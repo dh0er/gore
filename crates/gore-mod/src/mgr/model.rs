@@ -1323,8 +1323,11 @@ pub enum ComponentInfo {
     Ue4ssLua {
         name: String,
         rel: String,
+        /// Known exact `Class.Field` CDO targets. This remains useful partial metadata when
+        /// `opaque` is true, but must not be interpreted as the complete script footprint.
         #[serde(default)]
         targets: Vec<String>,
+        /// Whether the script can affect targets or runtime state beyond `targets`.
         #[serde(default)]
         opaque: bool,
     },
@@ -1445,7 +1448,8 @@ mod tests {
             });
         assert!(writer_was_denied.is_some(), "the growth hook must run");
         if writer_was_denied == Some(true) {
-            assert!(cfg!(windows), "Unix must permit and then detect the write");
+            #[cfg(not(windows))]
+            panic!("Unix must permit and then detect the write");
             assert_eq!(result.unwrap(), b"12345");
         } else {
             let error = result.unwrap_err().to_string();
@@ -1482,7 +1486,8 @@ mod tests {
         );
         assert!(writer_was_denied.is_some(), "the mutation hook must run");
         if writer_was_denied == Some(true) {
-            assert!(cfg!(windows), "Unix must permit and then detect the write");
+            #[cfg(not(windows))]
+            panic!("Unix must permit and then detect the write");
             assert_eq!(result.unwrap(), b"12345");
         } else {
             let error = result.unwrap_err().to_string();

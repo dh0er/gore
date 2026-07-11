@@ -29,3 +29,5 @@ libc = "0.2"
 # For building a real encrypted AlkimiaLocalization .lcache fixture in the manager apply tests
 # (mirrors gore-loc's own AES-256-ECB encoding without depending on its private test helpers).
 aes = "0.8"
+# Execute the exact generated UE4SS runtime against hermetic Lua tables in unit tests.
+mlua = { version = "0.10", features = ["lua54", "vendored"] }

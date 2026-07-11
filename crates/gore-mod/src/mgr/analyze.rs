@@ -1,12 +1,14 @@
 //! Pure conflict analysis: which enabled loadout mods step on the same game-side targets.
 //!
 //! [`analyze`] folds the enabled mods' component footprints into per-namespace buckets and
-//! reports every target claimed by two or more distinct mods (plus one advisory badge per mod
-//! carrying opaque UE4SS scripts). It never touches the filesystem — everything comes from
+//! reports every target claimed by two or more distinct mods. Opaque UE4SS components retain
+//! their known targets and also produce a conservative unknown-footprint advisory when another
+//! relevant UE4SS mod is enabled. It never touches the filesystem — everything comes from
 //! library metadata plus the loadout — so callers can re-run it on every reorder/toggle.
 //!
-//! Ordering contract: [`Conflict::mods`] follows loadout (mount) order, so under the manager's
-//! later-wins rule the LAST id is the winner. The report itself is sorted by `(kind, target)`.
+//! Ordering contract: [`Conflict::mods`] follows loadout (mount) order. For `Soft`/`Hard`
+//! conflicts the LAST id is the later-wins winner; `Info` advisories intentionally have no winner.
+//! The report itself is sorted by `(kind, target)`.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +22,8 @@ use super::model::{ComponentInfo, ModEntryMeta, RawTarget};
 pub struct Conflict {
     pub kind: ConflictKind,
     pub target: String,
-    /// Involved library mod ids in loadout order; the LAST one wins under later-wins.
+    /// Involved library mod ids in loadout order. The LAST one wins for `Soft`/`Hard`; `Info`
+    /// advisories describe uncertainty and have no winner.
     pub mods: Vec<String>,
     pub severity: Severity,
 }
@@ -37,6 +40,8 @@ pub enum ConflictKind {
     Asset,
     /// Class-default-object edits from UE4SS lua, target `"Class.Field"`.
     Cdo,
+    /// Possible interaction involving an incomplete UE4SS footprint, target `"<unknown>"`.
+    Ue4ssUnknown,
     /// AngelScript module splices, target = module name.
     ScriptModule,
     /// Voice ZIP member edit, target `"<archive>|<member path>"` (case-insensitive later-wins).
@@ -53,14 +58,14 @@ pub enum Severity {
     Soft,
     /// The earlier mod's whole component is clobbered or the two cannot coexist.
     Hard,
-    /// Advisory badge (the only severity where a single-mod entry is allowed), not a clash.
+    /// Advisory about an unknown footprint, not a proven later-wins clash.
     Info,
 }
 
-/// Report every target claimed by two or more distinct enabled mods, plus one `Info` badge per
-/// enabled mod carrying opaque UE4SS scripts. `mods` is the library in any order; only loadout
-/// entries with `enabled == true` participate, in loadout order (which also orders
-/// [`Conflict::mods`]). Output is sorted by `(kind, target)` with mod ids deduped.
+/// Report every target claimed by two or more distinct enabled mods, plus an `Info` advisory when
+/// an opaque UE4SS footprint can interact with another relevant UE4SS mod. `mods` is the library
+/// in any order; only loadout entries with `enabled == true` participate, in loadout order (which
+/// also orders [`Conflict::mods`]). Output is sorted by `(kind, target)` with mod ids deduped.
 pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
     let enabled = enabled_in_order(mods, loadout);
     let mut buckets: BTreeMap<(ConflictKind, String), (Severity, Vec<String>)> = BTreeMap::new();
@@ -105,24 +110,21 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
                         );
                     }
                 }
-                ComponentInfo::Ue4ssLua {
-                    targets, opaque, ..
-                } => {
+                ComponentInfo::Ue4ssLua { targets, .. } => {
                     // No dir-name conflict: manager apply deploys each mod to its OWN
                     // `gm{idx:03}_{name}` dir, so two mods sharing a script name never overwrite
                     // each other. Only their CDO targets (Class.Field) can genuinely clash.
-                    // Opaque scripts have no trustworthy target list; they get an info badge
-                    // below instead of participating in CDO overlap.
-                    if !opaque {
-                        for t in targets {
-                            note(
-                                &mut buckets,
-                                ConflictKind::Cdo,
-                                t.clone(),
-                                Severity::Soft,
-                                &m.id,
-                            );
-                        }
+                    // `opaque` means incomplete, not unusable: exact generated override targets
+                    // remain valid partial evidence and still participate in ordinary CDO
+                    // analysis. The unknown remainder is handled conservatively below.
+                    for t in targets {
+                        note(
+                            &mut buckets,
+                            ConflictKind::Cdo,
+                            t.clone(),
+                            Severity::Soft,
+                            &m.id,
+                        );
                     }
                 }
                 ComponentInfo::AngelScriptPatch { targets, .. } => {
@@ -186,18 +188,34 @@ pub fn analyze(mods: &[&ModEntryMeta], loadout: &Loadout) -> Vec<Conflict> {
         }
     }
 
-    // One info badge per enabled mod with any opaque UE4SS script: we cannot see what it edits.
+    // An opaque target list is only a known subset. If another mod has either its own opaque
+    // script or any precise UE4SS target, those footprints may interact in ways the manager cannot
+    // prove from metadata. Aggregate the relevant distinct mods into one deterministic advisory.
+    let mut ue4ss_unknown_members = Vec::<&str>::new();
+    let mut has_opaque_ue4ss = false;
     for m in &enabled {
-        if m.components
-            .iter()
-            .any(|c| matches!(c, ComponentInfo::Ue4ssLua { opaque: true, .. }))
-        {
+        let mut relevant = false;
+        for component in &m.components {
+            if let ComponentInfo::Ue4ssLua {
+                targets, opaque, ..
+            } = component
+            {
+                has_opaque_ue4ss |= *opaque;
+                relevant |= *opaque || !targets.is_empty();
+            }
+        }
+        if relevant {
+            ue4ss_unknown_members.push(&m.id);
+        }
+    }
+    if has_opaque_ue4ss && ue4ss_unknown_members.len() >= 2 {
+        for id in ue4ss_unknown_members {
             note(
                 &mut buckets,
-                ConflictKind::Cdo,
-                format!("{}:opaque", m.id),
+                ConflictKind::Ue4ssUnknown,
+                "<unknown>".into(),
                 Severity::Info,
-                &m.id,
+                id,
             );
         }
     }
@@ -583,10 +601,10 @@ mod tests {
         assert!(out.is_empty(), "same ue4ss name must not conflict: {out:?}");
     }
 
-    /// Each enabled mod with any opaque UE4SS script gets exactly ONE single-mod info badge,
-    /// and opaque `targets` do NOT count toward CDO overlap.
+    /// An opaque component keeps its known targets in precise CDO analysis and also contributes
+    /// its unknown remainder to one loadout-ordered advisory with other relevant UE4SS mods.
     #[test]
-    fn opaque_ue4ss_emits_info_once_per_mod() {
+    fn opaque_ue4ss_retains_precise_overlap_and_emits_unknown_interaction() {
         let a = meta(
             "mod-a",
             vec![
@@ -596,14 +614,70 @@ mod tests {
         );
         let b = meta("mod-b", vec![lua("DirB", &["ADamageData.Health"], false)]);
         let out = analyze(&[&a, &b], &loadout_of(&[("mod-a", true), ("mod-b", true)]));
-        // No Cdo/"ADamageData.Health" conflict: mod-a's claim is opaque, so only mod-b holds it.
         assert_eq!(
             out,
+            vec![
+                conflict(
+                    ConflictKind::Cdo,
+                    "ADamageData.Health",
+                    &["mod-a", "mod-b"],
+                    Severity::Soft
+                ),
+                conflict(
+                    ConflictKind::Ue4ssUnknown,
+                    "<unknown>",
+                    &["mod-a", "mod-b"],
+                    Severity::Info
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn opaque_ue4ss_unknown_is_conservative_deduped_and_deterministic() {
+        let a = meta(
+            "mod-a",
+            vec![
+                lua("OpaqueA", &["ADamageData.Health"], true),
+                lua("OpaqueA2", &[], true),
+            ],
+        );
+        let b = meta("mod-b", vec![lua("PreciseB", &["AItem.Value"], false)]);
+        let empty = meta("mod-empty", vec![lua("KnownEmpty", &[], false)]);
+        let disabled = meta("mod-disabled", vec![lua("OpaqueDisabled", &[], true)]);
+        let loadout = loadout_of(&[
+            ("mod-empty", true),
+            ("mod-a", true),
+            ("mod-disabled", false),
+            ("mod-b", true),
+        ]);
+        let expected = vec![conflict(
+            ConflictKind::Ue4ssUnknown,
+            "<unknown>",
+            &["mod-a", "mod-b"],
+            Severity::Info,
+        )];
+        assert_eq!(analyze(&[&b, &disabled, &empty, &a], &loadout), expected);
+        assert_eq!(analyze(&[&a, &empty, &b, &disabled], &loadout), expected);
+
+        let single = analyze(&[&a], &loadout_of(&[("mod-a", true)]));
+        assert!(
+            single.is_empty(),
+            "one opaque mod cannot conflict: {single:?}"
+        );
+
+        let opaque_empty_a = meta("opaque-a", vec![lua("OpaqueEmptyA", &[], true)]);
+        let opaque_empty_b = meta("opaque-b", vec![lua("OpaqueEmptyB", &[], true)]);
+        assert_eq!(
+            analyze(
+                &[&opaque_empty_b, &opaque_empty_a],
+                &loadout_of(&[("opaque-a", true), ("opaque-b", true)]),
+            ),
             vec![conflict(
-                ConflictKind::Cdo,
-                "mod-a:opaque",
-                &["mod-a"],
-                Severity::Info
+                ConflictKind::Ue4ssUnknown,
+                "<unknown>",
+                &["opaque-a", "opaque-b"],
+                Severity::Info,
             )]
         );
     }

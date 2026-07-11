@@ -1886,22 +1886,25 @@ fn goremod_components(
                     targets: targets.into_values().collect(),
                 }
             }
-            Component::Ue4ssLua { name, path, .. } => {
-                // Take `targets` from the RAW json: today's manifests don't have the field, a
-                // future gore-mod.json may — this stays correct either way with no compile-time
-                // coupling to the Component schema.
-                let mut targets: Vec<String> = raw_comps
-                    .and_then(|a| a.get(i))
-                    .and_then(|c| c.get("targets"))
-                    .and_then(|t| t.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect()
-                    })
-                    .unwrap_or_default();
+            Component::Ue4ssLua {
+                name,
+                path,
+                targets,
+                opaque,
+            } => {
+                // Old manifests had no `opaque` field. Keep their empty target list conservative,
+                // while an explicitly authored true/false value round-trips exactly.
+                let mut targets = targets.clone();
                 targets.sort();
-                let opaque = targets.is_empty();
+                targets.dedup();
+                let has_explicit_opaque = raw_comps
+                    .and_then(|components| components.get(i))
+                    .is_some_and(|component| component.get("opaque").is_some());
+                let opaque = if has_explicit_opaque {
+                    *opaque
+                } else {
+                    targets.is_empty()
+                };
                 ComponentInfo::Ue4ssLua {
                     name: name.clone(),
                     rel: join_rel(prefix, path),
@@ -2243,6 +2246,7 @@ mod tests {
                 module_name: "TestModule".into(),
                 mini_cache: mini.display().to_string(),
             }],
+            dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -2621,7 +2625,8 @@ mod tests {
         });
         assert!(writer_was_denied.is_some(), "the growth hook must run");
         if writer_was_denied == Some(true) {
-            assert!(cfg!(windows), "Unix must permit and then detect the write");
+            #[cfg(not(windows))]
+            panic!("Unix must permit and then detect the write");
             result.unwrap();
             assert_eq!(fs::read(&destination).unwrap(), b"1234");
         } else {
@@ -2655,7 +2660,8 @@ mod tests {
         });
         assert!(writer_was_denied.is_some(), "the mutation hook must run");
         if writer_was_denied == Some(true) {
-            assert!(cfg!(windows), "Unix must permit and then detect the write");
+            #[cfg(not(windows))]
+            panic!("Unix must permit and then detect the write");
             result.unwrap();
             assert_eq!(fs::read(&destination).unwrap(), b"1234");
         } else {
@@ -2869,9 +2875,8 @@ mod tests {
                     saw_lua = true;
                     assert_eq!(name, "Target Probe");
                     assert_eq!(rel, &pre("ue4ss/Target Probe"));
-                    // Written so it KEEPS passing once gore-mod.json grows a `targets` field
-                    // on ue4ss_lua components: opacity must simply track target absence.
-                    assert_eq!(*opaque, targets.is_empty());
+                    assert_eq!(targets, &["ItFo_Apple.m_Value"]);
+                    assert!(!*opaque, "ordinary generated override metadata is precise");
                 }
                 ComponentInfo::VoiceArchivePatch { rel, targets } => {
                     saw_voice = true;
@@ -2915,6 +2920,117 @@ mod tests {
         assert!(entry.join("gore-mod.json").is_file());
         assert!(entry.join("loc").join("edits.json").is_file());
         assert_eq!(list(&lib).unwrap(), vec![meta]);
+    }
+
+    #[test]
+    fn import_roundtrips_explicit_opaque_with_known_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let manifest_path = bundle.join("gore-mod.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let lua = manifest["components"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|component| component["type"] == "ue4ss_lua")
+            .unwrap();
+        lua["opaque"] = serde_json::Value::Bool(true);
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let meta = import(&lib, &bundle).unwrap();
+        assert!(matches!(
+            meta.components.iter().find(|component| matches!(
+                component,
+                ComponentInfo::Ue4ssLua { .. }
+            )),
+            Some(ComponentInfo::Ue4ssLua {
+                targets,
+                opaque: true,
+                ..
+            }) if targets == &["ItFo_Apple.m_Value"]
+        ));
+        let persisted: ModEntryMeta =
+            serde_json::from_slice(&fs::read(lib.join(&meta.id).join(META_FILE)).unwrap()).unwrap();
+        assert_eq!(persisted, meta);
+    }
+
+    #[test]
+    fn import_preserves_explicit_precise_targetless_lua() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let manifest_path = bundle.join("gore-mod.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let lua = manifest["components"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|component| component["type"] == "ue4ss_lua")
+            .unwrap();
+        lua["targets"] = serde_json::json!([]);
+        lua["opaque"] = serde_json::Value::Bool(false);
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let meta = import(&lib, &bundle).unwrap();
+        assert!(matches!(
+            meta.components.iter().find(|component| matches!(
+                component,
+                ComponentInfo::Ue4ssLua { .. }
+            )),
+            Some(ComponentInfo::Ue4ssLua {
+                targets,
+                opaque: false,
+                ..
+            }) if targets.is_empty()
+        ));
+    }
+
+    #[test]
+    fn import_legacy_targetless_lua_stays_conservatively_opaque() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("lib");
+        let bundle = mk_goremod_bundle(tmp.path());
+        let manifest_path = bundle.join("gore-mod.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        let lua = manifest["components"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|component| component["type"] == "ue4ss_lua")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap();
+        lua.remove("targets");
+        lua.remove("opaque");
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let meta = import(&lib, &bundle).unwrap();
+        assert!(matches!(
+            meta.components.iter().find(|component| matches!(
+                component,
+                ComponentInfo::Ue4ssLua { .. }
+            )),
+            Some(ComponentInfo::Ue4ssLua {
+                targets,
+                opaque: true,
+                ..
+            }) if targets.is_empty()
+        ));
     }
 
     #[test]

@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 
 use gore_modgen::gen::{gen_lua, MetaConfig, OverridesConfig, SingleOverride};
 
+pub mod dialog;
 pub mod mgr;
+
+pub use dialog::DialogTopicSpec;
 
 pub type Files = BTreeMap<String, Vec<u8>>;
 
@@ -155,6 +158,10 @@ pub struct BuildSpec {
     pub texture: Vec<TextureReplacement>,
     #[serde(default)]
     pub scripts: Vec<ScriptModule>,
+    /// Authored AngelScript topics to register at the target conversation's natural UI boundary.
+    /// This delivery mechanism does not certify selection-side save or knowledge behavior.
+    #[serde(default)]
+    pub dialog_topics: Vec<DialogTopicSpec>,
     #[serde(default)]
     pub voice: Vec<VoiceArchiveEdit>,
 }
@@ -171,6 +178,12 @@ pub enum Component {
         /// manifests parseable; omitted from the JSON when empty to keep byte-noise low.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         targets: Vec<String>,
+        /// `true` when `targets` is only the known, precise subset of this script's footprint.
+        /// Missing values default to `false` so format-1 manifests remain parseable. New manifests
+        /// always serialize the value: an explicit `false` with no known targets must remain
+        /// distinguishable from a legacy targetless script, which the manager treats as opaque.
+        #[serde(default)]
+        opaque: bool,
     },
     /// Declarative loc edits at `path` (`{id:{set:text}}`), applied to the .lcache.
     LocPatch { path: String },
@@ -214,6 +227,21 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     }
 
     // overrides → UE4SS Lua mod
+    // Runtime UE4SS content is emitted as exactly ONE component. Dialog topic registration shares
+    // that component with generated CDO overrides; emitting two roots would otherwise reintroduce
+    // ambiguous last-wins deployment behavior.
+    let ue4ss_opaque = !spec.dialog_topics.is_empty();
+    let dialog_runtime = if spec.dialog_topics.is_empty() {
+        None
+    } else {
+        Some(
+            dialog::render_dialog_runtime(name, &spec.dialog_topics)
+                .map_err(|error| ModError::Other(format!("invalid dialog topics: {error}")))?,
+        )
+    };
+    let mut ue4ss_lua = None;
+    let mut ue4ss_targets = Vec::new();
+
     if !spec.overrides.is_empty() {
         let cfg = OverridesConfig {
             meta: MetaConfig {
@@ -222,21 +250,35 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
             },
             overrides: spec.overrides.clone(),
         };
-        let lua = gen_lua(&cfg);
-        files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
-        files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
+        ue4ss_lua = Some(gen_lua(&cfg));
         // The `Class.Field` CDO targets this mod sets, for the manager's conflict detection.
-        let mut targets: Vec<String> = spec
+        ue4ss_targets = spec
             .overrides
             .iter()
             .map(|o| format!("{}.{}", o.class, o.field))
             .collect();
-        targets.sort();
-        targets.dedup();
+        ue4ss_targets.sort();
+        ue4ss_targets.dedup();
+    }
+
+    if let Some(runtime) = dialog_runtime {
+        let lua = ue4ss_lua.get_or_insert_with(String::new);
+        if !lua.is_empty() && !lua.ends_with('\n') {
+            lua.push('\n');
+        }
+        lua.push_str(&runtime);
+        // Dialog registration also mutates transient topic sets. The component is marked opaque
+        // below, while its exact generated CDO-override targets remain useful partial metadata.
+    }
+
+    if let Some(lua) = ue4ss_lua {
+        files.insert(format!("ue4ss/{name}/enabled.txt"), Vec::new());
+        files.insert(format!("ue4ss/{name}/Scripts/main.lua"), lua.into_bytes());
         components.push(Component::Ue4ssLua {
             name: name.clone(),
             path: format!("ue4ss/{name}"),
-            targets,
+            targets: ue4ss_targets,
+            opaque: ue4ss_opaque,
         });
     }
 
@@ -2867,11 +2909,16 @@ fn prepare(
                         "unsafe ue4ss component in manifest: name={name:?} path={path:?}"
                     )));
                 }
-                // A single bundle installs at most ONE UE4SS mod — a later Ue4ssLua component
-                // replaces an earlier one (same last-wins semantics as the old Option field).
+                // A single bundle installs at most one UE4SS mod. The guard below rejects a later
+                // component instead of silently replacing the first one.
+                if !plan.ue4ss_dirs.is_empty() {
+                    return Err(ModError::Other(
+                        "multiple UE4SS components in one bundle are unsupported".into(),
+                    ));
+                }
                 let source =
                     resolve_safe_bundle_tree(bundle_dir, Path::new(path), "UE4SS component")?;
-                plan.ue4ss_dirs = vec![(source, gp.ue4ss_mods.join(name))];
+                plan.ue4ss_dirs.push((source, gp.ue4ss_mods.join(name)));
             }
             Component::LocPatch { path } => {
                 if !is_safe_rel_path(path) {
@@ -6460,6 +6507,7 @@ mod tests {
             }],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
 
@@ -6565,6 +6613,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
         assert!(build_bundle(&spec).is_err());
@@ -6592,6 +6641,7 @@ mod tests {
                 image_path: png.display().to_string(),
             }],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -6627,6 +6677,7 @@ mod tests {
                 module_name: "MyMod".into(),
                 mini_cache: mini.display().to_string(),
             }],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -6663,6 +6714,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
@@ -6736,6 +6788,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "German.zip".into(),
                 op: VoicePatchOp::Add,
@@ -6933,6 +6986,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice,
         };
         let first_spec = voice_spec(
@@ -7052,6 +7106,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![VoiceArchiveEdit {
                 archive: "german_new.zip".into(),
                 op: VoicePatchOp::Replace,
@@ -7185,6 +7240,7 @@ mod tests {
                 module_name: "ignored_for_add".into(),
                 mini_cache: mini,
             }],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -7691,14 +7747,22 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
         let expected = vec!["ClassA.FieldX".to_string(), "ClassB.FieldY".to_string()];
-        let Some(Component::Ue4ssLua { targets, .. }) = bundle.manifest.components.first() else {
+        let Some(Component::Ue4ssLua {
+            targets, opaque, ..
+        }) = bundle.manifest.components.first()
+        else {
             panic!("expected a Ue4ssLua component");
         };
         assert_eq!(targets, &expected);
+        assert!(!*opaque);
+        assert!(std::str::from_utf8(&bundle.files["gore-mod.json"])
+            .unwrap()
+            .contains("\"opaque\": false"));
         // And the serialized manifest round-trips them.
         let m: ModManifest = serde_json::from_slice(&bundle.files["gore-mod.json"]).unwrap();
         assert!(matches!(
@@ -7721,12 +7785,45 @@ mod tests {
         let m: ModManifest = serde_json::from_str(json).unwrap();
         assert!(matches!(
             m.components.first(),
-            Some(Component::Ue4ssLua { name, path, targets })
-                if name == "OldMod" && path == "ue4ss/OldMod" && targets.is_empty()
+            Some(Component::Ue4ssLua {
+                name,
+                path,
+                targets,
+                opaque: false,
+            }) if name == "OldMod" && path == "ue4ss/OldMod" && targets.is_empty()
         ));
     }
 
-    /// Old serialized build specs remain source-compatible through the defaulted voice field.
+    #[test]
+    fn explicit_precise_targetless_lua_manifest_roundtrips() {
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "PreciseEmpty".into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            components: vec![Component::Ue4ssLua {
+                name: "PreciseEmpty".into(),
+                path: "ue4ss/PreciseEmpty".into(),
+                targets: vec![],
+                opaque: false,
+            }],
+        };
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert!(json.contains("\"opaque\":false"), "{json}");
+        let parsed: ModManifest = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            parsed.components.as_slice(),
+            [Component::Ue4ssLua {
+                targets,
+                opaque: false,
+                ..
+            }] if targets.is_empty()
+        ));
+    }
+
+    /// Old serialized build specs remain compatible through defaulted additive domain fields.
     #[test]
     fn legacy_build_spec_without_voice_defaults_to_empty() {
         let spec: BuildSpec = serde_json::from_str(
@@ -7736,6 +7833,7 @@ mod tests {
             }"#,
         )
         .unwrap();
+        assert!(spec.dialog_topics.is_empty());
         assert!(spec.voice.is_empty());
     }
 
@@ -7929,6 +8027,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle_dir = dir.path().join("bundle");
@@ -9076,6 +9175,7 @@ mod tests {
                 name: "GuardProbe".into(),
                 path: "ue4ss/GuardProbe".into(),
                 targets: Vec::new(),
+                opaque: false,
             }],
         };
         std::fs::write(

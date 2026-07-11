@@ -126,7 +126,8 @@ class ComponentView {
   /// which uses [rawFileTarget] instead.
   final List<String> targets;
 
-  /// `ue4ss_lua` only: true when the script body wasn't parseable.
+  /// `ue4ss_lua` only: true when [targets] is a known subset rather than the
+  /// component's complete conflict-analysis footprint.
   final bool opaque;
 
   /// Destination descriptor, `raw_file` components only.

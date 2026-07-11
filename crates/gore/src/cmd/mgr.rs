@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use gore_mod::mgr::{
     self,
-    analyze::analyze,
+    analyze::{analyze, Conflict, Severity},
     apply::{apply_loadout, undeploy_all},
     import,
     loadout::{self, Loadout, LoadoutEntry},
@@ -259,12 +259,7 @@ pub fn run(action: MgrAction) -> Result<()> {
                 println!("no conflicts");
             } else {
                 for c in &conflicts {
-                    let chain = c.mods.join(" -> ");
-                    let winner = c.mods.last().map(String::as_str).unwrap_or("");
-                    println!(
-                        "{:?} {:?} {}: {} (winner: {})",
-                        c.severity, c.kind, c.target, chain, winner
-                    );
+                    println!("{}", format_conflict(c));
                 }
             }
             Ok(())
@@ -339,6 +334,22 @@ pub fn run(action: MgrAction) -> Result<()> {
     }
 }
 
+fn format_conflict(conflict: &Conflict) -> String {
+    let chain = conflict.mods.join(" -> ");
+    if conflict.severity == Severity::Info {
+        format!(
+            "{:?} {:?} {}: {} (advisory; no winner)",
+            conflict.severity, conflict.kind, conflict.target, chain
+        )
+    } else {
+        let winner = conflict.mods.last().map(String::as_str).unwrap_or("");
+        format!(
+            "{:?} {:?} {}: {} (winner: {})",
+            conflict.severity, conflict.kind, conflict.target, chain, winner
+        )
+    }
+}
+
 /// Set the `enabled` flag of loadout entry `id`; error if it isn't in the loadout.
 /// (`--library` is accepted for a uniform CLI surface but isn't needed here.)
 fn set_enabled(id: &str, enabled: bool, loadout: Option<PathBuf>) -> Result<()> {
@@ -381,5 +392,44 @@ fn describe_status(st: &ManagerStatus) -> String {
                 drifted.len()
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gore_mod::mgr::analyze::ConflictKind;
+
+    fn conflict(severity: Severity) -> Conflict {
+        Conflict {
+            kind: if severity == Severity::Info {
+                ConflictKind::Ue4ssUnknown
+            } else {
+                ConflictKind::Cdo
+            },
+            target: if severity == Severity::Info {
+                "<unknown>".into()
+            } else {
+                "A.Value".into()
+            },
+            mods: vec!["first".into(), "last".into()],
+            severity,
+        }
+    }
+
+    #[test]
+    fn info_advisory_has_no_false_winner() {
+        assert_eq!(
+            format_conflict(&conflict(Severity::Info)),
+            "Info Ue4ssUnknown <unknown>: first -> last (advisory; no winner)"
+        );
+    }
+
+    #[test]
+    fn proven_conflict_keeps_later_wins_output() {
+        assert_eq!(
+            format_conflict(&conflict(Severity::Soft)),
+            "Soft Cdo A.Value: first -> last (winner: last)"
+        );
     }
 }

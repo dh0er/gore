@@ -999,6 +999,7 @@ mod tests {
             audio: vec![],
             texture: vec![],
             scripts: vec![],
+            dialog_topics: vec![],
             voice: vec![],
         };
         let bundle = build_bundle(&spec).unwrap();
@@ -1216,6 +1217,79 @@ mod tests {
         );
         assert_eq!(v["ok"], true, "resp: {v}");
         assert_eq!(v["conflicts"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn mgr_analyze_serializes_unknown_ue4ss_advisory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("library");
+        let lo = tmp.path().join("loadout.json");
+        let opaque_bundle = write_goremod_bundle(tmp.path(), "Opaque");
+        let precise_bundle = write_goremod_bundle(tmp.path(), "Precise");
+
+        let manifest_path = opaque_bundle.join("gore-mod.json");
+        let mut manifest: Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        let lua = manifest["components"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|component| component["type"] == "ue4ss_lua")
+            .unwrap();
+        lua["opaque"] = Value::Bool(true);
+        std::fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let opaque = mgr_call(
+            "mgr_import",
+            json!({
+                "path": opaque_bundle.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        let precise = mgr_call(
+            "mgr_import",
+            json!({
+                "path": precise_bundle.display().to_string(),
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        let opaque_id = opaque["entry"]["id"].as_str().unwrap();
+        let precise_id = precise["entry"]["id"].as_str().unwrap();
+        let set = mgr_call(
+            "mgr_set_loadout",
+            json!({
+                "loadout_path": lo.display().to_string(),
+                "loadout": {"format": 1, "entries": [
+                    {"id": opaque_id, "enabled": true},
+                    {"id": precise_id, "enabled": true}
+                ]}
+            }),
+        );
+        assert_eq!(set["ok"], true, "resp: {set}");
+
+        let response = mgr_call(
+            "mgr_analyze",
+            json!({
+                "library_dir": lib.display().to_string(),
+                "loadout_path": lo.display().to_string()
+            }),
+        );
+        let unknown = response["conflicts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|conflict| conflict["kind"] == "ue4ss_unknown")
+            .expect("unknown UE4SS advisory");
+        assert_eq!(unknown["target"], "<unknown>");
+        assert_eq!(unknown["severity"], "info");
+        assert_eq!(unknown["mods"], json!([opaque_id, precise_id]));
+        assert!(unknown.get("winner").is_none());
     }
 
     #[test]
