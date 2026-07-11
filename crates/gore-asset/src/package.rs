@@ -168,6 +168,17 @@ pub enum PackageError {
         range_length: usize,
         replacement_length: usize,
     },
+    #[error(
+        "{component} byte range at offset {offset} with length {length} drifted at byte {mismatch_offset}: expected 0x{expected:02x}, got 0x{actual:02x}"
+    )]
+    RangeDrift {
+        component: PackageComponent,
+        offset: usize,
+        length: usize,
+        mismatch_offset: usize,
+        expected: u8,
+        actual: u8,
+    },
     #[error("{path} changed length while it was being read: expected {expected}, got {actual}")]
     ConcurrentLengthChange {
         path: PathBuf,
@@ -322,6 +333,51 @@ impl PackageCarrier {
                 replacement_length: replacement.len(),
             });
         }
+        match component {
+            PackageComponent::Uasset => self.uasset[range].copy_from_slice(replacement),
+            PackageComponent::Uexp => self.uexp[range].copy_from_slice(replacement),
+        }
+        Ok(())
+    }
+
+    /// Replace an explicitly selected range only when its current bytes still
+    /// equal `expected`.
+    ///
+    /// The expected and replacement lengths must match. Bounds, length, and
+    /// byte equality are all checked before mutation, so every error leaves
+    /// both package components unchanged.
+    pub fn replace_range_if_equal(
+        &mut self,
+        component: PackageComponent,
+        offset: usize,
+        expected: &[u8],
+        replacement: &[u8],
+    ) -> Result<(), PackageError> {
+        let component_length = self.bytes(component).len();
+        let range = checked_range(component, component_length, offset, expected.len())?;
+        if replacement.len() != expected.len() {
+            return Err(PackageError::ReplacementLengthMismatch {
+                range_length: expected.len(),
+                replacement_length: replacement.len(),
+            });
+        }
+
+        let mismatch = self.bytes(component)[range.clone()]
+            .iter()
+            .zip(expected)
+            .enumerate()
+            .find(|(_, (actual, expected))| actual != expected);
+        if let Some((relative_offset, (&actual, &expected_byte))) = mismatch {
+            return Err(PackageError::RangeDrift {
+                component,
+                offset,
+                length: expected.len(),
+                mismatch_offset: offset + relative_offset,
+                expected: expected_byte,
+                actual,
+            });
+        }
+
         match component {
             PackageComponent::Uasset => self.uasset[range].copy_from_slice(replacement),
             PackageComponent::Uexp => self.uexp[range].copy_from_slice(replacement),
@@ -854,6 +910,134 @@ mod tests {
                 replacement_length: 1
             })
         ));
+    }
+
+    #[test]
+    fn conditional_replacement_is_strict_and_preserves_every_other_byte() {
+        let original_uasset = (0..32).collect::<Vec<_>>();
+        let original_uexp = (100..132).collect::<Vec<_>>();
+        let mut carrier = PackageCarrier::from_bytes(
+            original_uasset.clone(),
+            original_uexp.clone(),
+            small_limits(),
+        )
+        .unwrap();
+        let expected = &original_uexp[8..12];
+        let replacement = [9, 8, 7, 6];
+
+        carrier
+            .replace_range_if_equal(PackageComponent::Uexp, 8, expected, &replacement)
+            .unwrap();
+        assert_eq!(
+            &carrier.bytes(PackageComponent::Uexp)[..8],
+            &original_uexp[..8]
+        );
+        assert_eq!(&carrier.bytes(PackageComponent::Uexp)[8..12], &replacement);
+        assert_eq!(
+            &carrier.bytes(PackageComponent::Uexp)[12..],
+            &original_uexp[12..]
+        );
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), original_uasset);
+
+        let once_applied_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let once_applied_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+        assert!(matches!(
+            carrier.replace_range_if_equal(PackageComponent::Uexp, 8, expected, &replacement),
+            Err(PackageError::RangeDrift {
+                component: PackageComponent::Uexp,
+                offset: 8,
+                length: 4,
+                mismatch_offset: 8,
+                expected: 108,
+                actual: 9,
+            })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), once_applied_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), once_applied_uexp);
+    }
+
+    #[test]
+    fn conditional_replacement_reports_first_drift_byte_without_mutating() {
+        let original_uasset = vec![10, 11, 12, 13];
+        let original_uexp = vec![20, 21, 22, 23, 24];
+
+        for relative_mismatch in 0..3 {
+            let mut carrier = PackageCarrier::from_bytes(
+                original_uasset.clone(),
+                original_uexp.clone(),
+                small_limits(),
+            )
+            .unwrap();
+            let mut expected = original_uexp[1..4].to_vec();
+            expected[relative_mismatch] ^= 0xff;
+            let expected_byte = expected[relative_mismatch];
+            let actual_byte = original_uexp[1 + relative_mismatch];
+
+            assert!(matches!(
+                carrier.replace_range_if_equal(
+                    PackageComponent::Uexp,
+                    1,
+                    &expected,
+                    &[30, 31, 32]
+                ),
+                Err(PackageError::RangeDrift {
+                    component: PackageComponent::Uexp,
+                    offset: 1,
+                    length: 3,
+                    mismatch_offset,
+                    expected,
+                    actual,
+                }) if mismatch_offset == 1 + relative_mismatch
+                    && expected == expected_byte
+                    && actual == actual_byte
+            ));
+            assert_eq!(carrier.bytes(PackageComponent::Uasset), original_uasset);
+            assert_eq!(carrier.bytes(PackageComponent::Uexp), original_uexp);
+        }
+    }
+
+    #[test]
+    fn every_conditional_replacement_precondition_error_is_non_mutating() {
+        let original_uasset = vec![0, 1, 2, 3];
+        let original_uexp = vec![4, 5, 6];
+        let mut carrier = PackageCarrier::from_bytes(
+            original_uasset.clone(),
+            original_uexp.clone(),
+            small_limits(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            carrier.replace_range_if_equal(PackageComponent::Uasset, 1, &[1, 2], &[9]),
+            Err(PackageError::ReplacementLengthMismatch {
+                range_length: 2,
+                replacement_length: 1,
+            })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), original_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), original_uexp);
+
+        assert!(matches!(
+            carrier.replace_range_if_equal(PackageComponent::Uexp, 2, &[6, 7], &[8, 9]),
+            Err(PackageError::RangeOutOfBounds {
+                component: PackageComponent::Uexp,
+                offset: 2,
+                end: 4,
+                component_length: 3,
+            })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), original_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), original_uexp);
+
+        assert!(matches!(
+            carrier.replace_range_if_equal(PackageComponent::Uasset, usize::MAX, &[0, 1], &[8, 9]),
+            Err(PackageError::RangeOverflow {
+                offset: usize::MAX,
+                length: 2,
+            })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), original_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), original_uexp);
     }
 
     #[test]

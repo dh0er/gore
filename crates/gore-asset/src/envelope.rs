@@ -667,6 +667,7 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{FixedLeafPatch, FixedLeafPatchError, PropertySpanWalker, ValueSpan};
     use retoc::legacy_asset::{FMinimalName, FObjectExport, FObjectImport};
     use retoc::logging::Log;
 
@@ -813,6 +814,72 @@ mod tests {
         .unwrap()
     }
 
+    fn fixture_schema_db(properties: Vec<usmap::Property>) -> SchemaDb {
+        fixture_schema_db_with_structs(vec![(
+            usmap::Struct {
+                name: "Fixture".to_owned(),
+                super_struct: None,
+                properties,
+            },
+            usmap::FlagsType::Class,
+        )])
+    }
+
+    fn fixture_schema_db_with_structs(entries: Vec<(usmap::Struct, usmap::FlagsType)>) -> SchemaDb {
+        fixture_schema_db_with_tagged_structs(
+            entries
+                .into_iter()
+                .map(|(schema, kind)| (schema, kind, "/Script/Test".to_owned()))
+                .collect(),
+        )
+    }
+
+    fn fixture_schema_db_with_tagged_structs(
+        entries: Vec<(usmap::Struct, usmap::FlagsType, String)>,
+    ) -> SchemaDb {
+        let mut structs = Vec::with_capacity(entries.len());
+        let mut flags = Vec::with_capacity(entries.len());
+        let mut modules = Vec::with_capacity(entries.len());
+        for (schema, kind, module) in entries {
+            structs.push(schema);
+            flags.push(kind);
+            modules.push(module);
+        }
+        SchemaDb::from_parsed(usmap::Usmap {
+            enums: Vec::new(),
+            structs,
+            cext: None,
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: modules,
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: flags
+                    .into_iter()
+                    .map(|type_| usmap::StructFlags {
+                        type_,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    })
+                    .collect(),
+            }),
+            envp: None,
+        })
+        .unwrap()
+    }
+
+    fn fixture_property(name: &str, index: u16, inner: usmap::PropertyInner) -> usmap::Property {
+        usmap::Property {
+            name: name.to_owned(),
+            array_dim: 1,
+            index,
+            inner,
+        }
+    }
+
     fn cooked_flags() -> u32 {
         EPackageFlags::Cooked as u32
             | EPackageFlags::FilterEditorOnly as u32
@@ -859,6 +926,455 @@ mod tests {
                 .unwrap(),
             export[..8]
         );
+    }
+
+    #[test]
+    fn fixed_leaf_patch_revalidates_and_preserves_every_unknown_byte() {
+        // Two selected Bool slots followed by an opaque native suffix. The
+        // first payload byte is the only byte the patch may change.
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa, 0xbb];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+        let before_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let before_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            assert_eq!(block.consumed(), 8);
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("first property is not a fixed leaf");
+            };
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, leaf, &[1], &[0]).unwrap()
+        };
+
+        let receipt = patch.apply(&mut carrier, &schemas).unwrap();
+        assert_eq!(receipt.absolute_offset, 6);
+        assert_eq!(receipt.length, 1);
+        assert_eq!(receipt.kind, crate::FixedWireKind::Bool);
+        assert_ne!(receipt.before, receipt.after);
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), before_uasset);
+        let after_uexp = carrier.bytes(PackageComponent::Uexp);
+        assert_eq!(&after_uexp[..6], &before_uexp[..6]);
+        assert_eq!(after_uexp[6], 0);
+        assert_eq!(&after_uexp[7..], &before_uexp[7..]);
+
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+            panic!("patched property is not a fixed leaf");
+        };
+        assert_eq!(leaf.span().bytes(), &[0]);
+        assert_eq!(block.consumed(), 8);
+        let segments = export.split_decoded_prefix(block.consumed()).unwrap();
+        assert_eq!(segments.native_suffix, &[0xaa, 0xbb]);
+
+        assert!(matches!(
+            patch.apply(&mut carrier, &schemas),
+            Err(FixedLeafPatchError::PackageDrift { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_rejects_bad_expectations_bool_values_and_references() {
+        let bool_export = [0x00, 0x03, 0x01, 0xaa];
+        let carrier = package_with_exports(&[("Asset", &bool_export, 0)]);
+        let bool_schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let before_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let before_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+        {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export
+                .boundary()
+                .resolve_class_schema(&bool_schemas)
+                .unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&bool_schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("property is not fixed");
+            };
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[0], &[1]),
+                Err(FixedLeafPatchError::ExpectedMismatch { .. })
+            ));
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[1], &[2]),
+                Err(FixedLeafPatchError::InvalidBool { value: 2 })
+            ));
+            assert!(matches!(
+                FixedLeafPatch::plan(&carrier, &export, &bool_schemas, &block, leaf, &[1], &[1]),
+                Err(FixedLeafPatchError::NoChange)
+            ));
+        }
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), before_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), before_uexp);
+
+        let name_export = [0x00, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let name_carrier = package_with_exports(&[("Asset", &name_export, 0)]);
+        let name_schemas = fixture_schema_db(vec![fixture_property(
+            "Name",
+            0,
+            usmap::PropertyInner::Name,
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&name_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export
+            .boundary()
+            .resolve_class_schema(&name_schemas)
+            .unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&name_schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+            panic!("name property is not fixed");
+        };
+        let mut replacement = leaf.span().bytes().to_vec();
+        replacement[0] = 2;
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &name_carrier,
+                &export,
+                &name_schemas,
+                &block,
+                leaf,
+                leaf.span().bytes(),
+                &replacement
+            ),
+            Err(FixedLeafPatchError::ReferentialEditUnsupported {
+                kind: crate::FixedWireKind::FName
+            })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_seals_the_whole_pair_not_only_the_target_range() {
+        let export_bytes = [0x00, 0x03, 0x01];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Fixed(leaf) = block.properties()[0].value().unwrap() else {
+                panic!("property is not fixed");
+            };
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, leaf, &[1], &[0]).unwrap()
+        };
+
+        let changed = carrier.bytes(PackageComponent::Uasset)[0] ^ 0x01;
+        carrier
+            .replace_range(PackageComponent::Uasset, 0, 1, &[changed])
+            .unwrap();
+        let drifted_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let drifted_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+        assert!(matches!(
+            patch.apply(&mut carrier, &schemas),
+            Err(FixedLeafPatchError::PackageDrift { .. })
+        ));
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), drifted_uasset);
+        assert_eq!(carrier.bytes(PackageComponent::Uexp), drifted_uexp);
+    }
+
+    #[test]
+    fn fixed_leaf_patch_allows_map_values_but_refuses_all_map_keys() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&1i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Values",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Int),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+
+        let value_patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+                panic!("property should be a map");
+            };
+            let ValueSpan::Fixed(key) = map.entries()[0].key() else {
+                panic!("map key should be fixed");
+            };
+            let key_replacement = 8i32.to_le_bytes();
+            assert!(matches!(
+                FixedLeafPatch::plan(
+                    &carrier,
+                    &export,
+                    &schemas,
+                    &block,
+                    key,
+                    key.span().bytes(),
+                    &key_replacement
+                ),
+                Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+            ));
+
+            let ValueSpan::Fixed(value) = map.entries()[0].value() else {
+                panic!("map value should be fixed");
+            };
+            FixedLeafPatch::plan(
+                &carrier,
+                &export,
+                &schemas,
+                &block,
+                value,
+                value.span().bytes(),
+                &10i32.to_le_bytes(),
+            )
+            .unwrap()
+        };
+
+        value_patch.apply(&mut carrier, &schemas).unwrap();
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should remain a map");
+        };
+        assert_eq!(map.entries()[0].key().span().bytes(), &7i32.to_le_bytes());
+        assert_eq!(
+            map.entries()[0].value().span().bytes(),
+            &10i32.to_le_bytes()
+        );
+
+        let mut removed_bytes = vec![0x00, 0x03];
+        removed_bytes.extend_from_slice(&1i32.to_le_bytes());
+        removed_bytes.extend_from_slice(&7i32.to_le_bytes());
+        removed_bytes.extend_from_slice(&0i32.to_le_bytes());
+        let removed_carrier = package_with_exports(&[("Asset", &removed_bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&removed_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should be a map");
+        };
+        let ValueSpan::Fixed(removed_key) = &map.removed_keys()[0] else {
+            panic!("removed map key should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &removed_carrier,
+                &export,
+                &schemas,
+                &block,
+                removed_key,
+                removed_key.span().bytes(),
+                &8i32.to_le_bytes(),
+            ),
+            Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+        ));
+
+        let complex_schemas = fixture_schema_db_with_tagged_structs(vec![
+            (
+                usmap::Struct {
+                    name: "Fixture".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property(
+                        "Values",
+                        0,
+                        usmap::PropertyInner::Map {
+                            key: Box::new(usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            }),
+                            value: Box::new(usmap::PropertyInner::Int),
+                        },
+                    )],
+                },
+                usmap::FlagsType::Class,
+                "/Script/Test".to_owned(),
+            ),
+            (
+                usmap::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property("InvertX", 0, usmap::PropertyInner::Bool)],
+                },
+                usmap::FlagsType::Struct,
+                "/Script/G1R".to_owned(),
+            ),
+        ]);
+        let mut complex_bytes = vec![0x00, 0x03];
+        complex_bytes.extend_from_slice(&0i32.to_le_bytes());
+        complex_bytes.extend_from_slice(&1i32.to_le_bytes());
+        complex_bytes.extend_from_slice(&[0x00, 0x03, 0x01]);
+        complex_bytes.extend_from_slice(&9i32.to_le_bytes());
+        let complex_carrier = package_with_exports(&[("Asset", &complex_bytes, 0)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&complex_carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export
+            .boundary()
+            .resolve_class_schema(&complex_schemas)
+            .unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&complex_schemas)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        let ValueSpan::Map(map) = block.properties()[0].value().unwrap() else {
+            panic!("property should be a map");
+        };
+        let ValueSpan::Struct(key) = map.entries()[0].key() else {
+            panic!("map key should be a nested struct");
+        };
+        let ValueSpan::Fixed(key_leaf) = key.properties().properties()[0].value().unwrap() else {
+            panic!("map key field should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &complex_carrier,
+                &export,
+                &complex_schemas,
+                &block,
+                key_leaf,
+                key_leaf.span().bytes(),
+                &[0],
+            ),
+            Err(FixedLeafPatchError::MapKeyEditUnsupported { .. })
+        ));
+        let ValueSpan::Fixed(value) = map.entries()[0].value() else {
+            panic!("map value should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(
+                &complex_carrier,
+                &export,
+                &complex_schemas,
+                &block,
+                value,
+                value.span().bytes(),
+                &10i32.to_le_bytes(),
+            ),
+            Err(FixedLeafPatchError::ComplexMapKeyUnsupported)
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_patch_rejects_foreign_and_changed_semantic_schema_paths() {
+        let export_bytes = [0x00, 0x03, 0x01];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas_a =
+            fixture_schema_db(vec![fixture_property("A", 0, usmap::PropertyInner::Bool)]);
+        let schemas_b =
+            fixture_schema_db(vec![fixture_property("B", 0, usmap::PropertyInner::Bool)]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_a = export.boundary().resolve_class_schema(&schemas_a).unwrap();
+        let block_a = PropertySpanWalker::g1r_ue5_4(&schemas_a)
+            .walk(export.bytes(), schema_a)
+            .unwrap();
+        let ValueSpan::Fixed(leaf_a) = block_a.properties()[0].value().unwrap() else {
+            panic!("property should be fixed");
+        };
+        assert!(matches!(
+            FixedLeafPatch::plan(&carrier, &export, &schemas_b, &block_a, leaf_a, &[1], &[0]),
+            Err(FixedLeafPatchError::SemanticPathMismatch)
+        ));
+
+        let nested_db = |field: &str| {
+            fixture_schema_db_with_tagged_structs(vec![
+                (
+                    usmap::Struct {
+                        name: "Fixture".to_owned(),
+                        super_struct: None,
+                        properties: vec![fixture_property(
+                            "Nested",
+                            0,
+                            usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            },
+                        )],
+                    },
+                    usmap::FlagsType::Class,
+                    "/Script/Test".to_owned(),
+                ),
+                (
+                    usmap::Struct {
+                        name: "BoneTrackedData".to_owned(),
+                        super_struct: None,
+                        properties: vec![fixture_property(field, 0, usmap::PropertyInner::Bool)],
+                    },
+                    usmap::FlagsType::Struct,
+                    "/Script/G1R".to_owned(),
+                ),
+            ])
+        };
+        let schemas_nested_a = nested_db("A");
+        let schemas_nested_b = nested_db("B");
+        let nested_export = [0x00, 0x03, 0x00, 0x03, 0x01];
+        let mut nested_carrier = package_with_exports(&[("Asset", &nested_export, 0)]);
+        let nested_patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&nested_carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export
+                .boundary()
+                .resolve_class_schema(&schemas_nested_a)
+                .unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas_nested_a)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let ValueSpan::Struct(nested) = block.properties()[0].value().unwrap() else {
+                panic!("property should be nested");
+            };
+            let ValueSpan::Fixed(leaf) = nested.properties().properties()[0].value().unwrap()
+            else {
+                panic!("nested property should be fixed");
+            };
+            FixedLeafPatch::plan(
+                &nested_carrier,
+                &export,
+                &schemas_nested_a,
+                &block,
+                leaf,
+                &[1],
+                &[0],
+            )
+            .unwrap()
+        };
+        let before = nested_carrier.bytes(PackageComponent::Uexp).to_vec();
+        assert!(matches!(
+            nested_patch.apply(&mut nested_carrier, &schemas_nested_b),
+            Err(FixedLeafPatchError::LayoutDrift { .. })
+                | Err(FixedLeafPatchError::SchemaLayoutDrift { .. })
+        ));
+        assert_eq!(nested_carrier.bytes(PackageComponent::Uexp), before);
     }
 
     #[test]

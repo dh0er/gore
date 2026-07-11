@@ -1522,4 +1522,114 @@ mod tests {
             assert_eq!(segments.native_suffix, &[0, 0, 0, 0]);
         }
     }
+
+    #[test]
+    #[ignore = "requires GORE_USMAP and GORE_ASSET_FIXTURE_DIR for locally extracted G1R files"]
+    fn patches_one_real_fixed_leaf_without_touching_any_other_package_byte() {
+        use std::path::PathBuf;
+
+        use crate::{
+            FixedLeafPatch, LegacyPackageEnvelope, PackageCarrier, PackageComponent, PackageLimits,
+        };
+
+        let usmap = PathBuf::from(std::env::var_os("GORE_USMAP").expect("GORE_USMAP is required"));
+        let fixture_dir = PathBuf::from(
+            std::env::var_os("GORE_ASSET_FIXTURE_DIR").expect("GORE_ASSET_FIXTURE_DIR is required"),
+        );
+        let db = SchemaDb::from_usmap(&std::fs::read(usmap).unwrap()).unwrap();
+        let input = fixture_dir
+            .join("DA_WolfFootsteps")
+            .join("DA_WolfFootsteps.uasset");
+        let mut carrier = PackageCarrier::load(&input, PackageLimits::default()).unwrap();
+        let before_uasset = carrier.bytes(PackageComponent::Uasset).to_vec();
+        let before_uexp = carrier.bytes(PackageComponent::Uexp).to_vec();
+
+        let (patch, replacement) = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&db).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&db)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            assert_eq!(block.consumed(), 82);
+            let ValueSpan::Struct(bone_data) = block.properties()[0].value().unwrap() else {
+                panic!("BoneData should be a nested struct");
+            };
+            let ValueSpan::Fixed(vector) = bone_data.properties().properties()[0].value().unwrap()
+            else {
+                panic!("FeetTextureSize should be a fixed Vector4");
+            };
+            assert_eq!(vector.kind(), FixedWireKind::Vector4F64x4);
+            assert_eq!(vector.span().offset(), 8);
+            let expected = vector.span().bytes();
+            let original_x = f64::from_le_bytes(expected[..8].try_into().unwrap());
+            assert!(original_x.is_finite());
+            let replacement_x = if original_x.to_bits() == 123.25f64.to_bits() {
+                124.25f64
+            } else {
+                123.25f64
+            };
+            let mut replacement = expected.to_vec();
+            replacement[..8].copy_from_slice(&replacement_x.to_le_bytes());
+            let patch = FixedLeafPatch::plan(
+                &carrier,
+                &export,
+                &db,
+                &block,
+                vector,
+                expected,
+                &replacement,
+            )
+            .unwrap();
+            (patch, replacement)
+        };
+
+        let receipt = patch.apply(&mut carrier, &db).unwrap();
+        assert_eq!(receipt.kind, FixedWireKind::Vector4F64x4);
+        assert_eq!(receipt.length, 32);
+        assert_eq!(carrier.bytes(PackageComponent::Uasset), before_uasset);
+        let after_uexp = carrier.bytes(PackageComponent::Uexp);
+        assert_eq!(
+            &after_uexp[..receipt.absolute_offset],
+            &before_uexp[..receipt.absolute_offset]
+        );
+        assert_eq!(
+            &after_uexp[receipt.absolute_offset..receipt.absolute_offset + receipt.length],
+            replacement
+        );
+        assert_eq!(
+            &after_uexp[receipt.absolute_offset + receipt.length..],
+            &before_uexp[receipt.absolute_offset + receipt.length..]
+        );
+
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let schema_id = export.boundary().resolve_class_schema(&db).unwrap();
+        let block = PropertySpanWalker::g1r_ue5_4(&db)
+            .walk(export.bytes(), schema_id)
+            .unwrap();
+        assert_eq!(block.consumed(), 82);
+        assert_eq!(&export.bytes()[82..], &[0, 0, 0, 0]);
+        let ValueSpan::Struct(bone_data) = block.properties()[0].value().unwrap() else {
+            panic!("BoneData should remain a nested struct");
+        };
+        let ValueSpan::Fixed(vector) = bone_data.properties().properties()[0].value().unwrap()
+        else {
+            panic!("FeetTextureSize should remain a fixed Vector4");
+        };
+        assert_eq!(vector.span().bytes(), replacement);
+
+        let output_dir = tempfile::tempdir().unwrap();
+        let output = output_dir.path().join("DA_WolfFootsteps.uasset");
+        carrier.write_new(&output).unwrap();
+        let reopened = PackageCarrier::load(&output, PackageLimits::default()).unwrap();
+        assert_eq!(
+            reopened.bytes(PackageComponent::Uasset),
+            carrier.bytes(PackageComponent::Uasset)
+        );
+        assert_eq!(
+            reopened.bytes(PackageComponent::Uexp),
+            carrier.bytes(PackageComponent::Uexp)
+        );
+    }
 }

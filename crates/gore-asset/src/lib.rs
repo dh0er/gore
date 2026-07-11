@@ -6,6 +6,7 @@
 
 pub mod envelope;
 pub mod package;
+pub mod patch;
 pub mod primitive;
 pub mod schema;
 pub mod span;
@@ -19,6 +20,7 @@ pub use package::{
     ComponentDigest, PackageCarrier, PackageComponent, PackageError, PackageLimits, PackagePaths,
     PackageWriteReceipt,
 };
+pub use patch::{FixedLeafPatch, FixedLeafPatchError, FixedLeafPatchReceipt, PackagePairSeal};
 pub use primitive::{
     PrimitiveError, PrimitiveKind, PrimitiveProperty, PrimitivePropertyBlock, PrimitiveValue,
     PropertyPayload,
