@@ -61,6 +61,7 @@ Each domain produces a mod a different way:
 | Item/stat values | UE4SS Lua CDO override, applied at runtime | a new mod folder under `ue4ss/Mods/` |
 | Text & dialogs | re-encrypted `.lcache` | the localization cache, in place |
 | Audio | re-packed FMOD `.bank` | the sound bank, in place |
+| Voice-over | copy-on-write localized ZIP edit | the selected language archive, in place |
 | Textures | additive UE5 IoStore Zen triplet | the game's `~mods/` folder |
 | Scripts | edited precompiled AngelScript cache | the script cache (experimental) |
 
@@ -407,14 +408,14 @@ archive missing from the install is a hard preflight error: deployment refuses
 to create a partial voice patch. All manifests, payload paths, files, and Oggs
 are validated before an active manager loadout is transactionally replaced.
 
-Each candidate ZIP is composed in memory so validation can finish before the
-transaction starts; patching several large language archives therefore requires
-roughly their combined output size in available RAM. One deployment has a 4-GiB
-aggregate pending-write cap, while rollback snapshots are kept in durable
-same-directory temporary files rather than duplicating old archives in RAM.
-The game volume therefore also needs temporary free space comparable to the
-archives being replaced; insufficient space fails during staging before a live
-archive is changed.
+Each candidate ZIP is streamed to a private disk file and fully verified before
+the transaction publishes it. Memory is bounded by the retained source-Ogg
+budget (256 MiB for a direct bundle build/deploy) plus the ZIP index/streaming
+state, rather than by the combined output size of all language archives.
+Rollback snapshots and candidates are durable same-directory temporary files,
+so the game volume needs temporary free space comparable to the archives being
+replaced. Insufficient memory or disk space fails before a live archive is
+changed.
 
 This is the same engine [`mod-studio`](#gore-mod-studio) drives. Other helpers:
 
@@ -595,7 +596,7 @@ gore/
 │  ├─ gore-catalog/        item/npc/knowledge catalog model + pipelines
 │  ├─ gore-loc/            AlkimiaLocalization .lcache crypto + game-dir discovery + shared paths
 │  ├─ gore-modgen/         overrides.toml → UE4SS Lua mod generation + validation
-│  ├─ gore-mod/            unified mod-bundle engine (overrides + loc + audio + textures)
+│  ├─ gore-mod/            unified bundle engine (overrides + loc + audio + voice + textures + scripts)
 │  ├─ gore-fmod/           FMOD .bank decrypt/parse + Vorbis (audio backend, pure Rust)
 │  ├─ gore-vo/             safe voice ZIP index/extract/copy-on-write editor
 │  ├─ gore-asset/          USMAP + unversioned-property + lossless package primitives
