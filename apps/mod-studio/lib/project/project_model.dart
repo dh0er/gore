@@ -2,6 +2,7 @@ import '../audio/domain/audio_replacements_notifier.dart';
 import '../editor/domain/override_entry.dart';
 import '../scripts/domain/script_mods_notifier.dart';
 import '../textures/domain/texture_replacements_notifier.dart';
+import 'dialog_topics_notifier.dart';
 
 /// A saveable/loadable mod-studio project: the union of all editor domains. Serializes to
 /// `project.json` inside a `.goremod` zip (see project_io.dart), with source WAVs embedded.
@@ -16,6 +17,7 @@ class ModProject {
     this.audio = const [],
     this.textures = const [],
     this.scripts = const [],
+    this.dialogTopics = const [],
   });
 
   final String name;
@@ -27,11 +29,13 @@ class ModProject {
   final List<AudioReplacement> audio;
   final List<TextureReplacement> textures;
   final List<ScriptMod> scripts;
+  final List<DialogTopicDefinition> dialogTopics;
 
   ModProject copyWith({
     List<AudioReplacement>? audio,
     List<TextureReplacement>? textures,
     List<ScriptMod>? scripts,
+    List<DialogTopicDefinition>? dialogTopics,
   }) =>
       ModProject(
         name: name,
@@ -43,6 +47,7 @@ class ModProject {
         audio: audio ?? this.audio,
         textures: textures ?? this.textures,
         scripts: scripts ?? this.scripts,
+        dialogTopics: dialogTopics ?? this.dialogTopics,
       );
 
   Map<String, Object?> toJson() => {
@@ -57,6 +62,7 @@ class ModProject {
         'audio': [for (final a in audio) a.toJson()],
         'textures': [for (final t in textures) t.toJson()],
         'scripts': [for (final s in scripts) s.toJson()],
+        'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
       };
 
   factory ModProject.fromJson(Map<String, Object?> j) {
@@ -83,6 +89,10 @@ class ModProject {
         for (final s in (j['scripts'] as List? ?? const []))
           ScriptMod.fromJson((s as Map).cast<String, Object?>())
       ],
+      dialogTopics: [
+        for (final topic in (j['dialog_topics'] as List? ?? const []))
+          DialogTopicDefinition.fromJson((topic as Map).cast<String, Object?>())
+      ],
     );
   }
 
@@ -98,6 +108,7 @@ class ModProject {
           for (final s in scripts)
             {'op': scriptOpToString(s.op), 'module_name': s.moduleName, 'mini_cache': s.miniPath}
         ],
+        'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
       };
 }
 

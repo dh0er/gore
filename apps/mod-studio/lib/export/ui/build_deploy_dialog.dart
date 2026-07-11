@@ -12,6 +12,7 @@ import '../../core/providers.dart';
 import '../../editor/domain/overrides_notifier.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
+import '../../project/dialog_topics_notifier.dart';
 import '../../project/project_controller.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
@@ -48,9 +49,11 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
       // gore-mod's deploy owner-guard carries a stable marker; surface it in the user's
       // language instead of the raw FFI error. Every other error stays raw — it holds the
       // actionable detail.
-      _set(mounted && msg.contains('manager loadout active')
-          ? AppLocalizations.of(context).managerDeployActive
-          : msg);
+      _set(
+        mounted && msg.contains('manager loadout active')
+            ? AppLocalizations.of(context).managerDeployActive
+            : msg,
+      );
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -61,41 +64,43 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
   }
 
   Future<void> _buildToFolder() => _run(() async {
-        final dir = await getDirectoryPath();
-        if (dir == null) return;
-        // The folder picker is async; bail if the dialog was dismissed meanwhile so we don't read
-        // a disposed WidgetRef or build after the UI is gone.
-        if (!mounted) return;
-        final spec = gatherProject(ref).toBuildSpec();
-        final bundle = await _ffi.modBuild(spec, dir);
-        _set('Built bundle:\n$bundle');
-      });
+    final dir = await getDirectoryPath();
+    if (dir == null) return;
+    // The folder picker is async; bail if the dialog was dismissed meanwhile so we don't read
+    // a disposed WidgetRef or build after the UI is gone.
+    if (!mounted) return;
+    final spec = gatherProject(ref).toBuildSpec();
+    final bundle = await _ffi.modBuild(spec, dir);
+    _set('Built bundle:\n$bundle');
+  });
 
   Future<void> _deploy(String gameRoot) => _run(() async {
-        final tmp = await Directory.systemTemp.createTemp('goremod_build_');
-        try {
-          // createTemp is async; if the dialog closed while it ran, don't gather state from a
-          // disposed ref or deploy to the game after the UI is gone.
-          if (!mounted) return;
-          final spec = gatherProject(ref).toBuildSpec();
-          final bundle = await _ffi.modBuild(spec, tmp.path);
-          await _ffi.modDeploy(bundle, gameRoot);
-          _set('Deployed to game. Launch the game to see your changes.');
-        } finally {
-          // The bundle was deployed (copied into the game); the temp build dir is no longer
-          // needed, so don't leave it behind under the system temp directory.
-          try {
-            await tmp.delete(recursive: true);
-          } catch (_) {}
-        }
-      });
+    final tmp = await Directory.systemTemp.createTemp('goremod_build_');
+    try {
+      // createTemp is async; if the dialog closed while it ran, don't gather state from a
+      // disposed ref or deploy to the game after the UI is gone.
+      if (!mounted) return;
+      final spec = gatherProject(ref).toBuildSpec();
+      final bundle = await _ffi.modBuild(spec, tmp.path);
+      await _ffi.modDeploy(bundle, gameRoot);
+      _set('Deployed to game. Launch the game to see your changes.');
+    } finally {
+      // The bundle was deployed (copied into the game); the temp build dir is no longer
+      // needed, so don't leave it behind under the system temp directory.
+      try {
+        await tmp.delete(recursive: true);
+      } catch (_) {}
+    }
+  });
 
   Future<void> _undeploy(String gameRoot) => _run(() async {
-        final undone = await _ffi.modUndeploy(gameRoot);
-        _set(undone
-            ? 'Undeployed — original game files restored.'
-            : 'Nothing was deployed — no changes to undo.');
-      });
+    final undone = await _ffi.modUndeploy(gameRoot);
+    _set(
+      undone
+          ? 'Undeployed — original game files restored.'
+          : 'Nothing was deployed — no changes to undo.',
+    );
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -105,14 +110,18 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final audio = ref.watch(audioReplacementsProvider).count;
     final textures = ref.watch(textureReplacementsProvider).count;
     final scripts = ref.watch(scriptModsProvider).count;
+    final dialogTopics = ref.watch(dialogTopicsProvider).count;
     // Block Build/Deploy while any staged script is uncompiled OR was edited after compiling —
     // building would otherwise read an empty/stale mini-cache. The warning text below uses the
     // same flag.
-    final scriptsNotReady =
-        ref.watch(scriptModsProvider).entries.any((s) => !scriptCompileFresh(s));
+    final scriptsNotReady = ref
+        .watch(scriptModsProvider)
+        .entries
+        .any((s) => !scriptCompileFresh(s));
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
-    final hasContent = overrides + locEdits + audio + textures + scripts > 0;
+    final hasContent =
+        overrides + locEdits + audio + textures + scripts + dialogTopics > 0;
 
     return AlertDialog(
       title: const Text('Build & Deploy Mod'),
@@ -124,7 +133,10 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
           children: [
             TextFormField(
               initialValue: ref.read(modNameProvider),
-              decoration: const InputDecoration(labelText: 'Mod name', isDense: true),
+              decoration: const InputDecoration(
+                labelText: 'Mod name',
+                isDense: true,
+              ),
               onChanged: (v) => ref.read(modNameProvider.notifier).state = v,
             ),
             const SizedBox(height: 8),
@@ -132,14 +144,15 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
               initialValue: ref.read(modDelayMsProvider).toString(),
               decoration: const InputDecoration(
                 labelText: 'UE4SS load delay (ms)',
-                helperText: 'Wait before applying overrides at game start (0 = none)',
+                helperText:
+                    'Wait before applying overrides at game start (0 = none)',
                 isDense: true,
               ),
               keyboardType: TextInputType.number,
               // Keep the provider in sync so build/deploy uses the chosen delay instead of always
               // defaulting to 0. Blank or non-numeric input falls back to 0.
-              onChanged: (v) =>
-                  ref.read(modDelayMsProvider.notifier).state = int.tryParse(v.trim()) ?? 0,
+              onChanged: (v) => ref.read(modDelayMsProvider.notifier).state =
+                  int.tryParse(v.trim()) ?? 0,
             ),
             const SizedBox(height: 12),
             Text('Contents', style: theme.textTheme.labelMedium),
@@ -148,6 +161,7 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             Text('• $audio audio replacement(s)'),
             Text('• $textures texture replacement(s)'),
             Text('• $scripts script mod(s)'),
+            Text('• $dialogTopics runtime dialog topic(s)'),
             if (scriptsNotReady)
               Text(
                 'Some script mods are not compiled or were edited after compiling — (re)compile '
@@ -160,17 +174,20 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
                 'Set the game path in Settings to deploy directly.',
                 style: TextStyle(color: theme.colorScheme.error),
               ),
-            if (_busy) const Padding(
-              padding: EdgeInsets.symmetric(vertical: 8),
-              child: LinearProgressIndicator(),
-            ),
+            if (_busy)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: LinearProgressIndicator(),
+              ),
             if (_status != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   _status!,
                   style: TextStyle(
-                    color: _error ? theme.colorScheme.error : theme.colorScheme.onSurfaceVariant,
+                    color: _error
+                        ? theme.colorScheme.error
+                        : theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
               ),
@@ -188,12 +205,15 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             child: const Text('Undeploy'),
           ),
         OutlinedButton.icon(
-          onPressed: (_busy || !hasContent || scriptsNotReady) ? null : _buildToFolder,
+          onPressed: (_busy || !hasContent || scriptsNotReady)
+              ? null
+              : _buildToFolder,
           icon: const Icon(Icons.folder_zip_outlined, size: 18),
           label: const Text('Build to folder…'),
         ),
         FilledButton.icon(
-          onPressed: (_busy || gameRoot == null || !hasContent || scriptsNotReady)
+          onPressed:
+              (_busy || gameRoot == null || !hasContent || scriptsNotReady)
               ? null
               : () => _deploy(gameRoot),
           icon: const Icon(Icons.rocket_launch_outlined, size: 18),

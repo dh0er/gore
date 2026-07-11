@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/audio/domain/audio_replacements_notifier.dart';
 import 'package:gore_mod/editor/domain/override_entry.dart';
+import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/project_io.dart';
 import 'package:gore_mod/project/project_model.dart';
 
@@ -28,6 +29,14 @@ void main() {
       },
       audio: [
         AudioReplacement(bank: 'SFX.bank', sample: 'SFX_UI_X', wavPath: wav.path),
+      ],
+      dialogTopics: const [
+        DialogTopicDefinition(
+          id: 'viper_fixture',
+          participantName: 'om_viper_001',
+          topicClass: '/Script/Angelscript.ChoiceGoreViperFixture',
+          sentinelClass: '/Script/Angelscript.ChoiceViperVanilla',
+        ),
       ],
     );
 
@@ -55,11 +64,25 @@ void main() {
     expect(File(loaded.audio.single.wavPath).existsSync(), true);
     expect(await File(loaded.audio.single.wavPath).readAsBytes(), List<int>.filled(64, 7));
 
-    // build spec carries all three domains in FFI shape
+    expect(loaded.dialogTopics.length, 1);
+    expect(loaded.dialogTopics.single.id, 'viper_fixture');
+    expect(loaded.dialogTopics.single.participantName, 'om_viper_001');
+    expect(loaded.dialogTopics.single.topicClass, '/Script/Angelscript.ChoiceGoreViperFixture');
+    expect(loaded.dialogTopics.single.sentinelClass, '/Script/Angelscript.ChoiceViperVanilla');
+
+    // build spec carries all editor domains in FFI shape
     final spec = loaded.toBuildSpec();
     expect((spec['overrides'] as List).length, 1);
     expect((spec['audio'] as List).length, 1);
     expect((spec['loc_edits'] as Map).isNotEmpty, true);
+    expect(spec['dialog_topics'], [
+      {
+        'id': 'viper_fixture',
+        'participant_name': 'om_viper_001',
+        'topic_class': '/Script/Angelscript.ChoiceGoreViperFixture',
+        'sentinel_class': '/Script/Angelscript.ChoiceViperVanilla',
+      }
+    ]);
   });
 
   test('saveProject over an existing project replaces it and leaves no temp/backup', () async {

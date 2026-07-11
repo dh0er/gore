@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +14,7 @@ import '../../loc/domain/loc_edits_notifier.dart';
 import '../../loc/game_lang.dart';
 import '../../loc/primary_set.dart';
 import '../../loc/ui/lang_fields.dart';
+import '../../project/dialog_topics_notifier.dart';
 import '../domain/dialog_catalog_provider.dart';
 
 /// Currently selected dialog line (loc id), shared by all [DialogeTab]
@@ -36,19 +39,371 @@ class DialogeTab extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final catalogAsync = ref.watch(locCatalogProvider);
-    return catalogAsync.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Failed to load localization: $e')),
-      data: (_) {
-        return Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            SizedBox(width: 560, child: _DialogBrowser(onlyIds: onlyIds)),
-            const VerticalDivider(width: 1),
-            Expanded(child: _DialogEditor(onlyIds: onlyIds)),
-          ],
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _DialogTopicsSection(
+          storageScope: onlyIds == null ? 'main' : 'filtered',
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: catalogAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) =>
+                Center(child: Text('Failed to load localization: $e')),
+            data: (_) {
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(width: 560, child: _DialogBrowser(onlyIds: onlyIds)),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: _DialogEditor(onlyIds: onlyIds)),
+                ],
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogTopicsSection extends ConsumerWidget {
+  const _DialogTopicsSection({required this.storageScope});
+
+  final String storageScope;
+
+  Future<void> _openEditor(
+    BuildContext context,
+    WidgetRef ref, {
+    DialogTopicDefinition? initial,
+  }) async {
+    final state = ref.read(dialogTopicsProvider);
+    final otherTopics = [
+      for (final topic in state.entries)
+        if (topic.key != initial?.key) topic,
+    ];
+    final existingIds = <String>{for (final topic in otherTopics) topic.key};
+    final topic = await showDialog<DialogTopicDefinition>(
+      context: context,
+      builder: (_) => _DialogTopicEditorDialog(
+        initial: initial,
+        existingIds: existingIds,
+        existingTopicClasses: {
+          for (final topic in otherTopics) topic.topicClass.toLowerCase(),
+        },
+        existingSentinelClasses: {
+          for (final topic in otherTopics) topic.sentinelClass.toLowerCase(),
+        },
+      ),
+    );
+    if (topic == null || !context.mounted) return;
+
+    final notifier = ref.read(dialogTopicsProvider.notifier);
+    if (initial == null) {
+      notifier.setTopic(topic);
+    } else {
+      notifier.replaceTopic(initial.id, topic);
+    }
+  }
+
+  Future<void> _confirmDelete(
+    BuildContext context,
+    WidgetRef ref,
+    DialogTopicDefinition topic,
+  ) async {
+    final remove = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Delete runtime dialog topic?'),
+        content: Text('Remove "${topic.id}" from this mod project?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (remove == true && context.mounted) {
+      ref.read(dialogTopicsProvider.notifier).remove(topic.id);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final topics = ref.watch(dialogTopicsProvider).entries;
+    final theme = Theme.of(context);
+
+    return ExpansionTile(
+      key: PageStorageKey<String>('runtime-dialog-topics-$storageScope'),
+      title: Text('Runtime dialog topics (${topics.length})'),
+      subtitle: const Text(
+        'Explicit participant, topic class, and sentinel class',
+      ),
+      children: [
+        if (topics.isEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text('No runtime dialog topics staged.'),
+            ),
+          )
+        else
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 240),
+            child: ListView.builder(
+              key: PageStorageKey<String>(
+                'runtime-dialog-topic-list-$storageScope',
+              ),
+              primary: false,
+              shrinkWrap: true,
+              itemCount: topics.length,
+              itemBuilder: (context, index) {
+                final topic = topics[index];
+                return ListTile(
+                  key: ValueKey<String>('runtime-dialog-topic-${topic.key}'),
+                  dense: true,
+                  leading: CircleAvatar(
+                    radius: 13,
+                    backgroundColor: theme.colorScheme.secondaryContainer,
+                    child: Text('${index + 1}'),
+                  ),
+                  title: Text(topic.id),
+                  subtitle: Text(
+                    '${topic.participantName}\n'
+                    '${topic.topicClass}  ->  ${topic.sentinelClass}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Wrap(
+                    spacing: 4,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit_outlined),
+                        tooltip: 'Edit runtime dialog topic ${topic.id}',
+                        onPressed: () =>
+                            _openEditor(context, ref, initial: topic),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        tooltip: 'Delete runtime dialog topic ${topic.id}',
+                        onPressed: () => _confirmDelete(context, ref, topic),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: topics.length >= 64
+                  ? null
+                  : () => _openEditor(context, ref),
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add runtime topic'),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DialogTopicEditorDialog extends StatefulWidget {
+  const _DialogTopicEditorDialog({
+    required this.existingIds,
+    required this.existingTopicClasses,
+    required this.existingSentinelClasses,
+    this.initial,
+  });
+
+  final DialogTopicDefinition? initial;
+  final Set<String> existingIds;
+  final Set<String> existingTopicClasses;
+  final Set<String> existingSentinelClasses;
+
+  @override
+  State<_DialogTopicEditorDialog> createState() =>
+      _DialogTopicEditorDialogState();
+}
+
+class _DialogTopicEditorDialogState extends State<_DialogTopicEditorDialog> {
+  late final TextEditingController _idController;
+  late final TextEditingController _participantController;
+  late final TextEditingController _topicClassController;
+  late final TextEditingController _sentinelClassController;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    _idController = TextEditingController(text: initial?.id ?? '');
+    _participantController = TextEditingController(
+      text: initial?.participantName ?? '',
+    );
+    _topicClassController = TextEditingController(
+      text: initial?.topicClass ?? '',
+    );
+    _sentinelClassController = TextEditingController(
+      text: initial?.sentinelClass ?? '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _idController.dispose();
+    _participantController.dispose();
+    _topicClassController.dispose();
+    _sentinelClassController.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final id = _idController.text.trim();
+    final participant = _participantController.text.trim();
+    final topicClass = _topicClassController.text.trim();
+    final sentinelClass = _sentinelClassController.text.trim();
+
+    final topicClassKey = topicClass.toLowerCase();
+    final sentinelClassKey = sentinelClass.toLowerCase();
+    final classPathPattern = RegExp(
+      r'^/Script/Angelscript\.[A-Za-z_][A-Za-z0-9_]*$',
+    );
+    final message = id.isEmpty
+        ? 'Enter a topic ID.'
+        : utf8.encode(id).length > 128 ||
+              id.runes.any(
+                (rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f),
+              )
+        ? 'Topic ID must fit in 128 UTF-8 bytes and contain no control characters.'
+        : widget.existingIds.contains(id.toLowerCase())
+        ? 'This topic ID already exists.'
+        : participant.isEmpty ||
+              utf8.encode(participant).length > 128 ||
+              !RegExp(r'^[A-Za-z0-9_]+$').hasMatch(participant)
+        ? 'Participant name must use 1-128 ASCII letters, digits, or underscores.'
+        : utf8.encode(topicClass).length > 256 ||
+              !classPathPattern.hasMatch(topicClass)
+        ? 'Topic class must be an exact /Script/Angelscript.ClassName path.'
+        : utf8.encode(sentinelClass).length > 256 ||
+              !classPathPattern.hasMatch(sentinelClass)
+        ? 'Sentinel class must be an exact /Script/Angelscript.ClassName path.'
+        : topicClassKey == sentinelClassKey
+        ? 'Topic class and sentinel class must be different.'
+        : widget.existingTopicClasses.contains(topicClassKey)
+        ? 'This authored topic class is already registered.'
+        : widget.existingSentinelClasses.contains(topicClassKey)
+        ? 'An authored topic class cannot also be a sentinel class.'
+        : widget.existingTopicClasses.contains(sentinelClassKey)
+        ? 'A sentinel class cannot be another authored topic class.'
+        : null;
+    if (message != null) {
+      setState(() => _error = message);
+      return;
+    }
+
+    Navigator.pop(
+      context,
+      DialogTopicDefinition(
+        id: id,
+        participantName: participant,
+        topicClass: topicClass,
+        sentinelClass: sentinelClass,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final editing = widget.initial != null;
+    return AlertDialog(
+      title: Text(
+        editing ? 'Edit runtime dialog topic' : 'Add runtime dialog topic',
+      ),
+      content: SizedBox(
+        width: 620,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_error != null) ...[
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    _error!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
+              TextField(
+                controller: _idController,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  labelText: 'Topic ID',
+                  hintText: 'viper_gore_fixture',
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _participantController,
+                decoration: const InputDecoration(
+                  labelText: 'Participant name',
+                  hintText: 'om_stt_viper_302',
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _topicClassController,
+                decoration: const InputDecoration(
+                  labelText: 'Topic class',
+                  hintText: '/Script/Angelscript.ChoiceGoreViperTopic',
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _sentinelClassController,
+                decoration: const InputDecoration(
+                  labelText: 'Sentinel class',
+                  hintText: '/Script/Angelscript.ChoiceStt302ViperExit',
+                ),
+                onChanged: (_) {
+                  if (_error != null) setState(() => _error = null);
+                },
+                onSubmitted: (_) => _submit(),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(onPressed: _submit, child: Text(editing ? 'Save' : 'Add')),
+      ],
     );
   }
 }

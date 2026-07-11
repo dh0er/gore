@@ -13,6 +13,7 @@ import '../../dialog/domain/dialog_catalog_provider.dart';
 import '../../dialog/ui/dialoge_tab.dart';
 import '../../l10n/app_localizations.dart';
 import '../../loc/domain/loc_edits_notifier.dart';
+import '../../project/dialog_topics_notifier.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../scripts/domain/script_modules_provider.dart';
 import '../../scripts/ui/script_tab.dart';
@@ -98,11 +99,11 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
     });
   }
 
-  /// Distinct dialog loc ids among the staged loc edits — drives BOTH the
-  /// Dialoge sidebar count and the [DialogeTab.onlyIds] filter, so the two
-  /// can't disagree: non-dialog loc edits (e.g. item names staged via the
-  /// field editor) are excluded from this section and stay reviewable under
-  /// "All", and an id edited in several languages counts once.
+  /// Distinct dialog loc ids among the staged loc edits. These drive the
+  /// [DialogeTab.onlyIds] filter and the localization portion of the Dialogs
+  /// sidebar count; staged runtime topics add to that count independently.
+  /// Non-dialog loc edits remain excluded, and an id edited in several
+  /// languages still counts once.
   ///
   /// Cached in state behind a content compare: [locEditsProvider] emits a
   /// new edits map per keystroke even when the edited ID SET is unchanged,
@@ -127,6 +128,7 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
     final audioState = ref.watch(audioReplacementsProvider);
     final textureState = ref.watch(textureReplacementsProvider);
     final scriptState = ref.watch(scriptModsProvider);
+    final dialogTopicsState = ref.watch(dialogTopicsProvider);
 
     // Same arithmetic as the OverridesPanel header count.
     final total =
@@ -134,7 +136,8 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
         locState.entryCount +
         audioState.count +
         textureState.count +
-        scriptState.count;
+        scriptState.count +
+        dialogTopicsState.count;
 
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
@@ -157,7 +160,7 @@ class _ChangesTabState extends ConsumerState<ChangesTab> {
             section: _ChangesSection.dialogs,
             icon: Icons.forum_outlined,
             label: l10n.tabDialogs,
-            count: dialogIds.length,
+            count: dialogIds.length + dialogTopicsState.count,
           ),
           (
             section: _ChangesSection.audio,

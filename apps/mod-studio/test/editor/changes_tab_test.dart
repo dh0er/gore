@@ -11,6 +11,7 @@ import 'package:gore_mod/editor/ui/changes_tab.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/loc/domain/loc_catalog_provider.dart';
 import 'package:gore_mod/loc/domain/loc_edits_notifier.dart';
+import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/scripts/domain/script_modules_provider.dart';
 import 'package:gore_mod/textures/domain/texture_index_provider.dart';
 import 'package:gore_mod/textures/domain/texture_replacements_notifier.dart';
@@ -129,6 +130,53 @@ void main() {
     await tester.tap(find.text('Ghost (1)'));
     await tester.pumpAndSettle();
     expect(find.text('info_ghost_999'), findsOneWidget);
+  });
+
+  testWidgets('runtime topics add independently to All and Dialogs', (
+    tester,
+  ) async {
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    container
+        .read(dialogTopicsProvider.notifier)
+        .setTopic(
+          const DialogTopicDefinition(
+            id: 'viper_fixture',
+            participantName: 'om_stt_viper_302',
+            topicClass: '/Script/Angelscript.ChoiceGoreViperFixture',
+            sentinelClass: '/Script/Angelscript.ChoiceStt302ViperExit',
+          ),
+        );
+    await pumpHarness(tester, container);
+
+    // Existing localization arithmetic remains one distinct dialog id; the
+    // explicit runtime topic contributes one additional change to both badges.
+    expect(find.text('All (4)'), findsOneWidget);
+    expect(find.text('Dialogs (2)'), findsOneWidget);
+
+    await tester.tap(find.text('Dialogs (2)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Runtime dialog topics (1)'), findsOneWidget);
+    expect(find.text('info_aaron_001'), findsOneWidget);
+
+    await tester.tap(find.text('Runtime dialog topics (1)'));
+    await tester.pumpAndSettle();
+    expect(find.text('viper_fixture'), findsOneWidget);
+    expect(find.textContaining('om_stt_viper_302'), findsOneWidget);
+    expect(
+      find.textContaining('/Script/Angelscript.ChoiceGoreViperFixture'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('/Script/Angelscript.ChoiceStt302ViperExit'),
+      findsOneWidget,
+    );
+
+    container.read(dialogTopicsProvider.notifier).remove('viper_fixture');
+    await tester.pumpAndSettle();
+    expect(find.text('All (3)'), findsOneWidget);
+    expect(find.text('Dialogs (1)'), findsOneWidget);
+    expect(find.text('Runtime dialog topics (0)'), findsOneWidget);
   });
 
   testWidgets(

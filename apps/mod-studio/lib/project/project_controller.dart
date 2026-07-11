@@ -9,6 +9,7 @@ import '../editor/domain/overrides_notifier.dart';
 import '../loc/domain/loc_edits_notifier.dart';
 import '../scripts/domain/script_mods_notifier.dart';
 import '../textures/domain/texture_replacements_notifier.dart';
+import 'dialog_topics_notifier.dart';
 import 'project_io.dart';
 import 'project_model.dart';
 
@@ -28,7 +29,8 @@ bool projectIsDirty(WidgetRef ref) =>
     ref.watch(locEditsProvider).isDirty ||
     ref.watch(audioReplacementsProvider).count > 0 ||
     ref.watch(textureReplacementsProvider).count > 0 ||
-    ref.watch(scriptModsProvider).count > 0;
+    ref.watch(scriptModsProvider).count > 0 ||
+    ref.watch(dialogTopicsProvider).count > 0;
 
 /// Signature of the last state written to / loaded from a `.goremod`. Used to tell whether the
 /// current staged state still matches what was saved, so a saved project isn't treated as having
@@ -36,11 +38,14 @@ bool projectIsDirty(WidgetRef ref) =>
 final savedProjectSignatureProvider = StateProvider<String?>((ref) => null);
 
 /// A stable signature of the full current project (name + metadata + all editor domains).
-String _projectSignature(WidgetRef ref) => jsonEncode(gatherProject(ref).toJson());
+String _projectSignature(WidgetRef ref) =>
+    jsonEncode(gatherProject(ref).toJson());
 
 /// Record the current state as the saved baseline (after a save/open/new).
 void markProjectSaved(WidgetRef ref) =>
-    ref.read(savedProjectSignatureProvider.notifier).state = _projectSignature(ref);
+    ref.read(savedProjectSignatureProvider.notifier).state = _projectSignature(
+      ref,
+    );
 
 /// Whether there are staged changes NOT yet written to a project file. Once a baseline exists
 /// (after a save/open/new), this is purely current-vs-saved — so even CLEARING a loaded project
@@ -53,7 +58,8 @@ bool hasUnsavedChanges(WidgetRef ref) {
         ref.read(locEditsProvider).isDirty ||
         ref.read(audioReplacementsProvider).count > 0 ||
         ref.read(textureReplacementsProvider).count > 0 ||
-        ref.read(scriptModsProvider).count > 0;
+        ref.read(scriptModsProvider).count > 0 ||
+        ref.read(dialogTopicsProvider).count > 0;
   }
   return _projectSignature(ref) != saved;
 }
@@ -71,11 +77,16 @@ ModProject gatherProject(WidgetRef ref) {
     audio: ref.read(audioReplacementsProvider).entries,
     textures: ref.read(textureReplacementsProvider).entries,
     scripts: ref.read(scriptModsProvider).entries,
+    dialogTopics: ref.read(dialogTopicsProvider).entries,
   );
 }
 
 /// Replace all editor state from a loaded [ModProject].
 void applyProject(WidgetRef ref, ModProject project) {
+  // Validate/load the keyed dialog domain first. A malformed external project
+  // with duplicate case-insensitive IDs must fail before any other editor
+  // domain is replaced, rather than being silently collapsed or half-applied.
+  ref.read(dialogTopicsProvider.notifier).loadAll(project.dialogTopics);
   ref.read(modNameProvider.notifier).state = project.name;
   ref.read(modVersionProvider.notifier).state = project.version;
   ref.read(modAuthorProvider.notifier).state = project.author;
@@ -101,7 +112,10 @@ void newProject(WidgetRef ref) {
   ref.read(audioReplacementsProvider.notifier).clearAll();
   ref.read(textureReplacementsProvider.notifier).clearAll();
   ref.read(scriptModsProvider.notifier).clearAll();
-  markProjectSaved(ref); // a fresh project is in a clean (nothing-unsaved) state
+  ref.read(dialogTopicsProvider.notifier).clearAll();
+  markProjectSaved(
+    ref,
+  ); // a fresh project is in a clean (nothing-unsaved) state
 }
 
 /// Prompt for a path and save the current project. Returns the path, or null if cancelled.
