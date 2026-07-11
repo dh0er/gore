@@ -667,7 +667,11 @@ fn panic_message(panic: Box<dyn Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FixedLeafPatch, FixedLeafPatchError, PropertySpanWalker, ValueSpan};
+    use crate::{
+        describe_fixed_leaves, FixedLeafPatch, FixedLeafPatchError, FixedLeafRole,
+        FixedLeafSelector, FixedLeafSelectorError, FixedWireKind, PropertySpanWalker, ValueSpan,
+        FIXED_LEAF_SELECTOR_PROFILE,
+    };
     use retoc::legacy_asset::{FMinimalName, FObjectExport, FObjectImport};
     use retoc::logging::Log;
 
@@ -845,7 +849,7 @@ mod tests {
             flags.push(kind);
             modules.push(module);
         }
-        SchemaDb::from_parsed(usmap::Usmap {
+        let map = usmap::Usmap {
             enums: Vec::new(),
             structs,
             cext: None,
@@ -867,8 +871,10 @@ mod tests {
                     .collect(),
             }),
             envp: None,
-        })
-        .unwrap()
+        };
+        let mut bytes = Vec::new();
+        map.write(&mut bytes).unwrap();
+        SchemaDb::from_usmap(&bytes).unwrap()
     }
 
     fn fixture_property(name: &str, index: u16, inner: usmap::PropertyInner) -> usmap::Property {
@@ -983,6 +989,217 @@ mod tests {
         assert!(matches!(
             patch.apply(&mut carrier, &schemas),
             Err(FixedLeafPatchError::PackageDrift { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_json_round_trips_resolves_and_feeds_safe_patch_plan() {
+        let export_bytes = [0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x01, 0x00, 0xaa];
+        let mut carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![
+            fixture_property("A", 0, usmap::PropertyInner::Bool),
+            fixture_property("B", 1, usmap::PropertyInner::Bool),
+        ]);
+
+        let patch = {
+            let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+            let export = package.export(0).unwrap();
+            let schema_id = export.boundary().resolve_class_schema(&schemas).unwrap();
+            let block = PropertySpanWalker::g1r_ue5_4(&schemas)
+                .walk(export.bytes(), schema_id)
+                .unwrap();
+            let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+            assert_eq!(descriptors.len(), 2);
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.selector.expected_hex == "01")
+                .unwrap();
+            assert!(descriptor.editable);
+            assert_eq!(descriptor.selector.profile, FIXED_LEAF_SELECTOR_PROFILE);
+            assert_eq!(descriptor.selector.kind, FixedWireKind::Bool);
+            assert_eq!(descriptor.selector.role, FixedLeafRole::PropertyValue);
+
+            let json = serde_json::to_string(descriptor).unwrap();
+            assert!(json.contains("\"profile\":\"g1r_ue5_4\""));
+            assert!(json.contains("\"kind\":\"bool\""));
+            assert!(json.contains("\"uasset_sha256\":\""));
+            assert!(json.contains("\"uexp_sha256\":\""));
+            assert!(json.contains(&descriptor.selector.usmap_sha256));
+            assert!(!json.contains("offset"));
+            let round_trip: crate::FixedLeafDescriptor = serde_json::from_str(&json).unwrap();
+            assert_eq!(&round_trip, descriptor);
+
+            let selector: FixedLeafSelector = round_trip.selector;
+            let leaf = selector.resolve(&carrier, &export, &schemas).unwrap();
+            let expected = selector.expected_bytes().unwrap();
+            assert_eq!(expected, [1]);
+            FixedLeafPatch::plan(&carrier, &export, &schemas, &block, &leaf, &expected, &[0])
+                .unwrap()
+        };
+
+        patch.apply(&mut carrier, &schemas).unwrap();
+        assert_eq!(carrier.bytes(PackageComponent::Uexp)[6], 0);
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_profile_package_usmap_kind_and_value_drift() {
+        let export_bytes = [0x00, 0x03, 0x01, 0xaa];
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Enabled",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let selector = describe_fixed_leaves(&carrier, &export, &schemas)
+            .unwrap()
+            .remove(0)
+            .selector;
+
+        let mut changed = selector.clone();
+        changed.profile = "future_profile".to_owned();
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::UnsupportedProfile { .. })
+        ));
+        let other_schemas = fixture_schema_db(vec![fixture_property(
+            "Other",
+            0,
+            usmap::PropertyInner::Bool,
+        )]);
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &other_schemas),
+            Err(FixedLeafSelectorError::UsmapDrift { .. })
+        ));
+        let unsourced = schema_db(&[("Fixture", "/Script/Test", usmap::FlagsType::Class)]);
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &unsourced),
+            Err(FixedLeafSelectorError::MissingUsmapSource)
+        ));
+        assert!(matches!(
+            describe_fixed_leaves(&carrier, &export, &unsourced),
+            Err(FixedLeafSelectorError::MissingUsmapSource)
+        ));
+
+        changed = selector.clone();
+        changed.kind = FixedWireKind::Byte;
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::KindDrift { .. })
+        ));
+        changed = selector.clone();
+        changed.expected_hex = "00".to_owned();
+        assert!(matches!(
+            changed.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::ExpectedDrift { .. })
+        ));
+
+        let drifted_bytes = [0x00, 0x03, 0x01, 0xbb];
+        let drifted_carrier = package_with_exports(&[("Asset", &drifted_bytes, 0)]);
+        let drifted_package = LegacyPackageEnvelope::parse_g1r_ue5_4(&drifted_carrier).unwrap();
+        let drifted_export = drifted_package.export(0).unwrap();
+        assert!(matches!(
+            selector.resolve(&drifted_carrier, &drifted_export, &schemas),
+            Err(FixedLeafSelectorError::PackageDrift { .. })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_duplicate_map_key_paths_as_ambiguous() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&2i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&9i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&10i32.to_le_bytes());
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db(vec![fixture_property(
+            "Values",
+            0,
+            usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Int),
+                value: Box::new(usmap::PropertyInner::Int),
+            },
+        )]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+        assert!(descriptors.iter().all(|descriptor| !descriptor.editable));
+        let selector = descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.selector.role == FixedLeafRole::PropertyValue
+                    && descriptor.selector.expected_hex == "09000000"
+            })
+            .unwrap()
+            .selector
+            .clone();
+
+        assert!(matches!(
+            selector.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::Ambiguous { matches: 2 })
+        ));
+    }
+
+    #[test]
+    fn fixed_leaf_selector_rejects_unique_sparse_child_below_duplicate_map_key() {
+        let mut export_bytes = vec![0x00, 0x03];
+        export_bytes.extend_from_slice(&0i32.to_le_bytes());
+        export_bytes.extend_from_slice(&2i32.to_le_bytes());
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&[0x00, 0x03, 0x01]);
+        export_bytes.extend_from_slice(&7i32.to_le_bytes());
+        export_bytes.extend_from_slice(&[0x01, 0x03, 0x00]);
+        let carrier = package_with_exports(&[("Asset", &export_bytes, 0)]);
+        let schemas = fixture_schema_db_with_tagged_structs(vec![
+            (
+                usmap::Struct {
+                    name: "Fixture".to_owned(),
+                    super_struct: None,
+                    properties: vec![fixture_property(
+                        "Values",
+                        0,
+                        usmap::PropertyInner::Map {
+                            key: Box::new(usmap::PropertyInner::Int),
+                            value: Box::new(usmap::PropertyInner::Struct {
+                                name: "BoneTrackedData".to_owned(),
+                            }),
+                        },
+                    )],
+                },
+                usmap::FlagsType::Class,
+                "/Script/Test".to_owned(),
+            ),
+            (
+                usmap::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    super_struct: None,
+                    properties: vec![
+                        fixture_property("A", 0, usmap::PropertyInner::Bool),
+                        fixture_property("B", 1, usmap::PropertyInner::Bool),
+                    ],
+                },
+                usmap::FlagsType::Struct,
+                "/Script/G1R".to_owned(),
+            ),
+        ]);
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).unwrap();
+        let export = package.export(0).unwrap();
+        let descriptors = describe_fixed_leaves(&carrier, &export, &schemas).unwrap();
+        let descriptor = descriptors
+            .iter()
+            .find(|descriptor| {
+                descriptor.selector.role == FixedLeafRole::PropertyValue
+                    && descriptor.selector.expected_hex == "01"
+            })
+            .unwrap();
+
+        assert!(!descriptor.editable);
+        assert!(matches!(
+            descriptor.selector.resolve(&carrier, &export, &schemas),
+            Err(FixedLeafSelectorError::DuplicateMapKeyAncestry { occurrences: 2 })
         ));
     }
 

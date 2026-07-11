@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub type SchemaId = usize;
@@ -134,6 +135,7 @@ pub struct SchemaDb {
     schemas: Vec<SchemaRecord>,
     by_name: HashMap<String, Vec<SchemaId>>,
     by_qualified: HashMap<(String, String), Vec<SchemaId>>,
+    source_sha256: Option<[u8; 32]>,
 }
 
 impl SchemaDb {
@@ -148,7 +150,9 @@ impl SchemaDb {
         }))
         .map_err(|panic| SchemaError::ParserPanic(panic_message(panic)))?
         .map_err(|error| SchemaError::Parse(error.to_string()))?;
-        Self::from_parsed(parsed)
+        let mut db = Self::from_parsed(parsed)?;
+        db.source_sha256 = Some(Sha256::digest(bytes).into());
+        Ok(db)
     }
 
     /// Build an index from an already parsed map. Schema vector order is kept
@@ -231,7 +235,14 @@ impl SchemaDb {
             schemas,
             by_name,
             by_qualified,
+            source_sha256: None,
         })
+    }
+
+    /// SHA-256 of the exact `.usmap` bytes passed to [`Self::from_usmap`].
+    /// Synthetic databases built with [`Self::from_parsed`] have no raw source.
+    pub fn source_sha256(&self) -> Option<[u8; 32]> {
+        self.source_sha256
     }
 
     pub fn len(&self) -> usize {
@@ -678,11 +689,17 @@ mod tests {
         let mut bytes = Vec::new();
         fixture().write(&mut bytes).unwrap();
         let db = SchemaDb::from_usmap(&bytes).unwrap();
+        let expected_sha256: [u8; 32] = Sha256::digest(&bytes).into();
+        assert_eq!(db.source_sha256(), Some(expected_sha256));
         assert_eq!(db.len(), 2);
         assert_eq!(db.schema(0).unwrap().kind, SchemaKind::Class);
         assert_eq!(
             db.schema(1).unwrap().module_path.as_deref(),
             Some("/Script/Game")
+        );
+        assert_eq!(
+            SchemaDb::from_parsed(fixture()).unwrap().source_sha256(),
+            None
         );
     }
 

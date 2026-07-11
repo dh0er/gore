@@ -14,6 +14,7 @@ gore-catalog = { path = "../gore-catalog" }
 gore-loc = { path = "../gore-loc" }
 gore-modgen = { path = "../gore-modgen" }
 gore-as = { path = "../gore-as" }
+gore-asset = { path = "../gore-asset" }
 gore-fmod = { path = "../gore-fmod" }
 gore-mod = { path = "../gore-mod" }
 gore-tex = { path = "../gore-tex" }
@@ -22,6 +23,7 @@ image = "0.25"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 toml = "0.8"
 thiserror = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
@@ -31,6 +33,8 @@ anyhow = "1"
 tempfile = "3"
 assert_cmd = "2"
 predicates = "2"
+retoc = { path = "../../vendor/retoc" }
+usmap = { git = "https://github.com/trumank/jmap.git", rev = "909bce98a33e7d1932941404af7865514249f6be" }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 serde_json = "1"
 # For building a real encrypted AlkimiaLocalization .lcache fixture in the (ignored) `gore mgr apply`
@@ -80,3 +84,7 @@ path = "tests/integration/config_test.rs"
 [[test]]
 name = "voice_test"
 path = "tests/integration/voice_test.rs"
+
+[[test]]
+name = "asset_test"
+path = "tests/integration/asset_test.rs"

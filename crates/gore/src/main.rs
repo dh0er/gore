@@ -120,6 +120,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd::as_cache::AsCmd,
     },
+    /// Inspect and copy-on-write patch fixed-width cooked DataAsset leaves.
+    Asset {
+        #[command(subcommand)]
+        action: cmd::asset::AssetAction,
+    },
     /// Zip a mod folder into distributable UE4SS layout
     Package {
         /// Path to the mod directory
@@ -344,6 +349,7 @@ fn main() {
         } => cmd::gen::run(overrides, out, model),
         Commands::DeployShared { src, game } => cmd::deploy_shared::run(src, game),
         Commands::As { cmd } => cmd::as_cache::run(cmd),
+        Commands::Asset { action } => cmd::asset::run(action),
         Commands::Package { mod_dir, out } => cmd::package::run(mod_dir, out),
         Commands::Audio { action } => match action {
             AudioAction::List { bank, key } => cmd::audio::list(bank, key),

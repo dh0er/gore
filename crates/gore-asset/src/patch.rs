@@ -5,8 +5,10 @@
 //! components, then reparses and rewalks the package immediately before and
 //! after mutation. It never accepts a caller-supplied absolute offset.
 
+use std::collections::HashMap;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use usmap::PropertyInner;
@@ -17,10 +19,779 @@ use crate::{
     PropertySlot, PropertySpanWalker, SchemaDb, SchemaError, SliceSpan, SpanError, ValueSpan,
 };
 
+/// On-disk/API version of [`FixedLeafSelector`].
+pub const FIXED_LEAF_SELECTOR_FORMAT: u32 = 1;
+
+/// Exact cooked-property profile understood by [`FixedLeafSelector`].
+pub const FIXED_LEAF_SELECTOR_PROFILE: &str = "g1r_ue5_4";
+
+/// A listed fixed-width leaf plus whether [`FixedLeafPatch`] can edit its role
+/// and wire kind. The selector remains authoritative; `editable` is advisory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedLeafDescriptor {
+    pub selector: FixedLeafSelector,
+    pub editable: bool,
+}
+
+/// Snapshot-specific, offset-free identity for one walked fixed-width leaf.
+///
+/// The selector binds the exact export identity and bytes, exact class, exact
+/// schema-derived path, role, wire kind, and observed bytes. It intentionally
+/// carries no byte offset. [`Self::resolve`] performs its own authoritative
+/// rewalk with the exact source-bound schema database before returning a leaf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedLeafSelector {
+    pub format: u32,
+    pub profile: String,
+    pub package_seal: PackagePairSeal,
+    /// Lowercase SHA-256 of the exact `.usmap` bytes used to walk the export.
+    /// This is sourced from [`SchemaDb::source_sha256`], never from the caller.
+    pub usmap_sha256: String,
+    pub export_index: usize,
+    pub object_name: String,
+    pub class_path: String,
+    pub component: PackageComponent,
+    /// Lowercase SHA-256 of the complete export bytes.
+    pub export_sha256: String,
+    pub role: FixedLeafRole,
+    pub kind: FixedWireKind,
+    pub path: Vec<FixedLeafSelectorStep>,
+    /// Canonical lowercase hex of the exact observed leaf bytes.
+    pub expected_hex: String,
+}
+
+/// Stable identity of one map key. Entry indices are deliberately omitted:
+/// a unique key may move, while duplicate equal keys are ambiguous and fail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FixedLeafMapKeyIdentity {
+    /// Fixed root key kind, or `None` for a schema-recursive struct/map key.
+    pub kind: Option<FixedWireKind>,
+    pub byte_length: usize,
+    /// Lowercase SHA-256 of the complete serialized key.
+    pub sha256: String,
+}
+
+/// Format-1's stable, local wire representation of a USMAP property type.
+///
+/// This deliberately does not serialize `usmap::PropertyInner` directly: the
+/// dependency's serde layout is not part of this crate's persistence contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum FixedLeafWireType {
+    #[serde(rename = "byte")]
+    Byte {},
+    #[serde(rename = "bool")]
+    Bool {},
+    #[serde(rename = "int")]
+    Int {},
+    #[serde(rename = "float")]
+    Float {},
+    #[serde(rename = "object")]
+    Object {},
+    #[serde(rename = "name")]
+    Name {},
+    #[serde(rename = "delegate")]
+    Delegate {},
+    #[serde(rename = "double")]
+    Double {},
+    #[serde(rename = "array")]
+    Array { inner: Box<FixedLeafWireType> },
+    #[serde(rename = "struct")]
+    Struct { name: String },
+    #[serde(rename = "string")]
+    String {},
+    #[serde(rename = "text")]
+    Text {},
+    #[serde(rename = "interface")]
+    Interface {},
+    #[serde(rename = "multicast_delegate")]
+    MulticastDelegate {},
+    #[serde(rename = "weak_object")]
+    WeakObject {},
+    #[serde(rename = "lazy_object")]
+    LazyObject {},
+    #[serde(rename = "asset_object")]
+    AssetObject {},
+    #[serde(rename = "soft_object")]
+    SoftObject {},
+    #[serde(rename = "uint64")]
+    UInt64 {},
+    #[serde(rename = "uint32")]
+    UInt32 {},
+    #[serde(rename = "uint16")]
+    UInt16 {},
+    #[serde(rename = "int64")]
+    Int64 {},
+    #[serde(rename = "int16")]
+    Int16 {},
+    #[serde(rename = "int8")]
+    Int8 {},
+    #[serde(rename = "map")]
+    Map {
+        key: Box<FixedLeafWireType>,
+        value: Box<FixedLeafWireType>,
+    },
+    #[serde(rename = "set")]
+    Set { key: Box<FixedLeafWireType> },
+    #[serde(rename = "enum")]
+    Enum {
+        inner: Box<FixedLeafWireType>,
+        name: String,
+    },
+    #[serde(rename = "field_path")]
+    FieldPath {},
+    #[serde(rename = "optional")]
+    Optional { inner: Box<FixedLeafWireType> },
+    #[serde(rename = "utf8_string")]
+    Utf8String {},
+    #[serde(rename = "ansi_string")]
+    AnsiString {},
+    #[serde(rename = "unknown")]
+    Unknown {},
+}
+
+impl From<&PropertyInner> for FixedLeafWireType {
+    fn from(inner: &PropertyInner) -> Self {
+        match inner {
+            PropertyInner::Byte => Self::Byte {},
+            PropertyInner::Bool => Self::Bool {},
+            PropertyInner::Int => Self::Int {},
+            PropertyInner::Float => Self::Float {},
+            PropertyInner::Object => Self::Object {},
+            PropertyInner::Name => Self::Name {},
+            PropertyInner::Delegate => Self::Delegate {},
+            PropertyInner::Double => Self::Double {},
+            PropertyInner::Array { inner } => Self::Array {
+                inner: Box::new(Self::from(inner.as_ref())),
+            },
+            PropertyInner::Struct { name } => Self::Struct { name: name.clone() },
+            PropertyInner::Str => Self::String {},
+            PropertyInner::Text => Self::Text {},
+            PropertyInner::Interface => Self::Interface {},
+            PropertyInner::MulticastDelegate => Self::MulticastDelegate {},
+            PropertyInner::WeakObject => Self::WeakObject {},
+            PropertyInner::LazyObject => Self::LazyObject {},
+            PropertyInner::AssetObject => Self::AssetObject {},
+            PropertyInner::SoftObject => Self::SoftObject {},
+            PropertyInner::UInt64 => Self::UInt64 {},
+            PropertyInner::UInt32 => Self::UInt32 {},
+            PropertyInner::UInt16 => Self::UInt16 {},
+            PropertyInner::Int64 => Self::Int64 {},
+            PropertyInner::Int16 => Self::Int16 {},
+            PropertyInner::Int8 => Self::Int8 {},
+            PropertyInner::Map { key, value } => Self::Map {
+                key: Box::new(Self::from(key.as_ref())),
+                value: Box::new(Self::from(value.as_ref())),
+            },
+            PropertyInner::Set { key } => Self::Set {
+                key: Box::new(Self::from(key.as_ref())),
+            },
+            PropertyInner::Enum { inner, name } => Self::Enum {
+                inner: Box::new(Self::from(inner.as_ref())),
+                name: name.clone(),
+            },
+            PropertyInner::FieldPath => Self::FieldPath {},
+            PropertyInner::Optional { inner } => Self::Optional {
+                inner: Box::new(Self::from(inner.as_ref())),
+            },
+            PropertyInner::Utf8Str => Self::Utf8String {},
+            PropertyInner::AnsiStr => Self::AnsiString {},
+            PropertyInner::Unknown => Self::Unknown {},
+        }
+    }
+}
+
+/// One canonical semantic step from an export's class schema to a fixed leaf.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "step", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FixedLeafSelectorStep {
+    Property {
+        schema_index: usize,
+        property_name: String,
+        array_index: usize,
+        array_dimension: usize,
+        declaring_schema_name: String,
+        declaring_module_path: Option<String>,
+        property_type: FixedLeafWireType,
+    },
+    Struct {
+        name: String,
+        /// Exact qualified schema selected for the nested unversioned block.
+        schema_name: String,
+    },
+    Map {
+        key_type: FixedLeafWireType,
+        value_type: FixedLeafWireType,
+    },
+    MapEntryValue {
+        key: FixedLeafMapKeyIdentity,
+    },
+    MapEntryKey {
+        key: FixedLeafMapKeyIdentity,
+    },
+    RemovedMapKey {
+        key: FixedLeafMapKeyIdentity,
+    },
+}
+
+/// Failure to describe or resolve an offset-free fixed-leaf selector.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FixedLeafSelectorError {
+    #[error(
+        "unsupported fixed-leaf selector format {actual}; expected {FIXED_LEAF_SELECTOR_FORMAT}"
+    )]
+    UnsupportedFormat { actual: u32 },
+    #[error(
+        "unsupported fixed-leaf selector profile {actual:?}; expected {FIXED_LEAF_SELECTOR_PROFILE:?}"
+    )]
+    UnsupportedProfile { actual: String },
+    #[error("fixed-leaf selector path is empty")]
+    EmptyPath,
+    #[error("{field} is not canonical lowercase hexadecimal")]
+    NonCanonicalHex { field: &'static str },
+    #[error("{field} has {actual} hex characters; expected {expected}")]
+    HexLength {
+        field: &'static str,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("the export envelope is not backed by the supplied package carrier")]
+    ForeignExport,
+    #[error("fixed-leaf package pair drifted: expected {expected}, got {actual}")]
+    PackageDrift {
+        expected: Box<PackagePairSeal>,
+        actual: Box<PackagePairSeal>,
+    },
+    #[error("the supplied schema database has no exact raw `.usmap` source identity")]
+    MissingUsmapSource,
+    #[error("fixed-leaf USMAP drifted: expected {expected}, got {actual}")]
+    UsmapDrift { expected: String, actual: String },
+    #[error(
+        "fixed-leaf export identity field {field} drifted: expected {expected:?}, got {actual:?}"
+    )]
+    ExportIdentityDrift {
+        field: &'static str,
+        expected: String,
+        actual: String,
+    },
+    #[error("fixed-leaf export bytes drifted: expected {expected}, got {actual}")]
+    ExportBytesDrift { expected: String, actual: String },
+    #[error(transparent)]
+    ExportSchema(#[from] ExportSchemaError),
+    #[error(transparent)]
+    Span(#[from] SpanError),
+    #[error("fixed-leaf selector semantic path was not found")]
+    NotFound,
+    #[error("fixed-leaf selector semantic path matched {matches} leaves")]
+    Ambiguous { matches: usize },
+    #[error(
+        "fixed-leaf selector descends through a map key identity occurring {occurrences} times"
+    )]
+    DuplicateMapKeyAncestry { occurrences: usize },
+    #[error("fixed-leaf wire kind drifted: expected {expected:?}, got {actual:?}")]
+    KindDrift {
+        expected: FixedWireKind,
+        actual: FixedWireKind,
+    },
+    #[error("fixed-leaf bytes drifted: expected {expected}, got {actual}")]
+    ExpectedDrift { expected: String, actual: String },
+}
+
+impl FixedLeafDescriptor {
+    pub fn selector(&self) -> &FixedLeafSelector {
+        &self.selector
+    }
+}
+
+impl FixedLeafSelector {
+    /// Decode the canonical expected bytes carried by this selector.
+    pub fn expected_bytes(&self) -> Result<Vec<u8>, FixedLeafSelectorError> {
+        decode_canonical_hex("expected_hex", &self.expected_hex, self.kind.width())
+    }
+
+    /// Resolve this selector against a freshly parsed and walked export.
+    ///
+    /// No offset is accepted. Package and USMAP seals, export identity/hash,
+    /// semantic path uniqueness, role, kind, and expected bytes must all match.
+    pub fn resolve<'bytes>(
+        &self,
+        carrier: &PackageCarrier,
+        export: &ExportEnvelope<'bytes>,
+        schemas: &SchemaDb,
+    ) -> Result<FixedValueSpan<'bytes>, FixedLeafSelectorError> {
+        if self.format != FIXED_LEAF_SELECTOR_FORMAT {
+            return Err(FixedLeafSelectorError::UnsupportedFormat {
+                actual: self.format,
+            });
+        }
+        if self.profile != FIXED_LEAF_SELECTOR_PROFILE {
+            return Err(FixedLeafSelectorError::UnsupportedProfile {
+                actual: self.profile.clone(),
+            });
+        }
+        if self.path.is_empty() {
+            return Err(FixedLeafSelectorError::EmptyPath);
+        }
+        let expected = self.expected_bytes()?;
+        let sealed_usmap = decode_canonical_hex("usmap_sha256", &self.usmap_sha256, 32)?;
+        let sealed_export = decode_canonical_hex("export_sha256", &self.export_sha256, 32)?;
+
+        let actual_package = PackagePairSeal::capture(carrier);
+        if actual_package != self.package_seal {
+            return Err(FixedLeafSelectorError::PackageDrift {
+                expected: Box::new(self.package_seal.clone()),
+                actual: Box::new(actual_package),
+            });
+        }
+        let actual_usmap = schemas
+            .source_sha256()
+            .ok_or(FixedLeafSelectorError::MissingUsmapSource)?;
+        if sealed_usmap.as_slice() != actual_usmap.as_slice() {
+            return Err(FixedLeafSelectorError::UsmapDrift {
+                expected: self.usmap_sha256.clone(),
+                actual: encode_hex(&actual_usmap),
+            });
+        }
+        let boundary = export.boundary();
+        let carrier_export = carrier
+            .slice(boundary.component(), boundary.offset(), boundary.length())
+            .map_err(|_| FixedLeafSelectorError::ForeignExport)?;
+        if !same_slice(carrier_export, export.bytes()) {
+            return Err(FixedLeafSelectorError::ForeignExport);
+        }
+        require_identity(
+            "export_index",
+            self.export_index.to_string(),
+            boundary.export_index().to_string(),
+        )?;
+        require_identity(
+            "object_name",
+            self.object_name.clone(),
+            boundary.object_name(),
+        )?;
+        require_identity("class_path", self.class_path.clone(), boundary.class_path())?;
+        require_identity(
+            "component",
+            self.component.to_string(),
+            boundary.component().to_string(),
+        )?;
+
+        let actual_export_sha = sha256(export.bytes());
+        if sealed_export.as_slice() != actual_export_sha.as_slice() {
+            return Err(FixedLeafSelectorError::ExportBytesDrift {
+                expected: self.export_sha256.clone(),
+                actual: encode_hex(&actual_export_sha),
+            });
+        }
+        let schema_id = boundary.resolve_class_schema(schemas)?;
+        let block = PropertySpanWalker::g1r_ue5_4(schemas).walk(export.bytes(), schema_id)?;
+
+        let matches: Vec<_> = selector_candidates(&block)
+            .into_iter()
+            .filter(|candidate| candidate.role == self.role && candidate.path == self.path)
+            .collect();
+        let [candidate] = matches.as_slice() else {
+            return if matches.is_empty() {
+                Err(FixedLeafSelectorError::NotFound)
+            } else {
+                Err(FixedLeafSelectorError::Ambiguous {
+                    matches: matches.len(),
+                })
+            };
+        };
+        if let Some(occurrences) = candidate.duplicate_key_occurrences {
+            return Err(FixedLeafSelectorError::DuplicateMapKeyAncestry { occurrences });
+        }
+        if candidate.leaf.kind() != self.kind {
+            return Err(FixedLeafSelectorError::KindDrift {
+                expected: self.kind,
+                actual: candidate.leaf.kind(),
+            });
+        }
+        let actual = candidate.leaf.span().bytes();
+        if actual != expected.as_slice() {
+            return Err(FixedLeafSelectorError::ExpectedDrift {
+                expected: self.expected_hex.clone(),
+                actual: encode_hex(actual),
+            });
+        }
+        Ok(candidate.leaf.clone())
+    }
+}
+
+/// List every fixed-width leaf in a freshly walked export without exposing or
+/// accepting offsets. Traversal order is deterministic for identical bytes.
+pub fn describe_fixed_leaves<'bytes>(
+    carrier: &PackageCarrier,
+    export: &ExportEnvelope<'bytes>,
+    schemas: &SchemaDb,
+) -> Result<Vec<FixedLeafDescriptor>, FixedLeafSelectorError> {
+    let boundary = export.boundary();
+    let carrier_export = carrier
+        .slice(boundary.component(), boundary.offset(), boundary.length())
+        .map_err(|_| FixedLeafSelectorError::ForeignExport)?;
+    if !same_slice(carrier_export, export.bytes()) {
+        return Err(FixedLeafSelectorError::ForeignExport);
+    }
+    let usmap_sha256 = encode_hex(
+        &schemas
+            .source_sha256()
+            .ok_or(FixedLeafSelectorError::MissingUsmapSource)?,
+    );
+    let schema_id = boundary.resolve_class_schema(schemas)?;
+    let block = PropertySpanWalker::g1r_ue5_4(schemas).walk(export.bytes(), schema_id)?;
+    let package_seal = PackagePairSeal::capture(carrier);
+    let export_sha256 = encode_hex(&sha256(export.bytes()));
+    Ok(selector_candidates(&block)
+        .into_iter()
+        .map(|candidate| {
+            let editable = selector_candidate_is_editable(&candidate);
+            FixedLeafDescriptor {
+                selector: FixedLeafSelector {
+                    format: FIXED_LEAF_SELECTOR_FORMAT,
+                    profile: FIXED_LEAF_SELECTOR_PROFILE.to_owned(),
+                    package_seal: package_seal.clone(),
+                    usmap_sha256: usmap_sha256.clone(),
+                    export_index: boundary.export_index(),
+                    object_name: boundary.object_name().to_owned(),
+                    class_path: boundary.class_path().to_owned(),
+                    component: boundary.component(),
+                    export_sha256: export_sha256.clone(),
+                    role: candidate.role,
+                    kind: candidate.leaf.kind(),
+                    path: candidate.path,
+                    expected_hex: encode_hex(candidate.leaf.span().bytes()),
+                },
+                editable,
+            }
+        })
+        .collect())
+}
+
+fn require_identity(
+    field: &'static str,
+    expected: String,
+    actual: impl Into<String>,
+) -> Result<(), FixedLeafSelectorError> {
+    let actual = actual.into();
+    if expected == actual {
+        Ok(())
+    } else {
+        Err(FixedLeafSelectorError::ExportIdentityDrift {
+            field,
+            expected,
+            actual,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SelectorCandidate<'a> {
+    leaf: FixedValueSpan<'a>,
+    role: FixedLeafRole,
+    path: Vec<FixedLeafSelectorStep>,
+    duplicate_key_occurrences: Option<usize>,
+}
+
+fn selector_candidates<'a>(block: &PropertyBlockSpans<'a>) -> Vec<SelectorCandidate<'a>> {
+    let mut path = Vec::new();
+    let mut candidates = Vec::new();
+    collect_selector_block(
+        block,
+        FixedLeafRole::PropertyValue,
+        None,
+        &mut path,
+        &mut candidates,
+    );
+    candidates
+}
+
+fn collect_selector_block<'a>(
+    block: &PropertyBlockSpans<'a>,
+    role: FixedLeafRole,
+    duplicate_key_occurrences: Option<usize>,
+    path: &mut Vec<FixedLeafSelectorStep>,
+    candidates: &mut Vec<SelectorCandidate<'a>>,
+) {
+    for property in block.properties() {
+        let Some(value) = property.value() else {
+            continue;
+        };
+        let slot = property.slot();
+        path.push(FixedLeafSelectorStep::Property {
+            schema_index: slot.schema_index,
+            property_name: slot.property_name.clone(),
+            array_index: slot.array_index,
+            array_dimension: slot.array_dimension,
+            declaring_schema_name: slot.declaring_schema_name.clone(),
+            declaring_module_path: slot.declaring_module_path.clone(),
+            property_type: FixedLeafWireType::from(&slot.inner),
+        });
+        collect_selector_value(value, role, duplicate_key_occurrences, path, candidates);
+        path.pop();
+    }
+}
+
+fn collect_selector_value<'a>(
+    value: &ValueSpan<'a>,
+    role: FixedLeafRole,
+    duplicate_key_occurrences: Option<usize>,
+    path: &mut Vec<FixedLeafSelectorStep>,
+    candidates: &mut Vec<SelectorCandidate<'a>>,
+) {
+    match value {
+        ValueSpan::Fixed(leaf) => candidates.push(SelectorCandidate {
+            leaf: leaf.clone(),
+            role,
+            path: path.clone(),
+            duplicate_key_occurrences,
+        }),
+        ValueSpan::Struct(value) => {
+            path.push(FixedLeafSelectorStep::Struct {
+                name: value.struct_name().to_owned(),
+                schema_name: value.properties().schema_name().to_owned(),
+            });
+            collect_selector_block(
+                value.properties(),
+                role,
+                duplicate_key_occurrences,
+                path,
+                candidates,
+            );
+            path.pop();
+        }
+        ValueSpan::Map(value) => {
+            path.push(FixedLeafSelectorStep::Map {
+                key_type: FixedLeafWireType::from(value.key_type()),
+                value_type: FixedLeafWireType::from(value.value_type()),
+            });
+            let removed_identities: Vec<_> =
+                value.removed_keys().iter().map(map_key_identity).collect();
+            let removed_counts = map_key_identity_counts(&removed_identities);
+            for (key, identity) in value.removed_keys().iter().zip(&removed_identities) {
+                let occurrences = map_key_identity_count(&removed_counts, identity);
+                let branch_duplicate =
+                    duplicate_key_occurrences.or_else(|| (occurrences > 1).then_some(occurrences));
+                path.push(FixedLeafSelectorStep::RemovedMapKey {
+                    key: identity.clone(),
+                });
+                collect_selector_value(
+                    key,
+                    role.removed_key_child(),
+                    branch_duplicate,
+                    path,
+                    candidates,
+                );
+                path.pop();
+            }
+            let entry_identities: Vec<_> = value
+                .entries()
+                .iter()
+                .map(|entry| map_key_identity(entry.key()))
+                .collect();
+            let entry_counts = map_key_identity_counts(&entry_identities);
+            for (entry, identity) in value.entries().iter().zip(&entry_identities) {
+                let occurrences = map_key_identity_count(&entry_counts, identity);
+                let branch_duplicate =
+                    duplicate_key_occurrences.or_else(|| (occurrences > 1).then_some(occurrences));
+                path.push(FixedLeafSelectorStep::MapEntryKey {
+                    key: identity.clone(),
+                });
+                collect_selector_value(
+                    entry.key(),
+                    role.live_key_child(),
+                    branch_duplicate,
+                    path,
+                    candidates,
+                );
+                path.pop();
+
+                path.push(FixedLeafSelectorStep::MapEntryValue {
+                    key: identity.clone(),
+                });
+                collect_selector_value(entry.value(), role, branch_duplicate, path, candidates);
+                path.pop();
+            }
+            path.pop();
+        }
+    }
+}
+
+fn map_key_identity(key: &ValueSpan<'_>) -> FixedLeafMapKeyIdentity {
+    let span = key.span();
+    FixedLeafMapKeyIdentity {
+        kind: match key {
+            ValueSpan::Fixed(fixed) => Some(fixed.kind()),
+            ValueSpan::Struct(_) | ValueSpan::Map(_) => None,
+        },
+        byte_length: span.len(),
+        sha256: encode_hex(&sha256(span.bytes())),
+    }
+}
+
+type MapKeyIdentityCounts<'a> = HashMap<(Option<u8>, usize, &'a str), usize>;
+
+fn map_key_identity_counts(identities: &[FixedLeafMapKeyIdentity]) -> MapKeyIdentityCounts<'_> {
+    let mut counts = HashMap::with_capacity(identities.len());
+    for identity in identities {
+        *counts
+            .entry((
+                identity.kind.map(fixed_wire_kind_tag),
+                identity.byte_length,
+                identity.sha256.as_str(),
+            ))
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+fn map_key_identity_count(
+    counts: &MapKeyIdentityCounts<'_>,
+    identity: &FixedLeafMapKeyIdentity,
+) -> usize {
+    counts
+        .get(&(
+            identity.kind.map(fixed_wire_kind_tag),
+            identity.byte_length,
+            identity.sha256.as_str(),
+        ))
+        .copied()
+        .unwrap_or(0)
+}
+
+fn fixed_wire_kind_tag(kind: FixedWireKind) -> u8 {
+    match kind {
+        FixedWireKind::Byte => 0,
+        FixedWireKind::Bool => 1,
+        FixedWireKind::Int32 => 2,
+        FixedWireKind::Float32 => 3,
+        FixedWireKind::PackageIndex => 4,
+        FixedWireKind::FName => 5,
+        FixedWireKind::Float64 => 6,
+        FixedWireKind::UInt64 => 7,
+        FixedWireKind::UInt32 => 8,
+        FixedWireKind::UInt16 => 9,
+        FixedWireKind::Int64 => 10,
+        FixedWireKind::Int16 => 11,
+        FixedWireKind::Int8 => 12,
+        FixedWireKind::LinearColorF32x4 => 13,
+        FixedWireKind::Vector4F64x4 => 14,
+    }
+}
+
+/// The single exhaustive policy decision for editable fixed wire kinds.
+/// Adding a new kind fails compilation here until its edit safety is decided.
+fn fixed_wire_kind_is_editable(kind: FixedWireKind) -> bool {
+    match kind {
+        FixedWireKind::Byte
+        | FixedWireKind::Bool
+        | FixedWireKind::Int32
+        | FixedWireKind::Float32
+        | FixedWireKind::Float64
+        | FixedWireKind::UInt64
+        | FixedWireKind::UInt32
+        | FixedWireKind::UInt16
+        | FixedWireKind::Int64
+        | FixedWireKind::Int16
+        | FixedWireKind::Int8
+        | FixedWireKind::LinearColorF32x4
+        | FixedWireKind::Vector4F64x4 => true,
+        FixedWireKind::PackageIndex | FixedWireKind::FName => false,
+    }
+}
+
+fn selector_candidate_is_editable(candidate: &SelectorCandidate<'_>) -> bool {
+    candidate.duplicate_key_occurrences.is_none()
+        && candidate.role == FixedLeafRole::PropertyValue
+        && fixed_wire_kind_is_editable(candidate.leaf.kind())
+        && !candidate.path.iter().any(|step| {
+            matches!(
+                step,
+                FixedLeafSelectorStep::MapEntryValue {
+                    key: FixedLeafMapKeyIdentity { kind: None, .. }
+                }
+            )
+        })
+}
+
+fn decode_canonical_hex(
+    field: &'static str,
+    value: &str,
+    expected_bytes: usize,
+) -> Result<Vec<u8>, FixedLeafSelectorError> {
+    let expected_chars = expected_bytes * 2;
+    if value.len() != expected_chars {
+        return Err(FixedLeafSelectorError::HexLength {
+            field,
+            expected: expected_chars,
+            actual: value.len(),
+        });
+    }
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(FixedLeafSelectorError::NonCanonicalHex { field });
+    }
+    Ok(value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| (hex_nibble(pair[0]) << 4) | hex_nibble(pair[1]))
+        .collect())
+}
+
+fn hex_nibble(byte: u8) -> u8 {
+    match byte {
+        b'0'..=b'9' => byte - b'0',
+        b'a'..=b'f' => byte - b'a' + 10,
+        _ => unreachable!("canonical hex was validated before decoding"),
+    }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut out, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    out
+}
+
+mod hex_32 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(bytes: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&super::encode_hex(bytes))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let value = String::deserialize(deserializer)?;
+        let decoded =
+            super::decode_canonical_hex("package seal", &value, 32).map_err(D::Error::custom)?;
+        decoded
+            .try_into()
+            .map_err(|_| D::Error::custom("package seal must contain exactly 32 bytes"))
+    }
+}
+
 /// SHA-256 identity of both components at one point in time.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackagePairSeal {
+    #[serde(with = "hex_32")]
     pub uasset_sha256: [u8; 32],
+    #[serde(with = "hex_32")]
     pub uexp_sha256: [u8; 32],
 }
 
@@ -503,7 +1274,7 @@ fn validate_fixed_replacement(
             actual,
         });
     }
-    if matches!(kind, FixedWireKind::FName | FixedWireKind::PackageIndex) {
+    if !fixed_wire_kind_is_editable(kind) {
         return Err(FixedLeafPatchError::ReferentialEditUnsupported { kind });
     }
     if kind == FixedWireKind::Bool && !matches!(replacement, [0] | [1]) {
@@ -556,10 +1327,13 @@ enum FixedLeafPathStep {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FixedLeafRole {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FixedLeafRole {
+    #[serde(rename = "property_value")]
     PropertyValue,
+    #[serde(rename = "map_key")]
     MapKey,
+    #[serde(rename = "removed_map_key")]
     RemovedMapKey,
 }
 
@@ -846,4 +1620,331 @@ fn write_hex(formatter: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
         write!(formatter, "{byte:02x}")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod selector_wire_tests {
+    use super::*;
+
+    fn format_1_selector() -> FixedLeafSelector {
+        FixedLeafSelector {
+            format: FIXED_LEAF_SELECTOR_FORMAT,
+            profile: FIXED_LEAF_SELECTOR_PROFILE.to_owned(),
+            package_seal: PackagePairSeal {
+                uasset_sha256: [0x11; 32],
+                uexp_sha256: [0x22; 32],
+            },
+            usmap_sha256: "33".repeat(32),
+            export_index: 7,
+            object_name: "Asset".to_owned(),
+            class_path: "/Script/Test.Fixture".to_owned(),
+            component: PackageComponent::Uexp,
+            export_sha256: "44".repeat(32),
+            role: FixedLeafRole::PropertyValue,
+            kind: FixedWireKind::Bool,
+            path: vec![FixedLeafSelectorStep::Property {
+                schema_index: 2,
+                property_name: "Enabled".to_owned(),
+                array_index: 0,
+                array_dimension: 1,
+                declaring_schema_name: "Fixture".to_owned(),
+                declaring_module_path: Some("/Script/Test".to_owned()),
+                property_type: FixedLeafWireType::Map {
+                    key: Box::new(FixedLeafWireType::Name {}),
+                    value: Box::new(FixedLeafWireType::Optional {
+                        inner: Box::new(FixedLeafWireType::Struct {
+                            name: "State".to_owned(),
+                        }),
+                    }),
+                },
+            }],
+            expected_hex: "01".to_owned(),
+        }
+    }
+
+    #[test]
+    fn format_1_selector_json_is_golden_and_round_trips() {
+        let selector = format_1_selector();
+        let json = serde_json::to_string(&selector).unwrap();
+        let expected = concat!(
+            "{\"format\":1,\"profile\":\"g1r_ue5_4\",\"package_seal\":{",
+            "\"uasset_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\",",
+            "\"uexp_sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},",
+            "\"usmap_sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\",",
+            "\"export_index\":7,\"object_name\":\"Asset\",\"class_path\":\"/Script/Test.Fixture\",",
+            "\"component\":\"uexp\",\"export_sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\",",
+            "\"role\":\"property_value\",\"kind\":\"bool\",\"path\":[{\"step\":\"property\",",
+            "\"schema_index\":2,\"property_name\":\"Enabled\",\"array_index\":0,\"array_dimension\":1,",
+            "\"declaring_schema_name\":\"Fixture\",\"declaring_module_path\":\"/Script/Test\",",
+            "\"property_type\":{\"type\":\"map\",\"key\":{\"type\":\"name\"},",
+            "\"value\":{\"type\":\"optional\",\"inner\":{\"type\":\"struct\",\"name\":\"State\"}}}}],",
+            "\"expected_hex\":\"01\"}"
+        );
+        assert_eq!(json, expected);
+        assert_eq!(
+            serde_json::from_str::<FixedLeafSelector>(&json).unwrap(),
+            selector
+        );
+    }
+
+    #[test]
+    fn format_1_selector_rejects_unknown_top_level_and_wire_type_fields() {
+        let json = serde_json::to_string(&format_1_selector()).unwrap();
+        let top_level = json.replacen("{\"format\":1", "{\"future\":true,\"format\":1", 1);
+        assert!(serde_json::from_str::<FixedLeafSelector>(&top_level).is_err());
+
+        let nested = json.replacen(
+            "{\"type\":\"name\"}",
+            "{\"type\":\"name\",\"future\":true}",
+            1,
+        );
+        assert!(serde_json::from_str::<FixedLeafSelector>(&nested).is_err());
+
+        let deep_nested = json.replacen(
+            "{\"type\":\"struct\",\"name\":\"State\"}",
+            "{\"type\":\"struct\",\"name\":\"State\",\"future\":true}",
+            1,
+        );
+        assert!(serde_json::from_str::<FixedLeafSelector>(&deep_nested).is_err());
+
+        let nested_step = json.replacen(
+            "\"schema_index\":2",
+            "\"schema_index\":2,\"future\":true",
+            1,
+        );
+        assert!(serde_json::from_str::<FixedLeafSelector>(&nested_step).is_err());
+
+        let future_type = json.replacen("\"type\":\"name\"", "\"type\":\"future\"", 1);
+        assert!(serde_json::from_str::<FixedLeafSelector>(&future_type).is_err());
+    }
+
+    #[test]
+    fn format_1_round_trips_every_wire_type_variant() {
+        let variants = vec![
+            (FixedLeafWireType::Byte {}, r#"{"type":"byte"}"#),
+            (FixedLeafWireType::Bool {}, r#"{"type":"bool"}"#),
+            (FixedLeafWireType::Int {}, r#"{"type":"int"}"#),
+            (FixedLeafWireType::Float {}, r#"{"type":"float"}"#),
+            (FixedLeafWireType::Object {}, r#"{"type":"object"}"#),
+            (FixedLeafWireType::Name {}, r#"{"type":"name"}"#),
+            (FixedLeafWireType::Delegate {}, r#"{"type":"delegate"}"#),
+            (FixedLeafWireType::Double {}, r#"{"type":"double"}"#),
+            (
+                FixedLeafWireType::Array {
+                    inner: Box::new(FixedLeafWireType::Bool {}),
+                },
+                r#"{"type":"array","inner":{"type":"bool"}}"#,
+            ),
+            (
+                FixedLeafWireType::Struct {
+                    name: "State".to_owned(),
+                },
+                r#"{"type":"struct","name":"State"}"#,
+            ),
+            (FixedLeafWireType::String {}, r#"{"type":"string"}"#),
+            (FixedLeafWireType::Text {}, r#"{"type":"text"}"#),
+            (FixedLeafWireType::Interface {}, r#"{"type":"interface"}"#),
+            (
+                FixedLeafWireType::MulticastDelegate {},
+                r#"{"type":"multicast_delegate"}"#,
+            ),
+            (
+                FixedLeafWireType::WeakObject {},
+                r#"{"type":"weak_object"}"#,
+            ),
+            (
+                FixedLeafWireType::LazyObject {},
+                r#"{"type":"lazy_object"}"#,
+            ),
+            (
+                FixedLeafWireType::AssetObject {},
+                r#"{"type":"asset_object"}"#,
+            ),
+            (
+                FixedLeafWireType::SoftObject {},
+                r#"{"type":"soft_object"}"#,
+            ),
+            (FixedLeafWireType::UInt64 {}, r#"{"type":"uint64"}"#),
+            (FixedLeafWireType::UInt32 {}, r#"{"type":"uint32"}"#),
+            (FixedLeafWireType::UInt16 {}, r#"{"type":"uint16"}"#),
+            (FixedLeafWireType::Int64 {}, r#"{"type":"int64"}"#),
+            (FixedLeafWireType::Int16 {}, r#"{"type":"int16"}"#),
+            (FixedLeafWireType::Int8 {}, r#"{"type":"int8"}"#),
+            (
+                FixedLeafWireType::Map {
+                    key: Box::new(FixedLeafWireType::Name {}),
+                    value: Box::new(FixedLeafWireType::Int {}),
+                },
+                r#"{"type":"map","key":{"type":"name"},"value":{"type":"int"}}"#,
+            ),
+            (
+                FixedLeafWireType::Set {
+                    key: Box::new(FixedLeafWireType::Object {}),
+                },
+                r#"{"type":"set","key":{"type":"object"}}"#,
+            ),
+            (
+                FixedLeafWireType::Enum {
+                    inner: Box::new(FixedLeafWireType::Byte {}),
+                    name: "Mode".to_owned(),
+                },
+                r#"{"type":"enum","inner":{"type":"byte"},"name":"Mode"}"#,
+            ),
+            (FixedLeafWireType::FieldPath {}, r#"{"type":"field_path"}"#),
+            (
+                FixedLeafWireType::Optional {
+                    inner: Box::new(FixedLeafWireType::Double {}),
+                },
+                r#"{"type":"optional","inner":{"type":"double"}}"#,
+            ),
+            (
+                FixedLeafWireType::Utf8String {},
+                r#"{"type":"utf8_string"}"#,
+            ),
+            (
+                FixedLeafWireType::AnsiString {},
+                r#"{"type":"ansi_string"}"#,
+            ),
+            (FixedLeafWireType::Unknown {}, r#"{"type":"unknown"}"#),
+        ];
+
+        for (variant, expected) in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(json, expected);
+            assert_eq!(
+                serde_json::from_str::<FixedLeafWireType>(&json).unwrap(),
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn format_1_round_trips_every_step_role_kind_and_map_key_identity() {
+        let key = FixedLeafMapKeyIdentity {
+            kind: Some(FixedWireKind::Int32),
+            byte_length: 4,
+            sha256: "aa".repeat(32),
+        };
+        let key_json = concat!(
+            "{\"kind\":\"int32\",\"byte_length\":4,",
+            "\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}"
+        );
+        assert_eq!(serde_json::to_string(&key).unwrap(), key_json);
+        assert_eq!(
+            serde_json::from_str::<FixedLeafMapKeyIdentity>(key_json).unwrap(),
+            key
+        );
+
+        let steps = vec![
+            (
+                FixedLeafSelectorStep::Property {
+                    schema_index: 3,
+                    property_name: "Value".to_owned(),
+                    array_index: 1,
+                    array_dimension: 2,
+                    declaring_schema_name: "Fixture".to_owned(),
+                    declaring_module_path: Some("/Script/Test".to_owned()),
+                    property_type: FixedLeafWireType::Bool {},
+                },
+                "property",
+            ),
+            (
+                FixedLeafSelectorStep::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    schema_name: "/Script/G1R.BoneTrackedData".to_owned(),
+                },
+                "struct",
+            ),
+            (
+                FixedLeafSelectorStep::Map {
+                    key_type: FixedLeafWireType::Int {},
+                    value_type: FixedLeafWireType::Bool {},
+                },
+                "map",
+            ),
+            (
+                FixedLeafSelectorStep::MapEntryValue { key: key.clone() },
+                "map_entry_value",
+            ),
+            (
+                FixedLeafSelectorStep::MapEntryKey { key: key.clone() },
+                "map_entry_key",
+            ),
+            (
+                FixedLeafSelectorStep::RemovedMapKey { key: key.clone() },
+                "removed_map_key",
+            ),
+        ];
+        for (step, tag) in steps {
+            let json = serde_json::to_string(&step).unwrap();
+            assert!(json.starts_with(&format!(r#"{{"step":"{tag}""#)));
+            assert_eq!(
+                serde_json::from_str::<FixedLeafSelectorStep>(&json).unwrap(),
+                step
+            );
+        }
+
+        let roles = [
+            (FixedLeafRole::PropertyValue, "property_value"),
+            (FixedLeafRole::MapKey, "map_key"),
+            (FixedLeafRole::RemovedMapKey, "removed_map_key"),
+        ];
+        for (role, name) in roles {
+            let json = serde_json::to_string(&role).unwrap();
+            assert_eq!(json, format!(r#""{name}""#));
+            assert_eq!(serde_json::from_str::<FixedLeafRole>(&json).unwrap(), role);
+        }
+
+        let kinds = [
+            (FixedWireKind::Byte, "byte"),
+            (FixedWireKind::Bool, "bool"),
+            (FixedWireKind::Int32, "int32"),
+            (FixedWireKind::Float32, "float32"),
+            (FixedWireKind::PackageIndex, "package_index"),
+            (FixedWireKind::FName, "fname"),
+            (FixedWireKind::Float64, "float64"),
+            (FixedWireKind::UInt64, "uint64"),
+            (FixedWireKind::UInt32, "uint32"),
+            (FixedWireKind::UInt16, "uint16"),
+            (FixedWireKind::Int64, "int64"),
+            (FixedWireKind::Int16, "int16"),
+            (FixedWireKind::Int8, "int8"),
+            (FixedWireKind::LinearColorF32x4, "linear_color_f32x4"),
+            (FixedWireKind::Vector4F64x4, "vector4_f64x4"),
+        ];
+        for (kind, name) in kinds {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!(r#""{name}""#));
+            assert_eq!(serde_json::from_str::<FixedWireKind>(&json).unwrap(), kind);
+        }
+    }
+
+    #[test]
+    fn editable_kind_whitelist_is_the_planner_authority() {
+        let cases = [
+            (FixedWireKind::Byte, true),
+            (FixedWireKind::Bool, true),
+            (FixedWireKind::Int32, true),
+            (FixedWireKind::Float32, true),
+            (FixedWireKind::PackageIndex, false),
+            (FixedWireKind::FName, false),
+            (FixedWireKind::Float64, true),
+            (FixedWireKind::UInt64, true),
+            (FixedWireKind::UInt32, true),
+            (FixedWireKind::UInt16, true),
+            (FixedWireKind::Int64, true),
+            (FixedWireKind::Int16, true),
+            (FixedWireKind::Int8, true),
+            (FixedWireKind::LinearColorF32x4, true),
+            (FixedWireKind::Vector4F64x4, true),
+        ];
+        for (kind, editable) in cases {
+            assert_eq!(fixed_wire_kind_is_editable(kind), editable);
+            let observed = vec![0; kind.width()];
+            let mut replacement = observed.clone();
+            replacement[0] = 1;
+            let result = validate_fixed_replacement(kind, &observed, &observed, &replacement);
+            assert_eq!(result.is_ok(), editable, "kind={kind:?}, result={result:?}");
+        }
+    }
 }

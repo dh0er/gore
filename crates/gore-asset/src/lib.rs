@@ -20,7 +20,12 @@ pub use package::{
     ComponentDigest, PackageCarrier, PackageComponent, PackageError, PackageLimits, PackagePaths,
     PackageWriteReceipt,
 };
-pub use patch::{FixedLeafPatch, FixedLeafPatchError, FixedLeafPatchReceipt, PackagePairSeal};
+pub use patch::{
+    describe_fixed_leaves, FixedLeafDescriptor, FixedLeafMapKeyIdentity, FixedLeafPatch,
+    FixedLeafPatchError, FixedLeafPatchReceipt, FixedLeafRole, FixedLeafSelector,
+    FixedLeafSelectorError, FixedLeafSelectorStep, FixedLeafWireType, PackagePairSeal,
+    FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
+};
 pub use primitive::{
     PrimitiveError, PrimitiveKind, PrimitiveProperty, PrimitivePropertyBlock, PrimitiveValue,
     PropertyPayload,

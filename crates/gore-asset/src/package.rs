@@ -9,15 +9,26 @@
 //!
 //! Output is always written to a new pair. Both components are staged and
 //! verified before each file is atomically published with no-clobber semantics.
-//! Filesystems do not offer one atomic rename for two sibling files, so there is
-//! a very small interval between the two publishes; if the second publish fails,
-//! the first is removed. Existing destinations are never overwritten.
+//! The `.uexp` payload is published first and `.uasset` last as the visible
+//! commit marker. Filesystems do not offer one atomic rename for two sibling
+//! files, so ordinary process termination between those publishes may leave an
+//! orphan `.uexp`; `.uasset` is attempted only after `.uexp` succeeds. Parent
+//! directory sync is best-effort, so power-loss durability remains filesystem-
+//! and platform-dependent. Existing destinations are never overwritten.
+//!
+//! The final cleanup operation is necessarily a path-based unlink. The carrier
+//! retains the published file handle, checks SHA-256 during cleanup, then
+//! rechecks file identity immediately before unlinking. The standard library
+//! cannot make that identity check and unlink one atomic operation. Output
+//! directories therefore remain a trusted boundary and must have no concurrent
+//! writer or renamer, adversarial or otherwise.
 
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::fs::{self, File, Metadata, OpenOptions};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -42,9 +53,11 @@ impl Default for PackageLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum PackageComponent {
+    #[serde(rename = "uasset")]
     Uasset,
+    #[serde(rename = "uexp")]
     Uexp,
 }
 
@@ -110,6 +123,42 @@ pub struct PackageWriteReceipt {
     pub uexp: ComponentDigest,
 }
 
+/// A cleanup step that was deliberately refused or could not be completed.
+///
+/// Cleanup is conditional on the destination still identifying the exact file
+/// published by this process. A changed path is retained rather than risking
+/// deletion of another process's replacement.
+#[derive(Debug, Error)]
+pub enum CleanupFailure {
+    #[error("refusing to remove published {component} path {path}: {reason}")]
+    OwnershipChanged {
+        component: PackageComponent,
+        path: PathBuf,
+        reason: &'static str,
+    },
+    #[error("failed to inspect published {component} path {path} during cleanup: {source}")]
+    Inspect {
+        component: PackageComponent,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("failed to verify published {component} path {path} during cleanup: {source}")]
+    Verify {
+        component: PackageComponent,
+        path: PathBuf,
+        #[source]
+        source: Box<PackageError>,
+    },
+    #[error("failed to remove published {component} path {path}: {source}")]
+    Remove {
+        component: PackageComponent,
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+}
+
 #[derive(Debug, Error)]
 pub enum PackageError {
     #[error("expected a .{expected} path, got {path}")]
@@ -119,7 +168,7 @@ pub enum PackageError {
     },
     #[error("package path has no non-empty file stem: {0}")]
     MissingFileStem(PathBuf),
-    #[error("symbolic-link package paths are refused: {0}")]
+    #[error("symbolic-link or reparse-point package paths are refused: {0}")]
     SymlinkPath(PathBuf),
     #[error("package component is not a regular file: {0}")]
     NotRegularFile(PathBuf),
@@ -193,14 +242,22 @@ pub enum PackageError {
     },
     #[error("reopened file hash differs for {0}")]
     VerificationHash(PathBuf),
-    #[error(
-        "publishing {failed_destination} failed ({publish_error}); removing already-published {published} also failed: {rollback_error}"
-    )]
-    PublishRollbackFailed {
-        published: PathBuf,
-        failed_destination: PathBuf,
-        publish_error: String,
-        rollback_error: io::Error,
+    #[error("reopened file identity differs for {0}")]
+    VerificationIdentity(PathBuf),
+    #[error("package path changed identity while it was being opened: {0}")]
+    ConcurrentIdentityChange(PathBuf),
+    #[error("loaded package pair changed while revalidating {component} component {path}")]
+    PairGenerationChanged {
+        component: PackageComponent,
+        path: PathBuf,
+        #[source]
+        source: Box<PackageError>,
+    },
+    #[error("package pair publication failed and cleanup was incomplete: {cleanup_failures:?}")]
+    PublishCleanupFailed {
+        #[source]
+        cause: Box<PackageError>,
+        cleanup_failures: Vec<CleanupFailure>,
     },
     #[error("failed to {operation} {path}: {source}")]
     Io {
@@ -221,41 +278,82 @@ pub struct PackageCarrier {
 }
 
 impl PackageCarrier {
-    /// Load and re-open both components. Re-opening verifies length and SHA-256
-    /// so a file changed during the read is not silently accepted.
+    /// Load and re-open both components. After both reads, the complete pair is
+    /// revalidated against the exact loaded lengths and SHA-256 digests, with
+    /// `.uexp` checked first and the `.uasset` commit marker last. These are
+    /// sequential point checks, not an atomic pair snapshot: callers must ensure
+    /// there is no concurrent source writer. Observed component mutation fails
+    /// closed, but opaque vanilla pairs carry no shared semantic generation id.
     pub fn load(
         uasset_path: impl AsRef<Path>,
         limits: PackageLimits,
     ) -> Result<Self, PackageError> {
+        Self::load_with_hooks(uasset_path.as_ref(), limits, |_| {}, |_| {})
+    }
+
+    #[cfg(test)]
+    fn load_with_after_reads<F>(
+        uasset_path: &Path,
+        limits: PackageLimits,
+        after_reads: F,
+    ) -> Result<Self, PackageError>
+    where
+        F: FnOnce(&PackagePaths),
+    {
+        Self::load_with_hooks(uasset_path, limits, |_| {}, after_reads)
+    }
+
+    fn load_with_hooks<F, G>(
+        uasset_path: &Path,
+        limits: PackageLimits,
+        after_uasset_read: F,
+        after_reads: G,
+    ) -> Result<Self, PackageError>
+    where
+        F: FnOnce(&PackagePaths),
+        G: FnOnce(&PackagePaths),
+    {
         let requested = PackagePaths::from_uasset(uasset_path)?;
         let uasset_path = canonical_regular_path(requested.uasset())?;
         let uexp_path = canonical_regular_path(requested.uexp())?;
+        let source = PackagePaths {
+            uasset: uasset_path,
+            uexp: uexp_path,
+        };
 
         // Check both advertised lengths before allocating either component, so
         // a small pair limit cannot be bypassed by a large first file.
         let advertised_uasset = inspect_component_length(
-            &uasset_path,
+            source.uasset(),
             PackageComponent::Uasset,
             limits.max_uasset_bytes,
         )?;
         let advertised_uexp =
-            inspect_component_length(&uexp_path, PackageComponent::Uexp, limits.max_uexp_bytes)?;
+            inspect_component_length(source.uexp(), PackageComponent::Uexp, limits.max_uexp_bytes)?;
         validate_pair_sizes_u64(advertised_uasset, advertised_uexp, limits)?;
 
         let uasset = read_verified_component(
-            &uasset_path,
+            source.uasset(),
             PackageComponent::Uasset,
             limits.max_uasset_bytes,
+            0,
+            limits.max_total_bytes,
         )?;
-        let uexp =
-            read_verified_component(&uexp_path, PackageComponent::Uexp, limits.max_uexp_bytes)?;
+        after_uasset_read(&source);
+        let loaded_uasset = u64::try_from(uasset.len()).map_err(|_| PackageError::SizeOverflow)?;
+        let uexp = read_verified_component(
+            source.uexp(),
+            PackageComponent::Uexp,
+            limits.max_uexp_bytes,
+            loaded_uasset,
+            limits.max_total_bytes,
+        )?;
         validate_pair_sizes(uasset.len(), uexp.len(), limits)?;
+        after_reads(&source);
+        verify_loaded_pair(&source, &uasset, &uexp, limits)?;
 
         Ok(Self {
-            source: Some(PackagePaths {
-                uasset: uasset_path,
-                uexp: uexp_path,
-            }),
+            source: Some(source),
             uasset,
             uexp,
             limits,
@@ -412,32 +510,17 @@ impl PackageCarrier {
             self.limits.max_uexp_bytes,
         )?;
 
-        persist_new(staged_uasset, output.uasset())?;
-        if let Err(publish_error) = persist_new(staged_uexp, output.uexp()) {
-            return match fs::remove_file(output.uasset()) {
-                Ok(()) => Err(publish_error),
-                Err(rollback_error) => Err(PackageError::PublishRollbackFailed {
-                    published: output.uasset().to_path_buf(),
-                    failed_destination: output.uexp().to_path_buf(),
-                    publish_error: publish_error.to_string(),
-                    rollback_error,
-                }),
-            };
-        }
-
-        let uasset = verify_published(
-            output.uasset(),
-            PackageComponent::Uasset,
+        publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
             &self.uasset,
-            self.limits.max_uasset_bytes,
-        )?;
-        let uexp = verify_published(
-            output.uexp(),
-            PackageComponent::Uexp,
             &self.uexp,
-            self.limits.max_uexp_bytes,
-        )?;
-        Ok(PackageWriteReceipt { uasset, uexp })
+            self.limits,
+            persist_new,
+            |published, limit| published.verify(limit),
+            PublishedComponent::remove_if_owned,
+        )
     }
 
     fn validate_output_paths(&self, output: &PackagePaths) -> Result<(), PackageError> {
@@ -492,23 +575,141 @@ fn validate_package_path(path: &Path, component: PackageComponent) -> Result<(),
     Ok(())
 }
 
-fn canonical_regular_path(path: &Path) -> Result<PathBuf, PackageError> {
-    let link_metadata = fs::symlink_metadata(path).map_err(|source| PackageError::Io {
-        operation: "inspect input",
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    volume: u64,
+    id: [u8; 16],
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(not(any(unix, windows)))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileIdentity {
+    length: u64,
+    created: Option<std::time::SystemTime>,
+    modified: Option<std::time::SystemTime>,
+}
+
+#[cfg(windows)]
+fn identity_from_open_file(file: &File, path: &Path) -> Result<FileIdentity, PackageError> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
+    };
+
+    let mut id = FILE_ID_INFO::default();
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileIdInfo,
+            (&mut id as *mut FILE_ID_INFO).cast(),
+            std::mem::size_of::<FILE_ID_INFO>() as u32,
+        )
+    };
+    if ok == 0 {
+        return Err(PackageError::Io {
+            operation: "query opened file identity",
+            path: path.to_path_buf(),
+            source: io::Error::last_os_error(),
+        });
+    }
+    Ok(FileIdentity {
+        volume: id.VolumeSerialNumber,
+        id: id.FileId.Identifier,
+    })
+}
+
+#[cfg(unix)]
+fn identity_from_open_file(file: &File, path: &Path) -> Result<FileIdentity, PackageError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata().map_err(|source| PackageError::Io {
+        operation: "query opened file identity",
         path: path.to_path_buf(),
         source,
     })?;
-    if link_metadata.file_type().is_symlink() {
+    Ok(FileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn identity_from_open_file(file: &File, path: &Path) -> Result<FileIdentity, PackageError> {
+    let metadata = file.metadata().map_err(|source| PackageError::Io {
+        operation: "query opened file identity",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(FileIdentity {
+        length: metadata.len(),
+        created: metadata.created().ok(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn metadata_is_reparse_point(_metadata: &Metadata) -> bool {
+    false
+}
+
+fn ensure_regular_metadata(path: &Path, metadata: &Metadata) -> Result<(), PackageError> {
+    if metadata.file_type().is_symlink() || metadata_is_reparse_point(metadata) {
         return Err(PackageError::SymlinkPath(path.to_path_buf()));
     }
-    if !link_metadata.is_file() {
+    if !metadata.is_file() {
         return Err(PackageError::NotRegularFile(path.to_path_buf()));
     }
-    fs::canonicalize(path).map_err(|source| PackageError::Io {
+    Ok(())
+}
+
+fn open_read_without_following_reparse(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
+    }
+    options.open(path)
+}
+
+fn canonical_regular_path(path: &Path) -> Result<PathBuf, PackageError> {
+    let original = open_regular(path)?;
+    let original_identity = identity_from_open_file(&original, path)?;
+    let canonical = fs::canonicalize(path).map_err(|source| PackageError::Io {
         operation: "canonicalize input",
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    let canonical_file = open_regular(&canonical)?;
+    if identity_from_open_file(&canonical_file, &canonical)? != original_identity {
+        return Err(PackageError::ConcurrentIdentityChange(path.to_path_buf()));
+    }
+    Ok(canonical)
 }
 
 fn normalized_output_paths(path: &Path) -> Result<PackagePaths, PackageError> {
@@ -536,11 +737,14 @@ fn normalized_output_paths(path: &Path) -> Result<PackagePaths, PackageError> {
 fn read_verified_component(
     path: &Path,
     component: PackageComponent,
-    limit: u64,
+    component_limit: u64,
+    already_loaded: u64,
+    total_limit: u64,
 ) -> Result<Vec<u8>, PackageError> {
     let mut file = open_regular(path)?;
     let advertised = file_metadata_len(&file, path)?;
-    check_component_limit(component, advertised, limit)?;
+    check_component_limit(component, advertised, component_limit)?;
+    check_total_limit(already_loaded, advertised, total_limit)?;
     let allocation =
         usize::try_from(advertised).map_err(|_| PackageError::LengthDoesNotFitMemory {
             component,
@@ -554,7 +758,8 @@ fn read_verified_component(
             length: allocation,
             message: error.to_string(),
         })?;
-    let read_limit = limit.saturating_add(1);
+    let remaining_total = total_limit.saturating_sub(already_loaded);
+    let read_limit = component_limit.min(remaining_total).saturating_add(1);
     (&mut file)
         .take(read_limit)
         .read_to_end(&mut bytes)
@@ -564,7 +769,8 @@ fn read_verified_component(
             source,
         })?;
     let actual = u64::try_from(bytes.len()).map_err(|_| PackageError::SizeOverflow)?;
-    check_component_limit(component, actual, limit)?;
+    check_component_limit(component, actual, component_limit)?;
+    check_total_limit(already_loaded, actual, total_limit)?;
     if actual != advertised {
         return Err(PackageError::ConcurrentLengthChange {
             path: path.to_path_buf(),
@@ -573,8 +779,58 @@ fn read_verified_component(
         });
     }
     let expected_hash = sha256(&bytes);
-    verify_path(path, component, actual, expected_hash, limit)?;
+    verify_path(path, component, actual, expected_hash, component_limit)?;
     Ok(bytes)
+}
+
+fn check_total_limit(already_loaded: u64, component: u64, limit: u64) -> Result<(), PackageError> {
+    let actual = already_loaded
+        .checked_add(component)
+        .ok_or(PackageError::SizeOverflow)?;
+    if actual > limit {
+        return Err(PackageError::PairTooLarge { actual, limit });
+    }
+    Ok(())
+}
+
+fn verify_loaded_pair(
+    paths: &PackagePaths,
+    uasset: &[u8],
+    uexp: &[u8],
+    limits: PackageLimits,
+) -> Result<(), PackageError> {
+    verify_loaded_pair_with(paths, uasset, uexp, limits, verify_path)
+}
+
+fn verify_loaded_pair_with<F>(
+    paths: &PackagePaths,
+    uasset: &[u8],
+    uexp: &[u8],
+    limits: PackageLimits,
+    mut verify: F,
+) -> Result<(), PackageError>
+where
+    F: FnMut(&Path, PackageComponent, u64, [u8; 32], u64) -> Result<(), PackageError>,
+{
+    // Payload first, commit marker last. These sequential point checks detect a
+    // change that overlaps an observation, but they require the caller to keep
+    // concurrent source writers out and do not create an atomic pair snapshot.
+    for (component, bytes, limit) in [
+        (PackageComponent::Uexp, uexp, limits.max_uexp_bytes),
+        (PackageComponent::Uasset, uasset, limits.max_uasset_bytes),
+    ] {
+        let path = paths.component(component);
+        let expected_length = u64::try_from(bytes.len()).map_err(|_| PackageError::SizeOverflow)?;
+        let expected_hash = sha256(bytes);
+        verify(path, component, expected_length, expected_hash, limit).map_err(|source| {
+            PackageError::PairGenerationChanged {
+                component,
+                path: path.to_path_buf(),
+                source: Box::new(source),
+            }
+        })?;
+    }
+    Ok(())
 }
 
 fn validate_pair_sizes(
@@ -656,23 +912,40 @@ fn checked_range(
     Ok(offset..end)
 }
 
-fn open_regular(path: &Path) -> Result<File, PackageError> {
+fn open_checked_regular_handle(path: &Path) -> Result<File, PackageError> {
     let link_metadata = fs::symlink_metadata(path).map_err(|source| PackageError::Io {
         operation: "inspect file",
         path: path.to_path_buf(),
         source,
     })?;
-    if link_metadata.file_type().is_symlink() {
-        return Err(PackageError::SymlinkPath(path.to_path_buf()));
-    }
-    if !link_metadata.is_file() {
-        return Err(PackageError::NotRegularFile(path.to_path_buf()));
-    }
-    File::open(path).map_err(|source| PackageError::Io {
-        operation: "open file",
+    ensure_regular_metadata(path, &link_metadata)?;
+    let file = open_read_without_following_reparse(path).map_err(|source| PackageError::Io {
+        operation: "open file without following links",
         path: path.to_path_buf(),
         source,
-    })
+    })?;
+    let opened = file.metadata().map_err(|source| PackageError::Io {
+        operation: "read opened file metadata",
+        path: path.to_path_buf(),
+        source,
+    })?;
+    ensure_regular_metadata(path, &opened)?;
+    Ok(file)
+}
+
+fn open_regular(path: &Path) -> Result<File, PackageError> {
+    let file = open_checked_regular_handle(path)?;
+    let opened_identity = identity_from_open_file(&file, path)?;
+    let recheck = open_checked_regular_handle(path)?;
+    if identity_from_open_file(&recheck, path)? != opened_identity {
+        return Err(PackageError::ConcurrentIdentityChange(path.to_path_buf()));
+    }
+    Ok(file)
+}
+
+fn current_path_identity(path: &Path) -> Result<FileIdentity, PackageError> {
+    let file = open_regular(path)?;
+    identity_from_open_file(&file, path)
 }
 
 fn file_metadata_len(file: &File, path: &Path) -> Result<u64, PackageError> {
@@ -735,14 +1008,21 @@ fn stage_component(
     Ok(temp)
 }
 
-fn persist_new(temp: NamedTempFile, destination: &Path) -> Result<(), PackageError> {
+#[derive(Debug)]
+struct PublishedHandle {
+    file: File,
+    identity: FileIdentity,
+}
+
+fn persist_new(temp: NamedTempFile, destination: &Path) -> Result<PublishedHandle, PackageError> {
+    let identity = identity_from_open_file(temp.as_file(), temp.path())?;
     match temp.persist_noclobber(destination) {
-        // The staged file was already flushed and synced before this atomic
-        // rename. Avoid introducing a post-publication failure point here: a
-        // returned error must never leave an unreported first component behind.
+        // The staged file was already flushed and synced. Retain its open
+        // handle so post-publication verification and cleanup can compare file
+        // identity rather than trusting only a reusable path.
         Ok(file) => {
-            drop(file);
-            Ok(())
+            sync_parent_directory_best_effort(destination);
+            Ok(PublishedHandle { file, identity })
         }
         Err(error) => Err(PackageError::Io {
             operation: "publish new output",
@@ -752,20 +1032,245 @@ fn persist_new(temp: NamedTempFile, destination: &Path) -> Result<(), PackageErr
     }
 }
 
-fn verify_published(
-    path: &Path,
+fn sync_parent_directory_best_effort(path: &Path) {
+    // Unix permits opening and syncing a directory to durably record a rename
+    // or unlink. Windows does not expose a portable std equivalent. This is
+    // intentionally best-effort: once a name is visible, a directory-sync
+    // failure must not be reported as though publication never happened.
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        if let Ok(directory) = File::open(parent) {
+            let _ = directory.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+#[derive(Debug)]
+struct PublishedComponent {
     component: PackageComponent,
-    expected: &[u8],
-    limit: u64,
-) -> Result<ComponentDigest, PackageError> {
-    let length = u64::try_from(expected.len()).map_err(|_| PackageError::SizeOverflow)?;
-    let expected_hash = sha256(expected);
-    verify_path(path, component, length, expected_hash, limit)?;
-    Ok(ComponentDigest {
-        path: path.to_path_buf(),
-        length,
-        sha256: expected_hash,
+    path: PathBuf,
+    length: u64,
+    sha256: [u8; 32],
+    handle: PublishedHandle,
+}
+
+impl PublishedComponent {
+    fn new(
+        component: PackageComponent,
+        path: &Path,
+        expected: &[u8],
+        handle: PublishedHandle,
+    ) -> Self {
+        Self {
+            component,
+            path: path.to_path_buf(),
+            length: expected.len() as u64,
+            sha256: sha256(expected),
+            handle,
+        }
+    }
+
+    fn verify(&self, limit: u64) -> Result<ComponentDigest, PackageError> {
+        let mut file = open_regular(&self.path)?;
+        if identity_from_open_file(&file, &self.path)? != self.handle.identity {
+            return Err(PackageError::VerificationIdentity(self.path.clone()));
+        }
+        verify_open_file(
+            &mut file,
+            &self.path,
+            self.component,
+            self.length,
+            self.sha256,
+            limit,
+        )?;
+        if current_path_identity(&self.path)? != self.handle.identity {
+            return Err(PackageError::VerificationIdentity(self.path.clone()));
+        }
+        Ok(ComponentDigest {
+            path: self.path.clone(),
+            length: self.length,
+            sha256: self.sha256,
+        })
+    }
+
+    fn remove_if_owned(&self) -> Result<(), CleanupFailure> {
+        self.remove_if_owned_with_before_final_check(|_| {})
+    }
+
+    fn remove_if_owned_with_before_final_check<F>(
+        &self,
+        before_final_check: F,
+    ) -> Result<(), CleanupFailure>
+    where
+        F: FnOnce(&Path),
+    {
+        let published_identity = identity_from_open_file(&self.handle.file, &self.path)
+            .map_err(|source| self.cleanup_verification_failure(source))?;
+        if published_identity != self.handle.identity {
+            return Err(self.ownership_changed("published file-handle identity changed"));
+        }
+
+        let mut current = match open_regular(&self.path) {
+            Ok(file) => file,
+            Err(PackageError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(source) => return Err(self.cleanup_verification_failure(source)),
+        };
+        let current_identity = identity_from_open_file(&current, &self.path)
+            .map_err(|source| self.cleanup_verification_failure(source))?;
+        if current_identity != self.handle.identity {
+            return Err(self.ownership_changed("path no longer identifies the published file"));
+        }
+        if let Err(source) = verify_open_file(
+            &mut current,
+            &self.path,
+            self.component,
+            self.length,
+            self.sha256,
+            self.length,
+        ) {
+            return Err(self.cleanup_verification_failure(source));
+        }
+
+        // Tests can deterministically replace the name here. Production uses a
+        // no-op; the following lstat is the last identity check available via
+        // std before the necessarily path-based unlink.
+        before_final_check(&self.path);
+        match current_path_identity(&self.path) {
+            Err(PackageError::Io { source, .. }) if source.kind() == io::ErrorKind::NotFound => {
+                return Ok(());
+            }
+            Err(source) => return Err(self.cleanup_verification_failure(source)),
+            Ok(identity) if identity != self.handle.identity => {
+                return Err(self.ownership_changed("path identity changed before removal"));
+            }
+            Ok(_) => {}
+        }
+        drop(current);
+        match fs::remove_file(&self.path) {
+            Ok(()) => {
+                sync_parent_directory_best_effort(&self.path);
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(CleanupFailure::Remove {
+                component: self.component,
+                path: self.path.clone(),
+                source,
+            }),
+        }
+    }
+
+    fn ownership_changed(&self, reason: &'static str) -> CleanupFailure {
+        CleanupFailure::OwnershipChanged {
+            component: self.component,
+            path: self.path.clone(),
+            reason,
+        }
+    }
+
+    fn cleanup_verification_failure(&self, source: PackageError) -> CleanupFailure {
+        match source {
+            PackageError::VerificationLength { .. }
+            | PackageError::VerificationHash(_)
+            | PackageError::VerificationIdentity(_)
+            | PackageError::ConcurrentIdentityChange(_)
+            | PackageError::SymlinkPath(_)
+            | PackageError::NotRegularFile(_) => {
+                self.ownership_changed("identity, length, or SHA-256 no longer matches")
+            }
+            source => CleanupFailure::Verify {
+                component: self.component,
+                path: self.path.clone(),
+                source: Box::new(source),
+            },
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publish_staged_pair_with<P, V, C>(
+    output: &PackagePaths,
+    staged_uasset: NamedTempFile,
+    staged_uexp: NamedTempFile,
+    expected_uasset: &[u8],
+    expected_uexp: &[u8],
+    limits: PackageLimits,
+    mut persist: P,
+    mut verify: V,
+    mut cleanup: C,
+) -> Result<PackageWriteReceipt, PackageError>
+where
+    P: FnMut(NamedTempFile, &Path) -> Result<PublishedHandle, PackageError>,
+    V: FnMut(&PublishedComponent, u64) -> Result<ComponentDigest, PackageError>,
+    C: FnMut(&PublishedComponent) -> Result<(), CleanupFailure>,
+{
+    // Publish the payload first. The `.uasset` is the commit marker and is
+    // deliberately the final visible rename.
+    let uexp_handle = persist(staged_uexp, output.uexp())?;
+    let uexp = PublishedComponent::new(
+        PackageComponent::Uexp,
+        output.uexp(),
+        expected_uexp,
+        uexp_handle,
+    );
+    let uasset_handle = match persist(staged_uasset, output.uasset()) {
+        Ok(handle) => handle,
+        Err(cause) => return publication_failure(cause, [&uexp], &mut cleanup),
+    };
+    let uasset = PublishedComponent::new(
+        PackageComponent::Uasset,
+        output.uasset(),
+        expected_uasset,
+        uasset_handle,
+    );
+
+    // Verify the payload first and the commit marker last, matching load order.
+    let uexp_receipt = match verify(&uexp, limits.max_uexp_bytes) {
+        Ok(receipt) => receipt,
+        Err(cause) => return publication_failure(cause, [&uasset, &uexp], &mut cleanup),
+    };
+    let uasset_receipt = match verify(&uasset, limits.max_uasset_bytes) {
+        Ok(receipt) => receipt,
+        Err(cause) => return publication_failure(cause, [&uasset, &uexp], &mut cleanup),
+    };
+
+    Ok(PackageWriteReceipt {
+        uasset: uasset_receipt,
+        uexp: uexp_receipt,
     })
+}
+
+fn publication_failure<C, const N: usize>(
+    cause: PackageError,
+    cleanup_order: [&PublishedComponent; N],
+    cleanup: &mut C,
+) -> Result<PackageWriteReceipt, PackageError>
+where
+    C: FnMut(&PublishedComponent) -> Result<(), CleanupFailure>,
+{
+    let mut cleanup_failures = Vec::new();
+    for published in cleanup_order {
+        if let Err(failure) = cleanup(published) {
+            cleanup_failures.push(failure);
+            // Cleanup order encodes dependency: `.uasset` is the commit marker
+            // and `.uexp` its payload. If marker cleanup fails or is refused,
+            // retain the payload rather than manufacturing a visible marker
+            // whose required sibling was deleted.
+            break;
+        }
+    }
+    if cleanup_failures.is_empty() {
+        Err(cause)
+    } else {
+        Err(PackageError::PublishCleanupFailed {
+            cause: Box::new(cause),
+            cleanup_failures,
+        })
+    }
 }
 
 fn verify_path(
@@ -776,7 +1281,30 @@ fn verify_path(
     limit: u64,
 ) -> Result<(), PackageError> {
     let mut file = open_regular(path)?;
-    let metadata_length = file_metadata_len(&file, path)?;
+    let opened_identity = identity_from_open_file(&file, path)?;
+    verify_open_file(
+        &mut file,
+        path,
+        component,
+        expected_length,
+        expected_hash,
+        limit,
+    )?;
+    if current_path_identity(path)? != opened_identity {
+        return Err(PackageError::ConcurrentIdentityChange(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn verify_open_file(
+    file: &mut File,
+    path: &Path,
+    component: PackageComponent,
+    expected_length: u64,
+    expected_hash: [u8; 32],
+    limit: u64,
+) -> Result<(), PackageError> {
+    let metadata_length = file_metadata_len(file, path)?;
     if metadata_length != expected_length {
         return Err(PackageError::VerificationLength {
             path: path.to_path_buf(),
@@ -785,6 +1313,12 @@ fn verify_path(
         });
     }
     check_component_limit(component, metadata_length, limit)?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|source| PackageError::Io {
+            operation: "rewind reopened file",
+            path: path.to_path_buf(),
+            source,
+        })?;
 
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; HASH_BUFFER_BYTES];
@@ -1104,6 +1638,77 @@ mod tests {
     }
 
     #[test]
+    fn load_caps_replaced_second_component_to_remaining_pair_budget() {
+        let temp = tempfile::tempdir().unwrap();
+        let uasset = temp.path().join("GrowingPair.uasset");
+        fs::write(&uasset, [1; 4]).unwrap();
+        fs::write(uasset.with_extension("uexp"), [2; 2]).unwrap();
+        let limits = PackageLimits {
+            max_uasset_bytes: 8,
+            max_uexp_bytes: 8,
+            max_total_bytes: 6,
+        };
+
+        let result = PackageCarrier::load_with_hooks(
+            &uasset,
+            limits,
+            |paths| fs::write(paths.uexp(), [3; 5]).unwrap(),
+            |_| {},
+        );
+        assert!(matches!(
+            result,
+            Err(PackageError::PairTooLarge {
+                actual: 9,
+                limit: 6
+            })
+        ));
+    }
+
+    #[test]
+    fn load_rechecks_payload_then_commit_marker_after_both_reads() {
+        let paths = PackagePaths::from_uasset("Fixture.uasset").unwrap();
+        let mut order = Vec::new();
+        verify_loaded_pair_with(
+            &paths,
+            b"head",
+            b"body",
+            small_limits(),
+            |_path, component, _length, _hash, _limit| {
+                order.push(component);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(order, [PackageComponent::Uexp, PackageComponent::Uasset]);
+    }
+
+    #[test]
+    fn load_rejects_either_component_changing_after_both_reads() {
+        for changed in [PackageComponent::Uexp, PackageComponent::Uasset] {
+            let temp = tempfile::tempdir().unwrap();
+            let uasset = temp.path().join("Fixture.uasset");
+            fs::write(&uasset, b"head-a").unwrap();
+            fs::write(uasset.with_extension("uexp"), b"body-a").unwrap();
+
+            let result = PackageCarrier::load_with_after_reads(&uasset, small_limits(), |paths| {
+                fs::write(
+                    paths.component(changed),
+                    match changed {
+                        PackageComponent::Uasset => &b"head-b"[..],
+                        PackageComponent::Uexp => &b"body-b"[..],
+                    },
+                )
+                .unwrap();
+            });
+            assert!(matches!(
+                result,
+                Err(PackageError::PairGenerationChanged { component, .. })
+                    if component == changed
+            ));
+        }
+    }
+
+    #[test]
     fn writes_only_a_new_verified_pair() {
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().join("Edited.uasset");
@@ -1130,6 +1735,288 @@ mod tests {
             carrier.write_new(&output),
             Err(PackageError::DestinationExists(_))
         ));
+    }
+
+    #[test]
+    fn second_publish_failure_removes_payload_without_exposing_commit_marker() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let output = PackagePaths::from_uasset(temp.path().join("Edited.uasset")).unwrap();
+        let staged_uasset = stage_component(
+            temp.path(),
+            PackageComponent::Uasset,
+            b"head",
+            small_limits().max_uasset_bytes,
+        )
+        .unwrap();
+        let staged_uexp = stage_component(
+            temp.path(),
+            PackageComponent::Uexp,
+            b"body",
+            small_limits().max_uexp_bytes,
+        )
+        .unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let publish_events = Rc::clone(&events);
+        let cleanup_events = Rc::clone(&events);
+        let mut publishes = 0usize;
+
+        let result = publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
+            b"head",
+            b"body",
+            small_limits(),
+            move |staged, destination| {
+                let component = if destination.extension() == Some(std::ffi::OsStr::new("uexp")) {
+                    PackageComponent::Uexp
+                } else {
+                    PackageComponent::Uasset
+                };
+                publish_events
+                    .borrow_mut()
+                    .push(format!("publish:{component}"));
+                publishes += 1;
+                if publishes == 2 {
+                    return Err(PackageError::Io {
+                        operation: "injected second publish",
+                        path: destination.to_path_buf(),
+                        source: io::Error::other("injected"),
+                    });
+                }
+                persist_new(staged, destination)
+            },
+            |_published, _limit| unreachable!("verification follows both publishes"),
+            move |published| {
+                cleanup_events
+                    .borrow_mut()
+                    .push(format!("cleanup:{}", published.component));
+                published.remove_if_owned()
+            },
+        );
+
+        assert!(matches!(result, Err(PackageError::Io { .. })));
+        assert_eq!(
+            *events.borrow(),
+            ["publish:uexp", "publish:uasset", "cleanup:uexp"]
+        );
+        assert!(!output.uasset().exists());
+        assert!(!output.uexp().exists());
+    }
+
+    #[test]
+    fn postverify_failure_cleans_commit_marker_before_payload() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let output = PackagePaths::from_uasset(temp.path().join("Edited.uasset")).unwrap();
+        let staged_uasset =
+            stage_component(temp.path(), PackageComponent::Uasset, b"head", 64).unwrap();
+        let staged_uexp =
+            stage_component(temp.path(), PackageComponent::Uexp, b"body", 64).unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let verify_events = Rc::clone(&events);
+        let cleanup_events = Rc::clone(&events);
+
+        let result = publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
+            b"head",
+            b"body",
+            small_limits(),
+            persist_new,
+            move |published, limit| {
+                verify_events
+                    .borrow_mut()
+                    .push(format!("verify:{}", published.component));
+                if published.component == PackageComponent::Uasset {
+                    return Err(PackageError::VerificationHash(published.path.clone()));
+                }
+                published.verify(limit)
+            },
+            move |published| {
+                cleanup_events
+                    .borrow_mut()
+                    .push(format!("cleanup:{}", published.component));
+                published.remove_if_owned()
+            },
+        );
+
+        assert!(matches!(result, Err(PackageError::VerificationHash(_))));
+        assert_eq!(
+            *events.borrow(),
+            [
+                "verify:uexp",
+                "verify:uasset",
+                "cleanup:uasset",
+                "cleanup:uexp"
+            ]
+        );
+        assert!(!output.uasset().exists());
+        assert!(!output.uexp().exists());
+    }
+
+    #[test]
+    fn marker_cleanup_failure_retains_dependent_payload() {
+        use std::cell::RefCell;
+
+        let temp = tempfile::tempdir().unwrap();
+        let output = PackagePaths::from_uasset(temp.path().join("Edited.uasset")).unwrap();
+        let staged_uasset =
+            stage_component(temp.path(), PackageComponent::Uasset, b"head", 64).unwrap();
+        let staged_uexp =
+            stage_component(temp.path(), PackageComponent::Uexp, b"body", 64).unwrap();
+        let cleanup_order = RefCell::new(Vec::new());
+
+        let result = publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
+            b"head",
+            b"body",
+            small_limits(),
+            persist_new,
+            |published, limit| {
+                if published.component == PackageComponent::Uasset {
+                    return Err(PackageError::VerificationHash(published.path.clone()));
+                }
+                published.verify(limit)
+            },
+            |published| {
+                cleanup_order.borrow_mut().push(published.component);
+                Err(CleanupFailure::OwnershipChanged {
+                    component: published.component,
+                    path: published.path.clone(),
+                    reason: "injected marker cleanup refusal",
+                })
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(PackageError::PublishCleanupFailed {
+                cleanup_failures,
+                ..
+            }) if cleanup_failures.len() == 1
+        ));
+        assert_eq!(*cleanup_order.borrow(), [PackageComponent::Uasset]);
+        assert_eq!(fs::read(output.uasset()).unwrap(), b"head");
+        assert_eq!(fs::read(output.uexp()).unwrap(), b"body");
+    }
+
+    #[test]
+    fn cleanup_never_deletes_a_same_length_changed_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = PackagePaths::from_uasset(temp.path().join("Edited.uasset")).unwrap();
+        let staged_uasset =
+            stage_component(temp.path(), PackageComponent::Uasset, b"head", 64).unwrap();
+        let staged_uexp =
+            stage_component(temp.path(), PackageComponent::Uexp, b"body", 64).unwrap();
+
+        let result = publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
+            b"head",
+            b"body",
+            small_limits(),
+            persist_new,
+            |published, limit| {
+                if published.component == PackageComponent::Uasset {
+                    fs::write(&published.path, b"evil").unwrap();
+                    return Err(PackageError::VerificationHash(published.path.clone()));
+                }
+                published.verify(limit)
+            },
+            PublishedComponent::remove_if_owned,
+        );
+
+        assert!(matches!(
+            result,
+            Err(PackageError::PublishCleanupFailed {
+                cleanup_failures,
+                ..
+            }) if cleanup_failures.len() == 1
+        ));
+        assert_eq!(fs::read(output.uasset()).unwrap(), b"evil");
+        assert_eq!(fs::read(output.uexp()).unwrap(), b"body");
+    }
+
+    #[test]
+    fn cleanup_detects_same_bytes_replacement_before_final_identity_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = PackagePaths::from_uasset(temp.path().join("Edited.uasset")).unwrap();
+        let displaced = temp.path().join("published-original.uasset");
+        let staged_uasset =
+            stage_component(temp.path(), PackageComponent::Uasset, b"head", 64).unwrap();
+        let staged_uexp =
+            stage_component(temp.path(), PackageComponent::Uexp, b"body", 64).unwrap();
+
+        let result = publish_staged_pair_with(
+            &output,
+            staged_uasset,
+            staged_uexp,
+            b"head",
+            b"body",
+            small_limits(),
+            persist_new,
+            |published, limit| {
+                if published.component == PackageComponent::Uasset {
+                    return Err(PackageError::VerificationHash(published.path.clone()));
+                }
+                published.verify(limit)
+            },
+            |published| {
+                if published.component == PackageComponent::Uasset {
+                    published.remove_if_owned_with_before_final_check(|path| {
+                        fs::rename(path, &displaced).unwrap();
+                        fs::write(path, b"head").unwrap();
+                    })
+                } else {
+                    published.remove_if_owned()
+                }
+            },
+        );
+
+        assert!(matches!(
+            result,
+            Err(PackageError::PublishCleanupFailed {
+                cleanup_failures,
+                ..
+            }) if matches!(
+                cleanup_failures.as_slice(),
+                [CleanupFailure::OwnershipChanged { .. }]
+            )
+        ));
+        assert_eq!(fs::read(output.uasset()).unwrap(), b"head");
+        assert_eq!(fs::read(displaced).unwrap(), b"head");
+        assert_eq!(fs::read(output.uexp()).unwrap(), b"body");
+    }
+
+    #[test]
+    fn cleanup_preserves_non_ownership_verification_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("Edited.uexp");
+        let staged = stage_component(temp.path(), PackageComponent::Uexp, b"body", 64).unwrap();
+        let handle = persist_new(staged, &output).unwrap();
+        let published = PublishedComponent::new(PackageComponent::Uexp, &output, b"body", handle);
+
+        let failure = published.cleanup_verification_failure(PackageError::Io {
+            operation: "injected cleanup verification",
+            path: output.clone(),
+            source: io::Error::new(io::ErrorKind::PermissionDenied, "injected"),
+        });
+        assert!(matches!(
+            failure,
+            CleanupFailure::Verify { source, .. }
+                if matches!(*source, PackageError::Io { .. })
+        ));
+        published.remove_if_owned().unwrap();
     }
 
     #[test]

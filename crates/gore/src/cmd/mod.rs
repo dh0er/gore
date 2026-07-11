@@ -1,4 +1,5 @@
 pub mod as_cache;
+pub mod asset;
 pub mod audio;
 pub mod catalog;
 pub mod config;

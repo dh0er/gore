@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use usmap::PropertyInner;
 
@@ -67,22 +68,37 @@ impl<'a> SliceSpan<'a> {
 }
 
 /// Fixed-size encodings proven for the G1R UE5.4 cooked-property profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FixedWireKind {
+    #[serde(rename = "byte")]
     Byte,
+    #[serde(rename = "bool")]
     Bool,
+    #[serde(rename = "int32")]
     Int32,
+    #[serde(rename = "float32")]
     Float32,
+    #[serde(rename = "package_index")]
     PackageIndex,
+    #[serde(rename = "fname")]
     FName,
+    #[serde(rename = "float64")]
     Float64,
+    #[serde(rename = "uint64")]
     UInt64,
+    #[serde(rename = "uint32")]
     UInt32,
+    #[serde(rename = "uint16")]
     UInt16,
+    #[serde(rename = "int64")]
     Int64,
+    #[serde(rename = "int16")]
     Int16,
+    #[serde(rename = "int8")]
     Int8,
+    #[serde(rename = "linear_color_f32x4")]
     LinearColorF32x4,
+    #[serde(rename = "vector4_f64x4")]
     Vector4F64x4,
 }
 

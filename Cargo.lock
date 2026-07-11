@@ -864,6 +864,7 @@ dependencies = [
  "assert_cmd",
  "clap",
  "gore-as",
+ "gore-asset",
  "gore-catalog",
  "gore-fmod",
  "gore-loc",
@@ -874,11 +875,14 @@ dependencies = [
  "gore-vo",
  "image",
  "predicates 2.1.5",
+ "retoc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "usmap",
  "zip",
 ]
 
@@ -896,11 +900,15 @@ dependencies = [
 name = "gore-asset"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "retoc",
+ "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 1.0.69",
  "usmap",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
