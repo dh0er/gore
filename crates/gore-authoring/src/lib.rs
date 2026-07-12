@@ -7,6 +7,7 @@
 
 mod ids;
 mod model;
+mod npc;
 mod validate;
 
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
@@ -16,5 +17,12 @@ pub use model::{
     OggCodec, OggMetadata, OriginRef, ProjectJsonError, ProjectMeta, ProjectV2, SchemaRevisionV1,
     TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget,
     VoiceTargetResolution, MAX_PROJECT_JSON_BYTES,
+};
+pub use npc::{
+    LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
+    LogicalNpcCloneDraft, LogicalNpcCloneDraftError, LogicalNpcCloneField,
+    LogicalNpcCloneRuntimeStatus, LogicalNpcCloneSource, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
+    MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_ANGELSCRIPT_MODULE_SEGMENTS,
+    MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
