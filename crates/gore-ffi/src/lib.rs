@@ -1,5 +1,6 @@
-//! C ABI for gore-mod's `dart:ffi` bridge. Mirrors gore-save's
-//! `goresave_execute`/`goresave_free`: a single JSON-in/JSON-out entry point.
+//! C ABI for gore-mod's `dart:ffi` bridge. New Studio builds use a length-aware, globally bounded
+//! transport-v2 entry point; the bounded C-string entry point remains exported only for older
+//! Studio binaries. Both carry the same JSON command/response protocol.
 //!
 //! Request:  `{"command": "<name>", "payload": { ... }}`
 //! Response: `{"ok": true, ...}` or `{"ok": false, "error": {"code","message"}}`
@@ -38,10 +39,8 @@
 
 mod authoring;
 mod authoring_store;
+mod transport;
 mod voice;
-
-use std::ffi::{c_char, CStr, CString};
-use std::ptr;
 
 use serde_json::{json, Value};
 
@@ -52,8 +51,14 @@ use gore_modgen::gen::{gen_lua, OverridesConfig};
 use gore_modgen::validate::validate_config;
 use gore_reflect::model::ReflectionModel;
 
-/// Increment only when the JSON/ownership contract used by the Studio bridge is incompatible.
-const CORE_ABI: u32 = 1;
+pub use transport::{
+    gore_core_execute, gore_core_execute_v2, gore_core_free, gore_core_response_free_v2,
+    gore_core_transport_abi_v2, GoreCoreResponseV2,
+};
+
+/// Increment only when the JSON command/response protocol is incompatible. Transport ownership
+/// is negotiated independently so old Studio binaries can keep using the legacy C-string exports.
+const CORE_PROTOCOL_ABI: u32 = 1;
 
 /// Every command understood by [`dispatch`], kept in bytewise ascending order so capability
 /// negotiation is deterministic across builds and platforms.
@@ -94,49 +99,14 @@ const CORE_COMMANDS: &[&str] = &[
     "voice_archive_match_line",
 ];
 
-/// # Safety
-/// `request_json` must be null or a valid, NUL-terminated C string pointer that
-/// stays valid for the duration of the call. The returned pointer is owned by
-/// the caller and must be released with [`gore_core_free`].
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gore_core_execute(request_json: *const c_char) -> *mut c_char {
-    if request_json.is_null() {
-        return cstring_ptr(execute_json(r#"{"command":null}"#));
-    }
-    let input = unsafe { CStr::from_ptr(request_json) }
-        .to_string_lossy()
-        .to_string();
-    cstring_ptr(execute_json(&input))
-}
-
-/// # Safety
-/// `ptr` must be null or a pointer previously returned by [`gore_core_execute`]
-/// that has not already been freed. Passing any other pointer is undefined
-/// behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn gore_core_free(ptr: *mut c_char) {
-    if ptr.is_null() {
-        return;
-    }
-    unsafe {
-        drop(CString::from_raw(ptr));
-    }
-}
-
-fn cstring_ptr(value: String) -> *mut c_char {
-    match CString::new(value) {
-        Ok(s) => s.into_raw(),
-        Err(_) => ptr::null_mut(),
-    }
-}
+// The C ABI entry points live in `transport`; they are re-exported above so the Rust API and
+// native symbol names remain backward compatible.
 
 /// Pure entry point (no FFI) — also the test seam.
 pub fn execute_json(input: &str) -> String {
-    let resp = dispatch(input);
-    serde_json::to_string(&resp).unwrap_or_else(|_| {
-        r#"{"ok":false,"error":{"code":"SERIALIZE","message":"response serialize failed"}}"#
-            .to_string()
-    })
+    // The pure seam uses the same global response budget as both native transports.
+    String::from_utf8(transport::execute_json_bounded(input))
+        .expect("JSON transport output is always UTF-8")
 }
 
 fn err(code: &str, msg: impl Into<String>) -> Value {
@@ -194,7 +164,7 @@ fn dispatch(input: &str) -> Value {
 fn core_info() -> Value {
     json!({
         "ok": true,
-        "abi": CORE_ABI,
+        "abi": CORE_PROTOCOL_ABI,
         "version": env!("CARGO_PKG_VERSION"),
         "commands": CORE_COMMANDS,
     })

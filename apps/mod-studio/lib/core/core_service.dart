@@ -5,12 +5,40 @@ import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
-typedef _ExecuteNative = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef _ExecuteDart = Pointer<Utf8> Function(Pointer<Utf8>);
-typedef _FreeNative = Void Function(Pointer<Utf8>);
-typedef _FreeDart = void Function(Pointer<Utf8>);
+final class GoreCoreResponseV2 extends Struct {
+  external Pointer<Uint8> data;
+
+  @UintPtr()
+  external int len;
+
+  external Pointer<Void> handle;
+}
+
+typedef _TransportProbeNative = Uint32 Function();
+typedef _TransportProbeDart = int Function();
+typedef _ExecuteV2Native =
+    Uint32 Function(Pointer<Uint8>, UintPtr, Pointer<GoreCoreResponseV2>);
+typedef GoreCoreExecuteV2 =
+    int Function(Pointer<Uint8>, int, Pointer<GoreCoreResponseV2>);
+typedef _FreeV2Native = Void Function(Pointer<Void>);
+typedef GoreCoreFreeV2 = void Function(Pointer<Void>);
 
 const goreCoreAbi = 1;
+const goreCoreTransportAbiV2 = 2;
+const goreCoreTransportMaxRequestBytes = 64 * 1024 * 1024;
+const goreCoreTransportMaxResponseBytes = 64 * 1024 * 1024;
+const _transportStatusOk = 0;
+const _transportStatusInvalidArgument = 1;
+const _transportStatusPanic = 2;
+const _ffiRequestLimitResponse =
+    '{"ok":false,"error":{"code":"FFI_REQUEST_LIMIT",'
+    '"message":"native request exceeds the 67108864-byte transport limit"}}';
+const _transportInvalidArgumentResponse =
+    '{"ok":false,"error":{"code":"CORE_TRANSPORT_INVALID_ARGUMENT",'
+    '"message":"native transport rejected its arguments"}}';
+const _transportPanicResponse =
+    '{"ok":false,"error":{"code":"CORE_TRANSPORT_PANIC",'
+    '"message":"native transport caught an internal panic"}}';
 
 /// Commands the current Studio can invoke. A core missing even one is skipped at startup instead
 /// of failing later in an editor workflow.
@@ -136,9 +164,9 @@ class GoreCoreInfo {
     );
   }
 
-  /// Pure candidate-decision seam used by startup and unit tests. Legacy cores answer
-  /// `UNKNOWN_COMMAND`, which intentionally parses as incompatible rather than being executed
-  /// through a costly feature command.
+  /// Pure protocol-compatibility seam used after a transport has been independently accepted.
+  /// Candidate loading additionally requires transport v2; this parser alone never authorizes a
+  /// native library for feature commands.
   static GoreCoreInfo? tryParseCompatibleResponse(String response) {
     try {
       final info = GoreCoreInfo.parseResponse(response);
@@ -146,6 +174,16 @@ class GoreCoreInfo {
     } on FormatException {
       return null;
     }
+  }
+
+  /// A valid protocol response alone must never make a legacy, unbounded transport operational.
+  /// The loader uses this seam after resolving and invoking the exact versioned v2 probe.
+  static GoreCoreInfo? tryParseCompatibleTransportV2Response(
+    int transportAbi,
+    String response,
+  ) {
+    if (transportAbi != goreCoreTransportAbiV2) return null;
+    return tryParseCompatibleResponse(response);
   }
 }
 
@@ -166,18 +204,28 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
     for (final candidate in _candidateLibraryPaths()) {
       try {
         final lib = DynamicLibrary.open(candidate);
-        final execute = lib.lookupFunction<_ExecuteNative, _ExecuteDart>(
-          'gore_core_execute',
+        final probe = lib
+            .lookupFunction<_TransportProbeNative, _TransportProbeDart>(
+              'gore_core_transport_abi_v2',
+            );
+        final transportAbi = probe();
+        if (transportAbi != goreCoreTransportAbiV2) continue;
+        final execute = lib.lookupFunction<_ExecuteV2Native, GoreCoreExecuteV2>(
+          'gore_core_execute_v2',
         );
-        final free = lib.lookupFunction<_FreeNative, _FreeDart>(
-          'gore_core_free',
+        final free = lib.lookupFunction<_FreeV2Native, GoreCoreFreeV2>(
+          'gore_core_response_free_v2',
         );
-        final response = _executeNativeRequestWithBindings(
+        final response = executeGoreCoreV2WithBindings(
           execute,
           free,
           _coreInfoRequest,
+          responseLimitBytes: _maxCoreInfoResponseBytes,
         );
-        final info = GoreCoreInfo.tryParseCompatibleResponse(response);
+        final info = GoreCoreInfo.tryParseCompatibleTransportV2Response(
+          transportAbi,
+          response,
+        );
         if (info == null) continue;
         return NativeGoreCoreFfiService._(candidate, info);
       } catch (_) {
@@ -193,7 +241,8 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
 
   @override
   String get description =>
-      '$libraryPath (core ${coreInfo.version}, ABI ${coreInfo.abi})';
+      '$libraryPath (core ${coreInfo.version}, protocol ABI ${coreInfo.abi}, '
+      'transport ABI $goreCoreTransportAbiV2)';
 
   @override
   bool get isAvailable => true;
@@ -215,47 +264,168 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
 
 String _executeNativeRequest(String libPath, String request) {
   final lib = DynamicLibrary.open(libPath);
-  final execute = lib.lookupFunction<_ExecuteNative, _ExecuteDart>(
-    'gore_core_execute',
+  final probe = lib.lookupFunction<_TransportProbeNative, _TransportProbeDart>(
+    'gore_core_transport_abi_v2',
   );
-  final free = lib.lookupFunction<_FreeNative, _FreeDart>('gore_core_free');
-  return _executeNativeRequestWithBindings(execute, free, request);
+  if (probe() != goreCoreTransportAbiV2) {
+    throw const FormatException('gore_ffi transport ABI changed after load');
+  }
+  final execute = lib.lookupFunction<_ExecuteV2Native, GoreCoreExecuteV2>(
+    'gore_core_execute_v2',
+  );
+  final free = lib.lookupFunction<_FreeV2Native, GoreCoreFreeV2>(
+    'gore_core_response_free_v2',
+  );
+  return executeGoreCoreV2WithBindings(execute, free, request);
 }
 
-String _executeNativeRequestWithBindings(
-  _ExecuteDart execute,
-  _FreeDart free,
-  String request,
-) {
-  final reqPtr = request.toNativeUtf8();
-  Pointer<Utf8> resPtr = nullptr;
-  try {
-    resPtr = execute(reqPtr);
-    if (resPtr == nullptr) {
-      throw const FormatException('gore_ffi returned null');
+int? _boundedUtf8Length(String value, int limit) {
+  if (limit < 0) return null;
+  var length = 0;
+  for (var index = 0; index < value.length; index++) {
+    final codeUnit = value.codeUnitAt(index);
+    final int encodedLength;
+    if (codeUnit <= 0x7f) {
+      encodedLength = 1;
+    } else if (codeUnit <= 0x7ff) {
+      encodedLength = 2;
+    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      final hasLowSurrogate =
+          index + 1 < value.length &&
+          value.codeUnitAt(index + 1) >= 0xdc00 &&
+          value.codeUnitAt(index + 1) <= 0xdfff;
+      if (hasLowSurrogate) {
+        encodedLength = 4;
+        index++;
+      } else {
+        // Dart's UTF-8 encoder replaces an unpaired UTF-16 surrogate with U+FFFD.
+        encodedLength = 3;
+      }
+    } else {
+      // BMP scalars and unpaired low surrogates both encode to three bytes (the latter as U+FFFD).
+      encodedLength = 3;
     }
-    return resPtr.toDartString();
+    if (encodedLength > limit - length) return null;
+    length += encodedLength;
+  }
+  return length;
+}
+
+/// Executes transport v2 with injected bindings. Public so pointer ownership and malformed native
+/// responses can be unit-tested without loading a real DLL; production resolves these exact
+/// signatures from the selected candidate.
+String executeGoreCoreV2WithBindings(
+  GoreCoreExecuteV2 execute,
+  GoreCoreFreeV2 free,
+  String request, {
+  int requestLimitBytes = goreCoreTransportMaxRequestBytes,
+  int responseLimitBytes = goreCoreTransportMaxResponseBytes,
+}) {
+  final effectiveRequestLimit =
+      requestLimitBytes > goreCoreTransportMaxRequestBytes
+      ? goreCoreTransportMaxRequestBytes
+      : requestLimitBytes;
+  final effectiveResponseLimit = responseLimitBytes < 0
+      ? 0
+      : responseLimitBytes > goreCoreTransportMaxResponseBytes
+      ? goreCoreTransportMaxResponseBytes
+      : responseLimitBytes;
+  final boundedRequestLength = _boundedUtf8Length(
+    request,
+    effectiveRequestLimit,
+  );
+  if (boundedRequestLength == null) {
+    return _ffiRequestLimitResponse;
+  }
+  final requestBytes = utf8.encode(request);
+  if (requestBytes.length != boundedRequestLength) {
+    throw const FormatException('Dart UTF-8 length calculation disagreed');
+  }
+  final out = calloc<GoreCoreResponseV2>();
+  if (out == nullptr) {
+    throw StateError('failed to allocate native response descriptor');
+  }
+  Pointer<Uint8> reqPtr = nullptr;
+  try {
+    if (requestBytes.isNotEmpty) {
+      reqPtr = malloc<Uint8>(requestBytes.length);
+      if (reqPtr == nullptr) {
+        throw StateError('failed to allocate native request buffer');
+      }
+      reqPtr.asTypedList(requestBytes.length).setAll(0, requestBytes);
+    }
+    final status = execute(reqPtr, requestBytes.length, out);
+    final responseData = out.ref.data;
+    final responseLength = out.ref.len;
+    final responseHandle = out.ref.handle;
+
+    if (status != _transportStatusOk) {
+      if (responseData != nullptr ||
+          responseLength != 0 ||
+          responseHandle != nullptr) {
+        throw const FormatException(
+          'gore_ffi returned output with a failed transport status',
+        );
+      }
+      return switch (status) {
+        _transportStatusInvalidArgument => _transportInvalidArgumentResponse,
+        _transportStatusPanic => _transportPanicResponse,
+        _ => throw FormatException(
+          'gore_ffi returned unknown transport status $status',
+        ),
+      };
+    }
+
+    if (responseData == nullptr || responseHandle == nullptr) {
+      throw const FormatException('gore_ffi returned an incomplete response');
+    }
+    if (responseLength <= 0 || responseLength > effectiveResponseLimit) {
+      throw FormatException(
+        'gore_ffi response length $responseLength is outside the bounded range',
+      );
+    }
+    return utf8.decode(
+      responseData.asTypedList(responseLength),
+      allowMalformed: false,
+    );
   } finally {
-    malloc.free(reqPtr);
-    if (resPtr != nullptr) {
-      free(resPtr);
+    try {
+      if (reqPtr != nullptr) {
+        malloc.free(reqPtr);
+      }
+    } finally {
+      // Read the pre-zeroed descriptor here, not only after a normal execute return: an injected
+      // binding may publish ownership and then throw. Keep descriptor cleanup independent even if
+      // the native free binding itself fails.
+      final responseHandle = out.ref.handle;
+      try {
+        if (responseHandle != nullptr) {
+          free(responseHandle);
+        }
+      } finally {
+        calloc.free(out);
+      }
     }
   }
 }
 
-/// Stub returned when gore_ffi.dll is not found (dev / CI without the DLL).
+/// Stub returned when no candidate exposes the exact bounded transport and compatible protocol.
+/// This includes a missing DLL as well as stale legacy-only builds that are intentionally skipped.
 class MissingGoreCoreFfiService implements GoreCoreFfiService {
   @override
   bool get isAvailable => false;
   @override
-  String get description => 'gore_ffi.dll not loaded';
+  String get description => 'no compatible bounded-transport core';
   @override
   Future<Map<String, Object?>> execute(
     String command, {
     Map<String, Object?> payload = const {},
   }) async => {
     'ok': false,
-    'error': {'code': 'CORE_UNAVAILABLE', 'message': 'gore_ffi.dll not found'},
+    'error': {
+      'code': 'CORE_UNAVAILABLE',
+      'message': 'no compatible bounded-transport core was found',
+    },
   };
 }
 
