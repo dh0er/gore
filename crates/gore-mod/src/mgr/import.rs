@@ -2252,6 +2252,7 @@ mod tests {
                 op: VoicePatchOp::Replace,
                 archive_path: "NPC/Hero/hello.ogg".into(),
                 ogg_path: ogg.display().to_string(),
+                observation: None,
             }],
         };
         let bundle = build_bundle(&spec).unwrap();

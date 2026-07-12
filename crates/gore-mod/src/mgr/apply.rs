@@ -1579,6 +1579,7 @@ mod tests {
                     op,
                     archive_path: archive_path.into(),
                     ogg: payload.into(),
+                    observation: None,
                 }],
             };
             self.add_mod(

@@ -114,6 +114,33 @@ pub struct VoiceArchiveEdit {
     pub archive_path: String,
     /// Source Ogg file on disk.
     pub ogg_path: String,
+    /// Optional authoring-time identity of the pristine archive and targeted member. When every
+    /// edit supplies one, the bundle uses voice manifest format 2 and deploy refuses to apply it
+    /// to any other archive snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<VoiceArchiveObservation>,
+}
+
+/// Authoring-time identity of one pristine voice archive and the member an edit targets.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceArchiveObservation {
+    pub archive_size: u64,
+    /// Lowercase, 64-character hexadecimal SHA-256 of the complete pristine ZIP.
+    pub archive_sha256: String,
+    pub member_proof: VoiceMemberProof,
+}
+
+/// Exact authoring-time state of the member targeted by a voice edit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+pub enum VoiceMemberProof {
+    Present {
+        /// The source member must be non-empty and match this exact uncompressed length.
+        uncompressed_size: u64,
+        crc32: u32,
+    },
+    Absent,
 }
 
 /// Supported voice archive operations.
@@ -132,6 +159,8 @@ pub struct VoicePatchEntry {
     pub archive_path: String,
     /// Bundle-root-relative Ogg payload path.
     pub ogg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<VoiceArchiveObservation>,
 }
 
 /// Stable on-disk contract for a voice archive patch component.
@@ -323,10 +352,21 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     // order; deploy/manager composition applies case-insensitive later-wins before asking gore-vo
     // for one verified rewrite per target archive.
     if !spec.voice.is_empty() {
+        let sealed = spec.voice[0].observation.is_some();
+        if spec
+            .voice
+            .iter()
+            .any(|edit| edit.observation.is_some() != sealed)
+        {
+            return Err(ModError::Other(
+                "voice build mixes sealed and legacy edits; every edit must either include an observation or omit it".into(),
+            ));
+        }
         let mut edits = Vec::with_capacity(spec.voice.len());
         let mut retained_ogg_bytes = 0u64;
         for (i, edit) in spec.voice.iter().enumerate() {
             validate_voice_target(&edit.archive, &edit.archive_path)?;
+            validate_voice_edit_observation(edit.op, edit.observation.as_ref())?;
             let voice_limits = gore_vo::Limits::default();
             let remaining = MAX_PENDING_VOICE_OGG_BYTES
                 .checked_sub(retained_ogg_bytes)
@@ -348,11 +388,17 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
                 op: edit.op,
                 archive_path: edit.archive_path.clone(),
                 ogg: payload,
+                observation: edit.observation.clone(),
             });
         }
+        let manifest = VoicePatchManifest {
+            format: if sealed { 2 } else { 1 },
+            edits,
+        };
+        validate_voice_manifest(&manifest)?;
         files.insert(
             "voice/manifest.json".into(),
-            serde_json::to_vec_pretty(&VoicePatchManifest { format: 1, edits })?,
+            serde_json::to_vec_pretty(&manifest)?,
         );
         components.push(Component::VoiceArchivePatch {
             path: "voice".into(),
@@ -498,20 +544,112 @@ pub(crate) fn validate_voice_target(archive: &str, archive_path: &str) -> Result
     Ok(())
 }
 
-pub(crate) fn validate_voice_manifest(manifest: &VoicePatchManifest) -> Result<()> {
-    if manifest.format != 1 {
+fn parse_voice_archive_sha256(value: &str) -> Result<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
         return Err(ModError::Other(format!(
-            "unsupported voice patch manifest format {} (want 1)",
-            manifest.format
+            "invalid voice archive SHA-256 {value:?}: expected exactly 64 lowercase hexadecimal characters"
         )));
     }
+    let mut decoded = [0u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let nibble = |byte: u8| -> u8 {
+            if byte.is_ascii_digit() {
+                byte - b'0'
+            } else {
+                byte - b'a' + 10
+            }
+        };
+        decoded[index] = (nibble(pair[0]) << 4) | nibble(pair[1]);
+    }
+    Ok(decoded)
+}
+
+fn validate_voice_edit_observation(
+    op: VoicePatchOp,
+    observation: Option<&VoiceArchiveObservation>,
+) -> Result<()> {
+    let Some(observation) = observation else {
+        return Ok(());
+    };
+    if observation.archive_size == 0 {
+        return Err(ModError::Other(
+            "invalid voice archive observation: archive size must be non-zero".into(),
+        ));
+    }
+    parse_voice_archive_sha256(&observation.archive_sha256)?;
+    match (op, &observation.member_proof) {
+        (VoicePatchOp::Add, VoiceMemberProof::Absent) => Ok(()),
+        (
+            VoicePatchOp::Replace,
+            VoiceMemberProof::Present {
+                uncompressed_size,
+                ..
+            },
+        ) if *uncompressed_size > 0 => Ok(()),
+        (VoicePatchOp::Replace, VoiceMemberProof::Present { .. }) => Err(ModError::Other(
+            "invalid sealed voice replace: present member proof must have a non-zero uncompressed size"
+                .into(),
+        )),
+        (VoicePatchOp::Add, VoiceMemberProof::Present { .. }) => Err(ModError::Other(
+            "invalid sealed voice add: member proof must be absent".into(),
+        )),
+        (VoicePatchOp::Replace, VoiceMemberProof::Absent) => Err(ModError::Other(
+            "invalid sealed voice replace: member proof must be present".into(),
+        )),
+    }
+}
+
+pub(crate) fn validate_voice_manifest(manifest: &VoicePatchManifest) -> Result<()> {
     if manifest.edits.is_empty() {
         return Err(ModError::Other(
             "voice patch manifest contains no edits".into(),
         ));
     }
+    match manifest.format {
+        1 if manifest.edits.iter().any(|edit| edit.observation.is_some()) => {
+            return Err(ModError::Other(
+                "voice patch manifest format 1 must not contain archive observations".into(),
+            ));
+        }
+        2 if manifest.edits.iter().any(|edit| edit.observation.is_none()) => {
+            return Err(ModError::Other(
+                "voice patch manifest format 2 requires an archive observation on every edit"
+                    .into(),
+            ));
+        }
+        1 | 2 => {}
+        format => {
+            return Err(ModError::Other(format!(
+                "unsupported voice patch manifest format {format} (want 1 or 2)"
+            )));
+        }
+    }
+    let mut archive_seals: BTreeMap<String, (u64, [u8; 32])> = BTreeMap::new();
     for edit in &manifest.edits {
         validate_voice_target(&edit.archive, &edit.archive_path)?;
+        validate_voice_edit_observation(edit.op, edit.observation.as_ref())?;
+        if let Some(observation) = &edit.observation {
+            let seal = (
+                observation.archive_size,
+                parse_voice_archive_sha256(&observation.archive_sha256)?,
+            );
+            match archive_seals.entry(voice_key(&edit.archive)) {
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(seal);
+                }
+                std::collections::btree_map::Entry::Occupied(entry) if entry.get() != &seal => {
+                    return Err(ModError::Other(format!(
+                        "sealed voice edits for archive {:?} disagree on the pristine archive identity",
+                        edit.archive
+                    )));
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
+        }
         if edit.ogg.contains('\\')
             || !is_safe_rel_path(&edit.ogg)
             || !edit.ogg.to_ascii_lowercase().ends_with(".ogg")
@@ -531,6 +669,7 @@ pub(crate) struct PendingVoiceEdit {
     op: VoicePatchOp,
     archive_path: String,
     ogg: Vec<u8>,
+    observation: Option<VoiceArchiveObservation>,
     order: usize,
 }
 
@@ -627,6 +766,7 @@ pub(crate) fn merge_voice_component(
                 op: edit.op,
                 archive_path: edit.archive_path,
                 ogg,
+                observation: edit.observation,
                 order: *next_order,
             },
         )?;
@@ -1692,6 +1832,113 @@ fn pristine_voice_source(live: &Path, prev: Option<&DeployRecord>) -> Result<(Pa
     Ok((source.path, source.drifted))
 }
 
+fn sealed_voice_archive_identity(
+    archive_name: &str,
+    edits: &[&PendingVoiceEdit],
+) -> Result<Option<gore_vo::ArchiveSeal>> {
+    let sealed_count = edits
+        .iter()
+        .filter(|edit| edit.observation.is_some())
+        .count();
+    if sealed_count == 0 {
+        return Ok(None);
+    }
+    if sealed_count != edits.len() {
+        return Err(ModError::Other(format!(
+            "voice edits for archive {archive_name:?} mix sealed and legacy observations"
+        )));
+    }
+
+    let first = edits[0]
+        .observation
+        .as_ref()
+        .expect("a fully sealed edit group has an observation");
+    let expected = gore_vo::ArchiveSeal {
+        size: first.archive_size,
+        sha256: parse_voice_archive_sha256(&first.archive_sha256)?,
+    };
+    for edit in &edits[1..] {
+        let observation = edit
+            .observation
+            .as_ref()
+            .expect("a fully sealed edit group has an observation");
+        let seal = gore_vo::ArchiveSeal {
+            size: observation.archive_size,
+            sha256: parse_voice_archive_sha256(&observation.archive_sha256)?,
+        };
+        if seal != expected {
+            return Err(ModError::Other(format!(
+                "sealed voice edits for archive {archive_name:?} disagree on the pristine archive identity"
+            )));
+        }
+    }
+    Ok(Some(expected))
+}
+
+fn enforce_voice_member_proofs(
+    archive_name: &str,
+    archive: &gore_vo::ArchiveIndex,
+    edits: &[&PendingVoiceEdit],
+) -> Result<()> {
+    for edit in edits {
+        let Some(observation) = &edit.observation else {
+            continue;
+        };
+        match &observation.member_proof {
+            VoiceMemberProof::Absent => {
+                if archive
+                    .entries()
+                    .iter()
+                    .any(|entry| voice_key(&entry.path) == voice_key(&edit.archive_path))
+                {
+                    return Err(ModError::Other(format!(
+                        "sealed voice member proof mismatch in archive {archive_name:?}: {:?} was expected to be absent",
+                        edit.archive_path
+                    )));
+                }
+            }
+            VoiceMemberProof::Present {
+                uncompressed_size,
+                crc32,
+            } => {
+                let mut matches = archive
+                    .entries()
+                    .iter()
+                    .filter(|entry| entry.path == edit.archive_path);
+                let Some(entry) = matches.next() else {
+                    return Err(ModError::Other(format!(
+                        "sealed voice member proof mismatch in archive {archive_name:?}: exact member {:?} is missing",
+                        edit.archive_path
+                    )));
+                };
+                if entry.is_directory
+                    || entry.is_symlink
+                    || entry.encrypted
+                    || !matches!(
+                        entry.compression,
+                        zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+                    )
+                {
+                    return Err(ModError::Other(format!(
+                        "sealed voice member proof mismatch in archive {archive_name:?}: exact member {:?} is not an eligible regular Ogg entry",
+                        edit.archive_path
+                    )));
+                }
+                if matches.next().is_some()
+                    || entry.uncompressed_size != *uncompressed_size
+                    || entry.crc32 != *crc32
+                {
+                    return Err(ModError::Other(format!(
+                        "sealed voice member proof mismatch in archive {archive_name:?}: exact member {:?} metadata changed",
+                        edit.archive_path
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Materialize every effective voice edit into exactly one verified disk-backed rewrite per archive.
 /// Missing archives are a hard error: silently skipping one would create a partial voice patch.
 /// The source is always the same base selected by [`select_pristine_source`].
@@ -1796,9 +2043,16 @@ pub(crate) fn prepare_voice_archive_writes(
             )));
         }
         // gore-vo hashes the selected source before and after composition, so subsequent drift is
-        // rejected without first retaining a second full archive buffer here.
-        let archive = gore_vo::ArchiveIndex::open(&source, voice_limits)
-            .map_err(|e| ModError::Voice(format!("{}: {e}", source.display())))?;
+        // rejected without first retaining a second full archive buffer here. Sealed format-2
+        // edits additionally bind the first open to the exact authoring-time archive snapshot.
+        let expected_seal = sealed_voice_archive_identity(archive_name, &edits)?;
+        let archive = if let Some(expected_seal) = expected_seal {
+            gore_vo::ArchiveIndex::open_with_expected_seal(&source, voice_limits, expected_seal)
+        } else {
+            gore_vo::ArchiveIndex::open(&source, voice_limits)
+        }
+        .map_err(|e| ModError::Voice(format!("{}: {e}", source.display())))?;
+        enforce_voice_member_proofs(archive_name, &archive, &edits)?;
         let archive_edits: Vec<gore_vo::ArchiveEdit<'_>> = edits
             .iter()
             .map(|edit| match edit.op {
@@ -6342,6 +6596,58 @@ mod tests {
         Some(bytes)
     }
 
+    fn observe_test_voice_archive(path: &Path, member: &str) -> VoiceArchiveObservation {
+        let archive = gore_vo::ArchiveIndex::open(path, gore_vo::Limits::default()).unwrap();
+        let seal = archive.seal();
+        let member_proof = archive
+            .entries()
+            .iter()
+            .find(|entry| entry.path == member)
+            .map_or(VoiceMemberProof::Absent, |entry| {
+                VoiceMemberProof::Present {
+                    uncompressed_size: entry.uncompressed_size,
+                    crc32: entry.crc32,
+                }
+            });
+        VoiceArchiveObservation {
+            archive_size: seal.size,
+            archive_sha256: seal
+                .sha256
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+            member_proof,
+        }
+    }
+
+    fn test_voice_replace_spec(
+        name: &str,
+        ogg_path: &Path,
+        observation: Option<VoiceArchiveObservation>,
+    ) -> BuildSpec {
+        BuildSpec {
+            meta: ModMeta {
+                name: name.into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![VoiceArchiveEdit {
+                archive: "German.zip".into(),
+                op: VoicePatchOp::Replace,
+                archive_path: "NPC/Hero/hello.ogg".into(),
+                ogg_path: ogg_path.display().to_string(),
+                observation,
+            }],
+        }
+    }
+
     fn test_lcache_fstring(text: &str) -> Vec<u8> {
         if text.is_empty() {
             return 0i32.to_le_bytes().to_vec();
@@ -6721,12 +7027,14 @@ mod tests {
                     op: VoicePatchOp::Replace,
                     archive_path: "NPC/Hero/hello.ogg".into(),
                     ogg_path: replace.display().to_string(),
+                    observation: None,
                 },
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
                     op: VoicePatchOp::Add,
                     archive_path: "GORE/new.ogg".into(),
                     ogg_path: add.display().to_string(),
+                    observation: None,
                 },
             ],
         };
@@ -6766,6 +7074,140 @@ mod tests {
     }
 
     #[test]
+    fn sealed_voice_build_emits_v2_and_rejects_mixed_or_invalid_contracts() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive_path, &[("NPC/Hero/hello.ogg", &original)]);
+        let replacement = dir.path().join("replace.ogg");
+        let addition = dir.path().join("add.ogg");
+        std::fs::write(&replacement, test_ogg(32_000)).unwrap();
+        std::fs::write(&addition, test_ogg(48_000)).unwrap();
+
+        let present = observe_test_voice_archive(&archive_path, "NPC/Hero/hello.ogg");
+        let absent = observe_test_voice_archive(&archive_path, "GORE/new.ogg");
+        let spec = BuildSpec {
+            meta: ModMeta {
+                name: "SealedVoice".into(),
+                version: "1".into(),
+                author: "tester".into(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![
+                VoiceArchiveEdit {
+                    archive: "German.zip".into(),
+                    op: VoicePatchOp::Replace,
+                    archive_path: "NPC/Hero/hello.ogg".into(),
+                    ogg_path: replacement.display().to_string(),
+                    observation: Some(present.clone()),
+                },
+                VoiceArchiveEdit {
+                    archive: "German.zip".into(),
+                    op: VoicePatchOp::Add,
+                    archive_path: "GORE/new.ogg".into(),
+                    ogg_path: addition.display().to_string(),
+                    observation: Some(absent.clone()),
+                },
+            ],
+        };
+
+        let bundle = build_bundle(&spec).unwrap();
+        let manifest: VoicePatchManifest =
+            serde_json::from_slice(&bundle.files["voice/manifest.json"]).unwrap();
+        assert_eq!(manifest.format, 2);
+        assert_eq!(manifest.edits[0].observation, Some(present.clone()));
+        assert_eq!(manifest.edits[1].observation, Some(absent));
+
+        let mut mixed = spec.clone();
+        mixed.voice[1].observation = None;
+        let error = build_bundle(&mixed).err().unwrap().to_string();
+        assert!(
+            error.contains("mixes sealed and legacy"),
+            "unexpected error: {error}"
+        );
+
+        let mut wrong_proof = spec.clone();
+        wrong_proof.voice[0]
+            .observation
+            .as_mut()
+            .unwrap()
+            .member_proof = VoiceMemberProof::Absent;
+        let error = build_bundle(&wrong_proof).err().unwrap().to_string();
+        assert!(error.contains("replace") && error.contains("present"));
+
+        let mut zero_size = spec.clone();
+        zero_size.voice[0]
+            .observation
+            .as_mut()
+            .unwrap()
+            .member_proof = VoiceMemberProof::Present {
+            uncompressed_size: 0,
+            crc32: 0,
+        };
+        let error = build_bundle(&zero_size).err().unwrap().to_string();
+        assert!(error.contains("non-zero"), "unexpected error: {error}");
+
+        let mut uppercase_hash = spec.clone();
+        uppercase_hash.voice[0]
+            .observation
+            .as_mut()
+            .unwrap()
+            .archive_sha256 = "A".repeat(64);
+        let error = build_bundle(&uppercase_hash).err().unwrap().to_string();
+        assert!(
+            error.contains("lowercase hexadecimal"),
+            "unexpected error: {error}"
+        );
+
+        let mut zero_archive = spec.clone();
+        zero_archive.voice[0]
+            .observation
+            .as_mut()
+            .unwrap()
+            .archive_size = 0;
+        let error = build_bundle(&zero_archive).err().unwrap().to_string();
+        assert!(
+            error.contains("archive size must be non-zero"),
+            "unexpected error: {error}"
+        );
+
+        let mut legacy_with_observation = manifest.clone();
+        legacy_with_observation.format = 1;
+        assert!(validate_voice_manifest(&legacy_with_observation)
+            .unwrap_err()
+            .to_string()
+            .contains("format 1"));
+        let mut v2_without_observation = manifest.clone();
+        v2_without_observation.edits[0].observation = None;
+        assert!(validate_voice_manifest(&v2_without_observation)
+            .unwrap_err()
+            .to_string()
+            .contains("format 2"));
+        let mut unsupported = manifest.clone();
+        unsupported.format = 3;
+        assert!(validate_voice_manifest(&unsupported)
+            .unwrap_err()
+            .to_string()
+            .contains("want 1 or 2"));
+        let mut disagreeing = manifest;
+        disagreeing.edits[1]
+            .observation
+            .as_mut()
+            .unwrap()
+            .archive_size += 1;
+        assert!(validate_voice_manifest(&disagreeing)
+            .unwrap_err()
+            .to_string()
+            .contains("disagree"));
+    }
+
+    #[test]
     fn voice_bundle_inputs_are_rejected_by_length_before_unbounded_reads() {
         let dir = tempfile::tempdir().unwrap();
 
@@ -6794,6 +7236,7 @@ mod tests {
                 op: VoicePatchOp::Add,
                 archive_path: "GORE/oversized.ogg".into(),
                 ogg_path: oversized_ogg.display().to_string(),
+                observation: None,
             }],
         };
         let error = build_bundle(&spec).err().expect("oversized Ogg must fail");
@@ -6837,6 +7280,7 @@ mod tests {
                     op: VoicePatchOp::Add,
                     archive_path: "GORE/new.ogg".into(),
                     ogg: "voice/payload.ogg".into(),
+                    observation: None,
                 }],
             })
             .unwrap(),
@@ -6952,6 +7396,156 @@ mod tests {
     }
 
     #[test]
+    fn sealed_voice_replace_deploys_against_the_exact_observed_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let pristine = std::fs::read(&live).unwrap();
+        let observation = observe_test_voice_archive(&live, "NPC/Hero/hello.ogg");
+        let replacement = dir.path().join("replacement.ogg");
+        std::fs::write(&replacement, test_ogg(32_000)).unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(
+            &bundle_dir,
+            &build_bundle(&test_voice_replace_spec(
+                "SealedReplace",
+                &replacement,
+                Some(observation),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+
+        deploy(&bundle_dir, &game).unwrap();
+        assert_eq!(
+            read_test_zip_entry(&live, "NPC/Hero/hello.ogg").unwrap(),
+            std::fs::read(&replacement).unwrap()
+        );
+        assert_eq!(std::fs::read(bak_path(&live)).unwrap(), pristine);
+        undeploy(&game).unwrap();
+    }
+
+    #[test]
+    fn sealed_voice_rejects_a_hotfixed_archive_non_destructively() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let observation = observe_test_voice_archive(&live, "NPC/Hero/hello.ogg");
+        let replacement = dir.path().join("replacement.ogg");
+        std::fs::write(&replacement, test_ogg(32_000)).unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(
+            &bundle_dir,
+            &build_bundle(&test_voice_replace_spec(
+                "HotfixGuard",
+                &replacement,
+                Some(observation),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let hotfixed = test_ogg(22_050);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &hotfixed)]);
+        let before = std::fs::read(&live).unwrap();
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("archive changed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), before);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn sealed_voice_rejects_member_metadata_mismatch_non_destructively() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let mut observation = observe_test_voice_archive(&live, "NPC/Hero/hello.ogg");
+        match &mut observation.member_proof {
+            VoiceMemberProof::Present { crc32, .. } => *crc32 ^= 1,
+            VoiceMemberProof::Absent => panic!("test member must be present"),
+        }
+        let replacement = dir.path().join("replacement.ogg");
+        std::fs::write(&replacement, test_ogg(32_000)).unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(
+            &bundle_dir,
+            &build_bundle(&test_voice_replace_spec(
+                "MemberGuard",
+                &replacement,
+                Some(observation),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let before = std::fs::read(&live).unwrap();
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("member proof mismatch") && error.contains("metadata changed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), before);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn sealed_voice_rejects_a_false_absent_proof_non_destructively() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let existing = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("GORE/new.ogg", &existing)]);
+        let mut observation = observe_test_voice_archive(&live, "GORE/new.ogg");
+        observation.member_proof = VoiceMemberProof::Absent;
+        let addition = dir.path().join("addition.ogg");
+        std::fs::write(&addition, test_ogg(32_000)).unwrap();
+        let spec = BuildSpec {
+            meta: ModMeta {
+                name: "AbsentGuard".into(),
+                version: String::new(),
+                author: String::new(),
+            },
+            delay_ms: 0,
+            overrides: vec![],
+            loc_edits: BTreeMap::new(),
+            audio: vec![],
+            texture: vec![],
+            scripts: vec![],
+            dialog_topics: vec![],
+            voice: vec![VoiceArchiveEdit {
+                archive: "German.zip".into(),
+                op: VoicePatchOp::Add,
+                archive_path: "GORE/new.ogg".into(),
+                ogg_path: addition.display().to_string(),
+                observation: Some(observation),
+            }],
+        };
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(&bundle_dir, &build_bundle(&spec).unwrap()).unwrap();
+
+        let before = std::fs::read(&live).unwrap();
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("member proof mismatch") && error.contains("expected to be absent"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), before);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
     fn voice_deploy_rewrites_from_pristine_preserves_backup_and_fails_non_destructively() {
         let dir = tempfile::tempdir().unwrap();
         let game = dir.path().join("game");
@@ -7000,18 +7594,21 @@ mod tests {
                     op: VoicePatchOp::Add,
                     archive_path: "npc/hero/HELLO.OGG".into(),
                     ogg_path: added.display().to_string(),
+                    observation: None,
                 },
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
                     op: VoicePatchOp::Replace,
                     archive_path: "NPC/Hero/hello.ogg".into(),
                     ogg_path: replacement_one.display().to_string(),
+                    observation: None,
                 },
                 VoiceArchiveEdit {
                     archive: "German.zip".into(),
                     op: VoicePatchOp::Add,
                     archive_path: "GORE/added.ogg".into(),
                     ogg_path: added.display().to_string(),
+                    observation: None,
                 },
             ],
         );
@@ -7042,6 +7639,7 @@ mod tests {
                 op: VoicePatchOp::Add,
                 archive_path: "GORE/new.ogg".into(),
                 ogg_path: added.display().to_string(),
+                observation: None,
             }],
         );
         let missing_dir = dir.path().join("bundle-missing");
@@ -7062,6 +7660,7 @@ mod tests {
                 op: VoicePatchOp::Replace,
                 archive_path: "NPC/Hero/hello.ogg".into(),
                 ogg_path: replacement_two.display().to_string(),
+                observation: None,
             }],
         );
         let second_dir = dir.path().join("bundle-two");
@@ -7112,6 +7711,7 @@ mod tests {
                 op: VoicePatchOp::Replace,
                 archive_path: "NPC/Hero/hello.ogg".into(),
                 ogg_path: replacement.display().to_string(),
+                observation: None,
             }],
         };
         let bundle = dir.path().join("bundle");
