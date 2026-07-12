@@ -14,6 +14,14 @@
 //!   untouched format-2 JSON string and `profile` is `production|experimental`; returns canonical
 //!   project JSON, deterministic structured diagnostics, and `blocks_build`. Project input is
 //!   capped at 16 MiB by `gore-authoring`; serialized success responses are capped at 64 MiB.
+//! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
+//!   `authoring_store_prepare_checkpoint` open or prepare immutable format-2 working-store
+//!   checkpoints. Head/project JSON crosses the outer protocol as bounded raw strings, preserving
+//!   canonical-byte CAS and duplicate-key rejection. Preparing writes immutable objects but never
+//!   publishes `gore-project.json`.
+//! - `authoring_store_import_ogg` and `authoring_store_verify_asset` import or verify bounded
+//!   content-addressed Ogg assets. `expected_head_json` is a strict CAS token: null means the fixed
+//!   head must be absent; a canonical string means it must match exactly.
 //! - `voice_archive_list` — payload `{archive}`; returns exact entries plus the captured
 //!   `archive_size`/`archive_sha256` seal. Fails with `VOICE_ARCHIVE_LIMIT` for bounded ZIP
 //!   metadata violations or `VOICE_RESPONSE_LIMIT` before an oversized JSON result is built.
@@ -29,6 +37,7 @@
 //!   Filesystem-path request strings are capped at 32 KiB.
 
 mod authoring;
+mod authoring_store;
 mod voice;
 
 use std::ffi::{c_char, CStr, CString};
@@ -52,6 +61,11 @@ const CORE_COMMANDS: &[&str] = &[
     "audio_extract",
     "audio_list",
     "authoring_project_check",
+    "authoring_store_import_ogg",
+    "authoring_store_open",
+    "authoring_store_open_head_bytes",
+    "authoring_store_prepare_checkpoint",
+    "authoring_store_verify_asset",
     "core_info",
     "find_game",
     "generate_mod",
@@ -163,6 +177,11 @@ fn dispatch(input: &str) -> Value {
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
         "authoring_project_check" => authoring::project_check(payload),
+        "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
+        "authoring_store_open" => authoring_store::open(payload),
+        "authoring_store_open_head_bytes" => authoring_store::open_head_bytes(payload),
+        "authoring_store_prepare_checkpoint" => authoring_store::prepare_checkpoint(payload),
+        "authoring_store_verify_asset" => authoring_store::verify_asset(payload),
         "voice_archive_list" => voice::archive_list(payload),
         "voice_archive_match_line" => voice::archive_match_line(payload),
         "voice_archive_extract" => voice::archive_extract(payload),
@@ -1011,6 +1030,11 @@ mod tests {
                     "audio_extract",
                     "audio_list",
                     "authoring_project_check",
+                    "authoring_store_import_ogg",
+                    "authoring_store_open",
+                    "authoring_store_open_head_bytes",
+                    "authoring_store_prepare_checkpoint",
+                    "authoring_store_verify_asset",
                     "core_info",
                     "find_game",
                     "generate_mod",
@@ -1048,6 +1072,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_project_check"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_checkpoint"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));

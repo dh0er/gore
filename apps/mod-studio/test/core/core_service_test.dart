@@ -48,6 +48,13 @@ void main() {
               .where((command) => command != 'voice_archive_match_line')
               .toList(),
         );
+        final missingWorkingStore = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) => command != 'authoring_store_prepare_checkpoint',
+              )
+              .toList(),
+        );
         final current = _coreInfoResponse(version: '0.2.0-current');
 
         final decisions = [
@@ -55,9 +62,10 @@ void main() {
           wrongAbi,
           missingAuthoring,
           missingVoice,
+          missingWorkingStore,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(4), everyElement(isNull));
+        expect(decisions.take(5), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );

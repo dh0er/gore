@@ -1,7 +1,18 @@
+import 'dart:convert';
+
 import 'core_service.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
+const _maxAuthoringStorePathBytes = 32 * 1024;
+const _maxAuthoringHeadJsonBytes = 64 * 1024;
+const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringLogicalNameBytes = 1024;
+const _maxAuthoringReferencedAssetBytes = 64 * 1024 * 1024;
+const _maxAuthoringDiagnostics = 262144;
+const _maxAuthoringDiagnosticMessageBytes = 4096;
+const _maxAuthoringDiagnosticPathBytes = 4096;
+const _maxAuthoringRelatedEntities = 100000;
 final _nativeErrorCodePattern = RegExp(r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$');
 
 /// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, stateless
@@ -32,18 +43,27 @@ class ModFfi {
         reason: 'field ok must be a bool',
       );
     }
-
-    final error = r['error'];
-    if (error is! Map) {
+    if (r.length != 2 || !r.containsKey('error')) {
       throw ModFfiException._malformed(
         command: cmd,
-        reason: 'field error must be an object',
+        reason: 'error response has an invalid schema',
+      );
+    }
+
+    final error = r['error'];
+    if (error is! Map ||
+        error.length != 2 ||
+        !error.containsKey('code') ||
+        !error.containsKey('message')) {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'field error has an invalid schema',
       );
     }
     final code = error['code'];
     if (code is! String ||
         code.isEmpty ||
-        code.length > _maxNativeErrorCodeLength ||
+        utf8.encode(code).length > _maxNativeErrorCodeLength ||
         !_nativeErrorCodePattern.hasMatch(code)) {
       throw ModFfiException._malformed(
         command: cmd,
@@ -52,7 +72,7 @@ class ModFfi {
     }
     final message = error['message'];
     if (message is! String ||
-        message.length > _maxNativeErrorMessageLength ||
+        utf8.encode(message).length > _maxNativeErrorMessageLength ||
         message.trim().isEmpty) {
       throw ModFfiException._malformed(
         command: cmd,
@@ -105,6 +125,101 @@ class ModFfi {
       'profile': profile.wireName,
     });
     return AuthoringProjectCheckResult.fromJson(r);
+  }
+
+  /// Open the fixed canonical head and reconstruct one immutable format-2 checkpoint.
+  Future<AuthoringStoreOpenedResult> authoringStoreOpen({
+    required String root,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    final response = await _call('authoring_store_open', {
+      'root': root,
+      'verification': verification.wireName,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoreOpenedResult.fromJson(response);
+  }
+
+  /// Prepare immutable objects without publishing `gore-project.json`.
+  ///
+  /// `expectedHead == null` is a strict CAS assertion that the fixed head is absent. The raw
+  /// project string is passed through unchanged so Rust can reject duplicate JSON keys.
+  Future<AuthoringCheckpointPreparation> authoringStorePrepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    _authoringStoreRequestString(
+      projectJson,
+      'projectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final response = await _call('authoring_store_prepare_checkpoint', {
+      'root': root,
+      'expected_head_json': expectedHead?.canonicalJson,
+      'project_json': projectJson,
+      'profile': profile.wireName,
+    });
+    return AuthoringCheckpointPreparation.fromJson(response);
+  }
+
+  /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.
+  Future<AuthoringStoreOpenedResult> authoringStoreOpenHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    final response = await _call('authoring_store_open_head_bytes', {
+      'root': root,
+      'head_json': head.canonicalJson,
+      'verification': verification.wireName,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoreOpenedResult.fromJson(response);
+  }
+
+  /// Stream one bounded Ogg into the content-addressed store under a strict head CAS token.
+  Future<AuthoringImportedOgg> authoringStoreImportOgg({
+    required String root,
+    required String source,
+    required String logicalName,
+    required AuthoringWorkingHead? expectedHead,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    _authoringStoreRequestString(source, 'source', _maxAuthoringStorePathBytes);
+    _authoringStoreRequestString(
+      logicalName,
+      'logicalName',
+      _maxAuthoringLogicalNameBytes,
+    );
+    final response = await _call('authoring_store_import_ogg', {
+      'root': root,
+      'source': source,
+      'logical_name': logicalName,
+      'expected_head_json': expectedHead?.canonicalJson,
+    });
+    return AuthoringImportedOgg.fromJson(response);
+  }
+
+  /// Verify that one typed logical asset reference resolves to its sealed immutable object.
+  Future<void> authoringStoreVerifyAsset({
+    required String root,
+    required AuthoringAssetRef asset,
+    required AuthoringAssetVerification verification,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    final response = await _call('authoring_store_verify_asset', {
+      'root': root,
+      'asset': asset.toJson(),
+      'verification': verification.wireName,
+    });
+    _authoringExactFields(response, const {'ok'}, 'verify response');
   }
 
   /// Build the unified bundle into `outDir`; returns the bundle dir.
@@ -246,18 +361,79 @@ enum AuthoringValidationProfile {
   final String wireName;
 }
 
+enum AuthoringAssetVerification {
+  structural('structural'),
+  full('full');
+
+  const AuthoringAssetVerification(this.wireName);
+  final String wireName;
+}
+
 enum AuthoringDiagnosticSeverity { error, warning, info }
 
 final _authoringDiagnosticCodePattern = RegExp(
   r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$',
 );
 final _authoringEntityIdPattern = RegExp(r'^[0-9a-f]{32}$');
+final _authoringSha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+const _authoringProjectTopLevelFields = <String>[
+  'format',
+  'schema_revision',
+  'project_id',
+  'revision',
+  'meta',
+  'target',
+  'authoring_locales',
+  'entities',
+  'asset_store',
+];
 
-String _authoringRequiredString(Map<String, Object?> json, String field) {
+void _authoringStoreRequestString(String value, String field, int maxBytes) {
+  if (value.isEmpty || utf8.encode(value).length > maxBytes) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      field,
+      'must be 1..=$maxBytes UTF-8 bytes',
+    );
+  }
+}
+
+void _authoringExactFields(
+  Map<String, Object?> json,
+  Set<String> expected,
+  String context,
+) {
+  if (json.length != expected.length || !expected.every(json.containsKey)) {
+    throw FormatException('authoring $context has an invalid schema');
+  }
+}
+
+String _authoringRequiredString(
+  Map<String, Object?> json,
+  String field, {
+  int maxBytes = _maxAuthoringProjectJsonBytes,
+}) {
   final value = json[field];
-  if (value is! String || value.isEmpty) {
+  if (value is! String ||
+      value.isEmpty ||
+      utf8.encode(value).length > maxBytes) {
     throw FormatException(
-      'authoring response field $field is not a valid string',
+      'authoring response field $field is not a bounded string',
+    );
+  }
+  return value;
+}
+
+int _authoringRequiredInt(
+  Map<String, Object?> json,
+  String field, {
+  int min = 0,
+  int? max,
+}) {
+  final value = json[field];
+  if (value is! int || value < min || (max != null && value > max)) {
+    throw FormatException(
+      'authoring response field $field is not an integer in range',
     );
   }
   return value;
@@ -273,14 +449,17 @@ bool _authoringRequiredBool(Map<String, Object?> json, String field) {
 
 String? _authoringRequiredNullableString(
   Map<String, Object?> json,
-  String field,
-) {
+  String field, {
+  int maxBytes = _maxAuthoringDiagnosticPathBytes,
+}) {
   if (!json.containsKey(field)) {
     throw FormatException('authoring response is missing field $field');
   }
   final value = json[field];
   if (value == null) return null;
-  if (value is! String || value.isEmpty) {
+  if (value is! String ||
+      value.isEmpty ||
+      utf8.encode(value).length > maxBytes) {
     throw FormatException(
       'authoring response field $field is not a valid nullable string',
     );
@@ -313,6 +492,34 @@ String _authoringEntityId(String value, String field) {
   return value;
 }
 
+void _authoringRequireCanonicalProjectJson(String projectJson) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(projectJson);
+  } on FormatException {
+    throw const FormatException('authoring store project JSON is invalid');
+  }
+  final project = _authoringRequiredObject(decoded, 'store project');
+  final fields = project.keys.toList(growable: false);
+  if (fields.length != _authoringProjectTopLevelFields.length) {
+    throw const FormatException(
+      'authoring store project JSON has an invalid top-level schema',
+    );
+  }
+  for (var index = 0; index < fields.length; index++) {
+    if (fields[index] != _authoringProjectTopLevelFields[index]) {
+      throw const FormatException(
+        'authoring store project JSON has non-canonical field order',
+      );
+    }
+  }
+  if (jsonEncode(decoded) != projectJson) {
+    throw const FormatException(
+      'authoring store project JSON is not canonical',
+    );
+  }
+}
+
 class AuthoringProjectCheckResult {
   const AuthoringProjectCheckResult._({
     required this.canonicalProjectJson,
@@ -325,35 +532,23 @@ class AuthoringProjectCheckResult {
   final bool blocksBuild;
 
   factory AuthoringProjectCheckResult.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'ok',
+      'canonical_project_json',
+      'diagnostics',
+      'blocks_build',
+    }, 'project-check response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring project-check response is not ok');
+    }
     final canonicalProjectJson = _authoringRequiredString(
       json,
       'canonical_project_json',
+      maxBytes: _maxAuthoringProjectJsonBytes,
     );
-    final rawDiagnostics = json['diagnostics'];
-    if (rawDiagnostics is! List) {
-      throw const FormatException(
-        'authoring response diagnostics is not an array',
-      );
-    }
-    final diagnostics = <AuthoringDiagnostic>[];
-    for (var index = 0; index < rawDiagnostics.length; index++) {
-      diagnostics.add(
-        AuthoringDiagnostic.fromJson(
-          _authoringRequiredObject(
-            rawDiagnostics[index],
-            'diagnostic at index $index',
-          ),
-        ),
-      );
-    }
-
+    final diagnostics = _authoringDiagnostics(json);
     final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
-    if (blocksBuild !=
-        diagnostics.any((diagnostic) => diagnostic.blocksBuild)) {
-      throw const FormatException(
-        'authoring response blocks_build is inconsistent with diagnostics',
-      );
-    }
+    _authoringValidateBlocksBuild(blocksBuild, diagnostics);
     return AuthoringProjectCheckResult._(
       canonicalProjectJson: canonicalProjectJson,
       diagnostics: List.unmodifiable(diagnostics),
@@ -382,7 +577,16 @@ class AuthoringDiagnostic {
   final bool blocksBuild;
 
   factory AuthoringDiagnostic.fromJson(Map<String, Object?> json) {
-    final code = _authoringRequiredString(json, 'code');
+    _authoringExactFields(json, const {
+      'code',
+      'severity',
+      'entity',
+      'property_path',
+      'message',
+      'related_entities',
+      'blocks_build',
+    }, 'diagnostic');
+    final code = _authoringRequiredString(json, 'code', maxBytes: 128);
     if (!_authoringDiagnosticCodePattern.hasMatch(code)) {
       throw const FormatException('authoring diagnostic code is not canonical');
     }
@@ -401,11 +605,17 @@ class AuthoringDiagnostic {
     final propertyPath = _authoringRequiredNullableString(
       json,
       'property_path',
+      maxBytes: _maxAuthoringDiagnosticPathBytes,
     );
-    final message = _authoringRequiredString(json, 'message');
+    final message = _authoringRequiredString(
+      json,
+      'message',
+      maxBytes: _maxAuthoringDiagnosticMessageBytes,
+    );
 
     final rawRelatedEntities = json['related_entities'];
-    if (rawRelatedEntities is! List) {
+    if (rawRelatedEntities is! List ||
+        rawRelatedEntities.length > _maxAuthoringRelatedEntities) {
       throw const FormatException(
         'authoring diagnostic related_entities is not an array',
       );
@@ -436,6 +646,326 @@ class AuthoringDiagnostic {
       message: message,
       relatedEntities: List.unmodifiable(relatedEntities),
       blocksBuild: _authoringRequiredBool(json, 'blocks_build'),
+    );
+  }
+}
+
+List<AuthoringDiagnostic> _authoringDiagnostics(Map<String, Object?> json) {
+  final rawDiagnostics = json['diagnostics'];
+  if (rawDiagnostics is! List ||
+      rawDiagnostics.length > _maxAuthoringDiagnostics) {
+    throw const FormatException(
+      'authoring response diagnostics is not a bounded array',
+    );
+  }
+  final diagnostics = <AuthoringDiagnostic>[];
+  for (var index = 0; index < rawDiagnostics.length; index++) {
+    diagnostics.add(
+      AuthoringDiagnostic.fromJson(
+        _authoringRequiredObject(
+          rawDiagnostics[index],
+          'diagnostic at index $index',
+        ),
+      ),
+    );
+  }
+  return List.unmodifiable(diagnostics);
+}
+
+void _authoringValidateBlocksBuild(
+  bool blocksBuild,
+  List<AuthoringDiagnostic> diagnostics,
+) {
+  if (blocksBuild != diagnostics.any((diagnostic) => diagnostic.blocksBuild)) {
+    throw const FormatException(
+      'authoring response blocks_build is inconsistent with diagnostics',
+    );
+  }
+}
+
+class AuthoringWorkingHead {
+  const AuthoringWorkingHead._({
+    required this.canonicalJson,
+    required this.snapshotByteLength,
+    required this.snapshotSha256,
+  });
+
+  /// Exact canonical UTF-8 bytes represented as a Dart string. Do not re-encode this from fields
+  /// when using it as a compare-and-swap token.
+  final String canonicalJson;
+  final int snapshotByteLength;
+  final String snapshotSha256;
+
+  factory AuthoringWorkingHead.fromCanonicalJson(String value) {
+    if (value.isEmpty ||
+        utf8.encode(value).length > _maxAuthoringHeadJsonBytes) {
+      throw const FormatException(
+        'authoring head JSON is empty or exceeds its size limit',
+      );
+    }
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(value);
+    } on FormatException {
+      throw const FormatException('authoring head JSON is invalid');
+    }
+    final object = _authoringRequiredObject(decoded, 'head');
+    _authoringExactFields(object, const {'store_format', 'snapshot'}, 'head');
+    if (object['store_format'] != 1) {
+      throw const FormatException('authoring head store_format is not 1');
+    }
+    final snapshot = _authoringRequiredObject(
+      object['snapshot'],
+      'head snapshot',
+    );
+    _authoringExactFields(snapshot, const {
+      'byte_len',
+      'sha256',
+    }, 'head snapshot');
+    final byteLength = _authoringRequiredInt(
+      snapshot,
+      'byte_len',
+      min: 1,
+      max: _maxAuthoringProjectJsonBytes,
+    );
+    final sha256 = _authoringRequiredString(snapshot, 'sha256', maxBytes: 64);
+    if (!_authoringSha256Pattern.hasMatch(sha256)) {
+      throw const FormatException('authoring head SHA-256 is not canonical');
+    }
+    if (jsonEncode(object) != value) {
+      throw const FormatException('authoring head JSON is not canonical');
+    }
+    return AuthoringWorkingHead._(
+      canonicalJson: value,
+      snapshotByteLength: byteLength,
+      snapshotSha256: sha256,
+    );
+  }
+}
+
+class AuthoringStoreOpenedResult {
+  const AuthoringStoreOpenedResult._({
+    required this.head,
+    required this.projectJson,
+    required this.diagnostics,
+    required this.blocksBuild,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final List<AuthoringDiagnostic> diagnostics;
+  final bool blocksBuild;
+
+  factory AuthoringStoreOpenedResult.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'ok',
+      'head_json',
+      'project_json',
+      'diagnostics',
+      'blocks_build',
+    }, 'store-open response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring store-open response is not ok');
+    }
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRequiredString(
+        json,
+        'head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    final projectJson = _authoringRequiredString(
+      json,
+      'project_json',
+      maxBytes: _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRequireCanonicalProjectJson(projectJson);
+    final diagnostics = _authoringDiagnostics(json);
+    final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
+    _authoringValidateBlocksBuild(blocksBuild, diagnostics);
+    return AuthoringStoreOpenedResult._(
+      head: head,
+      projectJson: projectJson,
+      diagnostics: diagnostics,
+      blocksBuild: blocksBuild,
+    );
+  }
+}
+
+class AuthoringCheckpointPreparation {
+  const AuthoringCheckpointPreparation._({
+    required this.head,
+    required this.diagnostics,
+    required this.blocksBuild,
+  });
+
+  final AuthoringWorkingHead head;
+  final List<AuthoringDiagnostic> diagnostics;
+  final bool blocksBuild;
+
+  factory AuthoringCheckpointPreparation.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'ok',
+      'head_json',
+      'diagnostics',
+      'blocks_build',
+    }, 'checkpoint-preparation response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring checkpoint-preparation response is not ok',
+      );
+    }
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRequiredString(
+        json,
+        'head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    final diagnostics = _authoringDiagnostics(json);
+    final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
+    _authoringValidateBlocksBuild(blocksBuild, diagnostics);
+    return AuthoringCheckpointPreparation._(
+      head: head,
+      diagnostics: diagnostics,
+      blocksBuild: blocksBuild,
+    );
+  }
+}
+
+class AuthoringAssetRef {
+  const AuthoringAssetRef._({
+    required this.sha256,
+    required this.byteLength,
+    required this.logicalName,
+  });
+
+  factory AuthoringAssetRef({
+    required String sha256,
+    required int byteLength,
+    required String logicalName,
+  }) => AuthoringAssetRef.fromJson({
+    'sha256': sha256,
+    'byte_len': byteLength,
+    'logical_name': logicalName,
+  });
+
+  final String sha256;
+  final int byteLength;
+  final String logicalName;
+
+  factory AuthoringAssetRef.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'sha256',
+      'byte_len',
+      'logical_name',
+    }, 'asset reference');
+    final sha256 = _authoringRequiredString(json, 'sha256', maxBytes: 64);
+    if (!_authoringSha256Pattern.hasMatch(sha256)) {
+      throw const FormatException('authoring asset SHA-256 is not canonical');
+    }
+    return AuthoringAssetRef._(
+      sha256: sha256,
+      byteLength: _authoringRequiredInt(
+        json,
+        'byte_len',
+        min: 1,
+        max: _maxAuthoringReferencedAssetBytes,
+      ),
+      logicalName: _authoringRequiredString(
+        json,
+        'logical_name',
+        maxBytes: _maxAuthoringLogicalNameBytes,
+      ),
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+    'sha256': sha256,
+    'byte_len': byteLength,
+    'logical_name': logicalName,
+  };
+}
+
+enum AuthoringOggCodec { vorbis, opus }
+
+class AuthoringOggMetadata {
+  const AuthoringOggMetadata._({
+    required this.codec,
+    required this.channels,
+    required this.sampleRate,
+    required this.pages,
+    required this.logicalStreams,
+  });
+
+  final AuthoringOggCodec codec;
+  final int channels;
+  final int sampleRate;
+  final int pages;
+  final int logicalStreams;
+
+  factory AuthoringOggMetadata.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'codec',
+      'channels',
+      'sample_rate',
+      'pages',
+      'logical_streams',
+    }, 'Ogg metadata');
+    final codec = switch (json['codec']) {
+      'vorbis' => AuthoringOggCodec.vorbis,
+      'opus' => AuthoringOggCodec.opus,
+      _ => throw const FormatException('unknown authoring Ogg codec'),
+    };
+    return AuthoringOggMetadata._(
+      codec: codec,
+      channels: _authoringRequiredInt(json, 'channels', min: 1, max: 255),
+      sampleRate: _authoringRequiredInt(
+        json,
+        'sample_rate',
+        min: 1,
+        max: 0xffffffff,
+      ),
+      pages: _authoringRequiredInt(json, 'pages', min: 1, max: 0xffffffff),
+      logicalStreams: _authoringRequiredInt(
+        json,
+        'logical_streams',
+        min: 1,
+        max: 0xffffffff,
+      ),
+    );
+  }
+}
+
+class AuthoringImportedOgg {
+  const AuthoringImportedOgg._({
+    required this.asset,
+    required this.ogg,
+    required this.deduplicated,
+  });
+
+  final AuthoringAssetRef asset;
+  final AuthoringOggMetadata ogg;
+  final bool deduplicated;
+
+  factory AuthoringImportedOgg.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'ok',
+      'asset',
+      'ogg',
+      'deduplicated',
+    }, 'Ogg-import response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring Ogg-import response is not ok');
+    }
+    return AuthoringImportedOgg._(
+      asset: AuthoringAssetRef.fromJson(
+        _authoringRequiredObject(json['asset'], 'imported asset'),
+      ),
+      ogg: AuthoringOggMetadata.fromJson(
+        _authoringRequiredObject(json['ogg'], 'imported Ogg metadata'),
+      ),
+      deduplicated: _authoringRequiredBool(json, 'deduplicated'),
     );
   }
 }
