@@ -261,6 +261,18 @@ impl SchemaDb {
         self.schemas.get(id).ok_or(SchemaError::InvalidSchemaId(id))
     }
 
+    /// Resolve the direct parent of one schema using the same strict module-aware rules as
+    /// [`Self::flatten_slots`]. A missing, ambiguous, or differently-kinded parent is an error;
+    /// callers never receive a guessed inheritance edge.
+    pub fn super_schema_id(&self, id: SchemaId) -> Result<Option<SchemaId>, SchemaError> {
+        let schema = self.schema(id)?;
+        schema
+            .super_name
+            .as_deref()
+            .map(|super_name| self.resolve_super(schema, super_name))
+            .transpose()
+    }
+
     /// Resolve either a short name or `/Script/Module.Name`. Short names must
     /// be unique; duplicate schemas are never silently collapsed.
     pub fn resolve(&self, query: &str) -> Result<SchemaId, SchemaError> {
@@ -682,6 +694,12 @@ mod tests {
             db.schema(short).unwrap().qualified_name(),
             "/Script/Game.Derived"
         );
+        let parent = db.super_schema_id(short).unwrap().expect("Derived parent");
+        assert_eq!(
+            db.schema(parent).unwrap().qualified_name(),
+            "/Script/Game.Base"
+        );
+        assert_eq!(db.super_schema_id(parent).unwrap(), None);
     }
 
     #[test]

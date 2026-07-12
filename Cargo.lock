@@ -893,6 +893,7 @@ name = "gore-as"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "gore-asset",
  "sha2",
  "thiserror 2.0.18",
  "windows-sys 0.61.2",

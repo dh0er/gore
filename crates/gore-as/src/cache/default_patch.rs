@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::binds::NativeApi;
+use super::default_ancestry::DefaultNativeAncestry;
 use super::disasm::{disassemble, Instr};
 use super::emit_all::prepare_resolver_semantics;
 use super::header::CacheHeader;
@@ -258,6 +259,7 @@ struct ClassHierarchy {
     /// Every script class appears exactly once. `None` means no declared super; a non-script
     /// parent remains a valid terminal name so direct native ownership can still be proven.
     supers: HashMap<String, Option<String>>,
+    native: Option<DefaultNativeAncestry>,
 }
 
 #[derive(Debug, Clone)]
@@ -286,8 +288,76 @@ pub fn default_sites(
     cache: &[u8],
     native: Option<NativeApi>,
 ) -> Result<DefaultSiteReport, DefaultSiteError> {
-    let context = InspectionContext::build(cache, native)?;
+    default_sites_with_native_ancestry(cache, native, None)
+}
+
+/// Discover defaults with an optional, sealed proof of ancestry beyond the first native base.
+/// A profile for a different cache GUID is ignored, preserving the direct-owner fallback.
+pub fn default_sites_with_native_ancestry(
+    cache: &[u8],
+    native: Option<NativeApi>,
+    ancestry: Option<DefaultNativeAncestry>,
+) -> Result<DefaultSiteReport, DefaultSiteError> {
+    let context = InspectionContext::build(cache, native, ancestry)?;
     context.inspect(cache)
+}
+
+/// Mutation-stable fingerprint of the exact cache build used by the sealed native-ancestry
+/// profile. The full cache is hashed after zeroing only serialized immediates in the already
+/// audited direct scalar windows of canonical generated initializers. Scalar patches therefore
+/// retain the identity, while any code/layout/type/table/hotfix drift changes it.
+pub fn default_profile_cache_sha256(cache: &[u8]) -> Result<[u8; 32], DefaultSiteError> {
+    validate_cache(cache)?;
+    let modules = parse_modules(cache).map_err(wire_error)?;
+    let identities = class_identities(&modules)?;
+    let spans = collect_function_bytecode_spans(cache).map_err(wire_error)?;
+    let mut normalized = cache.to_vec();
+
+    for span in &spans {
+        if !identities.contains_key(&span.code.func)
+            || span.kind != FuncCodeKind::ClassMethod
+            || !span.method_table_valid
+            || !span.in_method_table
+            || !is_initializer_traits(span.function_traits)
+            || !span.code.is_method
+            || !span.code.param_types.is_empty()
+            || !is_plain_void(&span.code.ret)
+        {
+            continue;
+        }
+        let instrs =
+            disassemble(&span.code.bytecode).map_err(|error| DefaultSiteError::Disasm {
+                function: span.code.func.clone(),
+                error: error.to_string(),
+            })?;
+        if !is_reachable_linear_initializer(&instrs) {
+            continue;
+        }
+        for window in direct_windows(&span.code.bytecode, &instrs) {
+            let start = span
+                .bytecode_offset
+                .checked_add(window.operand_offset_dw.checked_mul(4).ok_or_else(|| {
+                    DefaultSiteError::RangeOverflow {
+                        function: span.code.func.clone(),
+                    }
+                })?)
+                .ok_or_else(|| DefaultSiteError::RangeOverflow {
+                    function: span.code.func.clone(),
+                })?;
+            let end = start
+                .checked_add(window.pattern.operand_width())
+                .ok_or_else(|| DefaultSiteError::RangeOverflow {
+                    function: span.code.func.clone(),
+                })?;
+            let Some(operand) = normalized.get_mut(start..end) else {
+                return Err(DefaultSiteError::RangeOverflow {
+                    function: span.code.func.clone(),
+                });
+            };
+            operand.fill(0);
+        }
+    }
+    Ok(Sha256::digest(&normalized).into())
 }
 
 /// Apply one semantic, compare-and-swap default patch to a cloned cache buffer.
@@ -298,7 +368,20 @@ pub fn patch_default(
     expected: &[u8],
     replacement: &[u8],
 ) -> Result<DefaultPatch, DefaultPatchError> {
-    let context = InspectionContext::build(cache, native)?;
+    patch_default_with_native_ancestry(cache, native, None, selector, expected, replacement)
+}
+
+/// Apply a default patch with optional sealed native-ancestry evidence. As with discovery, a
+/// differently paired profile supplies no proof and the selector fails closed if it needs one.
+pub fn patch_default_with_native_ancestry(
+    cache: &[u8],
+    native: Option<NativeApi>,
+    ancestry: Option<DefaultNativeAncestry>,
+    selector: &DefaultSiteSelector,
+    expected: &[u8],
+    replacement: &[u8],
+) -> Result<DefaultPatch, DefaultPatchError> {
+    let context = InspectionContext::build(cache, native, ancestry)?;
     let before_report = context.inspect(cache)?;
     let matches: Vec<_> = before_report
         .sites
@@ -311,7 +394,7 @@ pub fn patch_default(
         many => {
             return Err(DefaultPatchError::SelectorAmbiguous {
                 matches: many.len(),
-            })
+            });
         }
     };
 
@@ -383,7 +466,7 @@ pub fn patch_default(
             return Err(DefaultPatchError::Postcondition(format!(
                 "selector rediscovered {} times after patch",
                 other.len()
-            )))
+            )));
         }
     };
     if after.operand_offset != before.operand_offset || after.expected != replacement {
@@ -400,7 +483,11 @@ pub fn patch_default(
 }
 
 impl InspectionContext {
-    fn build(cache: &[u8], native: Option<NativeApi>) -> Result<Self, DefaultSiteError> {
+    fn build(
+        cache: &[u8],
+        native: Option<NativeApi>,
+        ancestry: Option<DefaultNativeAncestry>,
+    ) -> Result<Self, DefaultSiteError> {
         validate_cache(cache)?;
         let script_cache_guid = CacheHeader::parse(cache)
             .map_err(|error| DefaultSiteError::Header(error.to_string()))?
@@ -408,7 +495,8 @@ impl InspectionContext {
         let modules = parse_modules(cache).map_err(wire_error)?;
         // Validate bare class identity and inheritance before the shared resolver flattens both
         // maps by class name. Otherwise a later duplicate could silently replace type evidence.
-        let hierarchy = ClassHierarchy::build(&modules)?;
+        let ancestry = ancestry.filter(|profile| profile.supports_cache(&script_cache_guid));
+        let hierarchy = ClassHierarchy::build(&modules, ancestry)?;
         let mut refs = RefResolver::build(cache).map_err(wire_error)?;
         let script_enum_fields = proven_script_enum_fields(&modules, &refs);
         prepare_resolver_semantics(&modules, &mut refs, native);
@@ -704,7 +792,10 @@ fn validate_cache(cache: &[u8]) -> Result<(), DefaultSiteError> {
 }
 
 impl ClassHierarchy {
-    fn build(modules: &[Module]) -> Result<Self, DefaultSiteError> {
+    fn build(
+        modules: &[Module],
+        native: Option<DefaultNativeAncestry>,
+    ) -> Result<Self, DefaultSiteError> {
         let mut supers = HashMap::new();
         let mut defining_modules: HashMap<String, String> = HashMap::new();
         for module in modules {
@@ -734,7 +825,7 @@ impl ClassHierarchy {
             }
         }
 
-        let hierarchy = Self { supers };
+        let hierarchy = Self { supers, native };
         for class in hierarchy.supers.keys() {
             hierarchy.validate_chain(class)?;
         }
@@ -774,7 +865,10 @@ impl ClassHierarchy {
                 return true;
             }
             if !self.supers.contains_key(parent) {
-                return false;
+                return self
+                    .native
+                    .as_ref()
+                    .is_some_and(|profile| profile.proves_ancestry(parent, owner));
             }
             current = parent;
         }
@@ -1337,7 +1431,7 @@ mod tests {
             module_with_class("Items", "UApple", Some("UFood")),
             module_with_class("Items.Base", "UFood", Some("UNativeItem")),
         ];
-        let hierarchy = ClassHierarchy::build(&modules).unwrap();
+        let hierarchy = ClassHierarchy::build(&modules, None).unwrap();
         assert!(hierarchy.proves_ancestry("UApple", "UApple"));
         assert!(hierarchy.proves_ancestry("UApple", "UFood"));
         assert!(hierarchy.proves_ancestry("UApple", "UNativeItem"));
@@ -1352,7 +1446,7 @@ mod tests {
             module_with_class("Second", "UShared", None),
         ];
         assert!(matches!(
-            ClassHierarchy::build(&duplicate),
+            ClassHierarchy::build(&duplicate, None),
             Err(DefaultSiteError::DuplicateBareClass { .. })
         ));
 
@@ -1361,7 +1455,7 @@ mod tests {
             module_with_class("Second", "UB", Some("UA")),
         ];
         assert!(matches!(
-            ClassHierarchy::build(&cycle),
+            ClassHierarchy::build(&cycle, None),
             Err(DefaultSiteError::CyclicClassHierarchy { .. })
         ));
     }
@@ -1388,7 +1482,7 @@ mod tests {
             },
         ];
         assert!(matches!(
-            ClassHierarchy::build(&[module]),
+            ClassHierarchy::build(&[module], None),
             Err(DefaultSiteError::DuplicateDirectField { field, .. }) if field == "Value"
         ));
     }

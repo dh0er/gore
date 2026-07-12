@@ -922,3 +922,42 @@ fn configured_real_cache_exposes_known_direct_default_sites() {
         replacement
     );
 }
+
+#[test]
+fn configured_real_default_ancestry_profile_is_sealed() {
+    let Some(path) = std::env::var_os("GORE_AS_DEFAULT_CACHE") else {
+        eprintln!("skip: set GORE_AS_DEFAULT_CACHE");
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    let bytes = std::fs::read(&path).expect("read configured real cache");
+    let cache_guid = CacheHeader::parse(&bytes).expect("parse cache header").hash;
+    let semantic_sha = gore_as::cache::default_patch::default_profile_cache_sha256(&bytes)
+        .expect("compute default-profile cache identity");
+    eprintln!(
+        "default-profile-cache-sha256={}",
+        gore_as::cache::default_patch::encode_hex(&semantic_sha)
+    );
+    let binds = gore_as::cache::binds::NativeApi::load(
+        &path.parent().expect("Script directory").join("Binds.Cache"),
+    )
+    .expect("load sibling Binds.Cache");
+    let usmap = std::env::var_os("GORE_AS_USMAP")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            path.parent()
+                .expect("Script directory")
+                .parent()
+                .expect("G1R directory")
+                .join("Binaries/Win64/ue4ss/G1R-5.4.3-168781-272ce2f8.usmap")
+        });
+    let usmap_bytes = std::fs::read(&usmap).expect("read configured USMAP");
+    let schemas = gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse configured USMAP");
+    let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+        &binds,
+        &cache_guid,
+        &schemas,
+    )
+    .expect("build sealed ancestry profile");
+    assert_eq!(profile.class_count(), 6_572);
+}

@@ -53,6 +53,12 @@ const VERIFIED_DEFAULT_FIELD_MAP_SHA256: [u8; 32] = [
     0x5d, 0xdf, 0x7f, 0xa6, 0xdf, 0x36, 0xac, 0x00, 0xd0, 0x7b, 0xd0, 0x68, 0xfc, 0xf1, 0x9a, 0xd6,
     0x1a, 0x3f, 0x4b, 0x83, 0x61, 0x33, 0x51, 0x39, 0x66, 0xdc, 0x37, 0x9b, 0x24, 0x24, 0x17, 0x07,
 ];
+/// Deterministic digest of every unambiguous `(AngelScript type, /Script/ path)` bridge found in
+/// the sealed Binds file. Native-default ancestry uses this only together with a sealed USMAP.
+const VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256: [u8; 32] = [
+    0xcf, 0xfb, 0xce, 0x6f, 0xeb, 0x2f, 0x8c, 0x14, 0xdc, 0x5f, 0x25, 0x19, 0x37, 0x41, 0xf5, 0x89,
+    0x51, 0xc1, 0x6f, 0x27, 0x0a, 0x76, 0x77, 0x31, 0x25, 0xd0, 0xe5, 0x07, 0xd3, 0x6e, 0x95, 0xc4,
+];
 /// Per-build GUID from the matching audited `PrecompiledScript_Shipping.Cache` header.
 /// A sealed Binds file is not mutation evidence for any other script-cache build.
 const VERIFIED_DEFAULT_SCRIPT_CACHE_GUID: [u8; 16] = [
@@ -77,6 +83,10 @@ pub struct NativeApi {
     /// High-coverage native field rows are a mutation witness only for a sealed, audited
     /// Binds.Cache identity. Unknown versions keep this empty and therefore fail closed.
     verified_default_field_types: HashMap<(String, String), String>,
+    /// Exact AngelScript type name to qualified Unreal class/struct path bridge. Populated only
+    /// for the sealed Binds bytes and sealed parser-output digest; a USMAP profile independently
+    /// filters this to classes before it can become ancestry evidence.
+    verified_default_class_paths: HashMap<String, String>,
 }
 
 impl NativeApi {
@@ -96,6 +106,7 @@ impl NativeApi {
                 .collect(),
             field_types: HashMap::new(),
             verified_default_field_types: HashMap::new(),
+            verified_default_class_paths: HashMap::new(),
         }
     }
 
@@ -119,6 +130,7 @@ impl NativeApi {
             by_name: HashMap::new(),
             field_types: fields(generic),
             verified_default_field_types: fields(verified),
+            verified_default_class_paths: HashMap::new(),
         }
     }
 
@@ -131,12 +143,14 @@ impl NativeApi {
         }
         let (by_class, field_types) = parse_records(&data);
         let verified_default_field_types = verified_default_field_types(&data);
+        let verified_default_class_paths = verified_default_class_paths(&data);
         let by_name = scan_by_name(&data);
         // A partially readable cache may populate only one table; keep any useful table.
         if by_name.is_empty()
             && by_class.is_empty()
             && field_types.is_empty()
             && verified_default_field_types.is_empty()
+            && verified_default_class_paths.is_empty()
         {
             return None;
         }
@@ -145,6 +159,7 @@ impl NativeApi {
             by_name,
             field_types,
             verified_default_field_types,
+            verified_default_class_paths,
         })
     }
 
@@ -195,6 +210,18 @@ impl NativeApi {
             .map(String::as_str)
     }
 
+    /// Sealed AngelScript type-to-Unreal path map for native default ancestry. The full map is
+    /// available only for the audited script-cache GUID; callers must still join it with the
+    /// independently sealed USMAP class graph.
+    pub(crate) fn verified_default_class_paths(
+        &self,
+        script_cache_guid: &[u8; 16],
+    ) -> Option<&HashMap<String, String>> {
+        (script_cache_guid == &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID
+            && !self.verified_default_class_paths.is_empty())
+        .then_some(&self.verified_default_class_paths)
+    }
+
     /// Number of distinct `(class, field)` plain-field type entries (diagnostic).
     pub fn field_type_count(&self) -> usize {
         self.field_types.len()
@@ -223,6 +250,32 @@ fn verified_default_field_types(data: &[u8]) -> HashMap<(String, String), String
     } else {
         HashMap::new()
     }
+}
+
+fn verified_default_class_paths(data: &[u8]) -> HashMap<String, String> {
+    let source_sha256: [u8; 32] = Sha256::digest(data).into();
+    if source_sha256 != VERIFIED_DEFAULT_FIELD_BINDS_SHA256 {
+        return HashMap::new();
+    }
+    let paths = scan_type_paths(data);
+    if string_map_sha256(&paths) == VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256 {
+        paths
+    } else {
+        HashMap::new()
+    }
+}
+
+fn string_map_sha256(values: &HashMap<String, String>) -> [u8; 32] {
+    let mut rows: Vec<_> = values.iter().collect();
+    rows.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    let mut hash = Sha256::new();
+    for (key, value) in rows {
+        for value in [key, value] {
+            hash.update((value.len() as u32).to_le_bytes());
+            hash.update(value.as_bytes());
+        }
+    }
+    hash.finalize().into()
 }
 
 fn field_type_map_sha256(fields: &HashMap<(String, String), String>) -> [u8; 32] {
@@ -359,6 +412,73 @@ fn find_record_starts_exhaustive(data: &[u8]) -> Vec<usize> {
         o += 1;
     }
     starts
+}
+
+/// Extract exact type/path header pairs from every strong Binds header candidate. Both directions
+/// must be one-to-one: conflicting type aliases or path aliases are removed before the sealed map
+/// digest is checked.
+fn scan_type_paths(data: &[u8]) -> HashMap<String, String> {
+    let mut by_type = HashMap::new();
+    let mut type_conflicts = std::collections::HashSet::new();
+    let mut by_path: HashMap<String, String> = HashMap::new();
+    let mut path_conflicts = std::collections::HashSet::new();
+
+    for offset in find_record_starts_exhaustive(data) {
+        let Some(type_len) = read_u32(data, offset).map(|value| value as usize) else {
+            continue;
+        };
+        let Some(type_start) = offset.checked_add(4) else {
+            continue;
+        };
+        let Some(type_end) = type_start.checked_add(type_len) else {
+            continue;
+        };
+        let Some(path_len) = read_u32(data, type_end).map(|value| value as usize) else {
+            continue;
+        };
+        let Some(path_start) = type_end.checked_add(4) else {
+            continue;
+        };
+        let Some(path_end) = path_start.checked_add(path_len) else {
+            continue;
+        };
+        let (Some(type_bytes), Some(path_bytes)) = (
+            data.get(type_start..type_end.saturating_sub(1)),
+            data.get(path_start..path_end.saturating_sub(1)),
+        ) else {
+            continue;
+        };
+        let (Ok(type_name), Ok(path)) = (
+            std::str::from_utf8(type_bytes),
+            std::str::from_utf8(path_bytes),
+        ) else {
+            continue;
+        };
+        let type_name = type_name.to_owned();
+        let path = path.to_owned();
+
+        if by_type
+            .get(&type_name)
+            .is_some_and(|previous| previous != &path)
+        {
+            type_conflicts.insert(type_name.clone());
+        } else {
+            by_type.insert(type_name.clone(), path.clone());
+        }
+        if by_path
+            .get(&path)
+            .is_some_and(|previous| previous != &type_name)
+        {
+            path_conflicts.insert(path.clone());
+        } else {
+            by_path.insert(path, type_name);
+        }
+    }
+
+    by_type.retain(|type_name, path| {
+        !type_conflicts.contains(type_name) && !path_conflicts.contains(path)
+    });
+    by_type
 }
 
 /// Best-effort end of one record, used only to keep the method-arity parser from treating
