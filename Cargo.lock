@@ -915,6 +915,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-authoring"
+version = "0.0.0"
+dependencies = [
+ "gore-vo",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gore-catalog"
 version = "0.0.0"
 dependencies = [
