@@ -48,6 +48,28 @@ extract-remap --allow-new-symbols can retain and rekey the minimal rows needed
 by a newly authored class/function-bearing module; the default remains strict
 and rejects unresolved new symbols.
 
+## Semantic-oracle slot normalization
+
+`gore as bytediff --norm-slots` keeps N2 opt-in and fail-closed. Its cheap path
+alpha-renames frame slots by first use only when both sides retain the same
+number of distinct slots. A stronger path handles compiler register reuse and
+splitting only after proving all of the following:
+
+- opcode order and every non-slot operand are already identical;
+- ordinary jumps and `JMPP` rows form a complete, in-range CFG;
+- each read sees the same aligned reaching write on every path;
+- ABI-visible offsets (`this`, parameters and hidden RVO slots at offsets <= 0)
+  remain exact, while frame addresses exposed through `PSF`, `VAR` or `LDV`
+  retain one global storage bijection;
+- VM read-modify-write instructions are modeled as both reads and writes.
+
+N2 can also coalesce the qualified `producer temp; CpyVtoV4 local,temp`
+compiler idiom, but only for six exact primitive producers, with whole-CFG
+liveness proving the temp dead, no producer read of the destination, and no
+branch or dispatch entry into the removed copy. Any malformed edge, changed
+definition, escaped-storage split or unrecognized shape remains a semantic
+difference.
+
 ## Validation status
 
 - The complete 7,305-module tree parses through the final tail-table byte.
@@ -58,8 +80,11 @@ and rejects unresolved new symbols.
   file:line:column error output and publishes no cache.
 - Structural completeness and successful compilation are not semantic bytecode
   identity. Use the bytediff oracle for that separate claim.
-- One conservative decompiler fallback remains, and generated special methods
-  such as __InitDefaults are not emitted as ordinary editable functions.
+- The measured current-hotfix corpus emits 55,403 editable function bodies with
+  zero decompiler stubs. Unsupported or unproved future bytecode shapes still
+  fail visibly to signature-preserving stubs rather than being guessed.
+- Generated special methods such as __InitDefaults remain a separate coverage
+  gap and are not emitted as ordinary editable functions.
 
 ## Companion data and versions
 

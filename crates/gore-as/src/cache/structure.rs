@@ -15,6 +15,7 @@ use std::fmt::Write as _;
 
 use super::cfg::{self, Cfg};
 use super::disasm::{disassemble, Instr};
+use super::isa::BcType;
 use super::refs::RefResolver;
 use super::types::DataType;
 use super::walk_modules::FuncCode;
@@ -600,20 +601,22 @@ impl Ctx<'_> {
         match v {
             Some(v) => {
                 let v = strip_return_assign(&v).to_string();
-                let declared_bool = v
+                let declared_ty = v
                     .strip_prefix("local_")
                     .and_then(|d| d.parse::<i32>().ok())
-                    .and_then(|n| self.slot_type(n))
-                    .as_deref()
-                    == Some("bool");
+                    .and_then(|n| self.slot_type(n));
                 let v = match self.ret_ty {
-                    Some(rt) if looks_int(&v) && !declared_bool => {
+                    Some(rt) if looks_int(&v) => {
                         let tn = if rt.token == 0x41 {
                             "bool".to_string()
                         } else {
                             rt.base_name(self.refs)
                         };
-                        cast_to_typename(&v, &tn).unwrap_or(v)
+                        if declared_ty.as_deref() == Some(tn.as_str()) {
+                            v
+                        } else {
+                            cast_to_typename(&v, &tn).unwrap_or(v)
+                        }
                     }
                     _ => v,
                 };
@@ -2745,7 +2748,11 @@ fn block_stmts_in(
                     let raw = name(slot);
                     // a constant slot stored into a float/double field carries IEEE-754 bits,
                     // not an int — decode it; else apply the bool/enum/incompatible cast.
+                    let source_is_bool = ctx.slot_type(slot).as_deref() == Some("bool");
+                    let target_is_bool = ref_reg_ty.as_deref() == Some("bool")
+                        || ref_reg_vty.as_deref() == Some("bool");
                     let mut rhs = match ref_reg_ty.as_deref() {
+                        _ if source_is_bool && target_is_bool => raw.clone(),
                         Some("float32") => {
                             float_lit(&set_consts, slot, false).unwrap_or(raw.clone())
                         }
@@ -2896,7 +2903,9 @@ fn block_stmts_in(
                 flush!();
                 let bits = ins.dwords.first().copied().unwrap_or(0);
                 set_consts.insert(w(ins, 0), ConstBits::W4(bits));
-                let rhs = if ctx.float_slots.contains(&w(ins, 0)) {
+                let rhs = if ctx.slot_type(w(ins, 0)).as_deref() == Some("bool") && bits <= 1 {
+                    (bits != 0).to_string()
+                } else if ctx.float_slots.contains(&w(ins, 0)) {
                     fmt_float(ConstBits::W4(bits), false)
                 } else if ctx
                     .slot_type(w(ins, 0))
@@ -2990,30 +2999,37 @@ fn block_stmts_in(
             }
             // asBC_INCi/DECi (NO_ARG): ++/-- the int at the value/ref register — an lvalue that
             // is a member or deref (LoadThisR/LoadRObjR set ref_reg), unlike IncVi/DecVi which
-            // carry a slot operand. Render as a compound assignment on the recovered member expr.
+            // carry a slot operand. The recovered ref expression is evaluated exactly once by
+            // the VM; prefix ++/-- preserves that alias/evaluation-order contract and round-trips
+            // to the direct opcode. `x = x + 1` instead evaluates a complex lvalue twice and
+            // lowers to a read/add/write sequence.
             "INCi" | "INCi64" | "INCi16" | "INCi8" => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    out.push(format!("{0} = {0} + 1;", r));
+                    out.push(format!("++{r};"));
                 }
             }
             "DECi" | "DECi64" | "DECi16" | "DECi8" => {
                 flush!();
                 if let Some(r) = &ref_reg {
-                    out.push(format!("{0} = {0} - 1;", r));
+                    out.push(format!("--{r};"));
                 }
             }
             "NEGi" | "NEGf" | "NEGd" => {
                 flush!();
                 out.push(format!("{0} = -{0};", name(w(ins, 0))));
             }
-            // asBC NOT (opcode 6) is the boolean logical invert. The slot is held as `int` (and
-            // is often also written with integer values like `= 1`), and AngelScript rejects `!`
-            // on int ("Illegal operation on this datatype"); render an int-safe toggle instead.
+            // asBC NOT (opcode 6) is the boolean logical invert. Proven bool locals can use the
+            // faithful source operation; unresolved/int scratch keeps the compile-safe integer
+            // toggle because AngelScript rejects `!` on int.
             "NOT" => {
                 flush!();
                 let s = name(w(ins, 0));
-                out.push(format!("{s} = int({s} == 0);"));
+                if ctx.slot_type(w(ins, 0)).as_deref() == Some("bool") {
+                    out.push(format!("{s} = !{s};"));
+                } else {
+                    out.push(format!("{s} = int({s} == 0);"));
+                }
             }
             // ---- comparisons ----
             "CMPi" | "CMPu" | "CMPf" | "CMPd" | "CMPi64" | "CMPu64" => {
@@ -4787,6 +4803,506 @@ struct LoopScope {
     break_off: usize,
 }
 
+const COMPOUND_HEADER_MAX_BLOCKS: usize = 8;
+const COMPOUND_HEADER_MAX_PATHS: usize = 16;
+const COMPOUND_HEADER_MAX_EXPR_NODES: usize = 64;
+
+/// A deliberately small expression language for compiler-materialized loop predicates. It is
+/// used only while proving a bounded, side-effect-free header DAG; unsupported bytecode keeps the
+/// function on the existing stub path.
+#[derive(Clone, PartialEq, Eq)]
+enum HeaderExpr {
+    Atom(String),
+    Int(i64),
+    UInt(u64),
+    Real(String),
+    Bool(bool),
+    Cast(&'static str, Box<HeaderExpr>),
+    Cmp(Box<HeaderExpr>, HeaderRel, Box<HeaderExpr>),
+    And(Vec<HeaderExpr>),
+    Or(Vec<HeaderExpr>),
+    Not(Box<HeaderExpr>),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeaderRel {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+impl HeaderRel {
+    fn negated(self) -> Self {
+        match self {
+            Self::Eq => Self::Ne,
+            Self::Ne => Self::Eq,
+            Self::Lt => Self::Ge,
+            Self::Le => Self::Gt,
+            Self::Gt => Self::Le,
+            Self::Ge => Self::Lt,
+        }
+    }
+
+    fn text(self) -> &'static str {
+        match self {
+            Self::Eq => "==",
+            Self::Ne => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+        }
+    }
+}
+
+impl HeaderExpr {
+    fn nodes(&self) -> usize {
+        match self {
+            Self::Atom(_) | Self::Int(_) | Self::UInt(_) | Self::Real(_) | Self::Bool(_) => 1,
+            Self::Cast(_, v) | Self::Not(v) => 1 + v.nodes(),
+            Self::Cmp(a, _, b) => 1 + a.nodes() + b.nodes(),
+            Self::And(v) | Self::Or(v) => 1 + v.iter().map(Self::nodes).sum::<usize>(),
+        }
+    }
+
+    fn render(&self) -> String {
+        match self {
+            Self::Atom(s) => s.clone(),
+            Self::Int(v) => v.to_string(),
+            Self::UInt(v) => v.to_string(),
+            Self::Real(v) => v.clone(),
+            Self::Bool(v) => v.to_string(),
+            Self::Cast(t, v) => format!("{t}({})", v.render()),
+            Self::Cmp(a, op, b) => format!("{} {} {}", a.render(), op.text(), b.render()),
+            Self::And(v) => v
+                .iter()
+                .map(|x| format!("({})", x.render()))
+                .collect::<Vec<_>>()
+                .join(" && "),
+            Self::Or(v) => v
+                .iter()
+                .map(|x| format!("({})", x.render()))
+                .collect::<Vec<_>>()
+                .join(" || "),
+            Self::Not(v) => format!("!({})", v.render()),
+        }
+    }
+}
+
+fn header_not(v: HeaderExpr) -> HeaderExpr {
+    match v {
+        HeaderExpr::Bool(v) => HeaderExpr::Bool(!v),
+        HeaderExpr::Cmp(a, op, b) => HeaderExpr::Cmp(a, op.negated(), b),
+        HeaderExpr::Not(v) => *v,
+        v => HeaderExpr::Not(Box::new(v)),
+    }
+}
+
+fn header_and(values: Vec<HeaderExpr>) -> HeaderExpr {
+    let mut flat = Vec::new();
+    for value in values {
+        match value {
+            HeaderExpr::Bool(false) => return HeaderExpr::Bool(false),
+            HeaderExpr::Bool(true) => {}
+            HeaderExpr::And(v) => flat.extend(v),
+            v => flat.push(v),
+        }
+    }
+    flat.dedup();
+
+    // `x == A && x != B` makes the inequality redundant when A != B, and impossible when
+    // A == B. This is enough to collapse the common compiler lowering of `x == A || x == B`
+    // without introducing a general-purpose theorem prover.
+    let equalities: Vec<(HeaderExpr, HeaderExpr)> = flat
+        .iter()
+        .filter_map(|v| match v {
+            HeaderExpr::Cmp(a, HeaderRel::Eq, b) => Some(((**a).clone(), (**b).clone())),
+            _ => None,
+        })
+        .collect();
+    for (a, b) in &equalities {
+        if flat.iter().any(
+            |v| matches!(v, HeaderExpr::Cmp(na, HeaderRel::Ne, nb) if **na == *a && **nb == *b),
+        ) {
+            return HeaderExpr::Bool(false);
+        }
+    }
+    flat.retain(|v| {
+        !matches!(v, HeaderExpr::Cmp(a, HeaderRel::Ne, b)
+        if equalities.iter().any(|(ea, eb)| {
+            **a == *ea
+                && matches!((&**b, eb), (HeaderExpr::Int(n), HeaderExpr::Int(m)) if n != m)
+        }))
+    });
+    match flat.len() {
+        0 => HeaderExpr::Bool(true),
+        1 => flat.pop().unwrap(),
+        _ => HeaderExpr::And(flat),
+    }
+}
+
+fn header_or(values: Vec<HeaderExpr>) -> HeaderExpr {
+    let mut flat = Vec::new();
+    for value in values {
+        match value {
+            HeaderExpr::Bool(true) => return HeaderExpr::Bool(true),
+            HeaderExpr::Bool(false) => {}
+            HeaderExpr::Or(v) => flat.extend(v),
+            v => flat.push(v),
+        }
+    }
+    flat.dedup();
+    match flat.len() {
+        0 => HeaderExpr::Bool(false),
+        1 => flat.pop().unwrap(),
+        _ => HeaderExpr::Or(flat),
+    }
+}
+
+#[derive(Clone)]
+struct HeaderValue {
+    expr: HeaderExpr,
+    boolish: bool,
+    /// The complete VM value register is proven to contain canonical 0/1. A one-byte
+    /// `CpyVtoR1` is boolish for JLow*, but does not prove the upper register bytes for J*.
+    full_bool: bool,
+    ty: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct HeaderState {
+    slots: HashMap<i32, HeaderValue>,
+    cmp: Option<(HeaderExpr, HeaderExpr)>,
+    value_reg: Option<HeaderValue>,
+}
+
+fn header_truth_expr(value: HeaderValue) -> Option<HeaderExpr> {
+    if !value.boolish {
+        return None;
+    }
+    Some(match value.expr {
+        HeaderExpr::Int(0) | HeaderExpr::UInt(0) => HeaderExpr::Bool(false),
+        HeaderExpr::Int(1) | HeaderExpr::UInt(1) => HeaderExpr::Bool(true),
+        v @ (HeaderExpr::Bool(_)
+        | HeaderExpr::Cmp(_, _, _)
+        | HeaderExpr::And(_)
+        | HeaderExpr::Or(_)
+        | HeaderExpr::Not(_)) => v,
+        v => v,
+    })
+}
+
+fn header_bool_jump_taken(value: HeaderValue, jump: &str) -> Option<HeaderExpr> {
+    let full_bool = value.full_bool;
+    let value = header_truth_expr(value)?;
+    Some(match jump {
+        "JLowZ" => header_not(value),
+        "JLowNZ" => value,
+        _ if !full_bool => return None,
+        "JZ" | "JNP" => header_not(value),
+        "JNZ" | "JP" => value,
+        "JS" => HeaderExpr::Bool(false),
+        "JNS" => HeaderExpr::Bool(true),
+        _ => return None,
+    })
+}
+
+/// Return whether `ins` reads and/or writes `slot` through an explicit stack-var operand. The
+/// `rW`/`wW` roles are part of the VM instruction format, so this remains conservative across the
+/// full opcode table instead of maintaining a partial mnemonic list. Taking a slot's address is an
+/// `rW` use and therefore counts as a read/escape. `ChkNullS` is the one bare-W slot operand.
+fn explicit_slot_access(ins: &Instr, slot: i32) -> (bool, bool) {
+    use BcType::*;
+    let mut reads = false;
+    let mut writes = false;
+    let mut apply = |index: usize, read: bool, write: bool| {
+        if ins.words.get(index).copied().map(s16) == Some(slot) {
+            reads |= read;
+            writes |= write;
+        }
+    };
+    match ins.op.fmt {
+        wW_ARG | wW_DW_ARG | wW_QW_ARG => apply(0, false, true),
+        rW_ARG | rW_DW_ARG | rW_QW_ARG | rW_DW_DW_ARG => apply(0, true, false),
+        wW_rW_ARG | wW_rW_DW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+        }
+        rW_rW_ARG => {
+            apply(0, true, false);
+            apply(1, true, false);
+        }
+        wW_rW_rW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+            apply(2, true, false);
+        }
+        wW_W_ARG => apply(0, false, true),
+        W_rW_ARG => apply(1, true, false),
+        rW_W_DW_ARG => apply(0, true, false),
+        W_ARG if ins.op.name == "ChkNullS" => apply(0, true, false),
+        INFO | NO_ARG | W_ARG | DW_ARG | QW_ARG | DW_DW_ARG | QW_DW_ARG | W_DW_ARG => {}
+    }
+    if ins.op.name == "NOT" && ins.words.first().copied().map(s16) == Some(slot) {
+        reads = true;
+        writes = true;
+    }
+    (reads, writes)
+}
+
+fn header_numeric_cast_target(op: &str, dst_ty: Option<&str>) -> Option<&'static str> {
+    Some(match op {
+        "iTOf" | "uTOf" | "i64TOf" | "u64TOf" => "float32",
+        "iTOd" | "uTOd" | "fTOd" | "i64TOd" | "u64TOd" => "float",
+        "fTOi" | "dTOi" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi" => "int",
+        "fTOu" | "dTOu" => "uint",
+        "dTOf" => "float32",
+        "iTOb" => match dst_ty? {
+            "int8" => "int8",
+            "uint8" => "uint8",
+            _ => return None,
+        },
+        "iTOw" => match dst_ty? {
+            "int16" => "int16",
+            "uint16" => "uint16",
+            _ => return None,
+        },
+        "i64TOi" => match dst_ty? {
+            "int" => "int",
+            "uint" => "uint",
+            _ => return None,
+        },
+        "iTOi64" | "uTOi64" => match dst_ty? {
+            "int64" => "int64",
+            "uint64" => "uint64",
+            _ => return None,
+        },
+        "fTOi64" | "dTOi64" => "int64",
+        "fTOu64" | "dTOu64" => "uint64",
+        _ => return None,
+    })
+}
+
+fn header_numeric_cast_source(op: &str) -> Option<&'static str> {
+    Some(match op {
+        "iTOf" | "iTOd" | "iTOb" | "iTOw" | "iTOi64" => "int",
+        "uTOf" | "uTOd" | "uTOi64" => "uint",
+        "fTOi" | "fTOu" | "fTOd" | "fTOi64" | "fTOu64" => "float32",
+        "dTOi" | "dTOu" | "dTOf" | "dTOi64" | "dTOu64" => "float",
+        "i64TOf" | "i64TOd" | "i64TOi" => "int64",
+        "u64TOf" | "u64TOd" => "uint64",
+        "sbTOi" => "int8",
+        "swTOi" => "int16",
+        "ubTOi" => "uint8",
+        "uwTOi" => "uint16",
+        _ => return None,
+    })
+}
+
+fn header_numeric_cast_operand(op: &str, source: HeaderValue) -> Option<HeaderExpr> {
+    let source_ty = header_numeric_cast_source(op)?;
+    if source.ty.as_deref() == Some(source_ty)
+        // For an enum slot, the compiler knows the actual underlying byte/word signedness.
+        // Rendering `int(enum_value)` reproduces sb/sw/ub/uwTOi; pre-casting it to int8/uint8
+        // adds a redundant conversion and discards the enum metadata that made the opcode exact.
+        || (source.ty.as_deref().is_some_and(is_enum_name)
+            && matches!(op, "sbTOi" | "swTOi" | "ubTOi" | "uwTOi"))
+    {
+        Some(source.expr)
+    } else {
+        Some(HeaderExpr::Cast(source_ty, Box::new(source.expr)))
+    }
+}
+
+fn header_integral_width(ty: &str) -> Option<usize> {
+    Some(match ty {
+        "bool" | "int8" | "uint8" => 8,
+        "int16" | "uint16" => 16,
+        "int" | "uint" => 32,
+        "int64" | "uint64" => 64,
+        _ => return None,
+    })
+}
+
+fn header_primitive_cast_target(ty: &str) -> Option<&'static str> {
+    Some(match ty {
+        "bool" => "bool",
+        "int8" => "int8",
+        "uint8" => "uint8",
+        "int16" => "int16",
+        "uint16" => "uint16",
+        "int" => "int",
+        "uint" => "uint",
+        "int64" => "int64",
+        "uint64" => "uint64",
+        "float32" => "float32",
+        "float" | "double" | "float64" => "float",
+        _ => return None,
+    })
+}
+
+fn header_copy_type_matches_width(value: &HeaderValue, ty: &str, copy_bits: usize) -> bool {
+    match ty {
+        // Test results live in the full four-byte value register even though their source-level
+        // type is bool; this is the compiler's normal TZ -> CpyRtoV4 materialization.
+        "bool" => value.boolish && copy_bits == 32,
+        "float32" => copy_bits == 32,
+        "float" | "double" | "float64" => copy_bits == 64,
+        ty => header_integral_width(ty) == Some(copy_bits),
+    }
+}
+
+/// Retype a raw same-width VM copy using the destination slot, never the source slot. Primitive
+/// signed/unsigned copies are modulo-bit-preserving in AngelScript when written as an explicit
+/// cast. Other cross-type bit reinterpretations (notably integer/float and an enum destination
+/// with unknown underlying signedness) are rejected rather than guessed.
+fn header_copy_value(
+    mut value: HeaderValue,
+    dst_ty: Option<String>,
+    copy_bits: usize,
+) -> Option<HeaderValue> {
+    // Without the destination type a raw copy may be an integer/float bit reinterpretation. Any
+    // later numeric operation would turn that into an AngelScript numeric conversion, so reject.
+    // The sole safe exception is a proven canonical boolean materialization: its complete V4
+    // payload is 0/1 independently of the unnamed destination's inferred integer spelling.
+    let Some(dst_ty) = dst_ty else {
+        if value.boolish && value.full_bool && copy_bits == 32 {
+            value.ty = None;
+            return Some(value);
+        }
+        return None;
+    };
+    if value.ty.as_deref() == Some(dst_ty.as_str()) {
+        return header_copy_type_matches_width(&value, &dst_ty, copy_bits).then_some(value);
+    }
+
+    let dst_cast = header_primitive_cast_target(&dst_ty)?;
+    let safe = match value.ty.as_deref() {
+        Some("bool") => value.boolish && header_integral_width(&dst_ty) == Some(copy_bits),
+        Some(src) if is_enum_name(src) => header_integral_width(&dst_ty) == Some(copy_bits),
+        Some(src) => {
+            let integral = header_integral_width(src) == Some(copy_bits)
+                && header_integral_width(&dst_ty) == Some(copy_bits);
+            let same_float_width = matches!(
+                (src, dst_ty.as_str(), copy_bits),
+                ("float32", "float32", 32)
+                    | (
+                        "float" | "double" | "float64",
+                        "float" | "double" | "float64",
+                        64
+                    )
+            );
+            integral || same_float_width
+        }
+        None => {
+            header_integral_width(&dst_ty) == Some(copy_bits)
+                && matches!(
+                    &value.expr,
+                    HeaderExpr::Int(_)
+                        | HeaderExpr::UInt(_)
+                        | HeaderExpr::Bool(_)
+                        | HeaderExpr::Cmp(_, _, _)
+                        | HeaderExpr::And(_)
+                        | HeaderExpr::Or(_)
+                        | HeaderExpr::Not(_)
+                )
+        }
+    };
+    if !safe {
+        return None;
+    }
+    value.expr = HeaderExpr::Cast(dst_cast, Box::new(value.expr));
+    value.ty = Some(dst_ty);
+    Some(value)
+}
+
+/// VM integer comparisons are bit/integer operations. Casting a known float, handle, or object
+/// expression to an integer in source would be a numeric conversion and is not necessarily the
+/// bytecode operation that was executed, so only proven integral-like source values are accepted.
+fn header_is_integral_type(ty: Option<&str>) -> bool {
+    match ty {
+        None => true,
+        Some(
+            "bool" | "int8" | "uint8" | "int16" | "uint16" | "int" | "uint" | "int64" | "uint64",
+        ) => true,
+        Some(ty) => is_enum_name(ty),
+    }
+}
+
+fn header_set_value(op: &str, raw: u64, ty: Option<String>) -> Option<HeaderValue> {
+    let (expr, boolish) = match op {
+        "SetV1" => {
+            let raw = raw as u8;
+            match ty.as_deref() {
+                Some("bool") if raw <= 1 => (HeaderExpr::Int(raw as i64), true),
+                Some("int8") => (HeaderExpr::Int(raw as i8 as i64), false),
+                Some("uint8") => (HeaderExpr::UInt(raw as u64), false),
+                // A SetV1 enum's underlying byte signedness is not present in the cache's local
+                // type name. Guessing `i8` breaks 0xff followed by ubTOi, while guessing `u8`
+                // breaks sbTOi. Keep this uncommon shape on the visible fallback path.
+                Some(t) if is_enum_name(t) => return None,
+                None if raw <= 1 => (HeaderExpr::Int(raw as i64), true),
+                None => (HeaderExpr::Int(raw as i8 as i64), false),
+                _ => return None,
+            }
+        }
+        "SetV2" => {
+            let raw = raw as u16;
+            let expr = match ty.as_deref() {
+                Some("int16") | None => HeaderExpr::Int(raw as i16 as i64),
+                Some("uint16") => HeaderExpr::UInt(raw as u64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        "SetV4" => {
+            let raw = raw as u32;
+            let expr = match ty.as_deref() {
+                Some("float32") if f32::from_bits(raw).is_finite() => {
+                    HeaderExpr::Real(fmt_float(ConstBits::W4(raw), false))
+                }
+                Some("uint") => HeaderExpr::UInt(raw as u64),
+                Some("int") | None => HeaderExpr::Int(raw as i32 as i64),
+                Some(t) if is_enum_name(t) => HeaderExpr::Int(raw as i32 as i64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        "SetV8" => {
+            let expr = match ty.as_deref() {
+                Some("float" | "double" | "float64") if f64::from_bits(raw).is_finite() => {
+                    HeaderExpr::Real(fmt_float(ConstBits::W8(raw), true))
+                }
+                Some("uint64") => HeaderExpr::UInt(raw),
+                Some("int64") | None => HeaderExpr::Int(raw as i64),
+                _ => return None,
+            };
+            (expr, false)
+        }
+        _ => return None,
+    };
+    Some(HeaderValue {
+        expr,
+        boolish,
+        full_bool: false,
+        ty,
+    })
+}
+
+fn header_set_slot_type(known_ty: Option<String>, float_hint: bool, op: &str) -> Option<String> {
+    if known_ty.is_some() || !float_hint {
+        return known_ty;
+    }
+    match op {
+        "SetV4" => Some("float32".into()),
+        "SetV8" => Some("float".into()),
+        _ => None,
+    }
+}
+
 impl Structurer<'_> {
     fn jump_op(&self, bi: usize) -> &'static str {
         let b = &self.g.blocks[bi];
@@ -4855,6 +5371,23 @@ impl Structurer<'_> {
                 self.loop_scope = saved;
                 let _ = writeln!(out, "{ind}}}");
                 next = latch + 1;
+            } else if let Some((body, exit, cond, cont_off, brk_off)) =
+                self.compound_latch_loop_recoverable(i, stop)
+            {
+                // A bounded materialized top-test whose unique back-edge can occur inside a
+                // nested switch case. The physical loop body extends to the proven loop exit,
+                // including case/default blocks laid out after that back-edge.
+                let _ = writeln!(out, "{ind}while ({cond})");
+                let _ = writeln!(out, "{ind}{{");
+                let saved = self.loop_scope;
+                self.loop_scope = Some(LoopScope {
+                    continue_off: cont_off,
+                    break_off: brk_off,
+                });
+                self.emit_range(body, exit, depth + 1, out);
+                self.loop_scope = saved;
+                let _ = writeln!(out, "{ind}}}");
+                next = exit;
             } else if let Some((test_idx, cond, body_head, break_off)) =
                 self.test_first_foreach(i, stop)
             {
@@ -4985,7 +5518,20 @@ impl Structurer<'_> {
                 let taken = b.succs.first().copied();
                 let then_idx = fall.and_then(|o| self.idx_of.get(&o).copied());
                 let else_idx = taken.and_then(|o| self.idx_of.get(&o).copied());
-                let cond = negate(&branch_cond(&cmp, jop));
+                let taken_cond = branch_cond(&cmp, jop);
+                let cond = cmp
+                    .as_ref()
+                    .and_then(|c| c.expr.as_deref())
+                    .and_then(|expr| {
+                        let slot = expr
+                            .strip_prefix("local_")
+                            .and_then(|digits| digits.parse::<i32>().ok());
+                        (matches!(jop, "JZ" | "JLowZ")
+                            && slot.and_then(|slot| self.ctx.slot_type(slot)).as_deref()
+                                == Some("bool"))
+                        .then(|| expr.to_string())
+                    })
+                    .unwrap_or_else(|| negate(&taken_cond));
                 let then_end = else_idx.unwrap_or(stop).min(stop).max(i + 1);
                 let _ = writeln!(out, "{ind}if ({cond})");
                 let _ = writeln!(out, "{ind}{{");
@@ -5144,6 +5690,15 @@ impl Structurer<'_> {
             } else {
                 "break;".into()
             });
+        }
+        // A backward edge to the enclosing loop's *proven* continue target is an early switch
+        // exit, not the switch JOIN. Keep this narrower than `break_off`: `break;` written inside
+        // a switch is lexically a switch break and cannot represent an enclosing-loop break.
+        if self
+            .loop_scope
+            .is_some_and(|ls| t == ls.continue_off && ls.continue_off < self.g.blocks[bi].start_dw)
+        {
+            return Some("continue;".into());
         }
         if self.exit_mixed_rvo_ret_rows_ok
             && self.is_bare_ret_off(t)
@@ -5691,18 +6246,29 @@ impl Structurer<'_> {
         let mut join_cands: Vec<usize> = Vec::new();
         let mut ret_rows: Vec<usize> = Vec::new();
         let mut fall_pend: Vec<usize> = Vec::new();
-        // batch-36 (Stage B): an edge to the loop break/continue offset is a valid switch exit.
-        let is_loop_exit = |x: usize| -> bool {
-            lscope.is_some_and(|ls| x == ls.continue_off || x == ls.break_off)
+        // A backward edge to the exact enclosing-loop continue target is a proven early exit.
+        // It is never a JOIN candidate. A forward continue point can retain the older, ordinary
+        // `switch break -> loop increment/test` JOIN interpretation. `break_off` is deliberately
+        // excluded: a source `break;` inside the switch cannot exit the enclosing loop.
+        let early_continue = lscope
+            .filter(|ls| ls.continue_off < b0.start_dw)
+            .map(|ls| ls.continue_off);
+        let is_forward_loop_join = |x: usize| -> bool {
+            lscope.is_some_and(|ls| x == ls.continue_off && ls.continue_off >= b0.start_dw)
         };
+        let is_loop_break = |x: usize| -> bool { lscope.is_some_and(|ls| x == ls.break_off) };
         for w in bounds.windows(2) {
             let last_bi = self.idx_of.get(&w[1]).copied()? - 1;
             let lb = &blocks[last_bi];
             match ctx.instrs[lb.instr_hi - 1].op.name {
                 "JMP" => {
                     let x = lb.succs.first().copied()?;
-                    if is_loop_exit(x) {
-                        // `break;`/`continue;` out of the switch to the enclosing loop
+                    if is_loop_break(x) {
+                        return None;
+                    } else if Some(x) == early_continue {
+                        // Exact backward loop-continue trampoline: a case early-exit, not JOIN.
+                    } else if is_forward_loop_join(x) {
+                        // Ordinary switch break immediately before the loop increment/test.
                         join_cands.push(x);
                     } else if self.is_bare_ret_off(x) {
                         // batch-43 (Fix 2): a struct-RVO switch's per-case exit ALSO jumps to a
@@ -5737,14 +6303,17 @@ impl Structurer<'_> {
         // falls into the increment as a `break;`. Only when NO explicit forward join exists.
         let loop_join = lscope.and_then(|ls| {
             let cont_idx = self.idx_of.get(&ls.continue_off).copied();
-            if cont_idx == Some(stop) && join_cands.iter().all(|&j| is_loop_exit(j)) {
+            if ls.continue_off >= b0.start_dw
+                && cont_idx == Some(stop)
+                && join_cands.iter().all(|&j| is_forward_loop_join(j))
+            {
                 Some(ls.continue_off)
             } else {
                 None
             }
         });
         let join_off = match (join_cands.as_slice(), ret_rows.as_slice()) {
-            _ if loop_join.is_some() && join_cands.iter().all(|&j| is_loop_exit(j)) => {
+            _ if loop_join.is_some() && join_cands.iter().all(|&j| is_forward_loop_join(j)) => {
                 loop_join.unwrap()
             }
             ([j], _) => *j,
@@ -5833,6 +6402,12 @@ impl Structurer<'_> {
                     if s >= b && s < end_off {
                         continue; // in-region (incl. internal loops' back edges)
                     }
+                    if is_loop_break(s) {
+                        return None;
+                    }
+                    if uncond && Some(s) == early_continue {
+                        continue; // exact proven enclosing-loop `continue;`
+                    }
                     if s == join_off {
                         if uncond || (last_of_region && end == join_idx) {
                             continue; // break/return exit, or the last region falling into JOIN
@@ -5888,11 +6463,15 @@ impl Structurer<'_> {
             let append_break;
             if lt == "JMP" {
                 let x = lb.succs.first().copied()?;
+                if is_loop_break(x) {
+                    return None;
+                }
                 let mixed_rvo_ret_exit = rvo_return_mode
                     && !rvo_ret_switch
                     && self.is_bare_ret_off(x)
                     && self.proves_mixed_rvo_exit(end - 1, x);
-                let exits = x == join_off
+                let exits = Some(x) == early_continue
+                    || x == join_off
                     || ((register_based || mixed_rvo_ret_exit)
                         && !(x >= b && x < end_off)
                         && self.is_bare_ret_off(x));
@@ -6426,6 +7005,555 @@ impl Structurer<'_> {
         Some(j)
     }
 
+    fn header_slot_value(&self, state: &HeaderState, slot: i32) -> HeaderValue {
+        state.slots.get(&slot).cloned().unwrap_or_else(|| {
+            let ty = self.ctx.slot_type(slot);
+            let boolish = ty.as_deref() == Some("bool");
+            HeaderValue {
+                expr: HeaderExpr::Atom(self.ctx.slot_name(slot)),
+                boolish,
+                full_bool: false,
+                ty,
+            }
+        })
+    }
+
+    fn header_truth(&self, value: HeaderValue) -> Option<HeaderExpr> {
+        header_truth_expr(value)
+    }
+
+    fn header_relation(&self, state: &HeaderState, rel: HeaderRel) -> Option<HeaderExpr> {
+        let (a, b) = state.cmp.clone()?;
+        Some(HeaderExpr::Cmp(Box::new(a), rel, Box::new(b)))
+    }
+
+    fn header_taken_condition(&self, state: &HeaderState, jump: &str) -> Option<HeaderExpr> {
+        if matches!(jump, "JLowZ" | "JLowNZ") {
+            return header_bool_jump_taken(state.value_reg.clone()?, jump);
+        }
+        let rel = match jump {
+            "JZ" => HeaderRel::Eq,
+            "JNZ" => HeaderRel::Ne,
+            "JS" => HeaderRel::Lt,
+            "JNS" => HeaderRel::Ge,
+            "JP" => HeaderRel::Gt,
+            "JNP" => HeaderRel::Le,
+            _ => return None,
+        };
+        self.header_relation(state, rel)
+            .or_else(|| header_bool_jump_taken(state.value_reg.clone()?, jump))
+    }
+
+    /// Symbolically execute one compiler-materialized predicate block. The whitelist contains
+    /// only local/register copies, constants, numeric casts and comparisons. Any call, member
+    /// access, write, allocation, suspension or unmodelled opcode rejects the entire loop proof.
+    fn exec_header_block(&self, bi: usize, state: &mut HeaderState) -> Option<()> {
+        let b = &self.g.blocks[bi];
+        for k in b.instr_lo..b.instr_hi {
+            let ins = &self.ctx.instrs[k];
+            let n = ins.op.name;
+            if k + 1 == b.instr_hi && (n == "JMP" || is_cond_op(n)) {
+                continue;
+            }
+            match n {
+                "SetV1" | "SetV2" | "SetV4" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let ty = header_set_slot_type(
+                        self.ctx.slot_type(slot),
+                        self.ctx.float_slots.contains(&slot),
+                        n,
+                    );
+                    let value = header_set_value(n, *ins.dwords.first()? as u64, ty)?;
+                    state.slots.insert(slot, value);
+                }
+                "SetV8" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let ty = header_set_slot_type(
+                        self.ctx.slot_type(slot),
+                        self.ctx.float_slots.contains(&slot),
+                        n,
+                    );
+                    let value = header_set_value(n, *ins.qwords.first()?, ty)?;
+                    state.slots.insert(slot, value);
+                }
+                "CpyVtoV4" | "CpyVtoV8" => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let src = ins.words.get(1).copied().map(s16)?;
+                    let value = header_copy_value(
+                        self.header_slot_value(state, src),
+                        self.ctx.slot_type(dst),
+                        if n == "CpyVtoV4" { 32 } else { 64 },
+                    )?;
+                    state.slots.insert(dst, value);
+                }
+                "CpyRtoV4" | "CpyRtoV8" => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let value = header_copy_value(
+                        state.value_reg.clone()?,
+                        self.ctx.slot_type(dst),
+                        if n == "CpyRtoV4" { 32 } else { 64 },
+                    )?;
+                    state.slots.insert(dst, value);
+                }
+                "CpyVtoR1" | "CpyVtoR4" | "CpyVtoR8" => {
+                    let src = ins.words.first().copied().map(s16)?;
+                    let mut value = self.header_slot_value(state, src);
+                    if n == "CpyVtoR1" {
+                        value.full_bool = false;
+                    }
+                    state.value_reg = Some(value);
+                    state.cmp = None;
+                }
+                "CMPIi" | "CMPIu" => {
+                    let src = ins.words.first().copied().map(s16)?;
+                    let value = self.header_slot_value(state, src);
+                    if !header_is_integral_type(value.ty.as_deref()) {
+                        return None;
+                    }
+                    let (target, rhs) = if n == "CMPIu" {
+                        (
+                            "uint",
+                            HeaderExpr::Cast(
+                                "uint",
+                                Box::new(HeaderExpr::UInt(*ins.dwords.first()? as u64)),
+                            ),
+                        )
+                    } else {
+                        ("int", HeaderExpr::Int(*ins.dwords.first()? as i32 as i64))
+                    };
+                    let lhs = if value.ty.as_deref() == Some(target) {
+                        value.expr
+                    } else {
+                        HeaderExpr::Cast(target, Box::new(value.expr))
+                    };
+                    state.cmp = Some((lhs, rhs));
+                    state.value_reg = None;
+                }
+                "CMPi" | "CMPu" | "CMPi64" | "CMPu64" => {
+                    let a = ins.words.first().copied().map(s16)?;
+                    let b = ins.words.get(1).copied().map(s16)?;
+                    let a = self.header_slot_value(state, a);
+                    let b = self.header_slot_value(state, b);
+                    if !header_is_integral_type(a.ty.as_deref())
+                        || !header_is_integral_type(b.ty.as_deref())
+                    {
+                        return None;
+                    }
+                    let target = match n {
+                        "CMPi" => "int",
+                        "CMPu" => "uint",
+                        "CMPi64" => "int64",
+                        _ => "uint64",
+                    };
+                    let coerce = |v: HeaderValue| {
+                        if v.ty.as_deref() == Some(target) {
+                            v.expr
+                        } else {
+                            HeaderExpr::Cast(target, Box::new(v.expr))
+                        }
+                    };
+                    state.cmp = Some((coerce(a), coerce(b)));
+                    state.value_reg = None;
+                }
+                "TZ" | "TNZ" | "TS" | "TNS" | "TP" | "TNP" => {
+                    let rel = match n {
+                        "TZ" => HeaderRel::Eq,
+                        "TNZ" => HeaderRel::Ne,
+                        "TS" => HeaderRel::Lt,
+                        "TNS" => HeaderRel::Ge,
+                        "TP" => HeaderRel::Gt,
+                        _ => HeaderRel::Le,
+                    };
+                    state.value_reg = Some(HeaderValue {
+                        expr: self.header_relation(state, rel)?,
+                        boolish: true,
+                        full_bool: true,
+                        ty: Some("bool".into()),
+                    });
+                    state.cmp = None;
+                }
+                "NOT" => {
+                    let slot = ins.words.first().copied().map(s16)?;
+                    let value = self.header_truth(self.header_slot_value(state, slot))?;
+                    state.slots.insert(
+                        slot,
+                        HeaderValue {
+                            expr: header_not(value),
+                            boolish: true,
+                            full_bool: false,
+                            ty: Some("bool".into()),
+                        },
+                    );
+                }
+                n if is_numeric_cast(n) => {
+                    let dst = ins.words.first().copied().map(s16)?;
+                    let src = ins.words.get(1).copied().map(s16)?;
+                    let source = self.header_slot_value(state, src);
+                    let source = header_numeric_cast_operand(n, source)?;
+                    let dst_ty = self.ctx.slot_type(dst);
+                    let cast = header_numeric_cast_target(n, dst_ty.as_deref())?;
+                    state.slots.insert(
+                        dst,
+                        HeaderValue {
+                            expr: HeaderExpr::Cast(cast, Box::new(source)),
+                            boolish: false,
+                            full_bool: false,
+                            ty: Some(cast.into()),
+                        },
+                    );
+                }
+                // An unconditional terminator was skipped above. No other instruction is safe
+                // merely because it happens not to emit source text.
+                _ => return None,
+            }
+        }
+        Some(())
+    }
+
+    fn compound_header_written_slots(
+        &self,
+        head: usize,
+        body: usize,
+    ) -> Option<std::collections::BTreeSet<i32>> {
+        let mut written = std::collections::BTreeSet::new();
+        for bi in head..body {
+            let b = &self.g.blocks[bi];
+            for ins in &self.ctx.instrs[b.instr_lo..b.instr_hi] {
+                for &word in &ins.words {
+                    let slot = s16(word);
+                    if explicit_slot_access(ins, slot).1 {
+                        if slot <= 0 {
+                            return None;
+                        }
+                        written.insert(slot);
+                    }
+                }
+            }
+        }
+        Some(written)
+    }
+
+    /// Every header-written temporary that is read in the header must be defined earlier on that
+    /// exact path. This prevents an elided assignment on one iteration/path from becoming a
+    /// carried value consumed on the next iteration after the latch returns to `head`.
+    fn compound_header_writes_are_path_local(
+        &self,
+        head: usize,
+        body: usize,
+        written: &std::collections::BTreeSet<i32>,
+    ) -> bool {
+        let mut work = vec![(head, std::collections::BTreeSet::new())];
+        let mut paths = 0usize;
+        while let Some((bi, mut assigned)) = work.pop() {
+            paths += 1;
+            if paths > COMPOUND_HEADER_MAX_PATHS * COMPOUND_HEADER_MAX_BLOCKS {
+                return false;
+            }
+            let block = &self.g.blocks[bi];
+            for ins in &self.ctx.instrs[block.instr_lo..block.instr_hi] {
+                for &slot in written {
+                    let (reads, writes) = explicit_slot_access(ins, slot);
+                    if reads && !assigned.contains(&slot) {
+                        return false;
+                    }
+                    if writes {
+                        assigned.insert(slot);
+                    }
+                }
+            }
+            for &succ in &block.succs {
+                let Some(next) = self.idx_of.get(&succ).copied() else {
+                    return false;
+                };
+                if next >= head && next < body {
+                    if next <= bi {
+                        return false;
+                    }
+                    work.push((next, assigned.clone()));
+                }
+            }
+        }
+        true
+    }
+
+    /// Prove that every primitive temporary written by the elided header DAG is dead once control
+    /// reaches either the loop body or loop exit. A path is safe only when the slot is overwritten
+    /// before its first explicit read/escape, reaches a return without a read, or returns to the
+    /// proven header (whose own read-before-write safety is checked separately).
+    fn compound_header_writes_are_dead(
+        &self,
+        head: usize,
+        body: usize,
+        exit: usize,
+        written: &std::collections::BTreeSet<i32>,
+    ) -> bool {
+        for &slot in written {
+            let mut work = vec![body, exit];
+            let mut seen = std::collections::HashSet::new();
+            while let Some(bi) = work.pop() {
+                if bi == head || !seen.insert(bi) {
+                    continue;
+                }
+                let Some(block) = self.g.blocks.get(bi) else {
+                    return false;
+                };
+                let mut killed = false;
+                for ins in &self.ctx.instrs[block.instr_lo..block.instr_hi] {
+                    let (reads, writes) = explicit_slot_access(ins, slot);
+                    if reads {
+                        return false;
+                    }
+                    if writes {
+                        killed = true;
+                        break;
+                    }
+                }
+                if killed {
+                    continue;
+                }
+                let term = self.ctx.instrs[block.instr_hi - 1].op.name;
+                if block.succs.is_empty() {
+                    if !matches!(term, "RET" | "ThrowException") {
+                        return false;
+                    }
+                    continue;
+                }
+                for &succ in &block.succs {
+                    let Some(next) = self.idx_of.get(&succ).copied() else {
+                        return false;
+                    };
+                    work.push(next);
+                }
+            }
+        }
+        true
+    }
+
+    /// Recover the condition of a bounded, acyclic materialized header `[head, body)`. Every
+    /// path must terminate at exactly `body_off` or `exit_off`; path-local values are retained so
+    /// a compiler temporary assigned on both arms can feed the final low-register test.
+    fn symbolic_header_condition(
+        &self,
+        head: usize,
+        body: usize,
+        body_off: usize,
+        exit_off: usize,
+    ) -> Option<String> {
+        let mut work = vec![(head, HeaderState::default(), HeaderExpr::Bool(true))];
+        let mut body_paths = Vec::new();
+        let mut exit_paths = Vec::new();
+        let mut path_count = 0usize;
+        while let Some((bi, mut state, path)) = work.pop() {
+            if bi < head || bi >= body {
+                return None;
+            }
+            self.exec_header_block(bi, &mut state)?;
+            let b = &self.g.blocks[bi];
+            let term = self.jump_op(bi);
+            let mut push_edge =
+                |target: usize, state: HeaderState, condition: HeaderExpr| -> Option<()> {
+                    path_count += 1;
+                    if path_count > COMPOUND_HEADER_MAX_PATHS
+                        || condition.nodes() > COMPOUND_HEADER_MAX_EXPR_NODES
+                    {
+                        return None;
+                    }
+                    if target == body_off {
+                        body_paths.push(condition);
+                    } else if target == exit_off {
+                        exit_paths.push(condition);
+                    } else {
+                        let target_idx = self.idx_of.get(&target).copied()?;
+                        if target_idx <= bi || target_idx < head || target_idx >= body {
+                            return None;
+                        }
+                        work.push((target_idx, state, condition));
+                    }
+                    Some(())
+                };
+            if is_cond_op(term) {
+                if b.succs.len() != 2 {
+                    return None;
+                }
+                let taken = self.header_taken_condition(&state, term)?;
+                let fall = header_not(taken.clone());
+                push_edge(
+                    b.succs[0],
+                    state.clone(),
+                    header_and(vec![path.clone(), taken]),
+                )?;
+                push_edge(b.succs[1], state, header_and(vec![path, fall]))?;
+            } else {
+                if b.succs.len() != 1 {
+                    return None;
+                }
+                push_edge(b.succs[0], state, path)?;
+            }
+        }
+        if body_paths.is_empty() || exit_paths.is_empty() {
+            return None;
+        }
+        let condition = header_or(body_paths);
+        if matches!(condition, HeaderExpr::Bool(_))
+            || condition.nodes() > COMPOUND_HEADER_MAX_EXPR_NODES
+        {
+            return None;
+        }
+        let rendered = condition.render();
+        (rendered.len() <= 1024).then_some(rendered)
+    }
+
+    /// Detect a compound, side-effect-free top-test header whose only back-edge is an exact
+    /// unconditional jump to the header. Unlike a conventional latch-at-the-end loop, the
+    /// back-edge may live inside a switch case and code for another case/default may be laid out
+    /// after it; consequently the source loop body is `[body, exit)`, not `[body, latch)`.
+    fn compound_latch_loop(
+        &self,
+        i: usize,
+        stop: usize,
+    ) -> Option<(usize, usize, String, usize, usize)> {
+        if i >= stop || self.loop_latch(i, stop).is_some() || self.top_test_while(i, stop).is_some()
+        {
+            return None;
+        }
+        let header_off = self.g.blocks[i].start_dw;
+        let mut latch = None;
+        for bi in (i + 1)..stop {
+            if self.is_backward_jump(bi)
+                && self.g.blocks[bi].succs.first().copied() == Some(header_off)
+                && latch.replace(bi).is_some()
+            {
+                return None;
+            }
+        }
+        let latch = latch?;
+
+        for body in (i + 2)..=(i + COMPOUND_HEADER_MAX_BLOCKS).min(latch) {
+            let terminal = &self.g.blocks[body - 1];
+            if !self.is_cond(body - 1) || terminal.succs.len() != 2 {
+                continue;
+            }
+            let body_off = self.g.blocks[body].start_dw;
+            let exit_off = if terminal.succs[0] == body_off {
+                terminal.succs[1]
+            } else if terminal.succs[1] == body_off {
+                terminal.succs[0]
+            } else {
+                continue;
+            };
+            let Some(exit_idx) = self.idx_of.get(&exit_off).copied() else {
+                continue;
+            };
+            if exit_idx <= latch || exit_idx > stop {
+                continue;
+            }
+
+            // The header is a forward-only DAG with one terminal body edge and one terminal
+            // exit edge. No earlier header block may escape or enter the body directly.
+            let mut header_ok = true;
+            for bi in i..body {
+                for &s in &self.g.blocks[bi].succs {
+                    let internal = self
+                        .idx_of
+                        .get(&s)
+                        .copied()
+                        .is_some_and(|si| si > bi && si >= i && si < body);
+                    let terminal_edge = bi + 1 == body && (s == body_off || s == exit_off);
+                    if !internal && !terminal_edge {
+                        header_ok = false;
+                    }
+                }
+            }
+            if !header_ok {
+                continue;
+            }
+
+            // Single-entry/dominance: nothing outside `[i, exit)` may enter its interior; the
+            // only external entry is permitted at the header itself. Within the span, the sole
+            // non-forward edge is the proven latch -> header back-edge.
+            let mut shape_ok = true;
+            for (src, block) in self.g.blocks.iter().enumerate() {
+                for &s in &block.succs {
+                    let Some(target) = self.idx_of.get(&s).copied() else {
+                        continue;
+                    };
+                    if target >= i
+                        && target < exit_idx
+                        && !(src >= i && src < exit_idx)
+                        && (target != i || src >= i)
+                    {
+                        shape_ok = false;
+                    }
+                    if src >= i
+                        && src < exit_idx
+                        && target >= i
+                        && target < exit_idx
+                        && target <= src
+                        && (src != latch || target != i || self.jump_op(src) != "JMP")
+                    {
+                        shape_ok = false;
+                    }
+                }
+            }
+            if !shape_ok {
+                continue;
+            }
+
+            // Every physical block owned by the loop must be reachable from the one header
+            // entry. This is the explicit dominance/reducibility proof, including switch rows,
+            // default code laid out after the back-edge, and the latch itself.
+            let mut seen = std::collections::HashSet::new();
+            let mut work = vec![i];
+            while let Some(bi) = work.pop() {
+                if !seen.insert(bi) {
+                    continue;
+                }
+                for &s in &self.g.blocks[bi].succs {
+                    if let Some(ti) = self.idx_of.get(&s).copied() {
+                        if ti >= i && ti < exit_idx && !(bi == latch && ti == i) {
+                            work.push(ti);
+                        }
+                    }
+                }
+            }
+            if !(i..exit_idx).all(|bi| seen.contains(&bi)) {
+                continue;
+            }
+            let Some(written) = self.compound_header_written_slots(i, body) else {
+                continue;
+            };
+            if !self.compound_header_writes_are_path_local(i, body, &written)
+                || !self.compound_header_writes_are_dead(i, body, exit_idx, &written)
+            {
+                continue;
+            }
+
+            let cond = self.symbolic_header_condition(i, body, body_off, exit_off)?;
+            return Some((body, exit_idx, cond, header_off, exit_off));
+        }
+        None
+    }
+
+    fn compound_latch_loop_recoverable(
+        &mut self,
+        i: usize,
+        stop: usize,
+    ) -> Option<(usize, usize, String, usize, usize)> {
+        let (body, exit, cond, continue_off, break_off) = self.compound_latch_loop(i, stop)?;
+        let ls = LoopScope {
+            continue_off,
+            break_off,
+        };
+        if !self.body_has_inner_branch(body, exit, ls) {
+            return None;
+        }
+        let saved = self.loop_scope;
+        self.loop_scope = Some(ls);
+        let ok = self.loop_body_recoverable(body, exit, ls);
+        self.loop_scope = saved;
+        ok.then_some((body, exit, cond, continue_off, break_off))
+    }
+
     /// If block `i` begins a bottom-test loop within [.., stop), return the latch block
     /// index (the block whose conditional jump targets back to `i` or earlier in the body).
     fn loop_latch(&self, i: usize, stop: usize) -> Option<usize> {
@@ -6752,6 +7880,584 @@ fn operand_str(ins: &Instr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct TestInsn {
+        label: Option<&'static str>,
+        name: &'static str,
+        words: Vec<u16>,
+        dwords: Vec<u32>,
+        target: Option<&'static str>,
+    }
+
+    #[derive(Clone)]
+    struct CompoundFixture {
+        instrs: Vec<Instr>,
+        labels: HashMap<&'static str, usize>,
+    }
+
+    #[derive(Default)]
+    struct TestAssembler {
+        next_label: Option<&'static str>,
+        ops: Vec<TestInsn>,
+    }
+
+    impl TestAssembler {
+        fn label(&mut self, label: &'static str) {
+            assert!(self.next_label.replace(label).is_none());
+        }
+
+        fn op(&mut self, name: &'static str, words: &[u16], dwords: &[u32]) {
+            self.ops.push(TestInsn {
+                label: self.next_label.take(),
+                name,
+                words: words.to_vec(),
+                dwords: dwords.to_vec(),
+                target: None,
+            });
+        }
+
+        fn jump(&mut self, name: &'static str, target: &'static str) {
+            self.ops.push(TestInsn {
+                label: self.next_label.take(),
+                name,
+                words: Vec::new(),
+                dwords: vec![0],
+                target: Some(target),
+            });
+        }
+
+        fn finish(self) -> CompoundFixture {
+            let op_info = |name: &str| {
+                crate::cache::isa::OPCODES
+                    .iter()
+                    .find(|op| op.name == name)
+                    .unwrap_or_else(|| panic!("test opcode {name}"))
+            };
+            let mut labels = HashMap::new();
+            let mut offset = 0usize;
+            for op in &self.ops {
+                if let Some(label) = op.label {
+                    assert!(labels.insert(label, offset).is_none());
+                }
+                offset += op_info(op.name).size_dwords as usize;
+            }
+            assert!(self.next_label.is_none());
+
+            let mut instrs = Vec::new();
+            offset = 0;
+            for mut spec in self.ops {
+                if let Some(target) = spec.target {
+                    let rel = labels[&target] as i64 - offset as i64 - 2;
+                    spec.dwords[0] = rel as i32 as u32;
+                }
+                let op = op_info(spec.name);
+                instrs.push(Instr {
+                    offset_dw: offset,
+                    op,
+                    words: spec.words,
+                    dwords: spec.dwords,
+                    qwords: Vec::new(),
+                });
+                offset += op.size_dwords as usize;
+            }
+            CompoundFixture { instrs, labels }
+        }
+    }
+
+    fn compound_switch_fixture() -> CompoundFixture {
+        let mut a = TestAssembler::default();
+        a.label("preheader");
+        a.op("SetV4", &[4], &[0]);
+
+        // Materialized `(local_4 == 0 || local_4 == 1)` header.
+        a.label("head");
+        a.op("iTOf", &[11, 4], &[]);
+        a.op("fTOi", &[12, 11], &[]);
+        a.op("CMPIi", &[12], &[0]);
+        a.jump("JNZ", "head_else");
+        a.label("head_true");
+        a.op("SetV1", &[7], &[1]);
+        a.jump("JMP", "head_test");
+        a.label("head_else");
+        a.op("iTOf", &[11, 4], &[]);
+        a.op("fTOi", &[12, 11], &[]);
+        a.op("CMPIi", &[12], &[1]);
+        a.label("head_tz");
+        a.op("TZ", &[], &[]);
+        a.label("head_else_store");
+        a.op("CpyRtoV4", &[7], &[]);
+        a.label("head_test");
+        a.op("CpyVtoR1", &[7], &[]);
+        a.label("head_branch");
+        a.jump("JLowZ", "loop_exit");
+
+        // Standard guarded JMPP dispatch: cases 0/1 share a body; case 2 is inline.
+        a.label("switch");
+        a.op("CMPIi", &[4], &[2]);
+        a.jump("JP", "default");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JS", "default");
+        a.op("SUBIi", &[6, 4], &[0]);
+        a.op("JMPP", &[6], &[2]);
+        a.jump("JMP", "shared_case");
+        a.jump("JMP", "shared_case");
+        a.label("case_two");
+        a.op("SetV1", &[5], &[2]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("case_two_return");
+        a.jump("JMP", "shared_ret");
+
+        a.label("shared_case");
+        a.op("CMPIi", &[4], &[0]);
+        a.jump("JNZ", "continue_trampoline");
+        a.label("case_return");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("case_return_jump");
+        a.jump("JMP", "shared_ret");
+        a.label("continue_trampoline");
+        a.jump("JMP", "head");
+
+        // Physical default code follows the backward trampoline but still belongs to switch.
+        a.label("default");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.jump("JMP", "shared_ret");
+
+        a.label("loop_exit");
+        a.op("SetV1", &[5], &[1]);
+        a.op("CpyVtoR4", &[5], &[]);
+        a.label("shared_ret");
+        a.op("RET", &[0], &[]);
+
+        // Reachable only as independent post-RET blocks. They provide mutation targets for the
+        // outside-entry and ambiguous-join negative regressions without shifting the fixture.
+        a.label("outside_jump");
+        a.jump("JMP", "shared_ret");
+        a.label("alt_ret");
+        a.op("RET", &[0], &[]);
+        a.finish()
+    }
+
+    fn retarget(fixture: &mut CompoundFixture, source: &'static str, target: &'static str) {
+        let source = fixture.labels[&source];
+        let target = fixture.labels[&target];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == source)
+            .expect("source instruction");
+        assert!(matches!(ins.op.name, "JMP" | "JZ" | "JNZ"));
+        ins.dwords[0] = (target as i64 - source as i64 - 2) as i32 as u32;
+    }
+
+    fn replace_same_width(
+        fixture: &mut CompoundFixture,
+        label: &'static str,
+        name: &'static str,
+        words: &[u16],
+        dwords: &[u32],
+    ) {
+        let offset = fixture.labels[&label];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == offset)
+            .expect("instruction to replace");
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == name)
+            .expect("replacement opcode");
+        assert_eq!(op.size_dwords, ins.op.size_dwords);
+        ins.op = op;
+        ins.words = words.to_vec();
+        ins.dwords = dwords.to_vec();
+        ins.qwords.clear();
+    }
+
+    fn replace_jump_opcode_same_target(
+        fixture: &mut CompoundFixture,
+        label: &'static str,
+        name: &'static str,
+    ) {
+        let offset = fixture.labels[&label];
+        let ins = fixture
+            .instrs
+            .iter_mut()
+            .find(|ins| ins.offset_dw == offset)
+            .expect("jump instruction to replace");
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == name)
+            .expect("replacement jump opcode");
+        assert!(is_cond_op(ins.op.name) && is_cond_op(op.name));
+        assert_eq!(op.size_dwords, ins.op.size_dwords);
+        ins.op = op;
+    }
+
+    fn render_fixture_range(
+        fixture: &CompoundFixture,
+        range: Option<(&'static str, &'static str, LoopScope)>,
+    ) -> String {
+        let f = FuncCode {
+            func: "Synthetic::CompoundLoopSwitch".into(),
+            is_method: false,
+            param_names: Vec::new(),
+            param_types: Vec::new(),
+            ret: DataType {
+                token: 0x44,
+                ..Default::default()
+            },
+            bytecode: Vec::new(),
+        };
+        let refs = RefResolver::default();
+        let local_types =
+            HashMap::from([(4, "EHeaderStatus".to_string()), (7, "bool".to_string())]);
+        let g = cfg::build(&fixture.instrs);
+        let idx_of: HashMap<usize, usize> = g
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.start_dw, i))
+            .collect();
+        let ctx = Ctx {
+            f: &f,
+            refs: &refs,
+            instrs: &fixture.instrs,
+            super_ctor: None,
+            ret_ty: Some(&f.ret),
+            fields: None,
+            param_types: None,
+            class_name: None,
+            local_types: Some(&local_types),
+            float_slots: std::collections::HashSet::new(),
+            param_off_map: HashMap::new(),
+            rvo_off: None,
+            keep_ints: None,
+            rvo_switch_region: std::cell::Cell::new(false),
+        };
+        let mut st = Structurer {
+            ctx: &ctx,
+            g: &g,
+            idx_of: &idx_of,
+            exit_join: None,
+            exit_join_is_ret: false,
+            exit_ret_rows_ok: false,
+            exit_rvo_return: false,
+            exit_mixed_rvo_ret_rows_ok: false,
+            exit_scan_floor: 0,
+            carry: None,
+            loop_scope: None,
+        };
+        let (start, stop) = if let Some((start, stop, scope)) = range {
+            st.loop_scope = Some(scope);
+            (
+                idx_of[&fixture.labels[start]],
+                idx_of[&fixture.labels[stop]],
+            )
+        } else {
+            (0, g.blocks.len())
+        };
+        let mut out = String::new();
+        st.emit_range(start, stop, 0, &mut out);
+        out
+    }
+
+    fn assert_jmpp_rejected(fixture: &CompoundFixture, why: &str) {
+        let src = render_fixture_range(fixture, None);
+        assert!(
+            src.contains("// JMPP"),
+            "unsafe compound loop accepted ({why}):\n{src}"
+        );
+    }
+
+    #[test]
+    fn compound_header_switch_continue_recovers_synthetically() {
+        let fixture = compound_switch_fixture();
+        let src = render_fixture_range(&fixture, None);
+        assert!(src.contains("while ("), "loop missing:\n{src}");
+        assert!(
+            src.contains("int(float32(int(local_4))) == 0"),
+            "enum cast / numeric-cast chain was lost:\n{src}"
+        );
+        assert!(
+            src.contains("int(float32(int(local_4))) == 1"),
+            "second OR term missing:\n{src}"
+        );
+        assert!(
+            src.contains("switch (int(local_4))"),
+            "enum switch cast missing:\n{src}"
+        );
+        assert!(src.contains("continue;"), "continue missing:\n{src}");
+        assert!(!src.contains("// JMPP"), "JMPP marker remains:\n{src}");
+    }
+
+    #[test]
+    fn compound_header_rejects_second_or_wrong_backedge() {
+        let mut second = compound_switch_fixture();
+        retarget(&mut second, "case_return_jump", "head");
+        assert_jmpp_rejected(&second, "second backedge");
+
+        let mut wrong = compound_switch_fixture();
+        retarget(&mut wrong, "continue_trampoline", "head_else");
+        assert_jmpp_rejected(&wrong, "wrong backward target");
+    }
+
+    #[test]
+    fn compound_header_rejects_side_effect_or_nonboolean_materialization() {
+        let mut side_effect = compound_switch_fixture();
+        replace_same_width(&mut side_effect, "head_tz", "INCi", &[], &[]);
+        assert_jmpp_rejected(&side_effect, "side-effecting header");
+
+        let mut non_bool = compound_switch_fixture();
+        replace_same_width(&mut non_bool, "head_tz", "CpyVtoR4", &[4], &[]);
+        assert_jmpp_rejected(&non_bool, "non-boolean materialized value");
+    }
+
+    #[test]
+    fn compound_header_rejects_a_live_elided_temporary() {
+        let mut live = compound_switch_fixture();
+        replace_same_width(&mut live, "loop_exit", "CMPIi", &[7], &[0]);
+        assert_jmpp_rejected(&live, "header temporary read on loop exit");
+    }
+
+    #[test]
+    fn compound_header_rejects_cross_iteration_partial_materialization() {
+        let mut partial = compound_switch_fixture();
+        replace_same_width(&mut partial, "head_else_store", "CpyRtoV4", &[10], &[]);
+        assert_jmpp_rejected(&partial, "header temp carried from a prior iteration");
+    }
+
+    #[test]
+    fn compound_header_rejects_non_low_jump_after_narrow_bool_copy() {
+        let mut jnp = compound_switch_fixture();
+        replace_jump_opcode_same_target(&mut jnp, "head_branch", "JNP");
+        assert_jmpp_rejected(&jnp, "JNP after CpyVtoR1 has unproved upper bytes");
+
+        let mut jns = compound_switch_fixture();
+        replace_jump_opcode_same_target(&mut jns, "head_branch", "JNS");
+        assert_jmpp_rejected(&jns, "JNS after CpyVtoR1 has unproved upper bytes");
+    }
+
+    #[test]
+    fn canonical_full_bool_models_all_non_low_jump_senses() {
+        let canonical = HeaderValue {
+            expr: HeaderExpr::Atom("b".into()),
+            boolish: true,
+            full_bool: true,
+            ty: Some("bool".into()),
+        };
+        assert_eq!(
+            header_bool_jump_taken(canonical.clone(), "JNP")
+                .unwrap()
+                .render(),
+            "!(b)"
+        );
+        assert!(matches!(
+            header_bool_jump_taken(canonical.clone(), "JNS"),
+            Some(HeaderExpr::Bool(true))
+        ));
+        let narrow = HeaderValue {
+            full_bool: false,
+            ..canonical
+        };
+        assert!(header_bool_jump_taken(narrow, "JNP").is_none());
+    }
+
+    #[test]
+    fn not_is_an_explicit_header_slot_read_and_write() {
+        let op = crate::cache::isa::OPCODES
+            .iter()
+            .find(|op| op.name == "NOT")
+            .unwrap();
+        let ins = Instr {
+            offset_dw: 0,
+            op,
+            words: vec![7],
+            dwords: Vec::new(),
+            qwords: Vec::new(),
+        };
+        assert_eq!(explicit_slot_access(&ins, 7), (true, true));
+    }
+
+    #[test]
+    fn ambiguous_numeric_cast_targets_require_exact_slot_signedness() {
+        assert_eq!(
+            header_numeric_cast_target("iTOb", Some("uint8")),
+            Some("uint8")
+        );
+        assert_eq!(
+            header_numeric_cast_target("iTOb", Some("int8")),
+            Some("int8")
+        );
+        assert_eq!(
+            header_numeric_cast_target("uTOi64", Some("uint64")),
+            Some("uint64")
+        );
+        assert_eq!(
+            header_numeric_cast_target("iTOi64", Some("int64")),
+            Some("int64")
+        );
+        assert_eq!(header_numeric_cast_target("iTOb", None), None);
+        assert_eq!(header_numeric_cast_target("uTOi64", Some("int")), None);
+        assert_eq!(header_numeric_cast_source("iTOf"), Some("int"));
+        assert_eq!(header_numeric_cast_source("ubTOi"), Some("uint8"));
+
+        let enum_value = || HeaderValue {
+            expr: HeaderExpr::Atom("status".into()),
+            boolish: false,
+            full_bool: false,
+            ty: Some("EStatus".into()),
+        };
+        assert_eq!(
+            HeaderExpr::Cast(
+                "int",
+                Box::new(header_numeric_cast_operand("sbTOi", enum_value()).unwrap())
+            )
+            .render(),
+            "int(status)"
+        );
+        assert_eq!(
+            HeaderExpr::Cast(
+                "float32",
+                Box::new(header_numeric_cast_operand("iTOf", enum_value()).unwrap())
+            )
+            .render(),
+            "float32(int(status))"
+        );
+    }
+
+    #[test]
+    fn header_copy_uses_destination_signedness_before_following_casts() {
+        let unsigned = HeaderValue {
+            expr: HeaderExpr::UInt(u32::MAX as u64),
+            boolish: false,
+            full_bool: false,
+            ty: Some("uint".into()),
+        };
+        let signed = header_copy_value(unsigned, Some("int".into()), 32)
+            .expect("same-width uint-to-int copy");
+        assert_eq!(signed.ty.as_deref(), Some("int"));
+        assert_eq!(signed.expr.render(), "int(4294967295)");
+
+        // Model iTOf -> fTOi after the copy. The first cast must consume signed -1, not the
+        // original uint 4294967295; retaining the source slot type would change the condition.
+        let as_float = HeaderExpr::Cast("float32", Box::new(signed.expr));
+        let back_to_int = HeaderExpr::Cast("int", Box::new(as_float));
+        let compare = HeaderExpr::Cmp(
+            Box::new(back_to_int),
+            HeaderRel::Eq,
+            Box::new(HeaderExpr::Int(-1)),
+        );
+        assert_eq!(compare.render(), "int(float32(int(4294967295))) == -1");
+
+        let float_bits = HeaderValue {
+            expr: HeaderExpr::Real("1.0f".into()),
+            boolish: false,
+            full_bool: false,
+            ty: Some("float32".into()),
+        };
+        assert!(header_copy_value(float_bits.clone(), Some("uint".into()), 32).is_none());
+        assert!(header_copy_value(float_bits.clone(), None, 32).is_none());
+        assert!(header_copy_value(float_bits, Some("float32".into()), 64).is_none());
+    }
+
+    #[test]
+    fn header_constants_preserve_ieee_bits_and_unsigned_high_bits() {
+        let value = |op, raw, ty: &str| {
+            header_set_value(op, raw, Some(ty.into()))
+                .expect("supported typed SetV constant")
+                .expr
+                .render()
+        };
+        assert_eq!(value("SetV4", 1.0f32.to_bits() as u64, "float32"), "1.0f");
+        assert_eq!(value("SetV8", 1.0f64.to_bits(), "float"), "1.0");
+        assert_eq!(value("SetV4", u32::MAX as u64, "uint"), "4294967295");
+        assert_eq!(value("SetV8", u64::MAX, "uint64"), "18446744073709551615");
+        assert!(header_set_value("SetV4", 0, Some("float".into())).is_none());
+        assert!(header_set_value("SetV8", 0, Some("float32".into())).is_none());
+        assert!(header_set_value("SetV1", 0xff, Some("EByteEnum".into())).is_none());
+        assert!(
+            header_set_value("SetV4", f32::NAN.to_bits() as u64, Some("float32".into())).is_none()
+        );
+        assert!(header_set_value("SetV8", f64::INFINITY.to_bits(), Some("float".into())).is_none());
+
+        let inferred = header_set_slot_type(None, true, "SetV4");
+        assert_eq!(inferred.as_deref(), Some("float32"));
+        assert_eq!(
+            header_set_value("SetV4", 1.0f32.to_bits() as u64, inferred)
+                .unwrap()
+                .expr
+                .render(),
+            "1.0f"
+        );
+
+        // CMPIu uses the same unsigned expression form, then makes its 32-bit VM domain explicit.
+        let cmpiu_rhs = HeaderExpr::Cast("uint", Box::new(HeaderExpr::UInt(u32::MAX as u64)));
+        assert_eq!(cmpiu_rhs.render(), "uint(4294967295)");
+    }
+
+    #[test]
+    fn integer_header_comparisons_reject_known_non_integer_sources() {
+        for ty in [
+            "bool",
+            "int8",
+            "uint8",
+            "int16",
+            "uint16",
+            "int",
+            "uint",
+            "int64",
+            "uint64",
+            "EHeaderStatus",
+        ] {
+            assert!(header_is_integral_type(Some(ty)), "rejected {ty}");
+        }
+        assert!(header_is_integral_type(None));
+        for ty in ["float32", "float", "UObject", "FVector"] {
+            assert!(!header_is_integral_type(Some(ty)), "accepted {ty}");
+        }
+    }
+
+    #[test]
+    fn compound_loop_rejects_outside_entry_into_header_or_switch_tail() {
+        let mut header_entry = compound_switch_fixture();
+        retarget(&mut header_entry, "outside_jump", "head_test");
+        assert_jmpp_rejected(&header_entry, "outside header entry");
+
+        let mut default_entry = compound_switch_fixture();
+        retarget(&mut default_entry, "outside_jump", "default");
+        assert_jmpp_rejected(&default_entry, "outside default/tail entry");
+    }
+
+    #[test]
+    fn switch_rejects_loop_break_and_ambiguous_return_join() {
+        let mut break_target = compound_switch_fixture();
+        retarget(&mut break_target, "continue_trampoline", "loop_exit");
+        let scope = LoopScope {
+            continue_off: break_target.labels["head"],
+            break_off: break_target.labels["loop_exit"],
+        };
+        let body = render_fixture_range(&break_target, Some(("switch", "loop_exit", scope)));
+        assert!(
+            body.contains("// JMPP"),
+            "loop break was misrendered as switch break:\n{body}"
+        );
+
+        let mut ambiguous = compound_switch_fixture();
+        retarget(&mut ambiguous, "case_two_return", "outside_jump");
+        retarget(&mut ambiguous, "continue_trampoline", "loop_exit");
+        let scope = LoopScope {
+            continue_off: ambiguous.labels["head"],
+            break_off: ambiguous.labels["alt_ret"],
+        };
+        let body = render_fixture_range(&ambiguous, Some(("switch", "loop_exit", scope)));
+        assert!(
+            body.contains("// JMPP"),
+            "switch with ambiguous forward joins was accepted:\n{body}"
+        );
+    }
 
     #[test]
     fn member_ref_push_uses_native_enum_only_as_a_precise_value_fallback() {

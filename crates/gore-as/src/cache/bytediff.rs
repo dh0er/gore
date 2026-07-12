@@ -5,7 +5,7 @@
 //! Thesis: the AS compiler emits identical bytecode for identical source on the same engine
 //! build, MODULO a handful of build-non-determinism sources — ref/type-id keys (runtime
 //! pointers), jump absolutes (shift with instruction size), and constant raw encodings. This
-//! tool normalizes exactly those (N1/N3/N4, plus an opt-in slot-renumber N2) and classifies each
+//! tool normalizes exactly those (N1/N3/N4, plus opt-in fail-closed slot-allocation proofs N2) and classifies each
 //! aligned function IDENTICAL / BENIGN-DIFF / SEMANTIC-DIFF. A residual diff after normalization
 //! is a difference the compiler was FORCED to make by different SOURCE — a real behavior change.
 //!
@@ -13,10 +13,11 @@
 //! SEMANTIC only wastes fix effort (cheap). Every normalizer is provably behavior-preserving; when
 //! in doubt, leave the diff SEMANTIC.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
+use super::cfg;
 use super::disasm::{disassemble, Instr};
-use super::isa::BcType;
+use super::isa::{BcType, OPCODES};
 use super::refs::RefResolver;
 use super::remap::{ref_sites, OperandId, RefIdentity, RefKind};
 
@@ -141,8 +142,8 @@ pub struct NormOpts {
     pub n2_slots: bool,
     pub n3_jumps: bool,
     pub n4_consts: bool,
-    /// N5 (`n5_scope`): one-sided vanilla strip of the `FScopeCycleCounter` RAII profiler-scope
-    /// pair + the `FStatID` temp dtor — pure CPU-timing instrumentation, provably behavior-neutral
+    /// N5 (`n5_scope`): exact-frame strip of `FScopeCycleCounter` profiler scopes and matching
+    /// `FStatID` temp dtors on either side — pure CPU-timing instrumentation, behavior-neutral
     /// (`specs/final-residue.md §B.2`). Default ON.
     pub n5_scope: bool,
     /// N6 (`n6_reguard`): one-sided vanilla fold of a short-circuit boolean-cascade re-guard that
@@ -238,7 +239,7 @@ fn normalize(code: &[i32], instrs: &[Instr], side: &Side, opts: &NormOpts) -> Ve
     }
 
     if opts.n2_slots {
-        renumber_slots(&mut out);
+        let _ = renumber_slots(&mut out);
     }
     out
 }
@@ -367,7 +368,8 @@ fn push_word_operands(name: &str, ins: &Instr, out: &mut Vec<Operand>) {
         wW_rW_rW_ARG => &[true, true, true],
         rW_DW_ARG | wW_DW_ARG | rW_QW_ARG | wW_QW_ARG => &[true], // leading slot, then DW/QW
         W_DW_ARG => &[false], // leading plain word (ADDSi/LoadThisR: word=offset), then DW
-        wW_rW_DW_ARG | rW_W_DW_ARG => &[true, true],
+        wW_rW_DW_ARG => &[true, true],
+        rW_W_DW_ARG => &[true, false],
         rW_DW_DW_ARG => &[true],
         // no word operands:
         NO_ARG | INFO | DW_ARG | QW_ARG | DW_DW_ARG | QW_DW_ARG => &[],
@@ -461,21 +463,25 @@ fn const_qword_role(name: &str) -> QwordRole {
 /// slot a canonical ordinal on first appearance; rewrite `Slot` operands to their ordinal.
 /// Behavior-preserving ONLY when both sides share the same slot SHAPE — the caller GUARDS on
 /// distinct-slot-count equality before trusting an N2 BENIGN (see `classify`).
-fn renumber_slots(instrs: &mut [NormInstr]) {
+fn renumber_slots(instrs: &mut [NormInstr]) -> bool {
     let mut map: HashMap<i32, i32> = HashMap::new();
     let mut next = 0i32;
+    let mut changed = false;
     for ni in instrs.iter_mut() {
         for op in ni.operands.iter_mut() {
             if let Operand::Slot(s) = op {
+                let raw = *s;
                 let canon = *map.entry(*s).or_insert_with(|| {
                     let v = next;
                     next += 1;
                     v
                 });
+                changed |= raw != canon;
                 *op = Operand::Slot(canon);
             }
         }
     }
+    changed
 }
 
 /// Distinct raw slot count in a normalized instruction list (for the N2 guard).
@@ -489,6 +495,753 @@ fn distinct_slot_count(instrs: &[NormInstr]) -> usize {
         }
     }
     set.len()
+}
+
+/// Explicit frame-slot reads/writes for one decoded instruction. The AngelScript bytecode
+/// formats encode these roles directly (`rW`/`wW`), so this is exhaustive over the ISA table and
+/// does not rely on a mnemonic allowlist. Taking a slot address is a read/escape; `ChkNullS` is the
+/// sole bare-`W` instruction whose operand is actually a frame slot. A small explicit set of VM
+/// read-modify-write instructions is upgraded after the format-role pass because the ISA format
+/// records only how their operand is encoded, not that the old slot value is consumed.
+fn slot_accesses(ins: &Instr) -> (HashSet<i32>, HashSet<i32>) {
+    use BcType::*;
+
+    let mut reads = HashSet::new();
+    let mut writes = HashSet::new();
+    let slot = |index: usize| ins.words.get(index).map(|w| *w as i16 as i32);
+    let mut apply = |index: usize, read: bool, write: bool| {
+        if let Some(s) = slot(index) {
+            if read {
+                reads.insert(s);
+            }
+            if write {
+                writes.insert(s);
+            }
+        }
+    };
+
+    match ins.op.fmt {
+        wW_ARG | wW_DW_ARG | wW_QW_ARG => apply(0, false, true),
+        rW_ARG | rW_DW_ARG | rW_QW_ARG | rW_DW_DW_ARG => apply(0, true, false),
+        wW_rW_ARG | wW_rW_DW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+        }
+        rW_rW_ARG => {
+            apply(0, true, false);
+            apply(1, true, false);
+        }
+        wW_rW_rW_ARG => {
+            apply(0, false, true);
+            apply(1, true, false);
+            apply(2, true, false);
+        }
+        wW_W_ARG => apply(0, false, true),
+        W_rW_ARG => apply(1, true, false),
+        rW_W_DW_ARG => apply(0, true, false),
+        W_ARG if ins.op.name == "ChkNullS" => apply(0, true, false),
+        INFO | NO_ARG | W_ARG | DW_ARG | QW_ARG | DW_DW_ARG | QW_DW_ARG | W_DW_ARG => {}
+    }
+    // Opcode-table rW/wW roles describe operand encoding, not every read-modify-write effect.
+    // These VM instructions consume the old slot value and replace/clear it in-place.
+    if matches!(
+        ins.op.name,
+        "NOT"
+            | "NEGi"
+            | "NEGf"
+            | "NEGd"
+            | "IncVi"
+            | "DecVi"
+            | "BNOT"
+            | "NEGi64"
+            | "BNOT64"
+            | "FREE"
+            | "LOADOBJ"
+            | "RefCpyV"
+            | "FreeNullV8"
+    ) {
+        apply(0, true, true);
+    }
+    (reads, writes)
+}
+
+#[derive(Debug)]
+struct SlotLiveness {
+    live_out: Vec<HashSet<i32>>,
+    /// Explicit branch/dispatch destinations. Ordinary sequential fallthrough is not included.
+    branch_targets: HashSet<usize>,
+}
+
+/// Build a fail-closed instruction CFG and solve frame-slot liveness. `cfg::build` deliberately
+/// tolerates malformed edges for decompiler recovery; an equality oracle cannot. Therefore every
+/// ordinary jump target and every `JMPP` dispatch row is validated before its graph is accepted.
+fn slot_liveness(instrs: &[Instr]) -> Option<SlotLiveness> {
+    if instrs.is_empty() {
+        return Some(SlotLiveness {
+            live_out: Vec::new(),
+            branch_targets: HashSet::new(),
+        });
+    }
+
+    let off_to_idx: HashMap<usize, usize> = instrs
+        .iter()
+        .enumerate()
+        .map(|(i, ins)| (ins.offset_dw, i))
+        .collect();
+    if off_to_idx.len() != instrs.len() {
+        return None;
+    }
+
+    // Preflight JMPP before cfg::build: its recovery helper reserves `N` rows, so constrain N to
+    // the remaining decoded stream first (also proves the complete dispatch table shape).
+    for (i, ins) in instrs
+        .iter()
+        .enumerate()
+        .filter(|(_, ins)| ins.op.name == "JMPP")
+    {
+        let rows = (*ins.dwords.first()? as usize).checked_add(1)?;
+        if rows > instrs.len().checked_sub(i + 1)? {
+            return None;
+        }
+        for k in 0..rows {
+            let expected_dw = ins.offset_dw.checked_add(2 + 2 * k)?;
+            let row = instrs.get(i + 1 + k)?;
+            if row.offset_dw != expected_dw || (k + 1 < rows && row.op.name != "JMP") {
+                return None;
+            }
+        }
+    }
+
+    let graph = cfg::build(instrs);
+    if graph.blocks.is_empty() {
+        return None;
+    }
+
+    let mut successors = vec![Vec::<usize>::new(); instrs.len()];
+    let mut covered = vec![false; instrs.len()];
+    let mut block_ending_at = HashMap::<usize, usize>::new();
+    for (block_no, block) in graph.blocks.iter().enumerate() {
+        if block.instr_lo >= block.instr_hi
+            || block.instr_hi > instrs.len()
+            || instrs[block.instr_lo].offset_dw != block.start_dw
+        {
+            return None;
+        }
+        for i in block.instr_lo..block.instr_hi {
+            if std::mem::replace(&mut covered[i], true) {
+                return None;
+            }
+            if i + 1 < block.instr_hi {
+                successors[i].push(i + 1);
+            }
+        }
+        let last = block.instr_hi - 1;
+        block_ending_at.insert(last, block_no);
+        for target_dw in &block.succs {
+            let target = *off_to_idx.get(target_dw)?;
+            if !successors[last].contains(&target) {
+                successors[last].push(target);
+            }
+        }
+    }
+    if covered.iter().any(|covered| !covered) {
+        return None;
+    }
+
+    let mut branch_targets = HashSet::new();
+    for (i, ins) in instrs.iter().enumerate() {
+        if is_jump_op(ins.op.name) {
+            let rel = *ins.dwords.first()? as i32 as i64;
+            let target_dw = (ins.offset_dw as i64)
+                .checked_add(ins.op.size_dwords as i64)?
+                .checked_add(rel)?;
+            if target_dw < 0 {
+                return None;
+            }
+            let target = *off_to_idx.get(&(target_dw as usize))?;
+            branch_targets.insert(target);
+            let block_no = *block_ending_at.get(&i)?;
+            if !successors[i].contains(&target) || graph.blocks[block_no].instr_hi - 1 != i {
+                return None;
+            }
+        } else if ins.op.name == "JMPP" {
+            let block_no = *block_ending_at.get(&i)?;
+            let block = &graph.blocks[block_no];
+            if block.succs.is_empty() || block.instr_hi - 1 != i {
+                return None;
+            }
+            for target_dw in &block.succs {
+                branch_targets.insert(*off_to_idx.get(target_dw)?);
+            }
+        }
+    }
+
+    let accesses: Vec<_> = instrs.iter().map(slot_accesses).collect();
+    let mut live_in = vec![HashSet::<i32>::new(); instrs.len()];
+    let mut live_out = vec![HashSet::<i32>::new(); instrs.len()];
+    loop {
+        let mut changed = false;
+        for i in (0..instrs.len()).rev() {
+            let mut next_out = HashSet::new();
+            for &succ in &successors[i] {
+                next_out.extend(live_in[succ].iter().copied());
+            }
+            let (reads, writes) = &accesses[i];
+            let mut next_in = reads.clone();
+            next_in.extend(next_out.iter().filter(|s| !writes.contains(s)).copied());
+            if next_out != live_out[i] {
+                live_out[i] = next_out;
+                changed = true;
+            }
+            if next_in != live_in[i] {
+                live_in[i] = next_in;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    Some(SlotLiveness {
+        live_out,
+        branch_targets,
+    })
+}
+
+fn is_value_copy_producer(name: &str) -> bool {
+    matches!(
+        name,
+        "CpyRtoV4" | "RDR4" | "sbTOi" | "swTOi" | "ubTOi" | "uwTOi"
+    )
+}
+
+/// N2b — coalesce an immediately copied, dead primitive expression temporary:
+///
+/// ```text
+///     PRODUCER temp, ...; CpyVtoV4 local, temp
+///       => PRODUCER local, ...
+/// ```
+///
+/// Only the six exact producer opcodes observed in the qualified final residue are accepted. The
+/// source temp must be dead on every CFG path after the copy, the producer may not read the target
+/// local, and no branch/dispatch may enter at the copy. The transformation is prepared on a clone
+/// and committed atomically; malformed CFG/jump metadata leaves the stream unchanged.
+fn coalesce_dead_value_copies(norm: &mut Vec<NormInstr>, raw: &[Instr]) -> usize {
+    if norm.len() != raw.len() || raw.len() < 2 {
+        return 0;
+    }
+    let Some(liveness) = slot_liveness(raw) else {
+        return 0;
+    };
+    let accesses: Vec<_> = raw.iter().map(slot_accesses).collect();
+    let mut candidates = Vec::<(usize, usize, i32, i32)>::new();
+
+    for i in 0..raw.len() - 1 {
+        let producer = &raw[i];
+        let copy = &raw[i + 1];
+        if !is_value_copy_producer(producer.op.name) || copy.op.name != "CpyVtoV4" {
+            continue;
+        }
+        let Some(src) = producer.words.first().map(|w| *w as i16 as i32) else {
+            continue;
+        };
+        let (Some(dst), Some(copy_src)) = (
+            copy.words.first().map(|w| *w as i16 as i32),
+            copy.words.get(1).map(|w| *w as i16 as i32),
+        ) else {
+            continue;
+        };
+        if src == dst
+            || src != copy_src
+            || accesses[i].1.len() != 1
+            || !accesses[i].1.contains(&src)
+            || accesses[i].0.contains(&dst)
+            || accesses[i + 1].0 != HashSet::from([src])
+            || accesses[i + 1].1 != HashSet::from([dst])
+            || liveness.live_out[i + 1].contains(&src)
+            || liveness.branch_targets.contains(&(i + 1))
+        {
+            continue;
+        }
+        let norm_shape_matches = matches!(norm[i].operands.first(), Some(Operand::Slot(s)) if *s == src)
+            && matches!(norm[i + 1].operands.as_slice(), [Operand::Slot(d), Operand::Slot(s)] if *d == dst && *s == src)
+            && norm[i].op == producer.op.name
+            && norm[i + 1].op == "CpyVtoV4";
+        if norm_shape_matches {
+            candidates.push((i, i + 1, src, dst));
+        }
+    }
+    if candidates.is_empty() {
+        return 0;
+    }
+
+    let mut drop = vec![false; norm.len()];
+    for &(_, copy, _, _) in &candidates {
+        if std::mem::replace(&mut drop[copy], true) {
+            return 0;
+        }
+    }
+    // N3 edges must remain exact after instruction removal. A target into a removed copy is also
+    // rejected above from the raw CFG, but repeat the check on normalized metadata so this pass is
+    // safe even if its caller supplies inconsistent raw/normalized streams.
+    for ni in norm.iter() {
+        for op in &ni.operands {
+            if let Operand::JumpIndex(target) = op {
+                let Some(target) = *target else {
+                    return 0;
+                };
+                if target > drop.len() || (target < drop.len() && drop[target]) {
+                    return 0;
+                }
+            }
+        }
+    }
+
+    let mut rewritten = norm.clone();
+    for &(producer, _, src, dst) in &candidates {
+        match rewritten[producer].operands.first_mut() {
+            Some(Operand::Slot(slot)) if *slot == src => *slot = dst,
+            _ => return 0,
+        }
+    }
+    let mut old_to_new = vec![None; rewritten.len()];
+    let mut next = 0usize;
+    for (i, dropped) in drop.iter().copied().enumerate() {
+        if !dropped {
+            old_to_new[i] = Some(next);
+            next += 1;
+        }
+    }
+    for (i, ni) in rewritten.iter_mut().enumerate() {
+        if drop[i] {
+            continue;
+        }
+        for op in &mut ni.operands {
+            if let Operand::JumpIndex(Some(target)) = op {
+                *target = if *target == old_to_new.len() {
+                    next
+                } else {
+                    old_to_new.get(*target).and_then(|x| *x).unwrap_or(*target)
+                };
+            }
+        }
+    }
+    let mut i = 0usize;
+    rewritten.retain(|_| {
+        let keep = !drop[i];
+        i += 1;
+        keep
+    });
+    *norm = rewritten;
+    candidates.len()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NormSlotRole {
+    operand: usize,
+    read: bool,
+    write: bool,
+}
+
+/// Recover slot read/write roles from the opcode's ISA format and verify that every normalized
+/// `Slot` operand is accounted for. This mirrors [`slot_accesses`] but operates after N5/N6/N2b,
+/// where the retained instruction stream no longer has a 1:1 raw-index mapping.
+fn norm_slot_roles(ni: &NormInstr) -> Option<Vec<NormSlotRole>> {
+    use BcType::*;
+
+    let fmt = OPCODES.iter().find(|op| op.name == ni.op)?.fmt;
+    let mut roles = Vec::new();
+    let mut add = |operand: usize, read: bool, write: bool| {
+        roles.push(NormSlotRole {
+            operand,
+            read,
+            write,
+        });
+    };
+    match fmt {
+        wW_ARG | wW_DW_ARG | wW_QW_ARG => add(0, false, true),
+        rW_ARG | rW_DW_ARG | rW_QW_ARG | rW_DW_DW_ARG => add(0, true, false),
+        wW_rW_ARG | wW_rW_DW_ARG => {
+            add(0, false, true);
+            add(1, true, false);
+        }
+        rW_rW_ARG => {
+            add(0, true, false);
+            add(1, true, false);
+        }
+        wW_rW_rW_ARG => {
+            add(0, false, true);
+            add(1, true, false);
+            add(2, true, false);
+        }
+        wW_W_ARG => add(0, false, true),
+        W_rW_ARG => add(1, true, false),
+        rW_W_DW_ARG => add(0, true, false),
+        W_ARG if ni.op == "ChkNullS" => add(0, true, false),
+        INFO | NO_ARG | W_ARG | DW_ARG | QW_ARG | DW_DW_ARG | QW_DW_ARG | W_DW_ARG => {}
+    }
+    if matches!(
+        ni.op,
+        "NOT"
+            | "NEGi"
+            | "NEGf"
+            | "NEGd"
+            | "IncVi"
+            | "DecVi"
+            | "BNOT"
+            | "NEGi64"
+            | "BNOT64"
+            | "FREE"
+            | "LOADOBJ"
+            | "RefCpyV"
+            | "FreeNullV8"
+    ) {
+        let role = roles.iter_mut().find(|role| role.operand == 0)?;
+        role.read = true;
+        role.write = true;
+    }
+    if roles
+        .iter()
+        .any(|role| !matches!(ni.operands.get(role.operand), Some(Operand::Slot(_))))
+        || ni.operands.iter().enumerate().any(|(i, operand)| {
+            matches!(operand, Operand::Slot(_)) && !roles.iter().any(|role| role.operand == i)
+        })
+    {
+        return None;
+    }
+    Some(roles)
+}
+
+/// Exact instruction-level successors for a retained normalized stream. Unlike the recovery CFG,
+/// every ordinary jump must have an N3 target, every target must be in-range (the end sentinel is
+/// an exit), and every JMPP dispatch table must retain its verified row topology.
+fn norm_successors(instrs: &[NormInstr]) -> Option<Vec<Vec<usize>>> {
+    let mut successors = vec![Vec::new(); instrs.len()];
+    for (i, ni) in instrs.iter().enumerate() {
+        let mut add = |target: usize| -> Option<()> {
+            if target > instrs.len() {
+                return None;
+            }
+            if target < instrs.len() && !successors[i].contains(&target) {
+                successors[i].push(target);
+            }
+            Some(())
+        };
+        if is_jump_op(ni.op) {
+            let mut targets = ni.operands.iter().filter_map(|operand| match operand {
+                Operand::JumpIndex(target) => Some(*target),
+                _ => None,
+            });
+            let target = targets.next()??;
+            if targets.next().is_some() {
+                return None;
+            }
+            add(target)?;
+            if ni.op != "JMP" && i + 1 < instrs.len() {
+                add(i + 1)?;
+            }
+        } else if ni.op == "JMPP" {
+            let mut maxima = ni.operands.iter().filter_map(|operand| match operand {
+                Operand::RawDw(max) => Some(*max as usize),
+                _ => None,
+            });
+            let rows = maxima.next()?.checked_add(1)?;
+            if maxima.next().is_some() || rows > instrs.len().checked_sub(i + 1)? {
+                return None;
+            }
+            for k in 0..rows {
+                let row = i + 1 + k;
+                if k + 1 < rows && instrs[row].op != "JMP" {
+                    return None;
+                }
+                add(row)?;
+            }
+        } else if !matches!(ni.op, "RET" | "ThrowException") && i + 1 < instrs.len() {
+            add(i + 1)?;
+        }
+    }
+    Some(successors)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum FlowOrigin {
+    Entry(i32),
+    Write { instruction: usize, operand: usize },
+}
+
+type OriginSet = BTreeSet<FlowOrigin>;
+type FlowState = HashMap<i32, OriginSet>;
+
+#[derive(Debug)]
+struct SlotFlow {
+    incoming: Vec<FlowState>,
+    roles: Vec<Vec<NormSlotRole>>,
+    /// Slots whose storage identity escapes (address/lvalue push). These retain a strict global
+    /// bijection; physical live-range splitting is permitted only for non-escaping value slots.
+    pinned: HashSet<i32>,
+}
+
+fn merge_flow_state(into: &mut FlowState, from: &FlowState) {
+    for (&slot, origins) in from {
+        into.entry(slot).or_default().extend(origins);
+    }
+}
+
+/// Reaching-definition analysis for normalized frame slots. Every explicit write is named by its
+/// aligned instruction/operand position, independent of the compiler's chosen physical slot.
+/// All instructions must be reachable from entry; otherwise this stronger N2 proof declines.
+fn analyze_slot_flow(instrs: &[NormInstr]) -> Option<SlotFlow> {
+    if instrs.is_empty() {
+        return Some(SlotFlow {
+            incoming: Vec::new(),
+            roles: Vec::new(),
+            pinned: HashSet::new(),
+        });
+    }
+    let successors = norm_successors(instrs)?;
+    let roles: Vec<_> = instrs.iter().map(norm_slot_roles).collect::<Option<_>>()?;
+
+    let mut reachable = vec![false; instrs.len()];
+    let mut stack = vec![0usize];
+    while let Some(i) = stack.pop() {
+        if std::mem::replace(&mut reachable[i], true) {
+            continue;
+        }
+        stack.extend(successors[i].iter().copied());
+    }
+    if reachable.iter().any(|reachable| !reachable) {
+        return None;
+    }
+
+    let mut predecessors = vec![Vec::<usize>::new(); instrs.len()];
+    for (from, targets) in successors.iter().enumerate() {
+        for &target in targets {
+            predecessors[target].push(from);
+        }
+    }
+    let all_slots: HashSet<i32> = instrs
+        .iter()
+        .flat_map(|ni| ni.operands.iter())
+        .filter_map(|operand| match operand {
+            Operand::Slot(slot) => Some(*slot),
+            _ => None,
+        })
+        .collect();
+    let entry: FlowState = all_slots
+        .iter()
+        .map(|&slot| (slot, BTreeSet::from([FlowOrigin::Entry(slot)])))
+        .collect();
+    let mut incoming = vec![FlowState::new(); instrs.len()];
+    let mut outgoing = vec![FlowState::new(); instrs.len()];
+    loop {
+        let mut changed = false;
+        for i in 0..instrs.len() {
+            let mut next_in = FlowState::new();
+            if i == 0 {
+                merge_flow_state(&mut next_in, &entry);
+            }
+            for &pred in &predecessors[i] {
+                merge_flow_state(&mut next_in, &outgoing[pred]);
+            }
+            let mut next_out = next_in.clone();
+            for role in roles[i].iter().filter(|role| role.write) {
+                let Operand::Slot(slot) = instrs[i].operands[role.operand] else {
+                    return None;
+                };
+                next_out.insert(
+                    slot,
+                    BTreeSet::from([FlowOrigin::Write {
+                        instruction: i,
+                        operand: role.operand,
+                    }]),
+                );
+            }
+            if incoming[i] != next_in {
+                incoming[i] = next_in;
+                changed = true;
+            }
+            if outgoing[i] != next_out {
+                outgoing[i] = next_out;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut pinned = HashSet::new();
+    for (i, ni) in instrs.iter().enumerate() {
+        // PSF is an explicit frame address; VAR and PshVPtr can carry lvalue/RVO storage into a
+        // call. Keep their storage identity under one global alpha-renaming rather than splitting
+        // it by reaching definition.
+        // PSF exposes the frame address, VAR exposes its encoded frame offset, and LDV loads the
+        // frame address into the VM register. PshVPtr only pushes the pointer VALUE stored in the
+        // slot, so ordinary reaching-definition identity is sufficient for it. SetV1/SetV2 and
+        // the 8/16-bit reads/conversions also need no storage pin: the VM defines/zero-extends a
+        // complete DWORD for their frame result (AngelScript as_context.cpp).
+        let storage_sensitive = matches!(ni.op, "PSF" | "VAR" | "LDV");
+        if storage_sensitive {
+            for role in &roles[i] {
+                if let Operand::Slot(slot) = ni.operands[role.operand] {
+                    pinned.insert(slot);
+                }
+            }
+        }
+    }
+
+    Some(SlotFlow {
+        incoming,
+        roles,
+        pinned,
+    })
+}
+
+fn bind_bijection(
+    left: i32,
+    right: i32,
+    left_to_right: &mut HashMap<i32, i32>,
+    right_to_left: &mut HashMap<i32, i32>,
+) -> bool {
+    if left_to_right
+        .get(&left)
+        .is_some_and(|mapped| *mapped != right)
+        || right_to_left
+            .get(&right)
+            .is_some_and(|mapped| *mapped != left)
+    {
+        return false;
+    }
+    left_to_right.insert(left, right);
+    right_to_left.insert(right, left);
+    true
+}
+
+fn origin_sets_equivalent(
+    left: &OriginSet,
+    right: &OriginSet,
+    entry_left_to_right: &mut HashMap<i32, i32>,
+    entry_right_to_left: &mut HashMap<i32, i32>,
+) -> bool {
+    let left_writes: BTreeSet<_> = left
+        .iter()
+        .filter_map(|origin| match origin {
+            FlowOrigin::Write {
+                instruction,
+                operand,
+            } => Some((*instruction, *operand)),
+            FlowOrigin::Entry(_) => None,
+        })
+        .collect();
+    let right_writes: BTreeSet<_> = right
+        .iter()
+        .filter_map(|origin| match origin {
+            FlowOrigin::Write {
+                instruction,
+                operand,
+            } => Some((*instruction, *operand)),
+            FlowOrigin::Entry(_) => None,
+        })
+        .collect();
+    if left_writes != right_writes {
+        return false;
+    }
+    let left_entries: Vec<_> = left
+        .iter()
+        .filter_map(|origin| match origin {
+            FlowOrigin::Entry(slot) => Some(*slot),
+            FlowOrigin::Write { .. } => None,
+        })
+        .collect();
+    let right_entries: Vec<_> = right
+        .iter()
+        .filter_map(|origin| match origin {
+            FlowOrigin::Entry(slot) => Some(*slot),
+            FlowOrigin::Write { .. } => None,
+        })
+        .collect();
+    match (left_entries.as_slice(), right_entries.as_slice()) {
+        ([], []) => true,
+        // ABI-visible `this`/parameter/RVO offsets are <= 0 and are fixed by the signature, not
+        // local register allocation. Never alpha-rename them: that could hide a parameter swap.
+        ([left], [right]) if *left <= 0 || *right <= 0 => left == right,
+        ([left], [right]) => {
+            bind_bijection(*left, *right, entry_left_to_right, entry_right_to_left)
+        }
+        _ => false,
+    }
+}
+
+/// Strong N2 proof for register reuse/splitting. Opcode and every non-slot operand must already
+/// match. At each read operand, both sides must have the exact same aligned reaching writes (or a
+/// consistent bijection of entry values). Address/lvalue slots additionally keep a global storage
+/// bijection. This permits only physical allocation differences; a changed producer, CFG edge,
+/// operand order, reaching definition, or escaped-storage identity remains SEMANTIC.
+fn flow_equivalent_slots(left: &[NormInstr], right: &[NormInstr]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let (Some(left_flow), Some(right_flow)) = (analyze_slot_flow(left), analyze_slot_flow(right))
+    else {
+        return false;
+    };
+    let mut entry_l2r = HashMap::new();
+    let mut entry_r2l = HashMap::new();
+    let mut storage_l2r = HashMap::new();
+    let mut storage_r2l = HashMap::new();
+
+    for i in 0..left.len() {
+        if left[i].op != right[i].op
+            || left[i].operands.len() != right[i].operands.len()
+            || left_flow.roles[i] != right_flow.roles[i]
+        {
+            return false;
+        }
+        for operand in 0..left[i].operands.len() {
+            match (&left[i].operands[operand], &right[i].operands[operand]) {
+                (Operand::Slot(left_slot), Operand::Slot(right_slot)) => {
+                    let Some(role) = left_flow.roles[i]
+                        .iter()
+                        .find(|role| role.operand == operand)
+                    else {
+                        return false;
+                    };
+                    if (left_flow.pinned.contains(left_slot)
+                        || right_flow.pinned.contains(right_slot))
+                        && ((*left_slot <= 0 || *right_slot <= 0) && left_slot != right_slot
+                            || !bind_bijection(
+                                *left_slot,
+                                *right_slot,
+                                &mut storage_l2r,
+                                &mut storage_r2l,
+                            ))
+                    {
+                        return false;
+                    }
+                    if role.read {
+                        let Some(left_origins) = left_flow.incoming[i].get(left_slot) else {
+                            return false;
+                        };
+                        let Some(right_origins) = right_flow.incoming[i].get(right_slot) else {
+                            return false;
+                        };
+                        if !origin_sets_equivalent(
+                            left_origins,
+                            right_origins,
+                            &mut entry_l2r,
+                            &mut entry_r2l,
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+                (left_operand, right_operand) if left_operand == right_operand => {}
+                _ => return false,
+            }
+        }
+    }
+    true
 }
 
 // =================================================================================================
@@ -595,13 +1348,15 @@ fn strip_jitentry(instrs: &[NormInstr]) -> Vec<NormInstr> {
 }
 
 // =================================================================================================
-// N5 / N6 — benign-attribution ONE-SIDED VANILLA strips (`specs/final-residue.md` PART B).
+// N5 / N6 — benign-attribution instrumentation/control-flow strips
+// (`specs/final-residue.md` PART B).
 //
-// Both remove a PROVEN-INERT subsequence from the VANILLA normalized list only (regen already
-// lacks it), so they can only ever SHORTEN vanilla toward the (shorter) regen — never pad, never
-// manufacture a match by insertion. Governing safety rule (`bytediff.rs:12`): a false BENIGN hides
-// a real bug (catastrophic); when a pattern cannot be PROVEN inert/dominated, it is left in place
-// and the length mismatch keeps the function SEMANTIC.
+// N6 is a one-sided VANILLA fold. N5 strips only exact known profiler frames, on either side:
+// different source spellings can retain an FScopeCycleCounter dtor in vanilla but an FStatID temp
+// dtor in regen. Both identities are proven timing-only instrumentation. Neither normalizer pads or
+// inserts operations. Governing safety rule (`bytediff.rs:12`): a false BENIGN hides a real bug
+// (catastrophic); when a pattern cannot be PROVEN inert/dominated, it is left in place and the
+// mismatch keeps the function SEMANTIC.
 // =================================================================================================
 
 /// The (owner-type-name, method-name) of a normalized CALLSYS/CALL instruction's callee, if it
@@ -623,53 +1378,115 @@ fn callsys_owner_method(ni: &NormInstr) -> Option<(&str, &str)> {
 
 /// N5 — `FScopeCycleCounter` RAII profiler-scope strip (`specs/final-residue.md §B.2`).
 ///
-/// Removes, from the VANILLA list, each `[PSF <slot>; CALLSYS <inert-scope-callee>]` PAIR where the
-/// callee resolves EXACTLY to one of the three inert RAII identities:
+/// Removes exact call frames for the three inert RAII identities:
 ///   * `FScopeCycleCounter::$beh0`  — the RAII scope-counter CTOR (snapshots `Cycles()`)
 ///   * `FScopeCycleCounter::$beh2`  — the RAII scope-counter DTOR (accumulates elapsed cycles)
 ///   * `FStatID::$beh2`             — the transient `FStatID` temp DTOR that only fed the ctor
 ///
-/// The `FStatID::$beh0` CTOR is KEPT (both sides emit it — NOT stripped). Each CALLSYS is removed
-/// together with its immediately-preceding `PSF <same-or-any slot>` frame-push (that push exists
-/// only to address the RAII object for this call); if the preceding op is not a `PSF`, only the
-/// CALLSYS is removed (defensive — never remove an unrelated op).
+/// The `FStatID::$beh0` CTOR is KEPT (both sides emit it — NOT stripped). Exact arity is mandatory:
+/// the FScope ctor must have exactly two immediately-preceding PSFs (FStatID argument then distinct
+/// destination slot), while either dtor must have exactly one. A missing/extra frame push, aliased
+/// ctor slots, unresolved identity, or jump into a would-be-dropped frame rejects the entire strip.
+/// Retained N3 jump targets are rebased after removal.
 ///
 /// Behaviour proof (§B.2): the three callees touch no game object / ability / actor / return
 /// register — they read `FPlatformTime::Cycles()` and accumulate into a named `TStatId` CPU
 /// counter (compiled-in `SCOPE_CYCLE_COUNTER` instrumentation). Removing them changes only the
 /// stats-HUD timing readout. Provably behavior-neutral.
 ///
-/// Returns the number of CALLSYS scope-ops removed (each with its paired push).
+/// Returns the number of profiler CALLSYS ops removed.
 fn strip_benign_scopes(v: &mut Vec<NormInstr>) -> usize {
-    // Identify the indices of the inert scope CALLSYS ops and their paired preceding PSF.
+    let psf_slot = |ni: &NormInstr| match (ni.op, ni.operands.as_slice()) {
+        ("PSF", [Operand::Slot(slot)]) => Some(*slot),
+        _ => None,
+    };
+
+    // Identify exact inert call frames. Any recognized-but-malformed profiler call rejects the
+    // entire pass atomically: partially deleting one lifetime while retaining another would make
+    // the normalizer harder to reason about and could hide malformed control flow.
     let mut drop: Vec<bool> = vec![false; v.len()];
     let mut removed = 0usize;
     for i in 0..v.len() {
-        let is_scope = matches!(
-            callsys_owner_method(&v[i]),
-            Some(("FScopeCycleCounter", "$beh0"))
-                | Some(("FScopeCycleCounter", "$beh2"))
-                | Some(("FStatID", "$beh2"))
-        );
-        if !is_scope {
+        match callsys_owner_method(&v[i]) {
+            Some(("FScopeCycleCounter", "$beh0")) => {
+                let exact_two_psfs = i >= 2
+                    && (i < 3 || v[i - 3].op != "PSF")
+                    && psf_slot(&v[i - 2])
+                        .zip(psf_slot(&v[i - 1]))
+                        .is_some_and(|(stat, scope)| stat != scope);
+                if !exact_two_psfs {
+                    return 0;
+                }
+                if drop[i - 2] || drop[i - 1] || drop[i] {
+                    return 0;
+                }
+                drop[i - 2] = true;
+                drop[i - 1] = true;
+                drop[i] = true;
+                removed += 1;
+            }
+            Some(("FScopeCycleCounter", "$beh2")) | Some(("FStatID", "$beh2")) => {
+                let exact_one_psf =
+                    i >= 1 && (i < 2 || v[i - 2].op != "PSF") && psf_slot(&v[i - 1]).is_some();
+                if !exact_one_psf {
+                    return 0;
+                }
+                if drop[i - 1] || drop[i] {
+                    return 0;
+                }
+                drop[i - 1] = true;
+                drop[i] = true;
+                removed += 1;
+            }
+            _ => {}
+        }
+    }
+    if removed == 0 {
+        return 0;
+    }
+    // A branch into a call frame would make frame removal a control-flow rewrite rather than an
+    // instrumentation deletion. Fail the entire pass atomically.
+    if v.iter().any(|ni| {
+        ni.operands.iter().any(|op| match op {
+            Operand::JumpIndex(Some(target)) => {
+                *target > drop.len() || (*target < drop.len() && drop[*target])
+            }
+            _ => false,
+        })
+    }) {
+        return 0;
+    }
+
+    // Build old-index -> retained-index before removal and rebase every retained N3 edge. Targets
+    // of dropped ops were rejected above, so every concrete target has one exact new index.
+    let mut old_to_new = vec![None; v.len()];
+    let mut next = 0usize;
+    for (i, dropped) in drop.iter().copied().enumerate() {
+        if !dropped {
+            old_to_new[i] = Some(next);
+            next += 1;
+        }
+    }
+    for (i, ni) in v.iter_mut().enumerate() {
+        if drop[i] {
             continue;
         }
-        drop[i] = true;
-        removed += 1;
-        // Pair the immediately-preceding PSF frame-push (only if it is a PSF and not already
-        // claimed by another dropped call).
-        if i > 0 && v[i - 1].op == "PSF" && !drop[i - 1] {
-            drop[i - 1] = true;
+        for op in &mut ni.operands {
+            if let Operand::JumpIndex(Some(target)) = op {
+                if *target == old_to_new.len() {
+                    *target = next;
+                } else if let Some(Some(rebased)) = old_to_new.get(*target) {
+                    *target = *rebased;
+                }
+            }
         }
     }
-    if removed > 0 {
-        let mut idx = 0usize;
-        v.retain(|_| {
-            let keep = !drop[idx];
-            idx += 1;
-            keep
-        });
-    }
+    let mut idx = 0usize;
+    v.retain(|_| {
+        let keep = !drop[idx];
+        idx += 1;
+        keep
+    });
     removed
 }
 
@@ -745,6 +1562,42 @@ fn fold_dominated_reguards(v: &mut Vec<NormInstr>) -> usize {
     }
 
     if folded > 0 {
+        // Removing an entered window would be a control-flow rewrite, not a redundant expression
+        // fold. Reject atomically on an unresolved/out-of-range target or any edge into a dropped
+        // instruction, then rebase every retained N3 target (including the end sentinel).
+        if v.iter().any(|ni| {
+            ni.operands.iter().any(|op| match op {
+                Operand::JumpIndex(Some(target)) => {
+                    *target > drop.len() || (*target < drop.len() && drop[*target])
+                }
+                Operand::JumpIndex(None) => true,
+                _ => false,
+            })
+        }) {
+            return 0;
+        }
+        let mut old_to_new = vec![None; v.len()];
+        let mut next = 0usize;
+        for (i, dropped) in drop.iter().copied().enumerate() {
+            if !dropped {
+                old_to_new[i] = Some(next);
+                next += 1;
+            }
+        }
+        for (i, ni) in v.iter_mut().enumerate() {
+            if drop[i] {
+                continue;
+            }
+            for op in &mut ni.operands {
+                if let Operand::JumpIndex(Some(target)) = op {
+                    *target = if *target == old_to_new.len() {
+                        next
+                    } else {
+                        old_to_new[*target].expect("dropped targets rejected above")
+                    };
+                }
+            }
+        }
         let mut idx = 0usize;
         v.retain(|_| {
             let keep = !drop[idx];
@@ -889,26 +1742,35 @@ fn classify(
         };
     }
 
-    // N2 GUARD: if slot renumber is on but the two sides have a different distinct-slot COUNT, a
-    // real structural difference (added/dropped local) exists — DO NOT let N2 collapse it. We
-    // detect this and, if it's the only thing making them differ, still classify SEMANTIC.
-    let n2_slot_mismatch =
-        opts.n2_slots && distinct_slot_count(v_norm) != distinct_slot_count(r_norm);
+    // N2b coalesces only an exact producer -> dead-temp copy pair proven by whole-CFG liveness.
+    // It runs before any strip while normalized and raw instruction indices are still 1:1.
+    let mut v_prestrip = v_norm.to_vec();
+    let mut r_prestrip = r_norm.to_vec();
+    let (v_copy_count, r_copy_count) = if opts.n2_slots {
+        (
+            coalesce_dead_value_copies(&mut v_prestrip, v_raw),
+            coalesce_dead_value_copies(&mut r_prestrip, r_raw),
+        )
+    } else {
+        (0, 0)
+    };
+    let copy_fired = v_copy_count > 0 || r_copy_count > 0;
 
     // Compare normalized lists, tolerating JitEntry scaffolding.
-    let (mut v_cmp, r_cmp, jit_fired) = {
-        let vj = strip_jitentry(v_norm);
-        let rj = strip_jitentry(r_norm);
-        let fired = vj.len() != v_norm.len() || rj.len() != r_norm.len();
+    let (mut v_cmp, mut r_cmp, jit_fired) = {
+        let vj = strip_jitentry(&v_prestrip);
+        let rj = strip_jitentry(&r_prestrip);
+        let fired = vj.len() != v_prestrip.len() || rj.len() != r_prestrip.len();
         (vj, rj, fired)
     };
 
-    // N5/N6 — benign-attribution ONE-SIDED VANILLA strips (`specs/final-residue.md` PART B). Apply
-    // #2 (scope strip) BEFORE #1 (re-guard fold) per §B.3 (disjoint, but scope-first keeps the
-    // re-guard scanner's contiguous windows intact). Each only ever SHORTENS the vanilla side, so
-    // neither can pad a match into existence.
+    // N5/N6 benign-attribution strips. N5 removes only exact known profiler frames from either
+    // side (vanilla FScope vs regen FStat temp lifetimes can differ); N6 remains vanilla-only.
+    // Scope-first keeps N6's contiguous windows intact. Neither operation pads a stream.
     let scope_fired = if opts.n5_scope {
-        strip_benign_scopes(&mut v_cmp) > 0
+        let v_removed = strip_benign_scopes(&mut v_cmp);
+        let r_removed = strip_benign_scopes(&mut r_cmp);
+        v_removed > 0 || r_removed > 0
     } else {
         false
     };
@@ -918,13 +1780,36 @@ fn classify(
         false
     };
 
-    let norm_identical = !n2_slot_mismatch
-        && v_cmp.len() == r_cmp.len()
-        && v_cmp.iter().zip(&r_cmp).all(|(a, b)| a.norm_eq(b));
+    // N2 has two progressively stronger, fail-closed proofs. First-use alpha-renaming remains the
+    // cheap path and retains its equal-distinct-slot-count guard. If physical register reuse/split
+    // changes that shape, the reaching-definition proof may still establish exact value-flow
+    // equivalence. Keep the raw-slot streams intact for the latter; renumber only clones.
+    let raw_cmp_identical =
+        v_cmp.len() == r_cmp.len() && v_cmp.iter().zip(&r_cmp).all(|(a, b)| a.norm_eq(b));
+    let (simple_n2_identical, flow_n2_identical) = if opts.n2_slots && !raw_cmp_identical {
+        let mut v_simple = v_cmp.clone();
+        let mut r_simple = r_cmp.clone();
+        let slot_counts_equal = distinct_slot_count(&v_simple) == distinct_slot_count(&r_simple);
+        let _ = renumber_slots(&mut v_simple);
+        let _ = renumber_slots(&mut r_simple);
+        let simple = slot_counts_equal
+            && v_simple.len() == r_simple.len()
+            && v_simple
+                .iter()
+                .zip(&r_simple)
+                .all(|(left, right)| left.norm_eq(right));
+        let flow = !simple && flow_equivalent_slots(&v_cmp, &r_cmp);
+        (simple, flow)
+    } else {
+        (false, false)
+    };
+    let norm_identical = raw_cmp_identical || simple_n2_identical || flow_n2_identical;
+    let poststrip_n2_fired = simple_n2_identical || flow_n2_identical;
 
     if norm_identical {
         // BENIGN: determine WHICH normalizers were responsible by re-diffing raw operand roles.
         let mut fired = which_normalizers_fired(v_raw, r_raw, v_norm, r_norm, opts, jit_fired);
+        fired.n2_slots |= poststrip_n2_fired || copy_fired;
         fired.n5_scope = scope_fired;
         fired.n6_reguard = reguard_fired;
         // Defensive: if raw differs but NO normalizer is credited and no JitEntry/N5/N6 fired, that
@@ -1360,8 +2245,15 @@ fn diff_one(
         Ok(x) => x,
         Err(e) => return disasm_fail(name, "regen", e.to_string(), v_raw.len(), r_code.len()),
     };
-    let v_norm = normalize(v_code, &v_raw, v_side, opts);
-    let r_norm = normalize(r_code, &r_raw, r_side, opts);
+    // N2 must run only AFTER N5/N6 remove instrumentation-only slots. Canonicalizing first-use
+    // slot order before the strip irreversibly lets profiler temporaries perturb semantic locals;
+    // the stronger reaching-definition proof likewise must see the retained CFG. Direct
+    // normalization tests still exercise the cheap N2 path in `normalize`; the production pair
+    // pipeline deliberately defers all slot-allocation proofs to `classify`.
+    let mut prestrip_opts = *opts;
+    prestrip_opts.n2_slots = false;
+    let v_norm = normalize(v_code, &v_raw, v_side, &prestrip_opts);
+    let r_norm = normalize(r_code, &r_raw, r_side, &prestrip_opts);
     classify(
         name.to_string(),
         &v_raw,
@@ -1477,6 +2369,14 @@ mod tests {
     fn rw_arg(opcode: u8, slot: u16) -> Vec<i32> {
         vec![opcode as i32 | ((slot as i32) << 16)]
     }
+    /// Encode a wW_rW_ARG op: destination in dword-0 high word, source in dword-1 low word.
+    fn ww_rw_arg(opcode: u8, dst: u16, src: u16) -> Vec<i32> {
+        vec![opcode as i32 | ((dst as i32) << 16), src as i32]
+    }
+    /// Encode an rW_DW_ARG op (ordinary comparisons/JMPP).
+    fn rw_dw_arg(opcode: u8, slot: u16, arg: i32) -> Vec<i32> {
+        vec![opcode as i32 | ((slot as i32) << 16), arg]
+    }
     /// Encode a QW_ARG op: opcode dword + 64-bit arg (2 dwords LE).
     fn qw_arg(opcode: u8, arg: u64) -> Vec<i32> {
         vec![opcode as i32, arg as u32 as i32, (arg >> 32) as u32 as i32]
@@ -1498,6 +2398,37 @@ mod tests {
     fn norm(code: &[i32], side: &Side, opts: &NormOpts) -> Vec<NormInstr> {
         let raw = disassemble(code).expect("disasm");
         normalize(code, &raw, side, opts)
+    }
+
+    /// Minimal normalized companion for N2b unit tests. These streams contain only slot operands
+    /// plus ordinary jumps, so no cache-backed ref resolver is needed.
+    fn slot_norm(raw: &[Instr]) -> Vec<NormInstr> {
+        let offsets: HashMap<usize, usize> = raw
+            .iter()
+            .enumerate()
+            .map(|(i, ins)| (ins.offset_dw, i))
+            .collect();
+        raw.iter()
+            .map(|ins| {
+                let mut operands = Vec::new();
+                push_word_operands(ins.op.name, ins, &mut operands);
+                if is_jump_op(ins.op.name) {
+                    let target = ins.dwords.first().and_then(|raw_rel| {
+                        let target_dw = ins.offset_dw as i64
+                            + ins.op.size_dwords as i64
+                            + (*raw_rel as i32 as i64);
+                        (target_dw >= 0)
+                            .then_some(target_dw as usize)
+                            .and_then(|dw| offsets.get(&dw).copied())
+                    });
+                    operands.push(Operand::JumpIndex(target));
+                }
+                NormInstr {
+                    op: ins.op.name,
+                    operands,
+                }
+            })
+            .collect()
     }
 
     /// N3: two functions with the SAME instruction COUNT but where an earlier instruction has a
@@ -1636,6 +2567,237 @@ mod tests {
         assert_eq!(na[1].operands, nb[1].operands);
         assert_eq!(na[0].operands[0], Operand::Slot(0));
         assert_eq!(na[1].operands[0], Operand::Slot(1));
+    }
+
+    #[test]
+    fn n2_dead_value_copy_coalesces_only_qualified_producers() {
+        // The first two producers write only a destination; the four integer narrowers also read
+        // an independent input. All six are the exact residue shapes qualified on the real cache.
+        for (name, opcode, has_input) in [
+            ("CpyRtoV4", 85, false),
+            ("RDR4", 94, false),
+            ("sbTOi", 105, true),
+            ("swTOi", 106, true),
+            ("ubTOi", 107, true),
+            ("uwTOi", 108, true),
+        ] {
+            let mut code = if has_input {
+                ww_rw_arg(opcode, 5, 7)
+            } else {
+                rw_arg(opcode, 5)
+            };
+            code.extend(ww_rw_arg(80, 1, 5)); // CpyVtoV4 local_1, temp_5
+            code.extend(rw_arg(3, 1)); // PshV4 local_1
+            let raw = disassemble(&code).expect("disasm");
+            let mut normalized = slot_norm(&raw);
+            assert_eq!(
+                coalesce_dead_value_copies(&mut normalized, &raw),
+                1,
+                "{name} must coalesce"
+            );
+            assert_eq!(normalized.len(), 2, "{name}: copy not removed");
+            assert_eq!(normalized[0].op, name);
+            assert_eq!(normalized[0].operands[0], Operand::Slot(1));
+            assert_eq!(normalized[1].operands[0], Operand::Slot(1));
+        }
+    }
+
+    #[test]
+    fn n2_dead_value_copy_rebases_retained_jump_target() {
+        let mut code = rw_arg(94, 5); // RDR4 temp_5
+        code.extend(ww_rw_arg(80, 1, 5)); // copy at index 1
+        code.extend(dw_arg(11, 0)); // JMP index 2 -> PshV4 index 3
+        code.extend(rw_arg(3, 1));
+        let raw = disassemble(&code).expect("disasm");
+        let mut normalized = slot_norm(&raw);
+        assert_eq!(normalized[2].operands, [Operand::JumpIndex(Some(3))]);
+        assert_eq!(coalesce_dead_value_copies(&mut normalized, &raw), 1);
+        assert_eq!(normalized.len(), 3);
+        assert_eq!(normalized[1].op, "JMP");
+        assert_eq!(normalized[1].operands, [Operand::JumpIndex(Some(2))]);
+    }
+
+    #[test]
+    fn n2_dead_value_copy_rejects_live_source_and_producer_target_read() {
+        let mut live_code = rw_arg(94, 5);
+        live_code.extend(ww_rw_arg(80, 1, 5));
+        live_code.extend(rw_arg(3, 5)); // temp_5 remains live after the copy
+        let live_raw = disassemble(&live_code).expect("disasm");
+        let mut live_norm = slot_norm(&live_raw);
+        assert_eq!(coalesce_dead_value_copies(&mut live_norm, &live_raw), 0);
+        assert_eq!(live_norm.len(), live_raw.len());
+
+        let mut read_code = ww_rw_arg(105, 5, 1); // sbTOi temp_5, local_1
+        read_code.extend(ww_rw_arg(80, 1, 5));
+        read_code.extend(rw_arg(3, 1));
+        let read_raw = disassemble(&read_code).expect("disasm");
+        let mut read_norm = slot_norm(&read_raw);
+        assert_eq!(coalesce_dead_value_copies(&mut read_norm, &read_raw), 0);
+        assert_eq!(read_norm.len(), read_raw.len());
+
+        let mut free_code = rw_arg(94, 5);
+        free_code.extend(ww_rw_arg(80, 1, 5));
+        free_code.extend([65 | (5 << 16), 0, 0]); // FREE reads/releases then clears temp_5
+        let free_raw = disassemble(&free_code).expect("disasm");
+        let mut free_norm = slot_norm(&free_raw);
+        assert_eq!(coalesce_dead_value_copies(&mut free_norm, &free_raw), 0);
+        assert_eq!(free_norm.len(), free_raw.len());
+    }
+
+    #[test]
+    fn n2_dead_value_copy_rejects_branch_into_copy() {
+        let mut code = dw_arg(11, 1); // JMP index 0 -> copy at index 2
+        code.extend(rw_arg(94, 5)); // producer at index 1 (skipped by the branch)
+        code.extend(ww_rw_arg(80, 1, 5));
+        code.extend(rw_arg(3, 1));
+        let raw = disassemble(&code).expect("disasm");
+        let mut normalized = slot_norm(&raw);
+        assert_eq!(normalized[0].operands, [Operand::JumpIndex(Some(2))]);
+        assert_eq!(coalesce_dead_value_copies(&mut normalized, &raw), 0);
+        assert_eq!(normalized.len(), raw.len());
+    }
+
+    #[test]
+    fn n2_dead_value_copy_rejects_malformed_jump_and_jmpp_atomically() {
+        let mut invalid_jump = dw_arg(11, 999); // target is outside the decoded stream
+        invalid_jump.extend(rw_arg(94, 5));
+        invalid_jump.extend(ww_rw_arg(80, 1, 5));
+        invalid_jump.extend(rw_arg(3, 1));
+
+        let mut invalid_jmpp = rw_dw_arg(57, 9, 1); // two rows required; row 0 is not a JMP
+        invalid_jmpp.extend(rw_arg(94, 5));
+        invalid_jmpp.extend(ww_rw_arg(80, 1, 5));
+        invalid_jmpp.extend(rw_arg(3, 1));
+
+        for code in [invalid_jump, invalid_jmpp] {
+            let raw = disassemble(&code).expect("disasm");
+            let mut normalized = slot_norm(&raw);
+            let before = normalized.clone();
+            assert_eq!(coalesce_dead_value_copies(&mut normalized, &raw), 0);
+            assert_eq!(normalized.len(), before.len());
+            assert!(normalized
+                .iter()
+                .zip(&before)
+                .all(|(left, right)| left.norm_eq(right)));
+        }
+    }
+
+    #[test]
+    fn n2_flow_accepts_only_disjoint_non_escaping_register_split() {
+        let left = vec![
+            ni_setv4(1, 11),
+            ni_slot("PshV4", 1),
+            ni_setv4(1, 22), // physical slot 1 is reused for a disjoint value
+            ni_slot("PshV4", 1),
+            ni("RET"),
+        ];
+        let right = vec![
+            ni_setv4(5, 11),
+            ni_slot("PshV4", 5),
+            ni_setv4(6, 22), // allocator splits the second value into another slot
+            ni_slot("PshV4", 6),
+            ni("RET"),
+        ];
+        assert_ne!(distinct_slot_count(&left), distinct_slot_count(&right));
+        assert!(flow_equivalent_slots(&left, &right));
+
+        let mut wrong_source = right.clone();
+        wrong_source[3] = ni_slot("PshV4", 5); // reads definition #0, not definition #2
+        assert!(!flow_equivalent_slots(&left, &wrong_source));
+    }
+
+    #[test]
+    fn n2_flow_rejects_escaping_storage_split_and_abi_slot_rename() {
+        let escaped_left = vec![
+            ni_setv4(1, 11),
+            ni_slot("PSF", 1),
+            ni_setv4(1, 22),
+            ni_slot("PSF", 1),
+            ni("RET"),
+        ];
+        let escaped_right = vec![
+            ni_setv4(5, 11),
+            ni_slot("PSF", 5),
+            ni_setv4(6, 22),
+            ni_slot("PSF", 6),
+            ni("RET"),
+        ];
+        assert!(
+            !flow_equivalent_slots(&escaped_left, &escaped_right),
+            "address-taken storage must retain one global slot bijection"
+        );
+
+        let abi_left = vec![ni_slot("PshV4", 0), ni("RET")];
+        let abi_right = vec![ni_slot("PshV4", -2), ni("RET")];
+        assert!(
+            !flow_equivalent_slots(&abi_left, &abi_right),
+            "signature-defined parameter/this offsets must never be alpha-renamed"
+        );
+    }
+
+    #[test]
+    fn n2_flow_uses_loop_reaching_definitions() {
+        let left = vec![
+            ni_setv4(1, 0),
+            ni_slot("PshV4", 1),
+            ni_setv4(1, 1),
+            ni_jump("JNZ", 1),
+            ni_slot("PshV4", 1),
+            ni("RET"),
+        ];
+        let split_across_backedge = vec![
+            ni_setv4(5, 0),
+            ni_slot("PshV4", 5),
+            ni_setv4(6, 1),
+            ni_jump("JNZ", 1),
+            ni_slot("PshV4", 6),
+            ni("RET"),
+        ];
+        assert!(
+            !flow_equivalent_slots(&left, &split_across_backedge),
+            "the backedge reaches write #2 on the left but not slot 5 on the right"
+        );
+    }
+
+    #[test]
+    fn n2_flow_models_in_place_vm_writes() {
+        let instrs = vec![
+            ni_setv4(1, 7),
+            ni_slot("NEGi", 1),
+            ni_slot("PshV4", 1),
+            ni("RET"),
+        ];
+        let flow = analyze_slot_flow(&instrs).expect("flow");
+        assert_eq!(
+            flow.incoming[2].get(&1),
+            Some(&BTreeSet::from([FlowOrigin::Write {
+                instruction: 1,
+                operand: 0,
+            }])),
+            "PshV4 must observe the NEGi read-modify-write, not the older SetV4"
+        );
+
+        let free = ni_slot("FREE", 1);
+        let roles = norm_slot_roles(&free).expect("FREE roles");
+        assert_eq!(
+            roles,
+            [NormSlotRole {
+                operand: 0,
+                read: true,
+                write: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn word_role_rwwdw_keeps_plain_word_out_of_n2_slots() {
+        // LoadRObjR (184) is rW_W_DW: only operand 0 is a slot; operand 1 is a plain W.
+        let code = vec![184 | (5 << 16), 17, 23];
+        let raw = disassemble(&code).expect("disasm");
+        let mut operands = Vec::new();
+        push_word_operands("LoadRObjR", &raw[0], &mut operands);
+        assert_eq!(operands[0], Operand::Slot(5));
+        assert_eq!(operands[1], Operand::Word(17));
     }
 
     // ---- GAP-B / GAP-C gate tests (batch-38) ----
@@ -1814,11 +2976,23 @@ mod tests {
             operands: vec![Operand::Slot(slot)],
         }
     }
+    fn ni_setv4(slot: i32, value: i64) -> NormInstr {
+        NormInstr {
+            op: "SetV4",
+            operands: vec![Operand::Slot(slot), Operand::IntConst { value, width: 4 }],
+        }
+    }
     /// A normalized CALLSYS whose callee resolves to `owner::method` (via the remap test ctor).
     fn ni_callsys(owner: &str, method: &str) -> NormInstr {
         NormInstr {
             op: "CALLSYS",
             operands: vec![Operand::Ref(OperandId::named_func_for_test(owner, method))],
+        }
+    }
+    fn ni_jump(op: &'static str, target: usize) -> NormInstr {
+        NormInstr {
+            op,
+            operands: vec![Operand::JumpIndex(Some(target))],
         }
     }
 
@@ -1944,6 +3118,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn n6_rebases_retained_jump_and_rejects_entry_into_folded_window() {
+        let mut rebased = vec![ni_jump("JZ", 10)];
+        rebased.extend(s1_head_guard(5, 1));
+        rebased.push(ni("PshRPtr"));
+        rebased.extend(s1_reguard(5, 1));
+        rebased.push(ni("RET"));
+        assert_eq!(rebased.len(), 11);
+        assert_eq!(fold_dominated_reguards(&mut rebased), 1);
+        assert_eq!(rebased.len(), 7);
+        assert_eq!(rebased[0].operands, [Operand::JumpIndex(Some(6))]);
+
+        let mut entered = vec![ni_jump("JZ", 6)]; // enters the would-be re-guard directly
+        entered.extend(s1_head_guard(5, 1));
+        entered.push(ni("PshRPtr"));
+        entered.extend(s1_reguard(5, 1));
+        entered.push(ni("RET"));
+        let original = entered.clone();
+        assert_eq!(fold_dominated_reguards(&mut entered), 0);
+        assert_eq!(entered.len(), original.len());
+        assert!(entered
+            .iter()
+            .zip(&original)
+            .all(|(left, right)| left.norm_eq(right)));
+    }
+
     /// N5: the `FScopeCycleCounter` RAII ctor/dtor pair + `FStatID` temp dtor strip; the kept-on-
     /// both-sides `FStatID::$beh0` ctor is NOT stripped.
     #[test]
@@ -1951,8 +3151,9 @@ mod tests {
         let mut v = vec![
             ni_slot("PSF", 0),
             ni_callsys("FStatID", "$beh0"), // KEPT (both sides emit it)
-            ni_slot("PSF", 0),
-            ni_callsys("FScopeCycleCounter", "$beh0"), // strip (with its PSF)
+            ni_slot("PSF", 0),              // ctor argument: FStatID
+            ni_slot("PSF", 1),              // ctor destination: FScopeCycleCounter
+            ni_callsys("FScopeCycleCounter", "$beh0"), // strip (with both PSFs)
             ni_slot("PSF", 0),
             ni_callsys("FStatID", "$beh2"), // strip (with its PSF)
             ni("PshRPtr"),                  // body op
@@ -1962,7 +3163,7 @@ mod tests {
         ];
         let removed = strip_benign_scopes(&mut v);
         assert_eq!(removed, 3, "three inert scope CALLSYS ops removed");
-        // Each removed CALLSYS took its paired PSF too: 3 pairs = 6 ops gone; 10 -> 4.
+        // The ctor removes two PSFs; each dtor removes one: 7 ops gone; 11 -> 4.
         assert_eq!(
             v.len(),
             4,
@@ -1991,6 +3192,86 @@ mod tests {
         let removed = strip_benign_scopes(&mut v);
         assert_eq!(removed, 0);
         assert_eq!(v.len(), before);
+    }
+
+    /// N5 GUARD: every recognized profiler identity must have its exact physical frame arity.
+    /// One/three-PSF ctors, aliased ctor slots, and zero/two-PSF dtors reject the whole pass.
+    #[test]
+    fn n5_scope_rejects_near_miss_frame_arities_atomically() {
+        let cases = vec![
+            vec![
+                ni_slot("PSF", 0),
+                ni_callsys("FScopeCycleCounter", "$beh0"),
+                ni("RET"),
+            ],
+            vec![
+                ni_slot("PSF", 9),
+                ni_slot("PSF", 0),
+                ni_slot("PSF", 1),
+                ni_callsys("FScopeCycleCounter", "$beh0"),
+                ni("RET"),
+            ],
+            vec![
+                ni_slot("PSF", 0),
+                ni_slot("PSF", 0),
+                ni_callsys("FScopeCycleCounter", "$beh0"),
+                ni("RET"),
+            ],
+            vec![ni_callsys("FStatID", "$beh2"), ni("RET")],
+            vec![
+                ni_slot("PSF", 0),
+                ni_slot("PSF", 1),
+                ni_callsys("FScopeCycleCounter", "$beh2"),
+                ni("RET"),
+            ],
+        ];
+        for (case, mut frame) in cases.into_iter().enumerate() {
+            let original = frame.clone();
+            assert_eq!(
+                strip_benign_scopes(&mut frame),
+                0,
+                "near-miss case {case} must reject"
+            );
+            assert_eq!(frame.len(), original.len(), "case {case} length changed");
+            assert!(
+                frame.iter().zip(&original).all(|(a, b)| a.norm_eq(b)),
+                "case {case} must remain instruction-for-instruction"
+            );
+        }
+    }
+
+    /// N5 GUARD: a branch into a would-be-dropped frame rejects the pass atomically.
+    #[test]
+    fn n5_scope_rejects_jump_into_dropped_frame() {
+        let mut v = vec![
+            ni_jump("JNZ", 2),
+            ni_slot("PSF", 0),
+            ni_slot("PSF", 1),
+            ni_callsys("FScopeCycleCounter", "$beh0"),
+            ni("RET"),
+        ];
+        let original = v.clone();
+        assert_eq!(strip_benign_scopes(&mut v), 0);
+        assert_eq!(v.len(), original.len());
+        assert!(v.iter().zip(&original).all(|(a, b)| a.norm_eq(b)));
+    }
+
+    /// N5 rebases retained N3 targets both to a later retained op and to the end sentinel.
+    #[test]
+    fn n5_scope_rebases_retained_and_end_jump_targets() {
+        let mut v = vec![
+            ni_jump("JNZ", 5),
+            ni_jump("JZ", 6),
+            ni_slot("PSF", 0),
+            ni_slot("PSF", 1),
+            ni_callsys("FScopeCycleCounter", "$beh0"),
+            ni("RET"),
+        ];
+        assert_eq!(strip_benign_scopes(&mut v), 1);
+        assert_eq!(v.len(), 3);
+        assert_eq!(v[0].operands, [Operand::JumpIndex(Some(2))]);
+        assert_eq!(v[1].operands, [Operand::JumpIndex(Some(3))]);
+        assert_eq!(v[2].op, "RET");
     }
 
     /// Self-identity MUST stay 162828/0/0 with N5/N6 ON — the raw-eq fast path returns IDENTICAL

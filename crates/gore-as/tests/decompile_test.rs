@@ -245,10 +245,18 @@ fn thiscall1_preserves_deferred_static_name_in_real_cache() {
     };
     let b = std::fs::read(&path).expect("read real cache");
     let mut refs = RefResolver::build(&b).expect("resolver");
-    if let Ok(path) = std::env::var("GORE_AS_BINDS") {
-        if let Some(api) = gore_as::cache::binds::NativeApi::load(std::path::Path::new(&path)) {
-            refs.set_native_api(api);
-        }
+    let binds_path = std::env::var_os("GORE_AS_BINDS")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::path::Path::new(&path)
+                .parent()
+                .map(|parent| parent.join("Binds.Cache"))
+        });
+    if let Some(api) = binds_path
+        .as_deref()
+        .and_then(gore_as::cache::binds::NativeApi::load)
+    {
+        refs.set_native_api(api);
     }
     let funcs = collect_function_bytecodes(&b).expect("collect");
     let f = funcs
@@ -375,10 +383,18 @@ fn runtime_compiler_residue_recovers_generically_in_real_cache() {
             .flat_map(|c| c.methods.iter())
             .map(|f| f.name.clone()),
     );
-    if let Ok(path) = std::env::var("GORE_AS_BINDS") {
-        if let Some(api) = gore_as::cache::binds::NativeApi::load(std::path::Path::new(&path)) {
-            refs.set_native_api(api);
-        }
+    let binds_path = std::env::var_os("GORE_AS_BINDS")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::path::Path::new(&path)
+                .parent()
+                .map(|parent| parent.join("Binds.Cache"))
+        });
+    if let Some(api) = binds_path
+        .as_deref()
+        .and_then(gore_as::cache::binds::NativeApi::load)
+    {
+        refs.set_native_api(api);
     }
 
     let emit = |module: &str| {
@@ -665,6 +681,139 @@ fn mixed_rvo_switch_with_normal_join_recovers_in_real_cache() {
         rejected.contains("// JMPP"),
         "switch with an unproved RVO early return was accepted:\n{rejected}"
     );
+}
+
+/// Real-hotfix lock for the compound materialized loop header whose unique backward continue
+/// trampoline lives inside a switch case. The loop owns the complete switch through its proven
+/// forward exit; the physical default region is laid out after the backward trampoline.
+#[test]
+fn compound_loop_switch_continue_recovers_in_real_cache() {
+    let Ok(path) = std::env::var("GORE_AS_REAL_CACHE") else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let b = std::fs::read(&path).expect("read real cache");
+    let mut refs = RefResolver::build(&b).expect("resolver");
+    let modules = gore_as::cache::model::parse_modules(&b).expect("modules");
+    let native = std::path::Path::new(&path)
+        .parent()
+        .map(|p| p.join("Binds.Cache"))
+        .as_deref()
+        .and_then(gore_as::cache::binds::NativeApi::load);
+    gore_as::cache::emit_all::prepare_resolver_semantics(&modules, &mut refs, native);
+    let funcs = collect_function_bytecodes(&b).expect("collect");
+    let f = funcs
+        .iter()
+        .find(|f| f.func.ends_with("UCBT_CompleteSequence::Tick"))
+        .expect("hotfix corpus contains CompleteSequence::Tick");
+    let src = gore_as::cache::structure::decompile(f, &refs);
+    eprintln!("{src}");
+    assert!(src.contains("while ("), "loop was not recovered:\n{src}");
+    assert!(src.contains("switch ("), "switch was not recovered:\n{src}");
+    assert!(
+        src.contains("continue;"),
+        "continue was not retained:\n{src}"
+    );
+    assert!(!src.contains("// JMPP"), "JMPP marker remains:\n{src}");
+
+    let module = modules
+        .iter()
+        .find(|m| m.classes.iter().any(|c| c.name == "UCBT_CompleteSequence"))
+        .expect("hotfix module contains UCBT_CompleteSequence");
+    let emitted = gore_as::cache::emit::emit_module(module, &refs);
+    let class = emitted
+        .split("class UCBT_CompleteSequence")
+        .nth(1)
+        .expect("emitted target class")
+        .split("\nclass ")
+        .next()
+        .unwrap();
+    let tick = class
+        .split("ECBT_ExecutionResult Tick()")
+        .nth(1)
+        .expect("emitted Tick")
+        .split("\n    bool TryCancelExecution()")
+        .next()
+        .expect("Tick boundary");
+    assert!(!class.contains("body not fully recovered"), "{class}");
+    assert!(!class.contains("// JMPP"), "{class}");
+    assert!(class.contains("while ("), "{class}");
+    assert!(class.contains("switch ("), "{class}");
+    assert!(class.contains("continue;"), "{class}");
+    assert!(tick.contains("ECBT_ExecutionResult local_4;"), "{tick}");
+    assert!(
+        !tick.contains("ECBT_ExecutionResult local_5;") && !tick.contains("int local_5"),
+        "single-consumer enum expression temporary survived:\n{tick}"
+    );
+    assert!(
+        tick.contains("while ((int(local_4) == 0) || (int(local_4) == 1))"),
+        "enum metadata was discarded before the underlying-width cast:\n{tick}"
+    );
+    assert!(
+        tick.contains("local_2 = this.CurrentNodeIndex;")
+            && tick.contains("local_4 = this.Nodes.opIndex(local_2).ExecuteTick();"),
+        "compiler-reused index carrier was lost or moved across the call:\n{tick}"
+    );
+    assert!(
+        !tick.contains("return ECBT_ExecutionResult(local_5);")
+            && tick.contains("return ECBT_ExecutionResult(2);"),
+        "same-enum return temporary survived:\n{tick}"
+    );
+    for bool_shape in [
+        "this.bIsSuccess = true;",
+        "if (!(this.bIsSuccess))",
+        "this.bIsSuccess = false;",
+    ] {
+        assert!(
+            tick.contains(bool_shape),
+            "proven bool-field temporary did not fold to `{bool_shape}`:\n{tick}"
+        );
+    }
+    assert!(!tick.contains("local_8"), "bool scratch survived:\n{tick}");
+    assert!(tick.contains("++this.CurrentNodeIndex;"), "{tick}");
+    for carrier_shape in [
+        "local_2 = this.Nodes.Num();",
+        "local_6 = this.CurrentNodeIndex;",
+        "if (local_2 <= local_6)",
+    ] {
+        assert!(
+            tick.contains(carrier_shape),
+            "compiler-reused comparison carrier `{carrier_shape}` drifted:\n{tick}"
+        );
+    }
+    assert!(
+        tick.matches("this.CurrentNodeIndex = local_6;").count() >= 2,
+        "index reset carrier did not round-trip:\n{tick}"
+    );
+}
+
+/// Full authoritative emitter census for the configured hotfix cache. This is intentionally
+/// environment-gated because it parses and renders all 7,305 modules.
+#[test]
+fn configured_hotfix_has_zero_emitted_body_stubs() {
+    let Ok(path) = std::env::var("GORE_AS_REAL_CACHE") else {
+        eprintln!("skip: set GORE_AS_REAL_CACHE");
+        return;
+    };
+    let b = std::fs::read(&path).expect("read real cache");
+    let mut refs = RefResolver::build(&b).expect("resolver");
+    let modules = gore_as::cache::model::parse_modules(&b).expect("modules");
+    let native = std::path::Path::new(&path)
+        .parent()
+        .map(|p| p.join("Binds.Cache"))
+        .as_deref()
+        .and_then(gore_as::cache::binds::NativeApi::load);
+    gore_as::cache::emit_all::prepare_resolver_semantics(&modules, &mut refs, native);
+    let stubs: Vec<_> = modules
+        .iter()
+        .filter_map(|module| {
+            let source = gore_as::cache::emit::emit_module(module, &refs);
+            source
+                .contains("body not fully recovered")
+                .then_some(module.name.as_str())
+        })
+        .collect();
+    assert!(stubs.is_empty(), "emitted stub modules remain: {stubs:#?}");
 }
 
 #[test]

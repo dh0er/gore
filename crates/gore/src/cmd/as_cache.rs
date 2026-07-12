@@ -197,7 +197,7 @@ pub enum AsCmd {
     },
     /// Semantic byte-faithfulness oracle: diff a VANILLA cache against a REGEN (re-compilation of
     /// our decompiled source) per function, after normalizing away build-noise (ref keys N1, jump
-    /// absolutes N3, constant encodings N4; opt-in slot-renumber N2). Classifies each aligned
+    /// absolutes N3, constant encodings N4; opt-in slot-allocation proofs N2). Classifies each aligned
     /// function IDENTICAL / BENIGN-DIFF / SEMANTIC-DIFF. See specs/semantic-oracle.md.
     Bytediff {
         /// Vanilla reference cache (e.g. samples/cache_A.Cache).
@@ -219,7 +219,7 @@ pub enum AsCmd {
         /// Instruction window (±N) around each SEMANTIC divergence.
         #[arg(long, default_value_t = 6)]
         context: usize,
-        /// Enable the OPT-IN N2 slot-renumber normalizer (default OFF; see spec §3.2).
+        /// Enable OPT-IN fail-closed N2 slot-allocation normalization (default OFF; see FORMAT.md).
         #[arg(long = "norm-slots")]
         norm_slots: bool,
         /// Disable the N5 `FScopeCycleCounter` RAII profiler-scope strip (default ON; §B.2).

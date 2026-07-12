@@ -1,13 +1,14 @@
 # AngelScript decompiler — completeness and known gaps
 
-**Status: nearly complete, but not lossless.** The current emitter reconstructs almost every
-ordinary function body in the shipped cache. When it cannot prove that a body is correct, it
-keeps the declaration and emits a clearly marked, signature-preserving stub instead of silently
-inventing logic.
+**Status: complete body coverage for the current hotfix, but not lossless.** The current emitter
+reconstructs every ordinary function body it writes from the shipped cache. When it cannot prove
+that a body is correct, it still keeps the declaration and emits a clearly marked,
+signature-preserving stub instead of silently inventing logic; the measured current cache has no
+such fallback body.
 
 ## Current measured baseline
 
-Measured on 2026-07-11 against the current hotfix
+Measured on 2026-07-12 against the current hotfix
 `PrecompiledScript_Shipping.Cache` (SHA-256
 `1018F1CFE6B99A650EECB33AFB96752D691D2088EAD27808971B812F04ECB4C2`), with the matching
 `Binds.Cache` loaded and **without** `GORE_AS_STUBLIST`:
@@ -17,9 +18,9 @@ Measured on 2026-07-11 against the current hotfix
 | Emitted modules | 7,305 |
 | Raw cache function records | 156,251 |
 | Emitted body-bearing functions | 55,403 |
-| Bodies emitted without a fallback stub | 55,402 (**99.99820%**) |
-| Signature-preserving stubs | 1 (**0.00180%**) |
-| Modules containing at least one stub | 1 |
+| Bodies emitted without a fallback stub | 55,403 (**100%**) |
+| Signature-preserving stubs | 0 (**0%**) |
+| Modules containing at least one stub | 0 |
 
 The counts describe functions that `emit-all` emits. A non-stub body is one the structurer could
 render; this percentage is **not** a semantic byte-faithfulness score. Deep argument/dataflow
@@ -30,8 +31,9 @@ that every piece of class-default data round-trips. A fresh whole-tree game-comp
 the real generator and the diagnostics callback hook captured concrete file/line/column errors
 before the compiler exited without publishing a development cache. Those diagnostics exposed
 three generic emitter residues, which are fixed in the current tree. A final controlled compile of
-the corrected 7,305-module tree then completed successfully with the hardened helper and produced
-a structurally complete 91,321,157-byte development cache. A separate intentional unknown-symbol
+the 7,305-module, zero-stub tree completed successfully with the hardened helper and produced a
+structurally complete 91,181,145-byte development cache (SHA-256
+`FD868A0B46E71E93552F774435940FB9146216156C9E2160DE80C9FBCBED0EC1`). A separate intentional unknown-symbol
 compile proved normal `file:line:column: error` output and correctly accepted no cache. Both
 transactions restored every installed source, JIT artifact, proxy, and shipping cache byte-for-byte.
 The percentages still measure decompiler body coverage, not semantic byte identity.
@@ -49,9 +51,9 @@ estimate is needed.
 
 ## Remaining stubs
 
-| Reason | Count | Current cause |
-|--------|-------|---------------|
-| `opcode-uncovered` | 1 | `UCBT_CompleteSequence::Tick` combines a compound loop header, switch, and backward `continue`; that ownership shape is not yet reconstructed conservatively. |
+None in the measured current-hotfix corpus. This is a corpus result, not a promise that arbitrary
+future bytecode shapes will recover: every unsupported or unproved construct still takes the
+visible signature-preserving stub path.
 
 These are proactive stubs from the structured emitter. The old force-stub workflow and its
 thousands of name-keyed compile-failure stubs are no longer part of this baseline.
@@ -89,13 +91,10 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Root causes and next work
 
-1. **One compound `JMPP`/loop shape.** The switch recognizer handles normal tables, but
-   `UCBT_CompleteSequence::Tick` still takes the conservative `opcode-uncovered` exit because its
-   loop header, switch and backward `continue` ownership are not yet jointly proven.
-2. **Generated defaults.** `__InitDefaults` and related generated methods contain important NPC,
+1. **Generated defaults.** `__InitDefaults` and related generated methods contain important NPC,
    quest and class-default data and need a separate faithful representation before full asset
    authoring can be claimed.
-3. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from
+2. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from
    stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
    callback-body fingerprint to attach to the per-error `asSMessageInfo` callback. It prints normal
    file/line/column diagnostics only when the raw signature is unique and all five message-field
@@ -111,10 +110,23 @@ requires reconstructing its body manually or first extending the decompiler.
    executables pass the same offline structural check; runtime injection remains proven only on
    the installed 1.0.3 executable.
 
-The mixed-RVO switch in `MakeNewCrimeRegisterData` is now recovered with a per-exit proof: each
-early bare-RET edge must contain exactly one resolved RVO store, and removing that store in the
-negative regression atomically restores the stub. The remaining `UCBT_CompleteSequence::Tick`
-case needs compound-loop and backward-`continue` structuring. The corrected final emission now
-passes the whole-tree game compiler; use the remaining stub/generated-default limitations and the
-semantic `bytediff` oracle, rather than compileability alone, when deciding whether a broad edit is
+The mixed-RVO switch in `MakeNewCrimeRegisterData` is recovered with a per-exit proof: each early
+bare-RET edge must contain exactly one resolved RVO store, and removing that store in the negative
+regression atomically restores the stub. `UCBT_CompleteSequence::Tick` is now recovered by a
+bounded symbolic header-DAG proof plus single-entry, dominance, unique-backedge and fully
+structured-body gates. Its switch accepts only the exact backward loop-continue target as an early
+exit, stops at the proven loop exit, and leaves the physically later default and outer return tail
+under their correct owners. Elided header temporaries additionally require path-local definitions
+and a whole-body/exit no-read-before-overwrite proof. Numeric constants preserve IEEE and unsigned
+high-bit values; copy and cast chains retain destination signedness; enum-byte constants with
+unknown underlying signedness fail closed; and full-register jumps require a proven canonical
+boolean rather than a one-byte register copy. Synthetic negative regressions cover those type and
+liveness gates plus a second/wrong backedge, side-effecting or non-boolean header, outside entries,
+an enclosing-loop break target and ambiguous joins; every deviation atomically restores the
+`JMPP` stub path. The final zero-stub emission passes the whole-tree game compiler. A targeted
+semantic-oracle gate for `UCBT_CompleteSequence::Tick` aligns all 104 original operations and
+classifies the remaining differences as benign N1/N2/N4/N5 build/allocation noise with zero
+semantic differences. That is a qualification of the formerly stubbed function, not a claim that
+the entire emitted corpus is byte-identical. Use the generated-default limitations and the semantic
+oracle, rather than compileability or zero stubs alone, when deciding whether a broad edit is
 faithful.
