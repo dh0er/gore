@@ -65,6 +65,7 @@ pub use quest::{
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
-    AssetVerification, CheckpointPreparation, ImportedOgg, OpenedCheckpoint, WorkingHead,
-    WorkingProjectStore, WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
+    AssetVerification, CheckpointPreparation, ImportedOgg, OpenedCheckpoint,
+    OpenedDocumentCheckpoint, WorkingHead, WorkingProjectStore, WorkingStoreError,
+    WorkingStoreFormat, WorkingStoreLimits,
 };

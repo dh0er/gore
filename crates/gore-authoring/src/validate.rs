@@ -67,6 +67,9 @@ pub enum DiagnosticCode {
     GeneratedScriptDrift,
     ScriptModuleOwnershipMismatch,
     RuntimeUnqualified,
+    /// Schema revision 2 has story validation, but not yet the combined voice/localization/story
+    /// validator required to make a production-readiness claim.
+    Revision2CombinedValidationUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
