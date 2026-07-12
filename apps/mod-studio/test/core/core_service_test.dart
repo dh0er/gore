@@ -113,6 +113,14 @@ void main() {
               .where((command) => command != 'authoring_story_catalog_v1_read')
               .toList(),
         );
+        final missingStoryBuildPlan = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command != 'authoring_story_build_plan_v1_generate',
+              )
+              .toList(),
+        );
         final missingStoryCatalogBuild = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where((command) => command != 'authoring_story_catalog_v1_build')
@@ -159,6 +167,7 @@ void main() {
           missingWorkingStore,
           missingDocumentStore,
           missingStoryTransaction,
+          missingStoryBuildPlan,
           missingStoryCatalog,
           missingStoryCatalogBuild,
           missingStoryCatalogRootBuild,
@@ -167,7 +176,7 @@ void main() {
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(13), everyElement(isNull));
+        expect(decisions.take(14), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -198,6 +207,7 @@ void main() {
             (command) =>
                 command != 'authoring_project_check' &&
                 command != 'authoring_project_story_draft_insert_v1' &&
+                command != 'authoring_story_build_plan_v1_generate' &&
                 command != 'authoring_story_catalog_v1_build' &&
                 command != 'authoring_story_catalog_v1_build_for_game_root' &&
                 command != 'authoring_story_catalog_v1_read' &&
@@ -219,6 +229,7 @@ void main() {
         'authoring_project_check',
         'authoring_project_story_draft_insert_v1',
         'authoring_store_open_document',
+        'authoring_story_build_plan_v1_generate',
         'authoring_story_catalog_v1_build',
         'authoring_story_catalog_v1_build_for_game_root',
         'authoring_story_catalog_v1_read',

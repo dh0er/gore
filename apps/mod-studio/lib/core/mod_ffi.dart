@@ -18,6 +18,18 @@ const _maxAuthoringStoryInventoryJsonBytes = 24 * 1024 * 1024;
 const _maxAuthoringStoryInventoryEntries = 100000;
 const _maxAuthoringStoryInventoryEntryBytes = 512;
 const _maxAuthoringStoryInventoryTotalBytes = 16 * 1024 * 1024;
+const _maxAuthoringStoryBuildPlanJsonBytes = 32 * 1024 * 1024;
+const _maxAuthoringStoryBuildModules = 4096;
+const _maxAuthoringStoryBuildSourceBytes = 16 * 1024 * 1024;
+const _maxAuthoringStoryBuildDiagnostics = 65536;
+const _maxAuthoringStoryBuildRelatedPerDiagnostic = 1024;
+const _maxAuthoringStoryBuildRelatedTotal = 65536;
+const _maxAuthoringStoryBuildPropertyPathBytes = 2 * 1024;
+const _maxAuthoringStoryBuildDiagnosticMessageBytes = 16 * 1024;
+const _maxAuthoringStoryBuildSealedInputsPerModule = 16;
+const _maxAuthoringStoryBuildSealedInputsTotal =
+    _maxAuthoringStoryBuildModules *
+    _maxAuthoringStoryBuildSealedInputsPerModule;
 // This one FFI command deliberately stays within signed 64-bit JSON integers. A base at this
 // maximum can advance once to `_maxAuthoringStoryAppliedRevision` without becoming a double.
 const _maxAuthoringStoryBaseRevision = 0x7ffffffffffffffe;
@@ -178,6 +190,33 @@ class ModFfi {
       response,
       projectJson: projectJson,
       mutationJson: mutationJson,
+      profile: profile,
+    );
+  }
+
+  /// Derive a sealed, runtime-unqualified and permanently build-blocked source plan.
+  Future<AuthoringStoryBuildPlanResult> authoringStoryBuildPlanV1Generate({
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringDraftRequestString(
+      projectJson,
+      'projectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    const command = 'authoring_story_build_plan_v1_generate';
+    _authoringStoryBuildPlanEnvelopePreflight(
+      command,
+      projectJson,
+      profile.wireName,
+    );
+    final response = await _call(command, {
+      'project_json': projectJson,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoryBuildPlanResult._fromJson(
+      response,
+      projectJson: projectJson,
       profile: profile,
     );
   }
@@ -777,6 +816,22 @@ void _authoringSingleRawJsonEnvelopePreflight(
       command.length +
       wireField.length;
   _authoringAddEscapedJsonStringBytes(value, dartField, encodedBytes);
+}
+
+void _authoringStoryBuildPlanEnvelopePreflight(
+  String command,
+  String projectJson,
+  String profile,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"project_json":"","profile":""}}'.length +
+      command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    projectJson,
+    'projectJson',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(profile, 'profile', encodedBytes);
 }
 
 void _authoringStoryCatalogPath(String value, String field) {
@@ -2311,6 +2366,274 @@ class AuthoringProjectCheckResult {
   }
 }
 
+enum AuthoringStoryBuildRuntimeQualification { runtimeUnqualified }
+
+enum AuthoringStoryBuildPublicationStatus { notSupported }
+
+final class AuthoringStoryBuildProjectProvenance {
+  const AuthoringStoryBuildProjectProvenance._({
+    required this.projectId,
+    required this.projectRevision,
+    required this.canonicalDocument,
+    required this.targetExecutable,
+  });
+
+  final String projectId;
+  final int projectRevision;
+  final AuthoringDraftContentSeal canonicalDocument;
+  final AuthoringDraftContentSeal targetExecutable;
+}
+
+/// Read-only inspection plan. This type intentionally exposes no compile/deploy operation.
+final class AuthoringStoryBuildPlanResult {
+  const AuthoringStoryBuildPlanResult._({
+    required this.requestBindingSha256,
+    required this.planJson,
+    required this.planSeal,
+    required this.validationProfile,
+    required this.project,
+    required this.runtimeQualification,
+    required this.publicationStatus,
+    required this.moduleCount,
+    required this.diagnosticCount,
+    required this.blockingDiagnosticIndexes,
+    required this.blocksBuild,
+  });
+
+  final String requestBindingSha256;
+  final String planJson;
+  final AuthoringDraftContentSeal planSeal;
+  final AuthoringValidationProfile validationProfile;
+  final AuthoringStoryBuildProjectProvenance project;
+  final AuthoringStoryBuildRuntimeQualification runtimeQualification;
+  final AuthoringStoryBuildPublicationStatus publicationStatus;
+  final int moduleCount;
+  final int diagnosticCount;
+  final List<int> blockingDiagnosticIndexes;
+  final bool blocksBuild;
+
+  factory AuthoringStoryBuildPlanResult._fromJson(
+    Map<String, Object?> json, {
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) {
+    _authoringExactFields(json, const {
+      'ok',
+      'request_binding_sha256',
+      'plan_json',
+      'plan_seal',
+      'validation_profile',
+      'project',
+      'runtime_qualification',
+      'publication_status',
+      'module_count',
+      'diagnostic_count',
+      'blocking_diagnostic_indexes',
+      'blocks_build',
+    }, 'Story build-plan response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring Story build-plan response is not ok',
+      );
+    }
+    final requestBindingSha256 = _authoringRequiredString(
+      json,
+      'request_binding_sha256',
+      maxBytes: 64,
+    );
+    final expectedBinding = _authoringStoryBuildRequestBinding(
+      projectJson,
+      profile.wireName,
+    );
+    if (!_authoringSha256Pattern.hasMatch(requestBindingSha256) ||
+        requestBindingSha256 != expectedBinding) {
+      throw const FormatException(
+        'authoring Story build-plan response is not bound to its exact request',
+      );
+    }
+
+    final rawProject = _authoringDecodeDuplicateSafeObject(
+      projectJson,
+      'Story build source project',
+    );
+    if (jsonEncode(rawProject) != projectJson) {
+      throw const FormatException(
+        'authoring Story build source project is not canonical JSON',
+      );
+    }
+    _authoringExactFields(rawProject, const {
+      'format',
+      'schema_revision',
+      'project_id',
+      'revision',
+      'meta',
+      'target',
+      'authoring_locales',
+      'entities',
+      'asset_store',
+    }, 'Story build source project');
+    _authoringRequiredInt(rawProject, 'format', min: 2, max: 2);
+    _authoringRequiredInt(rawProject, 'schema_revision', min: 2, max: 2);
+    final projectId = _authoringStoryBuildId(
+      rawProject['project_id'],
+      'project_id',
+    );
+    final projectRevision = _authoringRequiredInt(
+      rawProject,
+      'revision',
+      max: _maxAuthoringStoryAppliedRevision,
+    );
+    final rawTarget = _authoringRequiredObject(
+      rawProject['target'],
+      'Story build source target',
+    );
+    _authoringExactFields(rawTarget, const {
+      'executable',
+    }, 'Story build source target');
+    final targetExecutable = _authoringStoryBuildSeal(
+      rawTarget['executable'],
+      'source target executable',
+    );
+    final projectEntities = _authoringRequiredObject(
+      rawProject['entities'],
+      'Story build source entities',
+    );
+    final canonicalDocument = _authoringStoryBuildBytesSeal(projectJson);
+
+    final planJson = _authoringRequiredString(
+      json,
+      'plan_json',
+      maxBytes: _maxAuthoringStoryBuildPlanJsonBytes,
+    );
+    final rawPlan = _authoringDecodeDuplicateSafeObject(
+      planJson,
+      'Story build plan',
+    );
+    _authoringExactFields(rawPlan, const {
+      'format',
+      'schema_revision',
+      'validation_profile',
+      'project',
+      'publication_status',
+      'modules',
+      'diagnostics',
+      'blocks_build',
+    }, 'Story build plan');
+    if (rawPlan['format'] != 'story_build_plan') {
+      throw const FormatException(
+        'authoring Story build-plan format is unsupported',
+      );
+    }
+    _authoringRequiredInt(rawPlan, 'schema_revision', min: 1, max: 1);
+    if (rawPlan['validation_profile'] != profile.wireName ||
+        json['validation_profile'] != profile.wireName) {
+      throw const FormatException(
+        'authoring Story build-plan validation profile is inconsistent',
+      );
+    }
+    if (rawPlan['publication_status'] != 'not_supported' ||
+        json['publication_status'] != 'not_supported' ||
+        rawPlan['blocks_build'] != true ||
+        json['blocks_build'] != true ||
+        json['runtime_qualification'] != 'runtime_unqualified') {
+      throw const FormatException(
+        'authoring Story build-plan response overstates its capabilities',
+      );
+    }
+
+    final rawPlanProject = _authoringRequiredObject(
+      rawPlan['project'],
+      'Story build plan project provenance',
+    );
+    final responseProject = _authoringRequiredObject(
+      json['project'],
+      'Story build response project provenance',
+    );
+    final planProject = _authoringStoryBuildProject(
+      rawPlanProject,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      canonicalDocument: canonicalDocument,
+      targetExecutable: targetExecutable,
+    );
+    final outerProject = _authoringStoryBuildProject(
+      responseProject,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      canonicalDocument: canonicalDocument,
+      targetExecutable: targetExecutable,
+    );
+    if (!_authoringStoryBuildSameProject(planProject, outerProject)) {
+      throw const FormatException(
+        'authoring Story build-plan project provenance is inconsistent',
+      );
+    }
+
+    final validation = _AuthoringStoryBuildPlanValidator(
+      projectId: projectId,
+      projectRevision: projectRevision,
+      projectEntities: projectEntities,
+      targetExecutable: targetExecutable,
+    ).validate(rawPlan['modules'], rawPlan['diagnostics']);
+    final moduleCount = _authoringRequiredInt(
+      json,
+      'module_count',
+      max: _maxAuthoringStoryBuildModules,
+    );
+    final diagnosticCount = _authoringRequiredInt(
+      json,
+      'diagnostic_count',
+      max: _maxAuthoringStoryBuildDiagnostics,
+    );
+    if (moduleCount != validation.moduleCount ||
+        diagnosticCount != validation.diagnosticCount) {
+      throw const FormatException(
+        'authoring Story build-plan counts disagree with the canonical plan',
+      );
+    }
+    final blockerIndexes = _authoringStoryBuildIndexes(
+      json['blocking_diagnostic_indexes'],
+      diagnosticCount,
+    );
+    if (!_authoringIntListsEqual(
+      blockerIndexes,
+      validation.blockingDiagnosticIndexes,
+    )) {
+      throw const FormatException(
+        'authoring Story build-plan blocker indexes are inconsistent',
+      );
+    }
+
+    if (jsonEncode(rawPlan) != planJson) {
+      throw const FormatException(
+        'authoring Story build plan is not canonical JSON',
+      );
+    }
+    final planSeal = _authoringStoryBuildSeal(json['plan_seal'], 'plan seal');
+    if (!_authoringStoryCatalogSameSeal(
+      planSeal,
+      _authoringStoryBuildBytesSeal(planJson),
+    )) {
+      throw const FormatException('authoring Story build-plan seal is invalid');
+    }
+
+    return AuthoringStoryBuildPlanResult._(
+      requestBindingSha256: requestBindingSha256,
+      planJson: planJson,
+      planSeal: planSeal,
+      validationProfile: profile,
+      project: planProject,
+      runtimeQualification:
+          AuthoringStoryBuildRuntimeQualification.runtimeUnqualified,
+      publicationStatus: AuthoringStoryBuildPublicationStatus.notSupported,
+      moduleCount: moduleCount,
+      diagnosticCount: diagnosticCount,
+      blockingDiagnosticIndexes: List.unmodifiable(blockerIndexes),
+      blocksBuild: true,
+    );
+  }
+}
+
 enum AuthoringStoryCatalogNpcDiscoveryStatus { sealedCacheDefaultsVerified }
 
 enum AuthoringStoryCatalogNpcAuthoringQualification { offlineQualified }
@@ -2331,6 +2654,9 @@ enum AuthoringStoryInventoryPublicationStatus { notSupported }
 
 final _authoringStoryCatalogIdPattern = RegExp(r'^[a-z0-9][a-z0-9._:-]*$');
 final _authoringStoryCatalogAliasPattern = RegExp(r'^Catalog_[0-9a-f]{64}$');
+final _authoringStoryBuildIdPattern = RegExp(r'^[0-9a-f]{32}$');
+const _authoringStoryBuildRequestBindingDomain =
+    'gore-story-build.authoring-plan-v1.request-binding\u0000';
 const _authoringStoryCatalogSelectorDomain =
     'gore-story-catalog.authoring-selector-v1\u0000';
 const _authoringStoryCatalogBuildBindingDomain =
@@ -3478,6 +3804,1045 @@ final class _AuthoringStoryInventoryEntryLimits {
   }
 }
 
+const _authoringStoryBuildDiagnosticCodeOrder = <String>[
+  'ENTITY_KEY_ID_MISMATCH',
+  'REFERENCE_PROJECT_MISMATCH',
+  'REFERENCE_DECLARED_KIND_MISMATCH',
+  'MISSING_REFERENCE',
+  'REFERENCE_TARGET_KIND_MISMATCH',
+  'LOCALE_SLOT_MISMATCH',
+  'SLOT_TAKE_LOCALE_MISMATCH',
+  'DUPLICATE_VOICE_CANDIDATE',
+  'MISSING_SELECTED_VOICE_TAKE',
+  'SELECTED_VOICE_TAKE_NOT_CANDIDATE',
+  'SELECTED_VOICE_TAKE_NOT_APPROVED',
+  'DUPLICATE_VOICE_TARGET',
+  'UNRESOLVED_VOICE_TARGET',
+  'AMBIGUOUS_VOICE_TARGET',
+  'INVALID_AMBIGUOUS_TARGET_CARDINALITY',
+  'DUPLICATE_VOICE_TARGET_CANDIDATE',
+  'LOCALE_NOT_AUTHORED',
+  'MISSING_LOCALIZATION_VALUE',
+  'INVALID_LOCALIZATION_ID',
+  'INVALID_ASSET_METADATA',
+  'MISSING_ASSET',
+  'ASSET_SIZE_MISMATCH',
+  'ASSET_MEDIA_TYPE_MISMATCH',
+  'INVALID_ARCHIVE_SEAL',
+  'INVALID_VOICE_TARGET',
+  'MEMBER_PROOF_OPERATION_MISMATCH',
+  'INVALID_MEMBER_PROOF',
+  'UNQUALIFIED_VOICE_ADD',
+  'INVALID_OGG_METADATA',
+  'OPUS_DECODE_UNPROVEN',
+  'INVALID_GENERATION_ANCHOR',
+  'INVALID_ORIGIN',
+  'ORIGIN_GENERATION_MISMATCH',
+  'INVALID_GENERATOR_INPUT',
+  'GENERATOR_CONTRACT_DRIFT',
+  'GENERATED_SCRIPT_DRIFT',
+  'SCRIPT_MODULE_OWNERSHIP_MISMATCH',
+  'RUNTIME_UNQUALIFIED',
+  'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+  'PROJECT_IDENTITY_MISMATCH',
+  'PROJECT_REVISION_CONFLICT',
+  'PROJECT_REVISION_OVERFLOW',
+  'INVALID_STORY_MUTATION',
+  'DUPLICATE_ENTITY_ID',
+  'DUPLICATE_AUTHORED_RUNTIME_ID',
+  'DUPLICATE_SCRIPT_MODULE_NAMESPACE',
+  'DUPLICATE_SCRIPT_MODULE_PATH',
+  'DUPLICATE_GENERATED_SYMBOL',
+];
+
+final _authoringStoryBuildDiagnosticCodeRanks = <String, int>{
+  for (
+    var index = 0;
+    index < _authoringStoryBuildDiagnosticCodeOrder.length;
+    index++
+  )
+    _authoringStoryBuildDiagnosticCodeOrder[index]: index,
+};
+
+const _authoringStoryBuildEntityKinds = <String>{
+  'localization_entry',
+  'dialog_line',
+  'voice_slot',
+  'voice_take',
+  'npc_draft',
+  'quest_draft',
+  'script_module',
+};
+
+final class _AuthoringStoryBuildPlanValidation {
+  const _AuthoringStoryBuildPlanValidation({
+    required this.moduleCount,
+    required this.diagnosticCount,
+    required this.blockingDiagnosticIndexes,
+  });
+
+  final int moduleCount;
+  final int diagnosticCount;
+  final List<int> blockingDiagnosticIndexes;
+}
+
+final class _AuthoringStoryBuildPlanValidator {
+  _AuthoringStoryBuildPlanValidator({
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectEntities,
+    required this.targetExecutable,
+  });
+
+  final String projectId;
+  final int projectRevision;
+  final Map<String, Object?> projectEntities;
+  final AuthoringDraftContentSeal targetExecutable;
+  int _sourceBytes = 0;
+  int _sealedInputCount = 0;
+  int _relatedEntityCount = 0;
+
+  _AuthoringStoryBuildPlanValidation validate(
+    Object? rawModules,
+    Object? rawDiagnostics,
+  ) {
+    if (rawModules is! List ||
+        rawModules.length > _maxAuthoringStoryBuildModules) {
+      throw const FormatException(
+        'authoring Story build-plan modules exceed their bound',
+      );
+    }
+    final ownerIds = <String>{};
+    _StoryBuildModuleKey? previousModuleKey;
+    for (var index = 0; index < rawModules.length; index++) {
+      final module = _authoringRequiredObject(
+        rawModules[index],
+        'Story build module $index',
+      );
+      _authoringExactFields(module, const {
+        'script_module',
+        'draft_input',
+        'persisted_source',
+        'sealed_inputs',
+        'generated',
+      }, 'Story build module $index');
+      final scriptRef = _typedRef(module['script_module'], 'script_module');
+      if (scriptRef.kind != 'script_module') {
+        throw const FormatException(
+          'authoring Story build-plan ScriptModule reference is invalid',
+        );
+      }
+      final draftInput = _sealedProperty(module['draft_input'], 'draft_input');
+      final persisted = _sealedProperty(
+        module['persisted_source'],
+        'persisted_source',
+      );
+      final sealedInputs = module['sealed_inputs'];
+      if (sealedInputs is! List ||
+          sealedInputs.length > _maxAuthoringStoryBuildSealedInputsPerModule ||
+          sealedInputs.length >
+              _maxAuthoringStoryBuildSealedInputsTotal - _sealedInputCount) {
+        throw const FormatException(
+          'authoring Story build-plan sealed inputs exceed their bound',
+        );
+      }
+      _sealedInputCount += sealedInputs.length;
+      final sealedProperties =
+          <
+            ({
+              _StoryBuildProvenance provenance,
+              AuthoringDraftContentSeal content,
+            })
+          >[];
+      for (var sealIndex = 0; sealIndex < sealedInputs.length; sealIndex++) {
+        sealedProperties.add(
+          _sealedProperty(sealedInputs[sealIndex], 'sealed_inputs[$sealIndex]'),
+        );
+      }
+
+      final generated = _authoringRequiredObject(
+        module['generated'],
+        'Story build generated module',
+      );
+      _authoringExactFields(generated, const {
+        'generator_id',
+        'generator_version',
+        'owner',
+        'module_namespace',
+        'module_relative_path',
+        'source',
+        'source_sha256',
+        'input_fingerprint',
+        'status',
+      }, 'Story build generated module');
+      final generatorId = _boundedText(
+        generated['generator_id'],
+        'generator_id',
+        256,
+      );
+      final generatorVersion = _authoringRequiredInt(
+        generated,
+        'generator_version',
+        min: 1,
+        max: 0xffffffff,
+      );
+      final owner = _typedRef(generated['owner'], 'owner');
+      if (owner.kind != 'npc_draft' && owner.kind != 'quest_draft') {
+        throw const FormatException(
+          'authoring Story build-plan owner is not an NPC/Quest draft',
+        );
+      }
+      ownerIds.add(owner.id);
+      final namespace = _boundedText(
+        generated['module_namespace'],
+        'module_namespace',
+        512,
+      );
+      final relativePath = _boundedText(
+        generated['module_relative_path'],
+        'module_relative_path',
+        2 * 1024,
+      );
+      final source = _boundedText(
+        generated['source'],
+        'source',
+        _maxAuthoringStoryBuildSourceBytes,
+      );
+      final sourceLength = utf8.encode(source).length;
+      if (sourceLength > _maxAuthoringStoryBuildSourceBytes - _sourceBytes) {
+        throw const FormatException(
+          'authoring Story build-plan sources exceed their aggregate bound',
+        );
+      }
+      _sourceBytes += sourceLength;
+      final sourceSha = generated['source_sha256'];
+      final inputFingerprint = generated['input_fingerprint'];
+      if (sourceSha is! String ||
+          !_authoringSha256Pattern.hasMatch(sourceSha) ||
+          sourceSha != crypto.sha256.convert(utf8.encode(source)).toString() ||
+          inputFingerprint is! String ||
+          !_authoringSha256Pattern.hasMatch(inputFingerprint)) {
+        throw const FormatException(
+          'authoring Story build-plan generated seals are invalid',
+        );
+      }
+      final status = _authoringRequiredObject(
+        generated['status'],
+        'Story build module status',
+      );
+      _authoringExactFields(status, const {
+        'authoring',
+        'runtime',
+      }, 'Story build module status');
+      if (status['authoring'] != 'offline_draft' ||
+          status['runtime'] != 'runtime_unqualified') {
+        throw const FormatException(
+          'authoring Story build-plan module overstates runtime qualification',
+        );
+      }
+      if (persisted.content.byteLength != sourceLength ||
+          persisted.content.sha256 != sourceSha ||
+          draftInput.provenance.propertyPath != 'payload.data.input' ||
+          persisted.provenance.propertyPath != 'payload.data.source' ||
+          persisted.provenance.entityId != scriptRef.id ||
+          persisted.provenance.entityKind != 'script_module' ||
+          draftInput.provenance.scope != 'entity' ||
+          draftInput.provenance.entityId != owner.id ||
+          draftInput.provenance.entityKind != owner.kind) {
+        throw const FormatException(
+          'authoring Story build-plan source provenance is inconsistent',
+        );
+      }
+      _requireSealedInputLocations(
+        sealedProperties,
+        ownerId: owner.id,
+        ownerKind: owner.kind,
+        entityRevision: draftInput.provenance.entityRevision,
+      );
+      _requireProjectModuleBinding(
+        scriptRef: scriptRef,
+        owner: owner,
+        generatorId: generatorId,
+        generatorVersion: generatorVersion,
+        generated: generated,
+        draftInput: draftInput,
+        persistedSource: persisted,
+        sealedInputs: sealedProperties,
+      );
+      final key = _StoryBuildModuleKey(
+        relativePath: relativePath,
+        namespace: namespace,
+        ownerId: owner.id,
+        scriptModuleId: scriptRef.id,
+      );
+      if (previousModuleKey != null &&
+          _compareStoryBuildModuleKeys(previousModuleKey, key) >= 0) {
+        throw const FormatException(
+          'authoring Story build-plan modules are not canonical',
+        );
+      }
+      previousModuleKey = key;
+    }
+
+    if (rawDiagnostics is! List ||
+        rawDiagnostics.length > _maxAuthoringStoryBuildDiagnostics) {
+      throw const FormatException(
+        'authoring Story build-plan diagnostics exceed their bound',
+      );
+    }
+    final blockers = <int>[];
+    final runtimeBlockers = <String>{};
+    final causalBlockers = <String>{};
+    var combinedBlocker = false;
+    _StoryBuildDiagnosticKey? previousDiagnosticKey;
+    for (var index = 0; index < rawDiagnostics.length; index++) {
+      final diagnostic = _authoringRequiredObject(
+        rawDiagnostics[index],
+        'Story build diagnostic $index',
+      );
+      _exactOptionalFields(
+        diagnostic,
+        required: const {'code', 'severity', 'message', 'blocks_build'},
+        optional: const {'entity', 'property_path', 'related_entities'},
+        context: 'Story build diagnostic $index',
+      );
+      final code = diagnostic['code'];
+      final severity = diagnostic['severity'];
+      final codeRank = code is String
+          ? _authoringStoryBuildDiagnosticCodeRanks[code]
+          : null;
+      if (code is! String ||
+          codeRank == null ||
+          severity is! String ||
+          !const {'error', 'warning', 'info'}.contains(severity)) {
+        throw const FormatException(
+          'authoring Story build-plan diagnostic identity is invalid',
+        );
+      }
+      final entity = diagnostic.containsKey('entity')
+          ? _authoringStoryBuildId(diagnostic['entity'], 'diagnostic.entity')
+          : null;
+      final propertyPath = diagnostic.containsKey('property_path')
+          ? _boundedText(
+              diagnostic['property_path'],
+              'property_path',
+              _maxAuthoringStoryBuildPropertyPathBytes,
+            )
+          : null;
+      final message = _boundedText(
+        diagnostic['message'],
+        'message',
+        _maxAuthoringStoryBuildDiagnosticMessageBytes,
+      );
+      final hasRelated = diagnostic.containsKey('related_entities');
+      final related = hasRelated
+          ? diagnostic['related_entities']
+          : const <Object?>[];
+      if (related is! List ||
+          (hasRelated && related.isEmpty) ||
+          related.length > _maxAuthoringStoryBuildRelatedPerDiagnostic ||
+          related.length >
+              _maxAuthoringStoryBuildRelatedTotal - _relatedEntityCount) {
+        throw const FormatException(
+          'authoring Story build-plan related entities exceed their bound',
+        );
+      }
+      _relatedEntityCount += related.length;
+      final relatedIds = <String>[];
+      String? previous;
+      for (final raw in related) {
+        final id = _authoringStoryBuildId(raw, 'related entity');
+        if (previous != null && previous.compareTo(id) >= 0) {
+          throw const FormatException(
+            'authoring Story build-plan related entities are not canonical',
+          );
+        }
+        previous = id;
+        relatedIds.add(id);
+      }
+      final blocks = diagnostic['blocks_build'];
+      if (blocks is! bool) {
+        throw const FormatException(
+          'authoring Story build-plan diagnostic gate is invalid',
+        );
+      }
+      final diagnosticKey = _StoryBuildDiagnosticKey(
+        severityRank: _authoringStoryBuildSeverityRank(severity),
+        entity: entity,
+        propertyPath: propertyPath,
+        codeRank: codeRank,
+        message: message,
+        relatedEntities: List.unmodifiable(relatedIds),
+        blocksBuild: blocks,
+      );
+      if (previousDiagnosticKey != null &&
+          _compareStoryBuildDiagnosticKeys(
+                previousDiagnosticKey,
+                diagnosticKey,
+              ) >=
+              0) {
+        throw const FormatException(
+          'authoring Story build-plan diagnostics are not canonical and unique',
+        );
+      }
+      previousDiagnosticKey = diagnosticKey;
+      if (blocks) blockers.add(index);
+      if (code == 'RUNTIME_UNQUALIFIED' &&
+          severity == 'error' &&
+          blocks &&
+          entity != null) {
+        runtimeBlockers.add(entity);
+      }
+      if (code != 'RUNTIME_UNQUALIFIED' && blocks && entity != null) {
+        causalBlockers.add(entity);
+      }
+      if (code == 'REVISION2_COMBINED_VALIDATION_UNAVAILABLE' &&
+          severity == 'error' &&
+          blocks &&
+          entity == null &&
+          propertyPath == 'schema_revision' &&
+          message ==
+              'schema revision 2 is not build-ready until combined story, voice, localization, and asset validation is implemented' &&
+          relatedIds.isEmpty) {
+        combinedBlocker = true;
+      }
+    }
+    if (blockers.isEmpty ||
+        !combinedBlocker ||
+        !ownerIds.every(runtimeBlockers.contains)) {
+      throw const FormatException(
+        'authoring Story build-plan blockers are incomplete',
+      );
+    }
+    _requireOmittedDraftBlockers(ownerIds, causalBlockers);
+    return _AuthoringStoryBuildPlanValidation(
+      moduleCount: rawModules.length,
+      diagnosticCount: rawDiagnostics.length,
+      blockingDiagnosticIndexes: List.unmodifiable(blockers),
+    );
+  }
+
+  void _requireOmittedDraftBlockers(
+    Set<String> plannedOwnerIds,
+    Set<String> causalBlockerEntityIds,
+  ) {
+    for (final entry in projectEntities.entries) {
+      final id = _authoringStoryBuildId(entry.key, 'source entity map key');
+      final rawEntity = _authoringRequiredObject(
+        entry.value,
+        'Story build source entity',
+      );
+      final payload = _authoringRequiredObject(
+        rawEntity['payload'],
+        'Story build source entity payload',
+      );
+      final kind = payload['kind'];
+      if (kind != 'npc_draft' && kind != 'quest_draft') continue;
+
+      final entity = _projectEntity(id, kind as String);
+      _authoringExactFields(entity.data, const {
+        'generator_id',
+        'generator_version',
+        'input',
+        'script_module',
+      }, 'Story build source draft');
+      final scriptRef = _typedRef(
+        entity.data['script_module'],
+        'source draft script_module',
+      );
+      if (scriptRef.kind != 'script_module') {
+        throw const FormatException(
+          'authoring Story build-plan source draft ScriptModule is invalid',
+        );
+      }
+      if (!plannedOwnerIds.contains(id) &&
+          !causalBlockerEntityIds.contains(id) &&
+          !causalBlockerEntityIds.contains(scriptRef.id)) {
+        throw const FormatException(
+          'authoring Story build-plan omitted a draft without a causal blocker',
+        );
+      }
+    }
+  }
+
+  void _requireProjectModuleBinding({
+    required ({String projectId, String id, String kind}) scriptRef,
+    required ({String projectId, String id, String kind}) owner,
+    required String generatorId,
+    required int generatorVersion,
+    required Map<String, Object?> generated,
+    required ({
+      _StoryBuildProvenance provenance,
+      AuthoringDraftContentSeal content,
+    })
+    draftInput,
+    required ({
+      _StoryBuildProvenance provenance,
+      AuthoringDraftContentSeal content,
+    })
+    persistedSource,
+    required List<
+      ({_StoryBuildProvenance provenance, AuthoringDraftContentSeal content})
+    >
+    sealedInputs,
+  }) {
+    final ownerEntity = _projectEntity(owner.id, owner.kind);
+    final moduleEntity = _projectEntity(scriptRef.id, 'script_module');
+    final ownerData = ownerEntity.data;
+    _authoringExactFields(ownerData, const {
+      'generator_id',
+      'generator_version',
+      'input',
+      'script_module',
+    }, 'Story build source draft');
+    final sourceGeneratorId = _boundedText(
+      ownerData['generator_id'],
+      'source draft generator_id',
+      256,
+    );
+    final sourceGeneratorVersion = _authoringRequiredInt(
+      ownerData,
+      'generator_version',
+      min: 1,
+      max: 0xffffffff,
+    );
+    final sourceScriptRef = _typedRef(
+      ownerData['script_module'],
+      'source draft script_module',
+    );
+    final sourceInput = _authoringRequiredObject(
+      ownerData['input'],
+      'Story build source draft input',
+    );
+    if (sourceGeneratorId != generatorId ||
+        sourceGeneratorVersion != generatorVersion ||
+        sourceScriptRef != scriptRef ||
+        jsonEncode(moduleEntity.data) != jsonEncode(generated) ||
+        draftInput.provenance.entityRevision != ownerEntity.revision ||
+        persistedSource.provenance.entityRevision != moduleEntity.revision ||
+        !_authoringStoryCatalogSameSeal(
+          draftInput.content,
+          _authoringStoryBuildBytesSeal(jsonEncode(sourceInput)),
+        )) {
+      throw const FormatException(
+        'authoring Story build-plan module is not bound to project entities',
+      );
+    }
+
+    final expectedInputs = _sourceSealedInputs(sourceInput, owner.kind);
+    for (final input in sealedInputs) {
+      final expected = expectedInputs[input.provenance.propertyPath];
+      if (expected == null ||
+          !_authoringStoryCatalogSameSeal(input.content, expected)) {
+        throw const FormatException(
+          'authoring Story build-plan sealed content disagrees with project entities',
+        );
+      }
+    }
+  }
+
+  _StoryBuildProjectEntity _projectEntity(String id, String expectedKind) {
+    if (!projectEntities.containsKey(id)) {
+      throw const FormatException(
+        'authoring Story build-plan module does not resolve in project entities',
+      );
+    }
+    final entity = _authoringRequiredObject(
+      projectEntities[id],
+      'Story build source entity',
+    );
+    _authoringExactFields(entity, const {
+      'id',
+      'display_name',
+      'origin',
+      'revision',
+      'payload',
+    }, 'Story build source entity');
+    final embeddedId = _authoringStoryBuildId(entity['id'], 'source entity.id');
+    final revision = _authoringRequiredInt(
+      entity,
+      'revision',
+      max: _maxAuthoringStoryAppliedRevision,
+    );
+    final payload = _authoringRequiredObject(
+      entity['payload'],
+      'Story build source entity payload',
+    );
+    _authoringExactFields(payload, const {
+      'kind',
+      'data',
+    }, 'Story build source entity payload');
+    if (embeddedId != id || payload['kind'] != expectedKind) {
+      throw const FormatException(
+        'authoring Story build-plan entity identity is inconsistent',
+      );
+    }
+    return _StoryBuildProjectEntity(
+      revision: revision,
+      data: _authoringRequiredObject(
+        payload['data'],
+        'Story build source entity data',
+      ),
+    );
+  }
+
+  Map<String, AuthoringDraftContentSeal> _sourceSealedInputs(
+    Map<String, Object?> sourceInput,
+    String ownerKind,
+  ) {
+    final expected = <String, AuthoringDraftContentSeal>{
+      'target.executable': targetExecutable,
+    };
+    final parents = ownerKind == 'npc_draft'
+        ? const [
+            'parent_character_definition',
+            'parent_ai_agent_config',
+            'parent_spawn_definition',
+          ]
+        : const ['parent_quest', 'giver', 'collision_catalog'];
+    for (final parentName in parents) {
+      final parent = _authoringRequiredObject(
+        sourceInput[parentName],
+        'Story build source input $parentName',
+      );
+      final generation = _authoringRequiredObject(
+        parent['generation'],
+        'Story build source input $parentName generation',
+      );
+      expected['payload.data.input.$parentName.generation.executable'] =
+          _authoringStoryBuildSeal(
+            generation['executable'],
+            'source input $parentName executable',
+          );
+      expected['payload.data.input.$parentName.source_seal'] =
+          _authoringStoryBuildSeal(
+            parent['source_seal'],
+            'source input $parentName source seal',
+          );
+    }
+    return expected;
+  }
+
+  ({String projectId, String id, String kind}) _typedRef(
+    Object? raw,
+    String context,
+  ) {
+    final object = _authoringRequiredObject(raw, 'Story build $context ref');
+    _authoringExactFields(object, const {
+      'project_id',
+      'id',
+      'expected_kind',
+    }, 'Story build $context ref');
+    final refProject = _authoringStoryBuildId(
+      object['project_id'],
+      '$context.project_id',
+    );
+    final id = _authoringStoryBuildId(object['id'], '$context.id');
+    final kind = object['expected_kind'];
+    if (refProject != projectId ||
+        kind is! String ||
+        !_authoringStoryBuildEntityKinds.contains(kind)) {
+      throw const FormatException(
+        'authoring Story build-plan reference is inconsistent',
+      );
+    }
+    return (projectId: refProject, id: id, kind: kind);
+  }
+
+  ({_StoryBuildProvenance provenance, AuthoringDraftContentSeal content})
+  _sealedProperty(Object? raw, String context) {
+    final object = _authoringRequiredObject(raw, 'Story build $context');
+    _authoringExactFields(object, const {
+      'provenance',
+      'content',
+    }, 'Story build $context');
+    return (
+      provenance: _provenance(object['provenance'], context),
+      content: _authoringStoryBuildSeal(object['content'], '$context.content'),
+    );
+  }
+
+  _StoryBuildProvenance _provenance(Object? raw, String context) {
+    final object = _authoringRequiredObject(raw, 'Story build provenance');
+    final scope = object['scope'];
+    if (scope == 'project') {
+      _authoringExactFields(object, const {
+        'scope',
+        'project_id',
+        'project_revision',
+        'property_path',
+      }, 'Story build project provenance');
+    } else if (scope == 'entity') {
+      _authoringExactFields(object, const {
+        'scope',
+        'project_id',
+        'project_revision',
+        'entity_id',
+        'entity_revision',
+        'entity_kind',
+        'property_path',
+      }, 'Story build entity provenance');
+    } else {
+      throw const FormatException(
+        'authoring Story build-plan provenance scope is invalid',
+      );
+    }
+    if (_authoringStoryBuildId(object['project_id'], 'provenance.project_id') !=
+            projectId ||
+        _authoringRequiredInt(
+              object,
+              'project_revision',
+              max: _maxAuthoringStoryAppliedRevision,
+            ) !=
+            projectRevision) {
+      throw const FormatException(
+        'authoring Story build-plan provenance targets another project',
+      );
+    }
+    final entityId = scope == 'entity'
+        ? _authoringStoryBuildId(object['entity_id'], 'provenance.entity_id')
+        : null;
+    final entityKind = scope == 'entity' ? object['entity_kind'] : null;
+    if (scope == 'entity' &&
+        (entityKind is! String ||
+            !_authoringStoryBuildEntityKinds.contains(entityKind))) {
+      throw const FormatException(
+        'authoring Story build-plan provenance entity kind is invalid',
+      );
+    }
+    final entityRevision = scope == 'entity'
+        ? _authoringRequiredInt(
+            object,
+            'entity_revision',
+            max: _maxAuthoringStoryAppliedRevision,
+          )
+        : null;
+    final path = _boundedText(
+      object['property_path'],
+      '$context.property_path',
+      _maxAuthoringStoryBuildPropertyPathBytes,
+    );
+    return _StoryBuildProvenance(
+      scope: scope as String,
+      propertyPath: path,
+      entityId: entityId,
+      entityKind: entityKind as String?,
+      entityRevision: entityRevision,
+    );
+  }
+
+  void _requireSealedInputLocations(
+    List<
+      ({_StoryBuildProvenance provenance, AuthoringDraftContentSeal content})
+    >
+    actual, {
+    required String ownerId,
+    required String ownerKind,
+    required int? entityRevision,
+  }) {
+    final paths = ownerKind == 'npc_draft'
+        ? <String>[
+            'payload.data.input.parent_character_definition.generation.executable',
+            'payload.data.input.parent_character_definition.source_seal',
+            'payload.data.input.parent_ai_agent_config.generation.executable',
+            'payload.data.input.parent_ai_agent_config.source_seal',
+            'payload.data.input.parent_spawn_definition.generation.executable',
+            'payload.data.input.parent_spawn_definition.source_seal',
+          ]
+        : <String>[
+            'payload.data.input.parent_quest.generation.executable',
+            'payload.data.input.parent_quest.source_seal',
+            'payload.data.input.giver.generation.executable',
+            'payload.data.input.giver.source_seal',
+            'payload.data.input.collision_catalog.generation.executable',
+            'payload.data.input.collision_catalog.source_seal',
+          ];
+    paths.sort();
+    if (actual.length != 7 ||
+        actual.first.provenance.scope != 'project' ||
+        actual.first.provenance.propertyPath != 'target.executable') {
+      throw const FormatException(
+        'authoring Story build-plan sealed provenance is incomplete',
+      );
+    }
+    for (var index = 0; index < paths.length; index++) {
+      final provenance = actual[index + 1].provenance;
+      if (provenance.scope != 'entity' ||
+          provenance.entityId != ownerId ||
+          provenance.entityKind != ownerKind ||
+          provenance.entityRevision != entityRevision ||
+          provenance.propertyPath != paths[index]) {
+        throw const FormatException(
+          'authoring Story build-plan sealed provenance is incomplete',
+        );
+      }
+    }
+  }
+}
+
+final class _StoryBuildProjectEntity {
+  const _StoryBuildProjectEntity({required this.revision, required this.data});
+
+  final int revision;
+  final Map<String, Object?> data;
+}
+
+final class _StoryBuildModuleKey {
+  const _StoryBuildModuleKey({
+    required this.relativePath,
+    required this.namespace,
+    required this.ownerId,
+    required this.scriptModuleId,
+  });
+
+  final String relativePath;
+  final String namespace;
+  final String ownerId;
+  final String scriptModuleId;
+}
+
+int _compareStoryBuildModuleKeys(
+  _StoryBuildModuleKey left,
+  _StoryBuildModuleKey right,
+) {
+  for (final comparison in <int>[
+    _compareStoryBuildText(left.relativePath, right.relativePath),
+    _compareStoryBuildText(left.namespace, right.namespace),
+    _compareStoryBuildText(left.ownerId, right.ownerId),
+    _compareStoryBuildText(left.scriptModuleId, right.scriptModuleId),
+  ]) {
+    if (comparison != 0) return comparison;
+  }
+  return 0;
+}
+
+final class _StoryBuildDiagnosticKey {
+  const _StoryBuildDiagnosticKey({
+    required this.severityRank,
+    required this.entity,
+    required this.propertyPath,
+    required this.codeRank,
+    required this.message,
+    required this.relatedEntities,
+    required this.blocksBuild,
+  });
+
+  final int severityRank;
+  final String? entity;
+  final String? propertyPath;
+  final int codeRank;
+  final String message;
+  final List<String> relatedEntities;
+  final bool blocksBuild;
+}
+
+int _authoringStoryBuildSeverityRank(String severity) => switch (severity) {
+  'error' => 0,
+  'warning' => 1,
+  'info' => 2,
+  _ => throw const FormatException(
+    'authoring Story build-plan diagnostic severity is invalid',
+  ),
+};
+
+int _compareStoryBuildDiagnosticKeys(
+  _StoryBuildDiagnosticKey left,
+  _StoryBuildDiagnosticKey right,
+) {
+  var comparison = left.severityRank.compareTo(right.severityRank);
+  if (comparison != 0) return comparison;
+  comparison = _compareStoryBuildOptionalText(left.entity, right.entity);
+  if (comparison != 0) return comparison;
+  comparison = _compareStoryBuildOptionalText(
+    left.propertyPath,
+    right.propertyPath,
+  );
+  if (comparison != 0) return comparison;
+  comparison = left.codeRank.compareTo(right.codeRank);
+  if (comparison != 0) return comparison;
+  comparison = _compareStoryBuildText(left.message, right.message);
+  if (comparison != 0) return comparison;
+  comparison = _compareStoryBuildTextLists(
+    left.relatedEntities,
+    right.relatedEntities,
+  );
+  if (comparison != 0) return comparison;
+  return (left.blocksBuild ? 1 : 0).compareTo(right.blocksBuild ? 1 : 0);
+}
+
+int _compareStoryBuildOptionalText(String? left, String? right) {
+  if (left == null) return right == null ? 0 : -1;
+  if (right == null) return 1;
+  return _compareStoryBuildText(left, right);
+}
+
+int _compareStoryBuildTextLists(List<String> left, List<String> right) {
+  final sharedLength = left.length < right.length ? left.length : right.length;
+  for (var index = 0; index < sharedLength; index++) {
+    final comparison = _compareStoryBuildText(left[index], right[index]);
+    if (comparison != 0) return comparison;
+  }
+  return left.length.compareTo(right.length);
+}
+
+int _compareStoryBuildText(String left, String right) {
+  final leftBytes = utf8.encode(left);
+  final rightBytes = utf8.encode(right);
+  final sharedLength = leftBytes.length < rightBytes.length
+      ? leftBytes.length
+      : rightBytes.length;
+  for (var index = 0; index < sharedLength; index++) {
+    final comparison = leftBytes[index].compareTo(rightBytes[index]);
+    if (comparison != 0) return comparison;
+  }
+  return leftBytes.length.compareTo(rightBytes.length);
+}
+
+final class _StoryBuildProvenance {
+  const _StoryBuildProvenance({
+    required this.scope,
+    required this.propertyPath,
+    required this.entityId,
+    required this.entityKind,
+    required this.entityRevision,
+  });
+  final String scope;
+  final String propertyPath;
+  final String? entityId;
+  final String? entityKind;
+  final int? entityRevision;
+}
+
+void _exactOptionalFields(
+  Map<String, Object?> json, {
+  required Set<String> required,
+  required Set<String> optional,
+  required String context,
+}) {
+  if (!required.every(json.containsKey) ||
+      json.keys.any(
+        (key) => !required.contains(key) && !optional.contains(key),
+      )) {
+    throw FormatException('authoring $context has an invalid schema');
+  }
+}
+
+String _boundedText(Object? raw, String field, int maxBytes) {
+  if (raw is! String || raw.isEmpty || utf8.encode(raw).length > maxBytes) {
+    throw FormatException('authoring Story build-plan $field is invalid');
+  }
+  return raw;
+}
+
+String _authoringStoryBuildId(Object? raw, String field) {
+  if (raw is! String || !_authoringStoryBuildIdPattern.hasMatch(raw)) {
+    throw FormatException('authoring Story build-plan $field is invalid');
+  }
+  return raw;
+}
+
+AuthoringDraftContentSeal _authoringStoryBuildSeal(
+  Object? raw,
+  String context,
+) => _authoringStoryCatalogSeal(raw, 'Story build $context');
+
+AuthoringDraftContentSeal _authoringStoryBuildBytesSeal(String value) {
+  final bytes = utf8.encode(value);
+  return AuthoringDraftContentSeal._(
+    byteLength: bytes.length,
+    sha256: crypto.sha256.convert(bytes).toString(),
+  );
+}
+
+AuthoringStoryBuildProjectProvenance _authoringStoryBuildProject(
+  Map<String, Object?> raw, {
+  required String projectId,
+  required int projectRevision,
+  required AuthoringDraftContentSeal canonicalDocument,
+  required AuthoringDraftContentSeal targetExecutable,
+}) {
+  _authoringExactFields(raw, const {
+    'project_id',
+    'project_revision',
+    'canonical_document',
+    'target_executable',
+  }, 'Story build project provenance');
+  final actual = AuthoringStoryBuildProjectProvenance._(
+    projectId: _authoringStoryBuildId(raw['project_id'], 'project.project_id'),
+    projectRevision: _authoringRequiredInt(
+      raw,
+      'project_revision',
+      max: _maxAuthoringStoryAppliedRevision,
+    ),
+    canonicalDocument: _authoringStoryBuildSeal(
+      raw['canonical_document'],
+      'canonical document',
+    ),
+    targetExecutable: _authoringStoryBuildSeal(
+      raw['target_executable'],
+      'target executable',
+    ),
+  );
+  if (actual.projectId != projectId ||
+      actual.projectRevision != projectRevision ||
+      !_authoringStoryCatalogSameSeal(
+        actual.canonicalDocument,
+        canonicalDocument,
+      ) ||
+      !_authoringStoryCatalogSameSeal(
+        actual.targetExecutable,
+        targetExecutable,
+      )) {
+    throw const FormatException(
+      'authoring Story build-plan provenance disagrees with project_json',
+    );
+  }
+  return actual;
+}
+
+bool _authoringStoryBuildSameProject(
+  AuthoringStoryBuildProjectProvenance left,
+  AuthoringStoryBuildProjectProvenance right,
+) =>
+    left.projectId == right.projectId &&
+    left.projectRevision == right.projectRevision &&
+    _authoringStoryCatalogSameSeal(
+      left.canonicalDocument,
+      right.canonicalDocument,
+    ) &&
+    _authoringStoryCatalogSameSeal(
+      left.targetExecutable,
+      right.targetExecutable,
+    );
+
+List<int> _authoringStoryBuildIndexes(Object? raw, int diagnosticCount) {
+  if (raw is! List || raw.isEmpty || raw.length > diagnosticCount) {
+    throw const FormatException(
+      'authoring Story build-plan blocker indexes are invalid',
+    );
+  }
+  final output = <int>[];
+  var previous = -1;
+  for (final value in raw) {
+    if (value is! int || value <= previous || value >= diagnosticCount) {
+      throw const FormatException(
+        'authoring Story build-plan blocker indexes are invalid',
+      );
+    }
+    output.add(value);
+    previous = value;
+  }
+  return output;
+}
+
+bool _authoringIntListsEqual(List<int> left, List<int> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
 AuthoringDraftContentSeal _authoringStoryCatalogSeal(
   Object? raw,
   String context,
@@ -3545,6 +4910,22 @@ String _authoringStoryCatalogBuildBindingSha256(
   final input = crypto.sha256.startChunkedConversion(output);
   input.add(utf8.encode(_authoringStoryCatalogBuildBindingDomain));
   for (final value in <String>[executable, shippingCache, bindsCache]) {
+    final bytes = utf8.encode(value);
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+    input
+      ..add(length)
+      ..add(bytes);
+  }
+  input.close();
+  return output.value.toString();
+}
+
+String _authoringStoryBuildRequestBinding(String projectJson, String profile) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryBuildRequestBindingDomain));
+  for (final value in <String>[projectJson, profile]) {
     final bytes = utf8.encode(value);
     final length = Uint8List(8);
     ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
