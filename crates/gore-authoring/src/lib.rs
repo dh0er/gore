@@ -5,20 +5,38 @@
 //! voice slots, and reusable voice takes. It does not imply runtime support for
 //! quests, NPCs, or new cooked identities.
 
+mod document;
 mod ids;
+mod migration;
 mod model;
+pub mod model_revision2;
 mod npc;
 mod quest;
 mod validate;
 mod working_store;
 
+pub use document::{ProjectDocument, ProjectDocumentError};
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
+pub use migration::{
+    migrate_revision1_to_revision2, Revision1ToRevision2Error, Revision1ToRevision2Migration,
+    Revision1ToRevision2Report, Revision1ToRevision2Transformation, Revision1TypedRefPosition,
+};
 pub use model::{
     ArchiveSeal, AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, DialogLine, Entity, EntityKind,
     EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, LocaleCodeError, LocalizationEntry,
     OggCodec, OggMetadata, OriginRef, ProjectJsonError, ProjectMeta, ProjectV2, SchemaRevisionV1,
     TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget,
     VoiceTargetResolution, MAX_PROJECT_JSON_BYTES,
+};
+pub use model_revision2::{
+    DialogLine as Revision2DialogLine, Entity as Revision2Entity,
+    EntityKind as Revision2EntityKind, EntityPayload as Revision2EntityPayload,
+    LocalizationEntry as Revision2LocalizationEntry, OggCodec as Revision2OggCodec,
+    OggMetadata as Revision2OggMetadata, OriginRef as Revision2OriginRef, ProjectRevision2,
+    SchemaRevisionV2, TypedRef as Revision2TypedRef, VoiceMemberProof as Revision2VoiceMemberProof,
+    VoiceOperation as Revision2VoiceOperation, VoiceSlot as Revision2VoiceSlot,
+    VoiceTake as Revision2VoiceTake, VoiceTakeStatus as Revision2VoiceTakeStatus,
+    VoiceTarget as Revision2VoiceTarget, VoiceTargetResolution as Revision2VoiceTargetResolution,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
