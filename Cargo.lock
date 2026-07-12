@@ -1063,6 +1063,7 @@ dependencies = [
 name = "gore-vo"
 version = "0.0.0"
 dependencies = [
+ "lewton",
  "libc",
  "sha2",
  "tempfile",

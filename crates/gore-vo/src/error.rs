@@ -106,6 +106,8 @@ pub enum OggError {
     IncompletePacket { serial: u32 },
     #[error("Ogg identification packet is malformed: {0}")]
     Identification(&'static str),
+    #[error("recognized audio logical stream {serial} is incomplete or malformed: {reason}")]
+    AudioStructure { serial: u32, reason: &'static str },
     #[error("multiple recognized audio logical streams are not supported")]
     MultipleAudioStreams,
     #[error("Ogg resource limit exceeded for {kind}: {actual} > {limit}")]

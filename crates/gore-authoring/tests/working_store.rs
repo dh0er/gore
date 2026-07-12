@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use gore_authoring::{
-    ArchiveSeal, AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal, DialogLine, Entity,
-    EntityId, EntityKind, EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode,
-    LocalizationEntry, OriginRef, ProjectId, ProjectMeta, ProjectV2, SchemaRevisionV1,
-    Sha256Digest, TypedRef, ValidationProfile, VoiceMemberProof, VoiceOperation, VoiceSlot,
-    VoiceTake, VoiceTakeStatus, VoiceTarget, VoiceTargetResolution, WorkingHead,
-    WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
+    ArchiveSeal, AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal, DiagnosticCode,
+    DiagnosticSeverity, DialogLine, Entity, EntityId, EntityKind, EntityPayload, FormatV2,
+    GameGenerationAnchor, LocaleCode, LocalizationEntry, OggCodec, OriginRef, ProjectId,
+    ProjectMeta, ProjectV2, SchemaRevisionV1, Sha256Digest, TypedRef, ValidationProfile,
+    VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget,
+    VoiceTargetResolution, WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
 };
 use sha2::{Digest, Sha256};
 
@@ -252,56 +252,57 @@ fn count_files(root: &Path) -> usize {
 }
 
 fn vorbis_ogg(sample_rate: u32) -> Vec<u8> {
-    let mut packet = Vec::with_capacity(30);
-    packet.extend_from_slice(b"\x01vorbis");
-    packet.extend_from_slice(&0u32.to_le_bytes());
-    packet.push(1);
-    packet.extend_from_slice(&sample_rate.to_le_bytes());
-    packet.extend_from_slice(&0i32.to_le_bytes());
-    packet.extend_from_slice(&0i32.to_le_bytes());
-    packet.extend_from_slice(&0i32.to_le_bytes());
-    packet.push(0x86);
-    packet.push(1);
-
-    let mut page = Vec::with_capacity(28 + packet.len());
-    page.extend_from_slice(b"OggS");
-    page.push(0);
-    page.push(0x02 | 0x04);
-    page.extend_from_slice(&0u64.to_le_bytes());
-    page.extend_from_slice(&7u32.to_le_bytes());
-    page.extend_from_slice(&0u32.to_le_bytes());
-    page.extend_from_slice(&0u32.to_le_bytes());
-    page.push(1);
-    page.push(packet.len() as u8);
-    page.extend_from_slice(&packet);
-    let checksum = ogg_crc(&page);
-    page[22..26].copy_from_slice(&checksum.to_le_bytes());
-    page
+    let mut data = include_bytes!("../../gore-vo/testdata/tiny-vorbis.ogg").to_vec();
+    let ident = find_bytes(&data, b"\x01vorbis").expect("fixture has Vorbis identification");
+    data[ident + 12..ident + 16].copy_from_slice(&sample_rate.to_le_bytes());
+    rewrite_page_checksums(&mut data);
+    data
 }
 
 fn opus_ogg(input_sample_rate: u32) -> Vec<u8> {
-    let mut packet = b"OpusHead".to_vec();
-    packet.push(1);
-    packet.push(1);
-    packet.extend_from_slice(&312u16.to_le_bytes());
-    packet.extend_from_slice(&input_sample_rate.to_le_bytes());
-    packet.extend_from_slice(&0i16.to_le_bytes());
-    packet.push(0);
+    let mut data = include_bytes!("../../gore-vo/testdata/tiny-opus.ogg").to_vec();
+    let head = find_bytes(&data, b"OpusHead").expect("fixture has OpusHead");
+    data[head + 12..head + 16].copy_from_slice(&input_sample_rate.to_le_bytes());
+    rewrite_page_checksums(&mut data);
+    data
+}
 
-    let mut page = Vec::with_capacity(28 + packet.len());
-    page.extend_from_slice(b"OggS");
-    page.push(0);
-    page.push(0x02 | 0x04);
-    page.extend_from_slice(&0u64.to_le_bytes());
-    page.extend_from_slice(&9u32.to_le_bytes());
-    page.extend_from_slice(&0u32.to_le_bytes());
-    page.extend_from_slice(&0u32.to_le_bytes());
-    page.push(1);
-    page.push(packet.len() as u8);
-    page.extend_from_slice(&packet);
-    let checksum = ogg_crc(&page);
-    page[22..26].copy_from_slice(&checksum.to_le_bytes());
-    page
+fn opus_identification_only() -> Vec<u8> {
+    let fixture = include_bytes!("../../gore-vo/testdata/tiny-opus.ogg");
+    let segment_count = usize::from(fixture[26]);
+    let header_len = 27 + segment_count;
+    let body_len = fixture[27..header_len]
+        .iter()
+        .map(|value| usize::from(*value))
+        .sum::<usize>();
+    let mut data = fixture[..header_len + body_len].to_vec();
+    data[5] |= 0x04;
+    rewrite_page_checksums(&mut data);
+    data
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn rewrite_page_checksums(data: &mut [u8]) {
+    let mut offset = 0usize;
+    while offset < data.len() {
+        assert_eq!(&data[offset..offset + 4], b"OggS");
+        let segment_count = usize::from(data[offset + 26]);
+        let header_len = 27 + segment_count;
+        let body_len = data[offset + 27..offset + header_len]
+            .iter()
+            .map(|value| usize::from(*value))
+            .sum::<usize>();
+        let page_len = header_len + body_len;
+        data[offset + 22..offset + 26].fill(0);
+        let checksum = ogg_crc(&data[offset..offset + page_len]);
+        data[offset + 22..offset + 26].copy_from_slice(&checksum.to_le_bytes());
+        offset += page_len;
+    }
 }
 
 fn ogg_crc(page: &[u8]) -> u32 {
@@ -478,6 +479,152 @@ fn opus_zero_input_rate_imports_with_the_fixed_decode_rate() {
 }
 
 #[test]
+fn full_verification_rejects_spoofed_or_drifted_persisted_ogg_metadata() {
+    let opus_root = TestRoot::new("opus-metadata-spoof");
+    let opus_source = opus_root.path().join("source.ogg");
+    fs::write(&opus_source, opus_ogg(48_000)).unwrap();
+    let opus_store = store(&opus_root);
+    let imported_opus = opus_store
+        .import_ogg(&opus_source, "opus.ogg", None)
+        .unwrap();
+    let correct_opus = full_project(&imported_opus);
+    let prepared = opus_store
+        .prepare_checkpoint(None, &correct_opus, ValidationProfile::Experimental)
+        .unwrap();
+
+    let mut spoofed_opus = correct_opus.clone();
+    let EntityPayload::VoiceTake(spoofed_take) = &mut spoofed_opus
+        .entities
+        .get_mut(&entity_id(2))
+        .unwrap()
+        .payload
+    else {
+        unreachable!();
+    };
+    spoofed_take.ogg.codec = OggCodec::Vorbis;
+    assert!(matches!(
+        opus_store.prepare_checkpoint(
+            None,
+            &spoofed_opus,
+            ValidationProfile::Production
+        ),
+        Err(WorkingStoreError::OggMetadataMismatch {
+            entity,
+            declared: gore_authoring::OggMetadata {
+                codec: OggCodec::Vorbis,
+                ..
+            },
+            actual: gore_authoring::OggMetadata {
+                codec: OggCodec::Opus,
+                ..
+            },
+            ..
+        }) if entity == entity_id(2)
+    ));
+
+    // Forge a canonical immutable entity/snapshot pair to prove Full reopen derives metadata from
+    // the sealed asset instead of trusting a persisted VoiceTake payload.
+    let snapshot_path = digest_path(
+        opus_root.path(),
+        "snapshots",
+        prepared.head.snapshot.sha256,
+        ".json",
+    );
+    let snapshot = fs::read(snapshot_path).unwrap();
+    let snapshot_json: serde_json::Value = serde_json::from_slice(&snapshot).unwrap();
+    let old_seal: ContentSeal =
+        serde_json::from_value(snapshot_json["entities"][entity_id(2).to_string()].clone())
+            .unwrap();
+    let spoofed_entity = spoofed_opus.entities.get(&entity_id(2)).unwrap();
+    let spoofed_bytes = serde_json::to_vec(spoofed_entity).unwrap();
+    let spoofed_seal = ContentSeal {
+        byte_len: spoofed_bytes.len() as u64,
+        sha256: digest_bytes(&spoofed_bytes),
+    };
+    let spoofed_path = entity_path(opus_root.path(), entity_id(2), spoofed_seal.sha256);
+    fs::create_dir_all(spoofed_path.parent().unwrap()).unwrap();
+    fs::write(spoofed_path, &spoofed_bytes).unwrap();
+    let spoofed_snapshot =
+        replace_snapshot_entity_seal(&snapshot, entity_id(2), &old_seal, &spoofed_seal);
+    let spoofed_head = write_candidate_snapshot(opus_root.path(), &spoofed_snapshot);
+    assert!(matches!(
+        opus_store.open_head_bytes(
+            &spoofed_head,
+            AssetVerification::Full,
+            ValidationProfile::Production
+        ),
+        Err(WorkingStoreError::OggMetadataMismatch { entity, .. })
+            if entity == entity_id(2)
+    ));
+
+    let vorbis_root = TestRoot::new("vorbis-metadata-drift");
+    let vorbis_source = vorbis_root.path().join("source.ogg");
+    fs::write(&vorbis_source, vorbis_ogg(44_100)).unwrap();
+    let vorbis_store = store(&vorbis_root);
+    let imported_vorbis = vorbis_store
+        .import_ogg(&vorbis_source, "vorbis.ogg", None)
+        .unwrap();
+    let mut drifted_vorbis = full_project(&imported_vorbis);
+    let EntityPayload::VoiceTake(drifted_take) = &mut drifted_vorbis
+        .entities
+        .get_mut(&entity_id(2))
+        .unwrap()
+        .payload
+    else {
+        unreachable!();
+    };
+    drifted_take.ogg.sample_rate = 48_000;
+    assert!(matches!(
+        vorbis_store.prepare_checkpoint(None, &drifted_vorbis, ValidationProfile::Production),
+        Err(WorkingStoreError::OggMetadataMismatch {
+            declared: gore_authoring::OggMetadata {
+                sample_rate: 48_000,
+                ..
+            },
+            actual: gore_authoring::OggMetadata {
+                sample_rate: 44_100,
+                ..
+            },
+            ..
+        })
+    ));
+}
+
+#[test]
+fn fully_verified_opus_stays_draftable_but_never_silently_production_ready() {
+    let root = TestRoot::new("verified-opus-gate");
+    let source = root.path().join("source.ogg");
+    fs::write(&source, opus_ogg(0)).unwrap();
+    let store = store(&root);
+    let imported = store.import_ogg(&source, "opus.ogg", None).unwrap();
+    let project = full_project(&imported);
+
+    let production = store
+        .prepare_checkpoint(None, &project, ValidationProfile::Production)
+        .unwrap();
+    let production_gate = production
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
+        .unwrap();
+    assert_eq!(production_gate.severity, DiagnosticSeverity::Error);
+    assert!(production_gate.blocks_build);
+    assert!(production.blocks_build);
+
+    let experimental = store
+        .prepare_checkpoint(None, &project, ValidationProfile::Experimental)
+        .unwrap();
+    let experimental_gate = experimental
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
+        .unwrap();
+    assert_eq!(experimental_gate.severity, DiagnosticSeverity::Warning);
+    assert!(!experimental_gate.blocks_build);
+    assert!(!experimental.blocks_build);
+}
+
+#[test]
 fn full_project_variant_round_trips_with_physical_asset_verification() {
     let root = TestRoot::new("full-project");
     let source = root.path().join("take.ogg");
@@ -592,6 +739,13 @@ fn invalid_ogg_and_hostile_staging_objects_never_create_or_replace_asset_blobs()
     let invalid_store = store(&invalid_root);
     assert!(matches!(
         invalid_store.import_ogg(&source, "invalid.ogg", None),
+        Err(WorkingStoreError::InvalidOgg(_))
+    ));
+    assert_eq!(count_files(&invalid_root.path().join("assets")), 0);
+
+    fs::write(&source, opus_identification_only()).unwrap();
+    assert!(matches!(
+        invalid_store.import_ogg(&source, "header-only.ogg", None),
         Err(WorkingStoreError::InvalidOgg(_))
     ));
     assert_eq!(count_files(&invalid_root.path().join("assets")), 0);
@@ -960,6 +1114,38 @@ fn configured_store_limits_must_be_finite_and_within_format_caps() {
         WorkingProjectStore::at(root.path(), too_large),
         Err(WorkingStoreError::InvalidLimits(_))
     ));
+}
+
+#[test]
+fn open_existing_never_creates_a_missing_root_or_parent() {
+    let root = TestRoot::new("open-existing-missing");
+    let missing_parent = root.path().join("missing-parent");
+    let missing_root = missing_parent.join("store");
+
+    assert!(matches!(
+        WorkingProjectStore::open_existing(&missing_root, WorkingStoreLimits::default()),
+        Err(WorkingStoreError::MissingRoot(path)) if path == missing_root
+    ));
+    assert!(!missing_parent.exists());
+    assert!(!missing_root.exists());
+}
+
+#[test]
+fn open_existing_accepts_a_real_root_and_rejects_a_link_root() {
+    let root = TestRoot::new("open-existing-real");
+    let existing = root.path().join("existing-store");
+    fs::create_dir(&existing).unwrap();
+    let opened =
+        WorkingProjectStore::open_existing(&existing, WorkingStoreLimits::default()).unwrap();
+    assert_eq!(opened.root(), existing);
+
+    let linked = root.path().join("linked-store");
+    if create_dir_symlink(&existing, &linked).is_ok() {
+        assert!(matches!(
+            WorkingProjectStore::open_existing(&linked, WorkingStoreLimits::default()),
+            Err(WorkingStoreError::UnsafePath { .. })
+        ));
+    }
 }
 
 #[test]

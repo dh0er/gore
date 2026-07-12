@@ -875,41 +875,38 @@ mod tests {
     }
 
     fn test_ogg(sample_rate: u32) -> Vec<u8> {
-        let mut packet = Vec::new();
-        packet.extend_from_slice(b"\x01vorbis");
-        packet.extend_from_slice(&0u32.to_le_bytes());
-        packet.push(1);
-        packet.extend_from_slice(&sample_rate.to_le_bytes());
-        packet.extend_from_slice(&0i32.to_le_bytes());
-        packet.extend_from_slice(&0i32.to_le_bytes());
-        packet.extend_from_slice(&0i32.to_le_bytes());
-        packet.push(0x86);
-        packet.push(1);
+        let mut data = include_bytes!("../../../gore-vo/testdata/tiny-vorbis.ogg").to_vec();
+        let ident = data
+            .windows(7)
+            .position(|window| window == b"\x01vorbis")
+            .expect("fixture has Vorbis identification");
+        data[ident + 12..ident + 16].copy_from_slice(&sample_rate.to_le_bytes());
 
-        let mut page = Vec::new();
-        page.extend_from_slice(b"OggS");
-        page.push(0);
-        page.push(0x02 | 0x04);
-        page.extend_from_slice(&0u64.to_le_bytes());
-        page.extend_from_slice(&7u32.to_le_bytes());
-        page.extend_from_slice(&0u32.to_le_bytes());
-        page.extend_from_slice(&0u32.to_le_bytes());
-        page.push(1);
-        page.push(packet.len() as u8);
-        page.extend_from_slice(&packet);
-        let mut crc = 0u32;
-        for &byte in &page {
-            crc ^= u32::from(byte) << 24;
-            for _ in 0..8 {
-                crc = if crc & 0x8000_0000 != 0 {
-                    (crc << 1) ^ 0x04c1_1db7
-                } else {
-                    crc << 1
-                };
+        let mut offset = 0usize;
+        while offset < data.len() {
+            let segment_count = usize::from(data[offset + 26]);
+            let header_len = 27 + segment_count;
+            let body_len = data[offset + 27..offset + header_len]
+                .iter()
+                .map(|value| usize::from(*value))
+                .sum::<usize>();
+            let page_len = header_len + body_len;
+            data[offset + 22..offset + 26].fill(0);
+            let mut crc = 0u32;
+            for &byte in &data[offset..offset + page_len] {
+                crc ^= u32::from(byte) << 24;
+                for _ in 0..8 {
+                    crc = if crc & 0x8000_0000 != 0 {
+                        (crc << 1) ^ 0x04c1_1db7
+                    } else {
+                        crc << 1
+                    };
+                }
             }
+            data[offset + 22..offset + 26].copy_from_slice(&crc.to_le_bytes());
+            offset += page_len;
         }
-        page[22..26].copy_from_slice(&crc.to_le_bytes());
-        page
+        data
     }
 
     #[test]

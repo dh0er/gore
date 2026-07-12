@@ -720,6 +720,40 @@ fn voice_take_asset_requires_canonical_ogg_media_type() {
 }
 
 #[test]
+fn approved_opus_take_blocks_production_but_remains_an_experimental_warning() {
+    let mut project = valid_project();
+    let EntityPayload::VoiceTake(take) = payload_mut(&mut project, 2) else {
+        panic!("fixture take changed kind");
+    };
+    assert_eq!(take.status, VoiceTakeStatus::Approved);
+    take.ogg.codec = OggCodec::Opus;
+
+    let production = project.validate_with_profile(ValidationProfile::Production);
+    let production_gate = production
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
+        .unwrap();
+    assert_eq!(production_gate.severity, DiagnosticSeverity::Error);
+    assert!(production_gate.blocks_build);
+    assert_eq!(production_gate.entity, Some(entity_id(2)));
+    assert_eq!(
+        production_gate.property_path.as_deref(),
+        Some("payload.data.ogg.codec")
+    );
+    assert!(production_gate.message.contains("SILK/CELT"));
+    assert!(production_gate.message.contains("no decode proof"));
+
+    let experimental = project.validate_with_profile(ValidationProfile::Experimental);
+    let experimental_gate = experimental
+        .iter()
+        .find(|diagnostic| diagnostic.code == DiagnosticCode::OpusDecodeUnproven)
+        .unwrap();
+    assert_eq!(experimental_gate.severity, DiagnosticSeverity::Warning);
+    assert!(!experimental_gate.blocks_build);
+    assert_eq!(experimental.len(), 1);
+}
+
+#[test]
 fn vanilla_origins_are_generation_qualified_and_typed_refs_remain_authored_only() {
     let mut project = valid_project();
     project.entities.get_mut(&entity_id(1)).unwrap().origin = OriginRef::Vanilla {

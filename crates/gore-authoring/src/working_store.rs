@@ -176,8 +176,10 @@ pub struct OpenedCheckpoint {
 #[serde(rename_all = "snake_case")]
 pub enum AssetVerification {
     /// Validate derived path, object type, link policy, and byte length.
+    /// This fast mode is for browsing only and is never production/build-readiness proof.
     Structural,
-    /// Perform structural checks and stream the complete SHA-256 digest.
+    /// Perform structural checks and stream the complete SHA-256 digest. VoiceTake Ogg blobs are
+    /// additionally parsed and their derived metadata is matched against the persisted entity.
     Full,
 }
 
@@ -231,6 +233,15 @@ pub enum WorkingStoreError {
     Invariant(String),
     #[error("invalid Ogg asset: {0}")]
     InvalidOgg(String),
+    #[error(
+        "voice take {entity} Ogg metadata for asset {asset} does not match the validated blob: declared {declared:?}, actual {actual:?}"
+    )]
+    OggMetadataMismatch {
+        entity: EntityId,
+        asset: Sha256Digest,
+        declared: OggMetadata,
+        actual: OggMetadata,
+    },
     #[error("failed to remove working-store staging file {path:?}: {source}")]
     StagingCleanup {
         path: PathBuf,
@@ -364,6 +375,7 @@ impl WorkingProjectStore {
         self.check_expected_head(expected_head)?;
         self.validate_project_limits(project)?;
         self.verify_asset_index(&project.asset_store, AssetVerification::Full)?;
+        self.verify_voice_take_ogg_metadata(project, AssetVerification::Full)?;
 
         let mut entity_seals = BTreeMap::new();
         let mut total_entity_bytes = 0u64;
@@ -494,6 +506,7 @@ impl WorkingProjectStore {
 
         let project = snapshot.into_project(entities);
         self.validate_project_limits(&project)?;
+        self.verify_voice_take_ogg_metadata(&project, verification)?;
         let diagnostics = project.validate_with_profile(profile);
         let blocks_build = diagnostics.iter().any(|item| item.blocks_build);
         Ok(OpenedCheckpoint {
@@ -565,30 +578,7 @@ impl WorkingProjectStore {
                 )));
             }
 
-            let info = gore_vo::validate_ogg(&bytes, &self.ogg_limits())
-                .map_err(|error| WorkingStoreError::InvalidOgg(error.to_string()))?;
-            let (codec, channels, sample_rate) = match info.codec {
-                gore_vo::OggCodec::Vorbis {
-                    channels,
-                    sample_rate,
-                } => (OggCodec::Vorbis, channels, sample_rate),
-                gore_vo::OggCodec::Opus { channels, .. } => {
-                    // Opus always decodes at 48 kHz. OpusHead's input rate is informational and
-                    // may legitimately be zero, while the authoring model stores decode rate.
-                    (OggCodec::Opus, channels, 48_000)
-                }
-                gore_vo::OggCodec::Unknown => {
-                    return Err(WorkingStoreError::InvalidOgg(
-                        "Ogg codec is not Vorbis or Opus".to_owned(),
-                    ));
-                }
-            };
-            let pages = u32::try_from(info.pages).map_err(|_| {
-                WorkingStoreError::Invariant("Ogg page count does not fit u32".to_owned())
-            })?;
-            let logical_streams = u32::try_from(info.logical_streams).map_err(|_| {
-                WorkingStoreError::Invariant("Ogg stream count does not fit u32".to_owned())
-            })?;
+            let ogg = self.derive_ogg_metadata(&bytes)?;
             let digest = digest_from_hasher(hasher);
             let seal = ContentSeal {
                 byte_len: total as u64,
@@ -606,13 +596,7 @@ impl WorkingProjectStore {
                     byte_len: total as u64,
                     logical_name,
                 },
-                ogg: OggMetadata {
-                    codec,
-                    channels,
-                    sample_rate,
-                    pages,
-                    logical_streams,
-                },
+                ogg,
                 deduplicated,
             })
         })();
@@ -779,6 +763,90 @@ impl WorkingProjectStore {
             self.verify_seal_at(&self.asset_path(*digest), &seal, verification, false)?;
         }
         Ok(())
+    }
+
+    fn verify_voice_take_ogg_metadata(
+        &self,
+        project: &ProjectV2,
+        verification: AssetVerification,
+    ) -> Result<(), WorkingStoreError> {
+        if verification != AssetVerification::Full {
+            return Ok(());
+        }
+
+        let mut validated = BTreeMap::<Sha256Digest, OggMetadata>::new();
+        for (entity_id, entity) in &project.entities {
+            let EntityPayload::VoiceTake(take) = &entity.payload else {
+                continue;
+            };
+            let Some(indexed) = project.asset_store.assets.get(&take.asset.sha256) else {
+                continue;
+            };
+            if indexed.media_type != "audio/ogg" {
+                continue;
+            }
+
+            let actual = if let Some(actual) = validated.get(&take.asset.sha256) {
+                actual.clone()
+            } else {
+                let seal = ContentSeal {
+                    byte_len: indexed.byte_len,
+                    sha256: take.asset.sha256,
+                };
+                let bytes = self.read_sealed_object(
+                    &self.asset_path(take.asset.sha256),
+                    &seal,
+                    self.limits.max_ogg_bytes,
+                    "Ogg bytes",
+                    AssetVerification::Full,
+                )?;
+                let actual = self.derive_ogg_metadata(&bytes)?;
+                validated.insert(take.asset.sha256, actual.clone());
+                actual
+            };
+
+            if take.ogg != actual {
+                return Err(WorkingStoreError::OggMetadataMismatch {
+                    entity: *entity_id,
+                    asset: take.asset.sha256,
+                    declared: take.ogg.clone(),
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn derive_ogg_metadata(&self, bytes: &[u8]) -> Result<OggMetadata, WorkingStoreError> {
+        let info = gore_vo::validate_ogg(bytes, &self.ogg_limits())
+            .map_err(|error| WorkingStoreError::InvalidOgg(error.to_string()))?;
+        let (codec, channels, sample_rate) = match info.codec {
+            gore_vo::OggCodec::Vorbis {
+                channels,
+                sample_rate,
+            } => (OggCodec::Vorbis, channels, sample_rate),
+            gore_vo::OggCodec::Opus { channels, .. } => {
+                // Opus always decodes at 48 kHz. OpusHead's input rate is informational and may
+                // legitimately be zero, while the authoring model stores the decode rate.
+                (OggCodec::Opus, channels, 48_000)
+            }
+            gore_vo::OggCodec::Unknown => {
+                return Err(WorkingStoreError::InvalidOgg(
+                    "Ogg codec is not Vorbis or Opus".to_owned(),
+                ));
+            }
+        };
+        Ok(OggMetadata {
+            codec,
+            channels,
+            sample_rate,
+            pages: u32::try_from(info.pages).map_err(|_| {
+                WorkingStoreError::Invariant("Ogg page count does not fit u32".to_owned())
+            })?,
+            logical_streams: u32::try_from(info.logical_streams).map_err(|_| {
+                WorkingStoreError::Invariant("Ogg stream count does not fit u32".to_owned())
+            })?,
+        })
     }
 
     fn install_immutable_bytes(

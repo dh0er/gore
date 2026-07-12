@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+lewton = "0.10"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"

@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AssetRef, ContentSeal, DialogLine, EntityId, EntityKind, EntityPayload, LocaleCode, OriginRef,
-    ProjectId, ProjectV2, TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake,
-    VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
+    AssetRef, ContentSeal, DialogLine, EntityId, EntityKind, EntityPayload, LocaleCode, OggCodec,
+    OriginRef, ProjectId, ProjectV2, TypedRef, VoiceMemberProof, VoiceOperation, VoiceSlot,
+    VoiceTake, VoiceTakeStatus, VoiceTarget, VoiceTargetResolution,
 };
 
 /// Validation strictness for mechanisms whose artifact path exists but runtime qualification does
@@ -58,6 +58,7 @@ pub enum DiagnosticCode {
     InvalidMemberProof,
     UnqualifiedVoiceAdd,
     InvalidOggMetadata,
+    OpusDecodeUnproven,
     InvalidGenerationAnchor,
     InvalidOrigin,
     OriginGenerationMismatch,
@@ -223,7 +224,7 @@ impl ProjectV2 {
                     validate_voice_slot(self, *map_id, slot, profile, &mut diagnostics);
                 }
                 EntityPayload::VoiceTake(take) => {
-                    validate_voice_take(self, *map_id, take, &mut diagnostics);
+                    validate_voice_take(self, *map_id, take, profile, &mut diagnostics);
                 }
             }
         }
@@ -579,6 +580,7 @@ fn validate_voice_take(
     project: &ProjectV2,
     owner: EntityId,
     take: &VoiceTake,
+    profile: ValidationProfile,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     validate_authored_locale(
@@ -609,6 +611,23 @@ fn validate_voice_take(
             "payload.data.ogg",
             "Ogg metadata counts, channel count, and sample rate must be non-zero",
         ));
+    }
+    if take.ogg.codec == OggCodec::Opus {
+        let message = "Opus headers, packet framing, duration, and granules were validated, but the SILK/CELT payload has no decode proof";
+        diagnostics.push(match profile {
+            ValidationProfile::Production => Diagnostic::error(
+                DiagnosticCode::OpusDecodeUnproven,
+                owner,
+                "payload.data.ogg.codec",
+                message,
+            ),
+            ValidationProfile::Experimental => Diagnostic::warning(
+                DiagnosticCode::OpusDecodeUnproven,
+                owner,
+                "payload.data.ogg.codec",
+                message,
+            ),
+        });
     }
 }
 
