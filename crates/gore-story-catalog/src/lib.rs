@@ -702,7 +702,11 @@ struct GuardedInput {
 
 #[derive(Debug, Clone)]
 struct GenerationInputGuard {
-    inputs: [GuardedInput; 3],
+    // Path-backed inputs only. A Shipping byte snapshot is already immutable after capture, so
+    // the snapshot builder retains live guards for executable and Binds while the path builder
+    // retains all three inputs.
+    inputs: Vec<GuardedInput>,
+    publication_supported: bool,
 }
 
 struct CapturedGeneration {
@@ -730,6 +734,8 @@ pub enum CatalogError {
         "a parsed catalog has no live generation-input guard and cannot be revalidated or published"
     )]
     MissingInputGuard,
+    #[error("a catalog built from an in-memory generation snapshot cannot be published")]
+    SnapshotPublicationUnsupported,
     #[error(
         "story catalog source changed while hashing {path:?}: expected {expected} bytes, read {actual}"
     )]
@@ -819,17 +825,64 @@ fn capture_generation_guarded(
             binds_cache,
         },
         guard: GenerationInputGuard {
-            inputs: [executable_guard, shipping_guard, binds_guard],
+            inputs: vec![executable_guard, shipping_guard, binds_guard],
+            publication_supported: true,
         },
     })
 }
 
-/// Build the curated revision-1 catalog only when all three generation inputs match exactly.
-pub fn build_known_catalog(
-    paths: &GenerationPaths,
+fn capture_generation_with_shipping_snapshot_guarded(
+    executable_path: &Path,
+    shipping_cache: &[u8],
+    binds_cache_path: &Path,
     limits: GenerationInputLimits,
+) -> Result<CapturedGeneration, CatalogError> {
+    let limits = limits.validate()?;
+    let shipping_len =
+        u64::try_from(shipping_cache.len()).map_err(|_| CatalogError::LimitExceeded {
+            kind: "Shipping cache bytes",
+            actual: u64::MAX,
+            limit: limits.max_shipping_cache_bytes,
+        })?;
+    enforce_limit(
+        "Shipping cache bytes",
+        shipping_len,
+        limits.max_shipping_cache_bytes,
+    )?;
+    if shipping_cache.is_empty() {
+        return Err(CatalogError::Invariant(
+            "Shipping cache bytes must not be empty".to_owned(),
+        ));
+    }
+
+    let (executable, executable_guard) = seal_file_guarded(
+        executable_path,
+        limits.max_executable_bytes,
+        "executable bytes",
+    )?;
+    let shipping_cache = seal_bytes(shipping_cache);
+    let (binds_cache, binds_guard) = seal_file_guarded(
+        binds_cache_path,
+        limits.max_binds_cache_bytes,
+        "Binds cache bytes",
+    )?;
+    Ok(CapturedGeneration {
+        generation: GameGenerationSeal {
+            edition: "g1r-steam".to_owned(),
+            executable,
+            shipping_cache,
+            binds_cache,
+        },
+        guard: GenerationInputGuard {
+            inputs: vec![executable_guard, binds_guard],
+            publication_supported: false,
+        },
+    })
+}
+
+fn build_known_catalog_from_capture(
+    captured: CapturedGeneration,
 ) -> Result<StoryCatalogFile, CatalogError> {
-    let captured = capture_generation_guarded(paths, limits)?;
     let actual = captured.generation;
     let expected = known_generation_v1();
     if actual != expected {
@@ -845,6 +898,38 @@ pub fn build_known_catalog(
     };
     validate_catalog_file(&catalog)?;
     Ok(catalog)
+}
+
+/// Build the curated revision-1 catalog only when all three generation inputs match exactly.
+pub fn build_known_catalog(
+    paths: &GenerationPaths,
+    limits: GenerationInputLimits,
+) -> Result<StoryCatalogFile, CatalogError> {
+    build_known_catalog_from_capture(capture_generation_guarded(paths, limits)?)
+}
+
+/// Build the exact curated catalog from an immutable pristine Shipping-cache snapshot plus
+/// guarded executable and Binds paths.
+///
+/// This is the native game-root seam: deployment-aware code can select and materialize the
+/// pristine cache without exposing deploy-record semantics to UI clients. The snapshot is bounded
+/// before hashing and cannot change afterwards. Executable and Binds retain the same live
+/// identity/change-stamp guards as [`build_known_catalog`]. The resulting canonical catalog is
+/// byte-for-byte identical for the same pinned generation. Because the snapshot has no protected
+/// source path, this in-memory result can be serialized and revalidated but not published through
+/// this crate's atomic publisher.
+pub fn build_known_catalog_with_shipping_snapshot(
+    executable_path: &Path,
+    shipping_cache: &[u8],
+    binds_cache_path: &Path,
+    limits: GenerationInputLimits,
+) -> Result<StoryCatalogFile, CatalogError> {
+    build_known_catalog_from_capture(capture_generation_with_shipping_snapshot_guarded(
+        executable_path,
+        shipping_cache,
+        binds_cache_path,
+        limits,
+    )?)
 }
 
 /// Build a catalog from already verified extraction records.
@@ -918,6 +1003,9 @@ where
         .input_guard
         .as_ref()
         .ok_or(CatalogError::MissingInputGuard)?;
+    if !input_guard.publication_supported {
+        return Err(CatalogError::SnapshotPublicationUnsupported);
+    }
     let bytes = catalog.to_canonical_json()?;
     let path = absolute_safe_output_path(path)?;
     let parent = path
@@ -2257,7 +2345,8 @@ mod tests {
             seal_file_guarded(&paths.shipping_cache, 1024, "test shipping cache").unwrap();
         let (_, binds) = seal_file_guarded(&paths.binds_cache, 1024, "test binds cache").unwrap();
         catalog.input_guard = Some(GenerationInputGuard {
-            inputs: [executable, shipping, binds],
+            inputs: vec![executable, shipping, binds],
+            publication_supported: true,
         });
         paths
     }
@@ -2690,6 +2779,83 @@ mod tests {
         assert!(matches!(
             build_wire_from_verified_records(synthetic_generation(1), records),
             Err(CatalogError::RecordGenerationMismatch)
+        ));
+    }
+
+    #[test]
+    fn shipping_snapshot_is_bounded_before_hashing_and_keeps_only_live_path_guards() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root.path().join("exe");
+        let binds = root.path().join("binds");
+        fs::write(&executable, b"fixture executable").unwrap();
+        fs::write(&binds, b"fixture binds").unwrap();
+        let limits = GenerationInputLimits {
+            max_executable_bytes: 1024,
+            max_shipping_cache_bytes: 3,
+            max_binds_cache_bytes: 1024,
+        };
+        assert!(matches!(
+            capture_generation_with_shipping_snapshot_guarded(&executable, b"four", &binds, limits,),
+            Err(CatalogError::LimitExceeded {
+                kind: "Shipping cache bytes",
+                actual: 4,
+                limit: 3,
+            })
+        ));
+        assert!(matches!(
+            capture_generation_with_shipping_snapshot_guarded(
+                &executable,
+                b"",
+                &binds,
+                GenerationInputLimits::default(),
+            ),
+            Err(CatalogError::Invariant(_))
+        ));
+
+        let captured = capture_generation_with_shipping_snapshot_guarded(
+            &executable,
+            b"snapshot",
+            &binds,
+            GenerationInputLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(captured.guard.inputs.len(), 2);
+        let mut catalog = trusted_catalog();
+        catalog.input_guard = Some(captured.guard);
+        catalog.revalidate_generation_inputs().unwrap();
+        fs::write(&binds, b"changed binds").unwrap();
+        assert!(matches!(
+            catalog.revalidate_generation_inputs(),
+            Err(CatalogError::IdentityChanged(_))
+        ));
+    }
+
+    #[test]
+    fn snapshot_capture_preserves_the_exact_known_catalog_wire() {
+        let root = tempfile::tempdir().unwrap();
+        let executable_path = root.path().join("exe");
+        let binds_path = root.path().join("binds");
+        fs::write(&executable_path, b"guard executable").unwrap();
+        fs::write(&binds_path, b"guard binds").unwrap();
+        let (_, executable_guard) =
+            seal_file_guarded(&executable_path, 1024, "test executable").unwrap();
+        let (_, binds_guard) = seal_file_guarded(&binds_path, 1024, "test Binds").unwrap();
+        let built = build_known_catalog_from_capture(CapturedGeneration {
+            generation: known_generation_v1(),
+            guard: GenerationInputGuard {
+                inputs: vec![executable_guard, binds_guard],
+                publication_supported: false,
+            },
+        })
+        .unwrap();
+        assert_eq!(
+            built.to_canonical_json().unwrap(),
+            trusted_catalog().to_canonical_json().unwrap()
+        );
+        built.revalidate_generation_inputs().unwrap();
+        assert!(matches!(
+            publish_catalog_atomic(root.path().join("must-not-publish.json"), &built),
+            Err(CatalogError::SnapshotPublicationUnsupported)
         ));
     }
 

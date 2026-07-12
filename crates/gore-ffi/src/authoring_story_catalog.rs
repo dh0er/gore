@@ -3,8 +3,9 @@
 use std::{io, path::PathBuf};
 
 use gore_story_catalog::{
-    build_known_catalog, CatalogError, GenerationInputLimits, GenerationPaths, StoryCatalogFile,
-    MAX_CATALOG_JSON_BYTES, MAX_NPCS, MAX_QUEST_PARENTS,
+    build_known_catalog, build_known_catalog_with_shipping_snapshot, CatalogError, ContentSeal,
+    GenerationInputLimits, GenerationPaths, StoryCatalogFile, MAX_CATALOG_JSON_BYTES, MAX_NPCS,
+    MAX_QUEST_PARENTS,
 };
 use serde_json::{json, Map, Value};
 use sha2::{Digest as _, Sha256};
@@ -16,6 +17,8 @@ const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_BUILD_RESPONSE_BYTES: usize = 48 * 1024 * 1024;
 const BUILD_REQUEST_BINDING_DOMAIN: &[u8] =
     b"gore-story-catalog.authoring-build-v1.request-binding\0";
+const GAME_ROOT_REQUEST_BINDING_DOMAIN: &[u8] =
+    b"gore-story-catalog.authoring-build-for-game-root-v1.request-binding\0";
 
 pub(super) fn build_story_catalog_v1(payload: Value) -> Value {
     match build_story_catalog_v1_inner(&payload) {
@@ -38,16 +41,72 @@ fn build_story_catalog_v1_inner(payload: &Value) -> Result<Value, Value> {
     let catalog =
         build_known_catalog(&paths, GenerationInputLimits::default()).map_err(map_build_error)?;
 
-    // Hashing can be expensive enough for an input to be replaced before response construction.
-    // Reopen every exact guarded path immediately around serialization. The second check also
-    // detects a replacement that raced the pure in-memory canonical encoder.
+    serialize_catalog_build(&catalog, request_binding_sha256, || Ok(()))
+}
+
+/// Build the pinned catalog from a game root while keeping deployment-record and pristine-backup
+/// selection entirely inside native code.
+pub(super) fn build_story_catalog_for_game_root_v1(payload: Value) -> Value {
+    match build_story_catalog_for_game_root_v1_inner(&payload) {
+        Ok(response) => response,
+        Err(error) => error,
+    }
+}
+
+fn build_story_catalog_for_game_root_v1_inner(payload: &Value) -> Result<Value, Value> {
+    let object = exact_game_root_payload(payload)?;
+    let game_root = bounded_game_root(object)?;
+    let request_binding_sha256 = game_root_request_binding(game_root);
+    let game_root = PathBuf::from(game_root);
+    let g1r = if game_root.file_name().is_some_and(|name| name == "G1R") {
+        game_root.clone()
+    } else {
+        game_root.join("G1R")
+    };
+    let executable = g1r
+        .join("Binaries")
+        .join("Win64")
+        .join("G1R-Win64-Shipping.exe");
+    let binds_cache = g1r.join("Script").join("Binds.Cache");
+
+    let shipping_snapshot =
+        gore_mod::pristine_script_cache(&game_root).map_err(map_pristine_error)?;
+    let catalog = build_known_catalog_with_shipping_snapshot(
+        &executable,
+        &shipping_snapshot,
+        &binds_cache,
+        GenerationInputLimits::default(),
+    )
+    .map_err(map_build_error)?;
+    drop(shipping_snapshot);
+
+    let expected_shipping = catalog.generation().shipping_cache.clone();
+    serialize_catalog_build(&catalog, request_binding_sha256, || {
+        reselect_pristine_and_verify(&expected_shipping, || {
+            gore_mod::pristine_script_cache(&game_root).map_err(map_pristine_error)
+        })
+    })
+}
+
+fn serialize_catalog_build<F>(
+    catalog: &StoryCatalogFile,
+    request_binding_sha256: String,
+    mut revalidate_pristine: F,
+) -> Result<Value, Value>
+where
+    F: FnMut() -> Result<(), Value>,
+{
+    // Reopen every live guarded path and reselect the deployment-aware pristine snapshot
+    // immediately around both canonical and outer response serialization.
     catalog
         .revalidate_generation_inputs()
         .map_err(map_build_error)?;
+    revalidate_pristine()?;
     let catalog_json = catalog.to_canonical_json().map_err(map_build_error)?;
     catalog
         .revalidate_generation_inputs()
         .map_err(map_build_error)?;
+    revalidate_pristine()?;
     let catalog_json = String::from_utf8(catalog_json).map_err(|_| {
         err(
             "AUTHORING_STORY_CATALOG_BUILD_FAILED",
@@ -74,6 +133,10 @@ fn build_story_catalog_v1_inner(payload: &Value) -> Result<Value, Value> {
             "built story catalog response exceeds its bounded transport budget",
         ));
     }
+    catalog
+        .revalidate_generation_inputs()
+        .map_err(map_build_error)?;
+    revalidate_pristine()?;
     Ok(response)
 }
 
@@ -181,6 +244,31 @@ fn exact_build_payload(payload: &Value) -> Result<&Map<String, Value>, Value> {
     Ok(object)
 }
 
+fn exact_game_root_payload(payload: &Value) -> Result<&Map<String, Value>, Value> {
+    let Some(object) = payload.as_object() else {
+        return Err(invalid_game_root_request());
+    };
+    if object.len() != 1 || !object.contains_key("game_root") {
+        return Err(invalid_game_root_request());
+    }
+    Ok(object)
+}
+
+fn bounded_game_root(object: &Map<String, Value>) -> Result<&str, Value> {
+    object
+        .get("game_root")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= MAX_PATH_BYTES && !value.contains('\0'))
+        .ok_or_else(invalid_game_root_request)
+}
+
+fn invalid_game_root_request() -> Value {
+    err(
+        "AUTHORING_STORY_CATALOG_GAME_ROOT_REQUEST_INVALID",
+        "payload must contain exactly one non-empty bounded game_root path",
+    )
+}
+
 fn bounded_path<'a>(object: &'a Map<String, Value>, field: &str) -> Result<&'a str, Value> {
     object
         .get(field)
@@ -203,6 +291,67 @@ fn build_request_binding(executable: &str, shipping_cache: &str, binds_cache: &s
         hasher.update(bytes);
     }
     hex_digest(hasher.finalize())
+}
+
+fn game_root_request_binding(game_root: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(GAME_ROOT_REQUEST_BINDING_DOMAIN);
+    let bytes = game_root.as_bytes();
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+    hex_digest(hasher.finalize())
+}
+
+fn verify_shipping_snapshot(bytes: &[u8], expected: &ContentSeal) -> Result<(), Value> {
+    let Ok(byte_len) = u64::try_from(bytes.len()) else {
+        return Err(story_catalog_input_changed());
+    };
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    if byte_len != expected.byte_len || digest.as_slice() != expected.sha256.as_bytes() {
+        return Err(story_catalog_input_changed());
+    }
+    Ok(())
+}
+
+fn reselect_pristine_and_verify<F>(expected: &ContentSeal, mut select: F) -> Result<(), Value>
+where
+    F: FnMut() -> Result<Vec<u8>, Value>,
+{
+    let current = select()?;
+    verify_shipping_snapshot(&current, expected)
+}
+
+fn story_catalog_input_changed() -> Value {
+    err(
+        "AUTHORING_STORY_CATALOG_BUILD_INPUT_CHANGED",
+        "a generation input changed while the catalog was being built",
+    )
+}
+
+fn map_pristine_error(error: gore_mod::ModError) -> Value {
+    let message = error.to_string();
+    if message.contains("RECOVERY_REQUIRED") {
+        return err(
+            "AUTHORING_STORY_CATALOG_BUILD_RECOVERY_REQUIRED",
+            "an interrupted deployment must be recovered before Story authoring",
+        );
+    }
+    if message.contains("exceeds the") || message.contains("too large") {
+        return err(
+            "AUTHORING_STORY_CATALOG_BUILD_LIMIT",
+            "the pristine Shipping cache exceeds the supported resource limits",
+        );
+    }
+    if message.contains("not a regular non-link file") {
+        return err(
+            "AUTHORING_STORY_CATALOG_BUILD_UNSAFE_INPUT",
+            "the pristine Shipping cache is not a safe regular file",
+        );
+    }
+    err(
+        "AUTHORING_STORY_CATALOG_BUILD_PRISTINE_UNAVAILABLE",
+        "the pristine Shipping cache could not be selected safely",
+    )
 }
 
 fn map_build_error(error: CatalogError) -> Value {
@@ -259,6 +408,8 @@ fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gore_story_catalog::Sha256Digest;
+    use std::collections::BTreeMap;
     use std::fs;
 
     fn trusted() -> &'static str {
@@ -436,5 +587,147 @@ mod tests {
                 "AUTHORING_STORY_CATALOG_BUILD_REQUEST_INVALID"
             );
         }
+    }
+
+    #[test]
+    fn game_root_request_is_exact_bound_and_derives_no_client_cache_path() {
+        let valid = json!({"game_root": "C:/Games/Gothic"});
+        let object = exact_game_root_payload(&valid).unwrap();
+        let root = bounded_game_root(object).unwrap();
+        assert_eq!(root, "C:/Games/Gothic");
+        assert_eq!(
+            game_root_request_binding(root),
+            "208d76c5754bc4457ea54b30605d1081b21894d3d8ea925c5e925257da370f7b"
+        );
+        assert_ne!(
+            game_root_request_binding(root),
+            game_root_request_binding("C:/Games/Other")
+        );
+        for invalid in [
+            Value::Null,
+            json!({}),
+            json!({"game_root": "",}),
+            json!({"game_root": "x\0y"}),
+            json!({"game_root": "x", "shipping_cache": "client-choice"}),
+            json!({"game_root": "x".repeat(MAX_PATH_BYTES + 1)}),
+        ] {
+            assert_eq!(
+                build_story_catalog_for_game_root_v1(invalid)["error"]["code"],
+                "AUTHORING_STORY_CATALOG_GAME_ROOT_REQUEST_INVALID"
+            );
+        }
+    }
+
+    #[test]
+    fn game_root_transport_uses_native_pristine_selection_and_sanitizes_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("private-game-root");
+        let g1r = game.join("G1R");
+        fs::create_dir_all(g1r.join("Binaries/Win64")).unwrap();
+        fs::create_dir_all(g1r.join("Script")).unwrap();
+        fs::write(
+            g1r.join("Binaries/Win64/G1R-Win64-Shipping.exe"),
+            b"fixture exe",
+        )
+        .unwrap();
+        fs::write(
+            g1r.join("Script/PrecompiledScript_Shipping.Cache"),
+            b"fixture pristine",
+        )
+        .unwrap();
+        fs::write(g1r.join("Script/Binds.Cache"), b"fixture binds").unwrap();
+        let response = build_story_catalog_for_game_root_v1(json!({
+            "game_root": game.to_string_lossy(),
+        }));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_STORY_CATALOG_BUILD_UNSUPPORTED_GENERATION"
+        );
+        assert!(!response
+            .to_string()
+            .contains(root.path().to_string_lossy().as_ref()));
+
+        let request = serde_json::to_string(&json!({
+            "command": "authoring_story_catalog_v1_build_for_game_root",
+            "payload": {"game_root": game.to_string_lossy()},
+        }))
+        .unwrap();
+        let dispatched: Value = serde_json::from_str(&crate::execute_json(&request)).unwrap();
+        assert_eq!(dispatched, response);
+    }
+
+    #[test]
+    fn native_pristine_selection_covers_live_backup_drift_and_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        fs::create_dir_all(&script).unwrap();
+        let live = script.join("PrecompiledScript_Shipping.Cache");
+        let backup = PathBuf::from(format!("{}.gore-bak", live.display()));
+        let pristine = b"pristine cache";
+        let modded = b"deployed cache";
+        fs::write(&live, pristine).unwrap();
+        assert_eq!(gore_mod::pristine_script_cache(&game).unwrap(), pristine);
+
+        fs::write(&backup, pristine).unwrap();
+        fs::write(&live, modded).unwrap();
+        let mut record = gore_mod::DeployRecord {
+            mod_name: "fixture".to_owned(),
+            backups: vec![(
+                live.display().to_string(),
+                backup.display().to_string(),
+                true,
+            )],
+            ..Default::default()
+        };
+        record.deployed_hashes =
+            BTreeMap::from([(live.display().to_string(), fnv1a64_hex(modded))]);
+        record.backup_hashes = BTreeMap::from([(
+            backup.display().to_string(),
+            format!("sha256:{}", hex_sha256(pristine)),
+        )]);
+        let record_path = game.join("gore-mod.deployed.json");
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        assert_eq!(gore_mod::pristine_script_cache(&game).unwrap(), pristine);
+
+        let updated = b"hotfix cache";
+        fs::write(&live, updated).unwrap();
+        assert_eq!(gore_mod::pristine_script_cache(&game).unwrap(), updated);
+
+        record.phase = gore_mod::DeployPhase::RecoveryRequired;
+        fs::write(&record_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let mapped = map_pristine_error(gore_mod::pristine_script_cache(&game).unwrap_err());
+        assert_eq!(
+            mapped["error"]["code"],
+            "AUTHORING_STORY_CATALOG_BUILD_RECOVERY_REQUIRED"
+        );
+        assert!(!mapped
+            .to_string()
+            .contains(root.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn pristine_reselection_hook_fails_on_a_raced_snapshot() {
+        let original = b"original pristine";
+        let expected = ContentSeal {
+            byte_len: original.len() as u64,
+            sha256: Sha256Digest::from_bytes(Sha256::digest(original).into()),
+        };
+        reselect_pristine_and_verify(&expected, || Ok(original.to_vec())).unwrap();
+        let error =
+            reselect_pristine_and_verify(&expected, || Ok(b"raced pristine".to_vec())).unwrap_err();
+        assert_eq!(
+            error["error"]["code"],
+            "AUTHORING_STORY_CATALOG_BUILD_INPUT_CHANGED"
+        );
+    }
+
+    fn fnv1a64_hex(bytes: &[u8]) -> String {
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        format!("{hash:016x}")
     }
 }

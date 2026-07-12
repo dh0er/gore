@@ -26,6 +26,9 @@
 //!   catalog entirely in memory; `authoring_story_catalog_v1_read` accepts one bounded raw
 //!   canonical catalog string and returns a request-bound read-only chooser projection. Neither
 //!   command writes game files, publishes a catalog, or launches the game.
+//!   `authoring_story_catalog_v1_build_for_game_root` keeps the same boundary but selects the
+//!   deployment-aware pristine Shipping cache natively through `gore-mod`; clients supply only the
+//!   game root and never parse deployment records or choose backups.
 //! - `authoring_story_inventory_v1_build` reads the same exact pinned generation paths and returns
 //!   one canonical, base-game-only collision inventory. It never resolves a mod loadout, writes,
 //!   launches the game, qualifies runtime behavior, builds, deploys, or publishes.
@@ -97,6 +100,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_verify_asset",
     "authoring_story_catalog_v1_build",
+    "authoring_story_catalog_v1_build_for_game_root",
     "authoring_story_catalog_v1_read",
     "authoring_story_inventory_v1_build",
     "core_info",
@@ -186,6 +190,9 @@ fn dispatch(input: &str) -> Value {
         }
         "authoring_story_catalog_v1_build" => {
             authoring_story_catalog::build_story_catalog_v1(payload)
+        }
+        "authoring_story_catalog_v1_build_for_game_root" => {
+            authoring_story_catalog::build_story_catalog_for_game_root_v1(payload)
         }
         "authoring_story_catalog_v1_read" => {
             authoring_story_catalog::read_story_catalog_v1(payload)
@@ -1065,6 +1072,7 @@ mod tests {
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_verify_asset",
                     "authoring_story_catalog_v1_build",
+                    "authoring_story_catalog_v1_build_for_game_root",
                     "authoring_story_catalog_v1_read",
                     "authoring_story_inventory_v1_build",
                     "core_info",
@@ -1110,6 +1118,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_story_catalog_v1_build"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_story_catalog_v1_build_for_game_root"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_story_catalog_v1_read"));
