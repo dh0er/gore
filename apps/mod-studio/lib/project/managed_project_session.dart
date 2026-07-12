@@ -52,6 +52,47 @@ class ManagedProjectSessionClosedException
   String toString() => 'ManagedProjectSessionClosedException: $message';
 }
 
+class ManagedProjectReentrantOperationException
+    extends ManagedProjectSessionException {
+  const ManagedProjectReentrantOperationException(super.message);
+
+  @override
+  String toString() => 'ManagedProjectReentrantOperationException: $message';
+}
+
+/// One immutable decision produced from the exact latest project inside a managed session's
+/// serialized operation lane.
+sealed class ManagedProjectDerivedSave<T> {
+  const ManagedProjectDerivedSave();
+
+  T get value;
+}
+
+/// Publish [projectJson] through the managed store before returning [value] to the caller.
+final class ManagedProjectDerivedCandidate<T>
+    extends ManagedProjectDerivedSave<T> {
+  const ManagedProjectDerivedCandidate({
+    required this.projectJson,
+    required this.value,
+  });
+
+  final String projectJson;
+  @override
+  final T value;
+}
+
+/// Return [value] without preparing objects or touching the published head.
+final class ManagedProjectDerivedRejection<T>
+    extends ManagedProjectDerivedSave<T> {
+  const ManagedProjectDerivedRejection(this.value);
+
+  @override
+  final T value;
+}
+
+typedef ManagedProjectDeriver<T> =
+    FutureOr<ManagedProjectDerivedSave<T>> Function(String latestProjectJson);
+
 /// Narrow seam over the native managed-store document API.
 ///
 /// The interface keeps session durability and ordering independently testable;
@@ -150,6 +191,7 @@ class ManagedAuthoringProjectSession {
   bool _closeRequested = false;
   bool _closed = false;
   bool _requiresReopen = false;
+  final Object _deriveZoneKey = Object();
 
   String get projectJson => _opened.projectJson;
   AuthoringWorkingHead get head => _opened.head;
@@ -267,6 +309,9 @@ class ManagedAuthoringProjectSession {
 
   /// Save a captured canonical format-2 document in invocation order.
   Future<void> save(String projectJson) {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<void>('save');
+    }
     if (_closeRequested) {
       return Future<void>.error(
         const ManagedProjectSessionClosedException(
@@ -275,76 +320,140 @@ class ManagedAuthoringProjectSession {
       );
     }
     final capturedProjectJson = projectJson;
+    return _enqueue(() => _saveCapturedInQueue(capturedProjectJson));
+  }
+
+  /// Derive from the exact project current when this invocation reaches the serialized session
+  /// lane. A rejection returns without any store or filesystem write. A candidate reuses the
+  /// complete verified save pipeline before its value becomes visible to the caller.
+  ///
+  /// The callback must not re-enter this same session: it already owns the operation lane.
+  Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<T>('deriveAndSave');
+    }
     return _enqueue(() async {
-      if (_requiresReopen) {
-        throw const ManagedProjectVerificationException(
-          'managed project must be reopened after an uncertain publication',
-        );
-      }
-      final oldHead = _opened.head;
+      _requireWritableState();
+      final exactHead = _opened.head;
       final operations = _ManagedSessionOperations(
         root: root,
         store: _store,
         replacement: _replacement,
         profile: _profile,
       );
-      try {
-        await operations.requirePublishedHead(oldHead);
-      } on ManagedProjectSessionException {
-        _requiresReopen = true;
-        rethrow;
-      }
-      final AuthoringCheckpointPreparation prepared;
-      try {
-        prepared = await _store.prepareCheckpoint(
-          root: root.path,
-          expectedHead: oldHead,
-          projectJson: capturedProjectJson,
-          profile: _profile,
-        );
-      } on ModFfiException catch (error) {
-        if (error.code == 'AUTHORING_STORE_HEAD_CONFLICT') {
-          _requiresReopen = true;
-          throw ManagedProjectHeadConflictException(error.message);
-        }
-        if (_prepareErrorRequiresReopen(error.code)) {
-          _requiresReopen = true;
-          throw ManagedProjectVerificationException(error.message);
-        }
-        rethrow;
-      } on ManagedProjectHeadConflictException {
-        _requiresReopen = true;
-        rethrow;
-      }
-      await operations.verifyPreparedCheckpoint(
-        prepared.head,
-        expectedProjectJson: capturedProjectJson,
-      );
+      await _requireExactPublishedHead(operations, exactHead);
 
+      final callbackToken = _ManagedProjectDeriveZoneToken();
+      final ManagedProjectDerivedSave<T> decision;
       try {
-        await operations.publish(prepared.head, expectedHead: oldHead);
-      } on AtomicSwapConflictException catch (error) {
-        _requiresReopen = true;
-        throw ManagedProjectHeadConflictException(error.message);
-      } on AtomicSwapException {
-        _requiresReopen = true;
-        rethrow;
-      }
-
-      try {
-        _opened = await operations.openPublished(
-          expectedHead: prepared.head,
-          expectedProjectJson: capturedProjectJson,
+        decision = await runZoned(
+          () => Future<ManagedProjectDerivedSave<T>>.sync(
+            () => derive(_opened.projectJson),
+          ),
+          zoneValues: <Object, Object>{_deriveZoneKey: callbackToken},
         );
-      } catch (_) {
-        _requiresReopen = true;
-        rethrow;
+      } catch (error, stackTrace) {
+        // A failed callback still observed this exact published head. If it drifted while the
+        // callback was suspended, surface and poison that stronger session-integrity failure;
+        // otherwise preserve the callback's original error and stack.
+        await _requireExactPublishedHead(operations, exactHead);
+        Error.throwWithStackTrace(error, stackTrace);
+      } finally {
+        callbackToken.active = false;
+      }
+      switch (decision) {
+        case ManagedProjectDerivedRejection<T> rejection:
+          await _requireExactPublishedHead(operations, exactHead);
+          return rejection.value;
+        case ManagedProjectDerivedCandidate<T> candidate:
+          await _saveCapturedInQueue(candidate.projectJson);
+          return candidate.value;
       }
     });
   }
 
+  bool get _isActiveDeriveCallbackZone {
+    final token = Zone.current[_deriveZoneKey];
+    return token is _ManagedProjectDeriveZoneToken && token.active;
+  }
+
+  Future<T> _reentrantOperation<T>(String operation) => Future<T>.error(
+    ManagedProjectReentrantOperationException(
+      'managed project $operation cannot be called from its active derive callback',
+    ),
+  );
+
+  void _requireWritableState() {
+    if (_requiresReopen) {
+      throw const ManagedProjectVerificationException(
+        'managed project must be reopened after an uncertain publication',
+      );
+    }
+  }
+
+  Future<void> _saveCapturedInQueue(String capturedProjectJson) async {
+    _requireWritableState();
+    final oldHead = _opened.head;
+    final operations = _ManagedSessionOperations(
+      root: root,
+      store: _store,
+      replacement: _replacement,
+      profile: _profile,
+    );
+    await _requireExactPublishedHead(operations, oldHead);
+    final AuthoringCheckpointPreparation prepared;
+    try {
+      prepared = await _store.prepareCheckpoint(
+        root: root.path,
+        expectedHead: oldHead,
+        projectJson: capturedProjectJson,
+        profile: _profile,
+      );
+    } on ModFfiException catch (error) {
+      if (error.code == 'AUTHORING_STORE_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        throw ManagedProjectHeadConflictException(error.message);
+      }
+      if (_prepareErrorRequiresReopen(error.code)) {
+        _requiresReopen = true;
+        throw ManagedProjectVerificationException(error.message);
+      }
+      rethrow;
+    } on ManagedProjectHeadConflictException {
+      _requiresReopen = true;
+      rethrow;
+    }
+    await operations.verifyPreparedCheckpoint(
+      prepared.head,
+      expectedProjectJson: capturedProjectJson,
+    );
+
+    try {
+      await operations.publish(prepared.head, expectedHead: oldHead);
+    } on AtomicSwapConflictException catch (error) {
+      _requiresReopen = true;
+      throw ManagedProjectHeadConflictException(error.message);
+    } on AtomicSwapException {
+      _requiresReopen = true;
+      rethrow;
+    }
+
+    try {
+      _opened = await operations.openPublished(
+        expectedHead: prepared.head,
+        expectedProjectJson: capturedProjectJson,
+      );
+    } catch (_) {
+      _requiresReopen = true;
+      rethrow;
+    }
+  }
+
   /// Wait for earlier saves, release the OS lock once, and reject new saves.
   Future<void> close() {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<void>('close');
+    }
     final existing = _closeFuture;
     if (existing != null) return existing;
     _closeRequested = true;
@@ -357,6 +466,23 @@ class ManagedAuthoringProjectSession {
     }, permitClosing: true);
     _closeFuture = result;
     return result;
+  }
+
+  Future<void> _requireExactPublishedHead(
+    _ManagedSessionOperations operations,
+    AuthoringWorkingHead expectedHead,
+  ) async {
+    try {
+      await operations.requirePublishedHead(expectedHead);
+    } on ManagedProjectSessionException {
+      _requiresReopen = true;
+      rethrow;
+    } on FileSystemException {
+      _requiresReopen = true;
+      throw const ManagedProjectVerificationException(
+        'managed project head could not be verified exactly',
+      );
+    }
   }
 
   Future<T> _enqueue<T>(
@@ -374,6 +500,10 @@ class ManagedAuthoringProjectSession {
     _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
+}
+
+final class _ManagedProjectDeriveZoneToken {
+  bool active = true;
 }
 
 class _ManagedSessionOperations {

@@ -162,6 +162,452 @@ void main() {
     await reopened.close();
   });
 
+  test(
+    'derive rejection observes latest state and performs zero writes',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final headBefore = await session.headFile.readAsBytes();
+      final prepareCallsBefore = store.prepareCalls;
+      final headVerificationsBefore = store.headVerifications.length;
+      final openVerificationsBefore = store.openVerifications.length;
+
+      final value = await session.deriveAndSave<String>((latestProjectJson) {
+        expect(latestProjectJson, original);
+        return const ManagedProjectDerivedRejection('rejected');
+      });
+
+      expect(value, 'rejected');
+      expect(store.prepareCalls, prepareCallsBefore);
+      expect(store.headVerifications.length, headVerificationsBefore);
+      expect(store.openVerifications.length, openVerificationsBefore);
+      expect(await session.headFile.readAsBytes(), headBefore);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'derive candidate publishes through the complete verified save lane',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final candidate = _projectJson(revision: 1, name: 'Derived');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final prepareCallsBefore = store.prepareCalls;
+      final headVerificationsBefore = store.headVerifications.length;
+      final openVerificationsBefore = store.openVerifications.length;
+
+      final value = await session.deriveAndSave<int>(
+        (latestProjectJson) => ManagedProjectDerivedCandidate(
+          projectJson: candidate,
+          value: latestProjectJson == original ? 42 : -1,
+        ),
+      );
+
+      expect(value, 42);
+      expect(session.projectJson, candidate);
+      expect(store.prepareCalls, prepareCallsBefore + 1);
+      expect(
+        store.headVerifications.length,
+        greaterThan(headVerificationsBefore),
+      );
+      expect(store.openVerifications.length, openVerificationsBefore + 1);
+      expect(await session.headFile.readAsString(), session.head.canonicalJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'derive invocations observe prior queued saves in invocation order',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final first = _projectJson(revision: 1, name: 'First');
+      final second = _projectJson(revision: 2, name: 'Second');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final observed = <String>[];
+
+      final firstSave = session.save(first);
+      final derived = session.deriveAndSave<String>((latestProjectJson) {
+        observed.add(latestProjectJson);
+        return ManagedProjectDerivedCandidate(
+          projectJson: second,
+          value: 'published',
+        );
+      });
+      await firstSave;
+      expect(await derived, 'published');
+
+      expect(observed, <String>[first]);
+      expect(session.projectJson, second);
+      await session.close();
+    },
+  );
+
+  test('derive callback cannot await a save on its own session lane', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: _FakeManagedStore(),
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+
+    await expectLater(
+      session
+          .deriveAndSave<void>((_) async {
+            await session.save(_projectJson(revision: 1, name: 'Reentrant'));
+            return const ManagedProjectDerivedRejection(null);
+          })
+          .timeout(const Duration(seconds: 1)),
+      throwsA(isA<ManagedProjectReentrantOperationException>()),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test('derive callback cannot await a nested derive on its session', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: _FakeManagedStore(),
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+
+    await expectLater(
+      session
+          .deriveAndSave<void>((_) async {
+            await session.deriveAndSave<void>(
+              (_) => const ManagedProjectDerivedRejection(null),
+            );
+            return const ManagedProjectDerivedRejection(null);
+          })
+          .timeout(const Duration(seconds: 1)),
+      throwsA(isA<ManagedProjectReentrantOperationException>()),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test('derive callback cannot close its own active session lane', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final original = _projectJson(revision: 0, name: 'Original');
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: _FakeManagedStore(),
+      projectJson: original,
+      profile: AuthoringValidationProfile.experimental,
+    );
+
+    await expectLater(
+      session
+          .deriveAndSave<void>((_) async {
+            await session.close();
+            return const ManagedProjectDerivedRejection(null);
+          })
+          .timeout(const Duration(seconds: 1)),
+      throwsA(isA<ManagedProjectReentrantOperationException>()),
+    );
+    expect(session.isClosed, isFalse);
+    expect(
+      await session.deriveAndSave<String>(
+        (_) => const ManagedProjectDerivedRejection('still open'),
+      ),
+      'still open',
+    );
+    await session.close();
+  });
+
+  test(
+    'external callers still queue behind an active derive callback',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final external = _projectJson(revision: 1, name: 'External queued save');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final derived = session.deriveAndSave<String>((latestProjectJson) async {
+        expect(latestProjectJson, original);
+        entered.complete();
+        await release.future;
+        return const ManagedProjectDerivedRejection('rejected');
+      });
+      await entered.future.timeout(const Duration(seconds: 1));
+
+      final queuedSave = session.save(external);
+      expect(session.projectJson, original);
+      release.complete();
+      expect(await derived.timeout(const Duration(seconds: 1)), 'rejected');
+      await queuedSave.timeout(const Duration(seconds: 1));
+      expect(session.projectJson, external);
+      await session.close();
+    },
+  );
+
+  test('derive failures preserve the same poison semantics as save', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final original = _projectJson(revision: 0, name: 'Original');
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+      profile: AuthoringValidationProfile.experimental,
+    );
+
+    await expectLater(
+      session.deriveAndSave<void>((_) => throw StateError('derive failed')),
+      throwsStateError,
+    );
+    expect(session.requiresReopen, isFalse);
+    expect(
+      await session.deriveAndSave<String>(
+        (_) => const ManagedProjectDerivedRejection('still usable'),
+      ),
+      'still usable',
+    );
+
+    store.nextPrepareError = const ModFfiException(
+      command: 'authoring_store_prepare_checkpoint',
+      code: 'AUTHORING_STORE_HEAD_CONFLICT',
+      message: 'injected native head conflict',
+    );
+    await expectLater(
+      session.deriveAndSave<void>(
+        (_) => ManagedProjectDerivedCandidate(
+          projectJson: _projectJson(revision: 1, name: 'Candidate'),
+          value: null,
+        ),
+      ),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(session.projectJson, original);
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test(
+    'derive candidate detects a stale published head before prepare',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final prepareCallsBefore = store.prepareCalls;
+      final externalProject = _projectJson(revision: 9, name: 'External');
+      final externalHead = store.register(externalProject);
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+
+      await expectLater(
+        session.deriveAndSave<void>((latestProjectJson) {
+          expect(latestProjectJson, original);
+          return ManagedProjectDerivedCandidate(
+            projectJson: _projectJson(revision: 1, name: 'Local'),
+            value: null,
+          );
+        }),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+
+      expect(store.prepareCalls, prepareCallsBefore);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'derive rejection checks missing, noncanonical, and replaced heads first',
+    () async {
+      for (final mode in <String>['missing', 'noncanonical', 'replaced']) {
+        final root = Directory(p.join(fixture.path, 'project-$mode'));
+        await root.create();
+        final store = _FakeManagedStore();
+        final original = _projectJson(revision: 0, name: 'Original');
+        final session = await ManagedAuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+          profile: AuthoringValidationProfile.experimental,
+        );
+        final prepareCallsBefore = store.prepareCalls;
+        final openCallsBefore = store.openVerifications.length;
+        final headCallsBefore = store.headVerifications.length;
+        switch (mode) {
+          case 'missing':
+            await session.headFile.delete();
+          case 'noncanonical':
+            await session.headFile.writeAsString(
+              '${session.head.canonicalJson}\n',
+              flush: true,
+            );
+          case 'replaced':
+            final externalHead = store.register(
+              _projectJson(revision: 9, name: 'External'),
+            );
+            await session.headFile.writeAsString(
+              externalHead.canonicalJson,
+              flush: true,
+            );
+        }
+        var callbackInvoked = false;
+
+        await expectLater(
+          session.deriveAndSave<void>((_) {
+            callbackInvoked = true;
+            return const ManagedProjectDerivedRejection(null);
+          }),
+          throwsA(isA<ManagedProjectSessionException>()),
+        );
+
+        expect(callbackInvoked, isFalse, reason: mode);
+        expect(store.prepareCalls, prepareCallsBefore, reason: mode);
+        expect(store.openVerifications.length, openCallsBefore, reason: mode);
+        expect(store.headVerifications.length, headCallsBefore, reason: mode);
+        expect(session.requiresReopen, isTrue, reason: mode);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'async rejection fails if the exact head drifts during callback',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final prepareCallsBefore = store.prepareCalls;
+      final openCallsBefore = store.openVerifications.length;
+      final headCallsBefore = store.headVerifications.length;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final derived = session.deriveAndSave<void>((_) async {
+        entered.complete();
+        await release.future;
+        return const ManagedProjectDerivedRejection(null);
+      });
+      await entered.future.timeout(const Duration(seconds: 1));
+      final externalHead = store.register(
+        _projectJson(revision: 9, name: 'External'),
+      );
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+      release.complete();
+
+      await expectLater(
+        derived.timeout(const Duration(seconds: 1)),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(store.prepareCalls, prepareCallsBefore);
+      expect(store.openVerifications.length, openCallsBefore);
+      expect(store.headVerifications.length, headCallsBefore);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'async callback failure still poisons if the exact head drifts',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final prepareCallsBefore = store.prepareCalls;
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final derived = session.deriveAndSave<void>((_) async {
+        entered.complete();
+        await release.future;
+        throw StateError('callback failed');
+      });
+      await entered.future.timeout(const Duration(seconds: 1));
+      final externalHead = store.register(
+        _projectJson(revision: 9, name: 'External'),
+      );
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+      release.complete();
+
+      await expectLater(
+        derived.timeout(const Duration(seconds: 1)),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(store.prepareCalls, prepareCallsBefore);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
   test('save rejects exact head drift without overwriting it', () async {
     final root = Directory(p.join(fixture.path, 'project'));
     await root.create();
