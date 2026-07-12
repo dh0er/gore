@@ -197,6 +197,7 @@ class ManagedAuthoringProjectSession {
   AuthoringWorkingHead get head => _opened.head;
   List<AuthoringDiagnostic> get diagnostics => _opened.diagnostics;
   bool get blocksBuild => _opened.blocksBuild;
+  AuthoringValidationProfile get profile => _profile;
   bool get isClosed => _closed;
 
   /// True after an I/O or verification failure leaves publication state

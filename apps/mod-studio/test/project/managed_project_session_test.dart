@@ -35,6 +35,7 @@ void main() {
       profile: AuthoringValidationProfile.experimental,
     );
     final firstHead = created.head.canonicalJson;
+    expect(created.profile, AuthoringValidationProfile.experimental);
     expect(created.projectJson, firstProject);
     expect(await created.headFile.readAsString(), firstHead);
 
@@ -52,6 +53,7 @@ void main() {
       store: store,
       profile: AuthoringValidationProfile.experimental,
     );
+    expect(reopened.profile, AuthoringValidationProfile.experimental);
     expect(reopened.head.canonicalJson, secondHead);
     expect(reopened.projectJson, secondProject);
     await reopened.close();
