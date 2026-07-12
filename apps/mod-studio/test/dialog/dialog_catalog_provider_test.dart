@@ -85,6 +85,35 @@ void main() {
       expect(line.speaker, 'guard');
       expect(line.groupKey, group.groupKey);
     });
+
+    test('actor-qualified Asghan and Viper lines use speaker names', () {
+      final rows = buildDialogRows({
+        'grd_263_asghan_open_info_06_02': {'de_A': 'Asghan'},
+        'stt_302_viper_greet_info_11_02': {'de_A': 'Viper'},
+        'grd_armor_bot_h_01': {'de_A': 'not dialog'},
+      });
+
+      expect(rows.whereType<DialogGroupRow>().map((group) => group.speaker), [
+        'asghan',
+        'viper',
+      ]);
+      expect(rows.whereType<DialogLineRow>().map((line) => line.id), [
+        'grd_263_asghan_open_info_06_02',
+        'stt_302_viper_greet_info_11_02',
+      ]);
+    });
+
+    test('historic psi-qualified mission lines use actual speaker', () {
+      final rows = buildDialogRows({
+        'mis_1_psi_kalom_success_10_01': {'de_A': 'Kalom'},
+        'sit_2_psi_yberion_bringfocus_info_12_02': {'de_A': 'Yberion'},
+      });
+
+      expect(rows.whereType<DialogGroupRow>().map((group) => group.speaker), [
+        'kalom',
+        'yberion',
+      ]);
+    });
   });
 
   group('buildDialogRows with onlyIds', () {
@@ -187,8 +216,11 @@ void main() {
       expect(isDialogLocId('dia_alice_001'), isTrue);
       expect(isDialogLocId('gvl_zed_001'), isTrue);
       expect(isDialogLocId('svm_guard_001'), isTrue);
+      expect(isDialogLocId('grd_263_asghan_open_info_06_02'), isTrue);
+      expect(isDialogLocId('stt_302_viper_greet_info_11_02'), isTrue);
       expect(isDialogLocId('itfo_apple_name'), isFalse);
       expect(isDialogLocId('text_menu_001'), isFalse);
+      expect(isDialogLocId('grd_armor_bot_h_01'), isFalse);
       // Whole-token match, not a substring prefix match.
       expect(isDialogLocId('information_x'), isFalse);
     });

@@ -7,6 +7,7 @@ import '../../loc/domain/loc_catalog_provider.dart';
 /// `itfo_`) is excluded.
 const Set<String> _kConversationPrefixes = {'info', 'dia'};
 const Set<String> _kBarkPrefixes = {'gvl', 'svm'};
+final RegExp _digitsOnly = RegExp(r'^\d+$');
 
 /// One row in the flattened dialog list: either a speaker group header or a
 /// single dialog line under it.
@@ -84,12 +85,34 @@ String _leadingToken(String id) {
 bool isDialogLocId(String id) {
   final token = _leadingToken(id);
   return _kConversationPrefixes.contains(token) ||
-      _kBarkPrefixes.contains(token);
+      _kBarkPrefixes.contains(token) ||
+      _isActorQualifiedDialog(id);
+}
+
+/// The remake also uses actor-qualified IDs such as
+/// `grd_263_asghan_open_info_06_02` and
+/// `stt_302_viper_greet_info_11_02`. Requiring an actor number and the two
+/// numeric voice suffixes keeps unrelated IDs such as `grd_armor_bot_h_01`
+/// out of the dialog browser.
+bool _isActorQualifiedDialog(String id) {
+  final tokens = id.split('_');
+  return tokens.length >= 6 &&
+      tokens.first.isNotEmpty &&
+      _digitsOnly.hasMatch(tokens[1]) &&
+      tokens[2].isNotEmpty &&
+      _digitsOnly.hasMatch(tokens[tokens.length - 2]) &&
+      _digitsOnly.hasMatch(tokens.last);
 }
 
 /// Second underscore token of [id], the speaker (`info_aaron_001` -> `aaron`,
 /// `gvl_g1hero_x` -> `g1hero`). Falls back to the whole id when absent.
 String _speakerToken(String id) {
+  if (_isActorQualifiedDialog(id)) {
+    final tokens = id.split('_');
+    // A small set of historic mission IDs keeps the `psi` guild marker
+    // between the actor number and the actual speaker name.
+    return tokens[2] == 'psi' && tokens.length >= 7 ? tokens[3] : tokens[2];
+  }
   final first = id.indexOf('_');
   if (first < 0) return id;
   final second = id.indexOf('_', first + 1);
