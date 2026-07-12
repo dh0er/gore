@@ -12,11 +12,16 @@
 //! - `voice_archive_list` — payload `{archive}`; returns exact entries plus the captured
 //!   `archive_size`/`archive_sha256` seal. Fails with `VOICE_ARCHIVE_LIMIT` for bounded ZIP
 //!   metadata violations or `VOICE_RESPONSE_LIMIT` before an oversized JSON result is built.
+//! - `voice_archive_match_line` — payload `{archive, loc_id}`; forms exact `${loc_id}.ogg` and
+//!   returns every eligible ASCII case-insensitive basename match plus
+//!   `unresolved|unique|ambiguous` and the captured archive seal. It rejects unsafe/unextractable
+//!   exact collisions, never selects an ambiguous member, searches substrings, or invents a path.
 //! - `voice_archive_extract` — payload `{archive, expected_archive_size,
 //!   expected_archive_sha256, entry_path, output_root}`; extracts only if that seal still matches.
 //!   The FFI caps archive entries at 50,000, central metadata at 64 MiB, entry paths at 1 KiB,
 //!   one extracted entry at 256 MiB, aggregate uncompressed metadata at 16 GiB, and list JSON at
-//!   8 MiB. Filesystem-path request strings are capped at 32 KiB.
+//!   8 MiB. Line-match localization IDs are capped at 512 bytes and match JSON at 1 MiB.
+//!   Filesystem-path request strings are capped at 32 KiB.
 
 mod voice;
 
@@ -114,6 +119,7 @@ fn dispatch(input: &str) -> Value {
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
         "voice_archive_list" => voice::archive_list(payload),
+        "voice_archive_match_line" => voice::archive_match_line(payload),
         "voice_archive_extract" => voice::archive_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }

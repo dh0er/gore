@@ -1,6 +1,7 @@
 import 'core_service.dart';
 
-/// Typed wrappers over the gore-ffi commands for audio + unified mod build/deploy.
+/// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, and unified
+/// mod build/deploy.
 class ModFfi {
   ModFfi(this._core);
   final GoreCoreFfiService _core;
@@ -35,6 +36,20 @@ class ModFfi {
     if (key != null) payload['key'] = key;
     final r = await _call('audio_extract', payload);
     return r['ogg_path'] as String;
+  }
+
+  /// Resolve every eligible exact ASCII case-insensitive `${locId}.ogg` basename in one read-only
+  /// voice snapshot.
+  /// Ambiguous matches are returned in full and are never selected by the backend.
+  Future<VoiceArchiveMatchLineResult> voiceArchiveMatchLine({
+    required String archive,
+    required String locId,
+  }) async {
+    final r = await _call('voice_archive_match_line', {
+      'archive': archive,
+      'loc_id': locId,
+    });
+    return VoiceArchiveMatchLineResult.fromJson(r);
   }
 
   /// Build the unified bundle into `outDir`; returns the bundle dir.
@@ -149,6 +164,285 @@ class AudioSampleInfo {
     channels: (j['channels'] as num).toInt(),
     seconds: (j['seconds'] as num).toDouble(),
   );
+}
+
+enum VoiceArchiveLineResolution { unresolved, unique, ambiguous }
+
+String _voiceRequiredString(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! String) {
+    throw FormatException('voice response field $field is not a string');
+  }
+  return value;
+}
+
+int _voiceRequiredInt(
+  Map<String, Object?> json,
+  String field, {
+  int min = 0,
+  int? max,
+}) {
+  final value = json[field];
+  if (value is! int || value < min || (max != null && value > max)) {
+    throw FormatException(
+      'voice response field $field is not an integer in range '
+      '$min..${max ?? 'unbounded'}',
+    );
+  }
+  return value;
+}
+
+int? _voiceOptionalInt(
+  Map<String, Object?> json,
+  String field, {
+  int min = 0,
+  int? max,
+}) {
+  if (json[field] == null) return null;
+  return _voiceRequiredInt(json, field, min: min, max: max);
+}
+
+bool _voiceRequiredBool(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! bool) {
+    throw FormatException('voice response field $field is not a bool');
+  }
+  return value;
+}
+
+bool _isAscii(String value) => value.codeUnits.every((unit) => unit <= 0x7f);
+
+bool _asciiCaseEquals(String left, String right) =>
+    _isAscii(left) &&
+    _isAscii(right) &&
+    left.toLowerCase() == right.toLowerCase();
+
+class VoiceArchiveMatchLineResult {
+  const VoiceArchiveMatchLineResult({
+    required this.archive,
+    required this.archiveSize,
+    required this.archiveSha256,
+    required this.locId,
+    required this.expectedBasename,
+    required this.resolution,
+    required this.matches,
+  });
+
+  final String archive;
+  final int archiveSize;
+  final String archiveSha256;
+  final String locId;
+  final String expectedBasename;
+  final VoiceArchiveLineResolution resolution;
+  final List<VoiceArchiveEntryInfo> matches;
+
+  factory VoiceArchiveMatchLineResult.fromJson(Map<String, Object?> j) {
+    final archive = _voiceRequiredString(j, 'archive');
+    final archiveSize = _voiceRequiredInt(j, 'archive_size');
+    final locId = _voiceRequiredString(j, 'loc_id');
+    if (!_isAscii(locId)) {
+      throw const FormatException(
+        'voice match response has a non-ASCII loc_id',
+      );
+    }
+    final expectedBasename = _voiceRequiredString(j, 'expected_basename');
+    if (expectedBasename != '$locId.ogg') {
+      throw const FormatException(
+        'voice match expected_basename does not equal loc_id + .ogg',
+      );
+    }
+
+    final rawMatches = j['matches'];
+    if (rawMatches is! List) {
+      throw const FormatException('voice match response has no matches array');
+    }
+    final matches = <VoiceArchiveEntryInfo>[];
+    for (final rawMatch in rawMatches) {
+      if (rawMatch is! Map) {
+        throw const FormatException(
+          'voice match response contains a non-object match',
+        );
+      }
+      final match = VoiceArchiveEntryInfo.fromJson(
+        rawMatch.cast<String, Object?>(),
+      );
+      if (!_asciiCaseEquals(match.basename, expectedBasename)) {
+        throw const FormatException(
+          'voice match basename does not match expected_basename',
+        );
+      }
+      final pathParts = match.path.split('/');
+      if (match.path.isEmpty ||
+          match.path.contains('\\') ||
+          pathParts.isEmpty ||
+          pathParts.last != match.basename) {
+        throw const FormatException(
+          'voice match basename is inconsistent with its entry path',
+        );
+      }
+      if (match.isDirectory || match.isSymlink || match.encrypted) {
+        throw const FormatException(
+          'voice match response contains an ineligible entry',
+        );
+      }
+      final expectedCompression = switch (match.compressionCode) {
+        0 => 'stored',
+        8 => 'deflated',
+        _ => throw const FormatException(
+          'voice match response contains unsupported compression',
+        ),
+      };
+      if (match.compression != expectedCompression) {
+        throw const FormatException(
+          'voice match compression label/code mismatch',
+        );
+      }
+      matches.add(match);
+    }
+
+    final resolution = switch (j['resolution']) {
+      'unresolved' => VoiceArchiveLineResolution.unresolved,
+      'unique' => VoiceArchiveLineResolution.unique,
+      'ambiguous' => VoiceArchiveLineResolution.ambiguous,
+      final value => throw FormatException(
+        'unknown voice line resolution: $value',
+      ),
+    };
+    final matchCount = _voiceRequiredInt(j, 'match_count');
+    final countMatchesResolution = switch (resolution) {
+      VoiceArchiveLineResolution.unresolved => matchCount == 0,
+      VoiceArchiveLineResolution.unique => matchCount == 1,
+      VoiceArchiveLineResolution.ambiguous => matchCount > 1,
+    };
+    if (matchCount != matches.length || !countMatchesResolution) {
+      throw FormatException(
+        'voice match count/resolution mismatch: '
+        '$matchCount/${matches.length}/$resolution',
+      );
+    }
+
+    final archiveSha256 = _voiceRequiredString(j, 'archive_sha256');
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(archiveSha256)) {
+      throw const FormatException(
+        'voice match response has an invalid archive SHA-256',
+      );
+    }
+    return VoiceArchiveMatchLineResult(
+      archive: archive,
+      archiveSize: archiveSize,
+      archiveSha256: archiveSha256,
+      locId: locId,
+      expectedBasename: expectedBasename,
+      resolution: resolution,
+      matches: List.unmodifiable(matches),
+    );
+  }
+}
+
+class VoiceArchiveEntryInfo {
+  const VoiceArchiveEntryInfo({
+    required this.index,
+    required this.path,
+    required this.basename,
+    required this.compressedSize,
+    required this.uncompressedSize,
+    required this.crc32,
+    required this.compression,
+    required this.compressionCode,
+    required this.lastModified,
+    required this.unixMode,
+    required this.isDirectory,
+    required this.isSymlink,
+    required this.encrypted,
+  });
+
+  final int index;
+  final String path;
+  final String basename;
+  final int compressedSize;
+  final int uncompressedSize;
+  final int crc32;
+  final String compression;
+  final int compressionCode;
+  final VoiceArchiveEntryTimestamp? lastModified;
+  final int? unixMode;
+  final bool isDirectory;
+  final bool isSymlink;
+  final bool encrypted;
+
+  factory VoiceArchiveEntryInfo.fromJson(Map<String, Object?> j) {
+    final rawLastModified = j['last_modified'];
+    final lastModified = switch (rawLastModified) {
+      null => null,
+      final Map value => VoiceArchiveEntryTimestamp.fromJson(
+        value.cast<String, Object?>(),
+      ),
+      _ => throw const FormatException(
+        'voice archive entry has invalid last_modified metadata',
+      ),
+    };
+    return VoiceArchiveEntryInfo(
+      index: _voiceRequiredInt(j, 'index'),
+      path: _voiceRequiredString(j, 'path'),
+      basename: _voiceRequiredString(j, 'basename'),
+      compressedSize: _voiceRequiredInt(j, 'compressed_size'),
+      uncompressedSize: _voiceRequiredInt(j, 'uncompressed_size'),
+      crc32: _voiceRequiredInt(j, 'crc32', max: 0xffffffff),
+      compression: _voiceRequiredString(j, 'compression'),
+      compressionCode: _voiceRequiredInt(j, 'compression_code', max: 0xffff),
+      lastModified: lastModified,
+      unixMode: _voiceOptionalInt(j, 'unix_mode', max: 0xffffffff),
+      isDirectory: _voiceRequiredBool(j, 'is_directory'),
+      isSymlink: _voiceRequiredBool(j, 'is_symlink'),
+      encrypted: _voiceRequiredBool(j, 'encrypted'),
+    );
+  }
+}
+
+class VoiceArchiveEntryTimestamp {
+  const VoiceArchiveEntryTimestamp({
+    required this.year,
+    required this.month,
+    required this.day,
+    required this.hour,
+    required this.minute,
+    required this.second,
+  });
+
+  final int year;
+  final int month;
+  final int day;
+  final int hour;
+  final int minute;
+  final int second;
+
+  factory VoiceArchiveEntryTimestamp.fromJson(Map<String, Object?> j) {
+    final year = _voiceRequiredInt(j, 'year', min: 1980, max: 2107);
+    final month = _voiceRequiredInt(j, 'month', min: 1, max: 12);
+    final day = _voiceRequiredInt(j, 'day', min: 1, max: 31);
+    final hour = _voiceRequiredInt(j, 'hour', max: 23);
+    final minute = _voiceRequiredInt(j, 'minute', max: 59);
+    final second = _voiceRequiredInt(j, 'second', max: 59);
+    final timestamp = DateTime.utc(year, month, day, hour, minute, second);
+    if (timestamp.year != year ||
+        timestamp.month != month ||
+        timestamp.day != day ||
+        timestamp.hour != hour ||
+        timestamp.minute != minute ||
+        timestamp.second != second) {
+      throw const FormatException(
+        'voice archive entry has an invalid calendar timestamp',
+      );
+    }
+    return VoiceArchiveEntryTimestamp(
+      year: year,
+      month: month,
+      day: day,
+      hour: hour,
+      minute: minute,
+      second: second,
+    );
+  }
 }
 
 class ScriptModuleInfo {
