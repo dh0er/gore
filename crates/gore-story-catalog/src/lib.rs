@@ -25,11 +25,15 @@ pub const MAX_TEXT_BYTES: usize = 4 * 1024;
 const STORY_FORMAT: &str = "story_catalog";
 const STORY_SCHEMA_REVISION: u32 = 1;
 const RECORD_SET_ID: &str = "g1r-steam-1.0.3-curated-story-v1";
-const RECORD_SET_BYTE_LEN: u64 = 5_410;
-const RECORD_SET_SHA256: &str = "c6ca7fc2537046c767468181b8e2301758035343d165a3f8e02dc3ae8f670de0";
-const CATALOG_PAYLOAD_BYTE_LEN: u64 = 5_522;
+const RECORD_SET_BYTE_LEN: u64 = 5_499;
+const RECORD_SET_SHA256: &str = "323ffe3fb3d6394c0d4397d090aabddb5e87c1ac7e5cecd14382b0a4f0516fc8";
+const CATALOG_PAYLOAD_BYTE_LEN: u64 = 5_611;
 const CATALOG_PAYLOAD_SHA256: &str =
-    "62f17d78b4d18be4809aba4cadf8530943d21590e21f4a85b46123accc115072";
+    "51192393aa28cff00b1a4e59de7793a8db354e30692569719c4b46e2f9bc4853";
+const VIPER_OFFLINE_EVIDENCE_ID: &str = concat!(
+    "npc-logical-clone-v1:viper-current-v1:proof-format-v1:",
+    "sha256-b65b551f1f7d0c783c982250c87934287141cc3bf29013ba58c9cdce5852e68a"
+);
 const BASE_GAME_LAYER: &str = "base-game.g1r.scripts";
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_EXE_BYTES_HARD: u64 = 512 * 1024 * 1024;
@@ -916,8 +920,8 @@ fn curated_records_v1() -> VerifiedExtractionRecords {
                 "UAIAgentConfig_Human_OM_STT_Viper_302",
                 known_seal(932, "dde3f35f70f23a1ae77f0768d7a947fc2fbd9deaac4b3c12a5bad4f35725220b"),
                 "USpawnAIAgentDefinition_OM_STT_Viper_302",
-                NpcAuthoringQualification::CatalogObserved,
-                "current-cache-defaults-viper-20260712",
+                NpcAuthoringQualification::OfflineQualified,
+                VIPER_OFFLINE_EVIDENCE_ID,
             ),
         ],
         quest_parents: vec![QuestParentCatalogEntry {
@@ -2070,6 +2074,10 @@ mod tests {
             catalog.wire.catalog.npcs[0].authoring_qualification,
             NpcAuthoringQualification::OfflineQualified
         );
+        assert!(catalog.wire.catalog.npcs.iter().all(|npc| {
+            npc.authoring_qualification == NpcAuthoringQualification::OfflineQualified
+                && npc.runtime_qualification == RuntimeQualification::RuntimeUnqualified
+        }));
     }
 
     #[test]
@@ -2099,11 +2107,17 @@ mod tests {
             .unwrap();
         assert_eq!(
             viper.authoring_qualification,
-            NpcAuthoringQualification::CatalogObserved
+            NpcAuthoringQualification::OfflineQualified
         );
         assert_eq!(
             viper.runtime_qualification,
             RuntimeQualification::RuntimeUnqualified
+        );
+        assert_eq!(viper.evidence_id, VIPER_OFFLINE_EVIDENCE_ID);
+        validate_catalog_id(&viper.evidence_id).unwrap();
+        assert_eq!(
+            serde_json::to_value(viper).unwrap()["blocks_build"],
+            serde_json::Value::Bool(true)
         );
 
         let quest = &records.quest_parents[0];
@@ -2173,7 +2187,7 @@ mod tests {
 
         let mut forged_qualification = catalog.wire.clone();
         forged_qualification.catalog.npcs[1].authoring_qualification =
-            NpcAuthoringQualification::OfflineQualified;
+            NpcAuthoringQualification::CatalogObserved;
         reseal_wire(&mut forged_qualification);
         let bytes = canonical_json(
             &forged_qualification,
@@ -2193,6 +2207,39 @@ mod tests {
         assert!(matches!(
             StoryCatalogFile::from_json(&bytes),
             Err(CatalogError::Invariant(message)) if message.contains("strictly increasing")
+        ));
+    }
+
+    #[test]
+    fn trusted_reader_rejects_pre_viper_offline_catalog_bytes_and_status() {
+        let catalog = trusted_catalog();
+        let mut old = catalog.wire.clone();
+        let viper = old
+            .catalog
+            .npcs
+            .iter_mut()
+            .find(|npc| npc.runtime_unique_name == "OM_STT_Viper_302")
+            .unwrap();
+        viper.authoring_qualification = NpcAuthoringQualification::CatalogObserved;
+        viper.evidence_id = "current-cache-defaults-viper-20260712".to_owned();
+        reseal_wire(&mut old);
+
+        assert_eq!(old.catalog.record_set_seal.byte_len, 5_410);
+        assert_eq!(
+            old.catalog.record_set_seal.sha256.to_string(),
+            "c6ca7fc2537046c767468181b8e2301758035343d165a3f8e02dc3ae8f670de0"
+        );
+        assert_eq!(old.catalog_seal.byte_len, 5_522);
+        assert_eq!(
+            old.catalog_seal.sha256.to_string(),
+            "62f17d78b4d18be4809aba4cadf8530943d21590e21f4a85b46123accc115072"
+        );
+
+        let old_bytes = canonical_json(&old, "old story catalog", MAX_CATALOG_JSON_BYTES).unwrap();
+        assert!(String::from_utf8_lossy(&old_bytes).contains("\"catalog_observed\""));
+        assert!(matches!(
+            StoryCatalogFile::from_json(&old_bytes),
+            Err(CatalogError::UntrustedCatalog(_))
         ));
     }
 
@@ -2461,6 +2508,9 @@ mod tests {
         let (before_handle, before) = open_regular_no_follow(&path, true).unwrap();
         drop(before_handle);
 
+        // Some Windows filesystems coalesce metadata timestamps for back-to-back rewrites. Cross
+        // that clock tick so this test exercises the intended change-stamp branch deterministically.
+        std::thread::sleep(std::time::Duration::from_millis(20));
         fs::write(&path, b"after!").unwrap();
         let (after_handle, after) = open_regular_no_follow(&path, true).unwrap();
         drop(after_handle);
