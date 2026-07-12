@@ -21,6 +21,8 @@ pub const MAX_RECORD_SET_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_NPCS: usize = 2;
 pub const MAX_QUEST_PARENTS: usize = 1;
 pub const MAX_TEXT_BYTES: usize = 4 * 1024;
+pub const AUTHORING_SELECTION_SCHEMA_REVISION: u32 = 1;
+pub const QUEST_COLLISION_CATALOG_LAYER: &str = "resolved-loadout.scripts.v1";
 
 const STORY_FORMAT: &str = "story_catalog";
 const STORY_SCHEMA_REVISION: u32 = 1;
@@ -428,6 +430,81 @@ struct StoryCatalogWire {
     catalog_seal: ContentSeal,
 }
 
+/// Closed, read-only projection used by normal authoring clients.
+///
+/// It deliberately omits source modules, relative paths, and raw cache bytes. `authoring_selector`
+/// is a stable identifier-safe alias derived from the pinned catalog record and role; the richer
+/// `source_catalog_selector` remains provenance only and must never be copied into a Draft input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthoringClassSelection {
+    pub catalog_layer: String,
+    pub authoring_selector: String,
+    pub source_catalog_selector: String,
+    pub runtime_class: String,
+    pub source_seal: ContentSeal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthoringQuestGiverSelection {
+    pub catalog_layer: String,
+    pub authoring_selector: String,
+    pub source_catalog_selector: String,
+    pub runtime_unique_name: String,
+    pub source_seal: ContentSeal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthoringNpcSelection {
+    pub catalog_id: String,
+    pub display_name: String,
+    pub runtime_unique_name: String,
+    pub character_definition: AuthoringClassSelection,
+    pub ai_agent_config: AuthoringClassSelection,
+    pub spawn_definition: AuthoringClassSelection,
+    pub quest_giver: AuthoringQuestGiverSelection,
+    pub discovery_status: String,
+    pub authoring_qualification: String,
+    pub runtime_qualification: String,
+    pub evidence_id: String,
+    pub blocks_build: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthoringQuestParentSelection {
+    pub catalog_id: String,
+    pub display_name: String,
+    pub quest_class: AuthoringClassSelection,
+    pub parent_class_name: String,
+    pub role: String,
+    pub qualification: String,
+    pub transition_qualification: String,
+    pub evidence_id: String,
+    pub blocks_build: bool,
+}
+
+/// Honest boundary for the current catalog revision. The pinned Shipping-cache seal is available,
+/// but the complete module/path/symbol collision inventory is not part of `story_catalog.v1`.
+/// Consequently a normal client can populate NPC provenance and Quest giver/parent provenance,
+/// but must keep Quest creation disabled until a separately sealed inventory is supplied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuthoringQuestCollisionCatalogAvailability {
+    pub status: String,
+    pub catalog_layer: String,
+    pub source_seal: ContentSeal,
+    pub blocks_draft_creation: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StoryCatalogAuthoringSelections {
+    pub schema_revision: u32,
+    pub generation: GameGenerationSeal,
+    pub catalog_seal: ContentSeal,
+    pub npcs: Vec<AuthoringNpcSelection>,
+    pub quest_parents: Vec<AuthoringQuestParentSelection>,
+    pub quest_collision_catalog: AuthoringQuestCollisionCatalogAvailability,
+    pub blocks_build: bool,
+}
+
 /// A fully verified `story_catalog.v1` document.
 ///
 /// This type cannot be deserialized or constructed by callers. `from_json` and `read_catalog`
@@ -483,6 +560,40 @@ impl StoryCatalogFile {
 
     pub fn catalog_seal(&self) -> &ContentSeal {
         &self.wire.catalog_seal
+    }
+
+    /// Return only the pinned, bounded fields needed by a friendly NPC/Quest chooser.
+    pub fn authoring_selections(&self) -> Result<StoryCatalogAuthoringSelections, CatalogError> {
+        validate_catalog_file(self)?;
+        let generation = self.wire.catalog.generation.clone();
+        let npcs = self
+            .wire
+            .catalog
+            .npcs
+            .iter()
+            .map(authoring_npc_selection)
+            .collect();
+        let quest_parents = self
+            .wire
+            .catalog
+            .quest_parents
+            .iter()
+            .map(authoring_quest_parent_selection)
+            .collect();
+        Ok(StoryCatalogAuthoringSelections {
+            schema_revision: AUTHORING_SELECTION_SCHEMA_REVISION,
+            catalog_seal: self.wire.catalog_seal.clone(),
+            npcs,
+            quest_parents,
+            quest_collision_catalog: AuthoringQuestCollisionCatalogAvailability {
+                status: "inventory_unavailable".to_owned(),
+                catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                source_seal: generation.shipping_cache.clone(),
+                blocks_draft_creation: true,
+            },
+            generation,
+            blocks_build: true,
+        })
     }
 }
 
@@ -865,6 +976,106 @@ pub fn read_catalog(path: impl AsRef<Path>) -> Result<StoryCatalogFile, CatalogE
     let path = path.as_ref();
     let bytes = read_bounded(path, MAX_CATALOG_JSON_BYTES, "story catalog JSON bytes")?;
     StoryCatalogFile::from_json(&bytes)
+}
+
+fn authoring_npc_selection(entry: &NpcCatalogEntry) -> AuthoringNpcSelection {
+    let character_definition = authoring_class_selection(
+        &entry.catalog_id,
+        "character_definition",
+        &entry.character_definition,
+    );
+    AuthoringNpcSelection {
+        catalog_id: entry.catalog_id.clone(),
+        display_name: entry.display_name.clone(),
+        runtime_unique_name: entry.runtime_unique_name.clone(),
+        quest_giver: AuthoringQuestGiverSelection {
+            catalog_layer: entry.character_definition.catalog_layer.clone(),
+            authoring_selector: authoring_selector_alias(&entry.catalog_id, "quest_giver"),
+            source_catalog_selector: entry.character_definition.canonical_selector.clone(),
+            runtime_unique_name: entry.runtime_unique_name.clone(),
+            source_seal: entry.character_definition.source_seal.clone(),
+        },
+        character_definition,
+        ai_agent_config: authoring_class_selection(
+            &entry.catalog_id,
+            "ai_agent_config",
+            &entry.ai_agent_config,
+        ),
+        spawn_definition: authoring_class_selection(
+            &entry.catalog_id,
+            "spawn_definition",
+            &entry.spawn_definition,
+        ),
+        discovery_status: match entry.discovery_status {
+            NpcDiscoveryStatus::SealedCacheDefaultsVerified => {
+                "sealed_cache_defaults_verified".to_owned()
+            }
+        },
+        authoring_qualification: match entry.authoring_qualification {
+            NpcAuthoringQualification::OfflineQualified => "offline_qualified".to_owned(),
+            NpcAuthoringQualification::CatalogObserved => "catalog_observed".to_owned(),
+        },
+        runtime_qualification: runtime_qualification(entry.runtime_qualification),
+        evidence_id: entry.evidence_id.clone(),
+        blocks_build: true,
+    }
+}
+
+fn authoring_quest_parent_selection(
+    entry: &QuestParentCatalogEntry,
+) -> AuthoringQuestParentSelection {
+    AuthoringQuestParentSelection {
+        catalog_id: entry.catalog_id.clone(),
+        display_name: entry.display_name.clone(),
+        quest_class: authoring_class_selection(
+            &entry.catalog_id,
+            "quest_parent",
+            &entry.quest_class,
+        ),
+        parent_class_name: entry.parent_class_name.clone(),
+        role: match entry.role {
+            QuestParentRole::Chapter => "chapter".to_owned(),
+        },
+        qualification: match entry.qualification {
+            QuestParentQualification::CuratedDefaultsVerified => {
+                "curated_defaults_verified".to_owned()
+            }
+        },
+        transition_qualification: runtime_qualification(entry.transition_qualification),
+        evidence_id: entry.evidence_id.clone(),
+        blocks_build: true,
+    }
+}
+
+fn authoring_class_selection(
+    catalog_id: &str,
+    role: &str,
+    class: &CatalogClassRef,
+) -> AuthoringClassSelection {
+    AuthoringClassSelection {
+        catalog_layer: class.catalog_layer.clone(),
+        authoring_selector: authoring_selector_alias(catalog_id, role),
+        source_catalog_selector: class.canonical_selector.clone(),
+        runtime_class: class.class_name.clone(),
+        source_seal: class.source_seal.clone(),
+    }
+}
+
+fn runtime_qualification(value: RuntimeQualification) -> String {
+    match value {
+        RuntimeQualification::RuntimeUnqualified => "runtime_unqualified".to_owned(),
+    }
+}
+
+fn authoring_selector_alias(catalog_id: &str, role: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"gore-story-catalog.authoring-selector-v1\0");
+    for value in [catalog_id.as_bytes(), role.as_bytes()] {
+        digest.update((value.len() as u64).to_le_bytes());
+        digest.update(value);
+    }
+    let bytes: [u8; 32] = digest.finalize().into();
+    format!("Catalog_{}", Sha256Digest::from_bytes(bytes))
 }
 
 pub fn known_generation_v1() -> GameGenerationSeal {
@@ -2078,6 +2289,84 @@ mod tests {
             npc.authoring_qualification == NpcAuthoringQualification::OfflineQualified
                 && npc.runtime_qualification == RuntimeQualification::RuntimeUnqualified
         }));
+    }
+
+    #[test]
+    fn authoring_projection_is_bounded_friendly_and_never_invents_quest_collisions() {
+        let catalog = trusted_catalog();
+        let first = catalog.authoring_selections().unwrap();
+        let second = catalog.authoring_selections().unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.schema_revision, AUTHORING_SELECTION_SCHEMA_REVISION);
+        assert_eq!(first.npcs.len(), MAX_NPCS);
+        assert_eq!(first.quest_parents.len(), MAX_QUEST_PARENTS);
+        assert!(first.blocks_build);
+        assert_eq!(
+            first.quest_collision_catalog.status,
+            "inventory_unavailable"
+        );
+        assert!(first.quest_collision_catalog.blocks_draft_creation);
+        assert_eq!(
+            first.quest_collision_catalog.source_seal,
+            first.generation.shipping_cache
+        );
+
+        let mut aliases = BTreeSet::new();
+        for npc in &first.npcs {
+            assert_eq!(npc.authoring_qualification, "offline_qualified");
+            assert_eq!(npc.runtime_qualification, "runtime_unqualified");
+            assert!(npc.blocks_build);
+            for (role, class) in [
+                ("character_definition", &npc.character_definition),
+                ("ai_agent_config", &npc.ai_agent_config),
+                ("spawn_definition", &npc.spawn_definition),
+            ] {
+                assert!(class.authoring_selector.starts_with("Catalog_"));
+                assert_eq!(class.authoring_selector.len(), 72);
+                assert_eq!(
+                    class.authoring_selector,
+                    authoring_selector_alias(&npc.catalog_id, role)
+                );
+                assert_eq!(class.catalog_layer, BASE_GAME_LAYER);
+                assert!(class
+                    .authoring_selector
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_'));
+                assert!(aliases.insert(class.authoring_selector.clone()));
+                assert!(class.source_catalog_selector.starts_with("script-class:"));
+                assert!(class
+                    .source_catalog_selector
+                    .ends_with(&format!("/{}", class.runtime_class)));
+            }
+            assert_eq!(
+                npc.quest_giver.authoring_selector,
+                authoring_selector_alias(&npc.catalog_id, "quest_giver")
+            );
+            assert_eq!(
+                npc.quest_giver.source_catalog_selector,
+                npc.character_definition.source_catalog_selector
+            );
+            assert!(aliases.insert(npc.quest_giver.authoring_selector.clone()));
+        }
+        let parent = &first.quest_parents[0];
+        assert_eq!(parent.transition_qualification, "runtime_unqualified");
+        assert!(parent.blocks_build);
+        assert_eq!(
+            parent.quest_class.authoring_selector,
+            authoring_selector_alias(&parent.catalog_id, "quest_parent")
+        );
+        assert!(parent
+            .quest_class
+            .source_catalog_selector
+            .ends_with(&format!("/{}", parent.quest_class.runtime_class)));
+        assert!(aliases.insert(parent.quest_class.authoring_selector.clone()));
+
+        let wire = serde_json::to_value(&first).unwrap();
+        let encoded = serde_json::to_string(&wire).unwrap();
+        assert!(!encoded.contains("relative_path"));
+        assert!(!encoded.contains("\"module\""));
+        assert!(!encoded.contains("modules"));
+        assert!(!encoded.contains("symbols"));
     }
 
     #[test]

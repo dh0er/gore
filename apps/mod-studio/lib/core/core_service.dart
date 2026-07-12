@@ -57,6 +57,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_checkpoint',
   'authoring_store_prepare_document_checkpoint',
   'authoring_store_verify_asset',
+  'authoring_story_catalog_v1_read',
   'core_info',
   'find_game',
   'generate_mod',

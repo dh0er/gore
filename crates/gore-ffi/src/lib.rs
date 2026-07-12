@@ -22,6 +22,9 @@
 //! - `authoring_project_story_draft_insert_v1` atomically evaluates one raw, duplicate-safe Story
 //!   Draft mutation against one exact canonical schema-revision-2 project. Rejections never carry
 //!   candidate project JSON.
+//! - `authoring_story_catalog_v1_read` accepts one bounded raw canonical catalog string, verifies it
+//!   through the pinned `gore-story-catalog` reader, and returns a request-bound read-only chooser
+//!   projection. It never reads or writes game files.
 //! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
 //!   `authoring_store_prepare_checkpoint` retain the frozen schema-revision-1 working-store wire.
 //!   Their additive `*_document` counterparts dispatch between closed schema revisions 1 and 2.
@@ -49,6 +52,7 @@ mod authoring;
 mod authoring_drafts;
 mod authoring_store;
 mod authoring_story;
+mod authoring_story_catalog;
 mod transport;
 mod voice;
 
@@ -87,6 +91,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_verify_asset",
+    "authoring_story_catalog_v1_read",
     "core_info",
     "find_game",
     "generate_mod",
@@ -171,6 +176,9 @@ fn dispatch(input: &str) -> Value {
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_project_story_draft_insert_v1" => {
             authoring_story::insert_story_draft_v1(payload)
+        }
+        "authoring_story_catalog_v1_read" => {
+            authoring_story_catalog::read_story_catalog_v1(payload)
         }
         "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
         "authoring_store_open" => authoring_store::open(payload),
@@ -1043,6 +1051,7 @@ mod tests {
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_verify_asset",
+                    "authoring_story_catalog_v1_read",
                     "core_info",
                     "find_game",
                     "generate_mod",
@@ -1083,6 +1092,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_project_story_draft_insert_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_story_catalog_v1_read"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_logical_npc_clone_draft_v1_generate"));

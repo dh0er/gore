@@ -11,6 +11,9 @@ const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringStoryMutationJsonBytes = 20 * 1024 * 1024;
+const _maxAuthoringStoryCatalogJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringStoryCatalogNpcs = 2;
+const _maxAuthoringStoryCatalogQuestParents = 1;
 // This one FFI command deliberately stays within signed 64-bit JSON integers. A base at this
 // maximum can advance once to `_maxAuthoringStoryAppliedRevision` without becoming a double.
 const _maxAuthoringStoryBaseRevision = 0x7ffffffffffffffe;
@@ -172,6 +175,29 @@ class ModFfi {
       projectJson: projectJson,
       mutationJson: mutationJson,
       profile: profile,
+    );
+  }
+
+  /// Verify and project one exact pinned `story_catalog.v1` document without filesystem access.
+  Future<AuthoringStoryCatalogSelections> authoringStoryCatalogV1Read({
+    required String catalogJson,
+  }) async {
+    _authoringDraftRequestString(
+      catalogJson,
+      'catalogJson',
+      _maxAuthoringStoryCatalogJsonBytes,
+    );
+    const command = 'authoring_story_catalog_v1_read';
+    _authoringSingleRawJsonEnvelopePreflight(
+      command,
+      'catalog_json',
+      'catalogJson',
+      catalogJson,
+    );
+    final response = await _call(command, {'catalog_json': catalogJson});
+    return AuthoringStoryCatalogSelections.fromJson(
+      response,
+      catalogJson: catalogJson,
     );
   }
 
@@ -633,6 +659,19 @@ void _authoringStoryMutationEnvelopePreflight(
     'mutationJson',
     encodedBytes,
   );
+}
+
+void _authoringSingleRawJsonEnvelopePreflight(
+  String command,
+  String wireField,
+  String dartField,
+  String value,
+) {
+  final encodedBytes =
+      '{"command":"","payload":{"":""}}'.length +
+      command.length +
+      wireField.length;
+  _authoringAddEscapedJsonStringBytes(value, dartField, encodedBytes);
 }
 
 int _authoringAddEscapedJsonStringBytes(
@@ -2132,6 +2171,813 @@ class AuthoringProjectCheckResult {
     );
   }
 }
+
+enum AuthoringStoryCatalogNpcDiscoveryStatus { sealedCacheDefaultsVerified }
+
+enum AuthoringStoryCatalogNpcAuthoringQualification { offlineQualified }
+
+enum AuthoringStoryCatalogRuntimeQualification { runtimeUnqualified }
+
+enum AuthoringStoryCatalogQuestParentRole { chapter }
+
+enum AuthoringStoryCatalogQuestParentQualification { curatedDefaultsVerified }
+
+enum AuthoringStoryCatalogCollisionStatus { inventoryUnavailable }
+
+final _authoringStoryCatalogIdPattern = RegExp(r'^[a-z0-9][a-z0-9._:-]*$');
+final _authoringStoryCatalogAliasPattern = RegExp(r'^Catalog_[0-9a-f]{64}$');
+const _authoringStoryCatalogSelectorDomain =
+    'gore-story-catalog.authoring-selector-v1\u0000';
+
+class AuthoringStoryCatalogSelections {
+  const AuthoringStoryCatalogSelections._({
+    required this.requestCatalogSha256,
+    required this.schemaRevision,
+    required this.generation,
+    required this.catalogSeal,
+    required this.npcs,
+    required this.questParents,
+    required this.questCollisionCatalog,
+    required this.blocksBuild,
+  });
+
+  final String requestCatalogSha256;
+  final int schemaRevision;
+  final AuthoringStoryCatalogGeneration generation;
+  final AuthoringDraftContentSeal catalogSeal;
+  final List<AuthoringStoryCatalogNpcSelection> npcs;
+  final List<AuthoringStoryCatalogQuestParentSelection> questParents;
+  final AuthoringStoryCatalogCollisionAvailability questCollisionCatalog;
+  final bool blocksBuild;
+
+  factory AuthoringStoryCatalogSelections.fromJson(
+    Map<String, Object?> json, {
+    required String catalogJson,
+  }) {
+    _authoringExactFields(json, const {
+      'ok',
+      'request_catalog_sha256',
+      'selections',
+    }, 'Story catalog response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring Story catalog response is not ok');
+    }
+    final requestCatalogSha256 = _authoringRequiredString(
+      json,
+      'request_catalog_sha256',
+      maxBytes: 64,
+    );
+    final expectedBinding = crypto.sha256
+        .convert(utf8.encode(catalogJson))
+        .toString();
+    if (!_authoringSha256Pattern.hasMatch(requestCatalogSha256) ||
+        requestCatalogSha256 != expectedBinding) {
+      throw const FormatException(
+        'authoring Story catalog response is not bound to its exact request',
+      );
+    }
+
+    final selections = _authoringRequiredObject(
+      json['selections'],
+      'Story catalog selections',
+    );
+    _authoringExactFields(selections, const {
+      'schema_revision',
+      'generation',
+      'catalog_seal',
+      'npcs',
+      'quest_parents',
+      'quest_collision_catalog',
+      'blocks_build',
+    }, 'Story catalog selections');
+    final schemaRevision = _authoringRequiredInt(
+      selections,
+      'schema_revision',
+      min: 1,
+      max: 1,
+    );
+    final generation = AuthoringStoryCatalogGeneration.fromJson(
+      _authoringRequiredObject(
+        selections['generation'],
+        'Story catalog generation',
+      ),
+    );
+    final catalogSeal = _authoringStoryCatalogSeal(
+      selections['catalog_seal'],
+      'catalog_seal',
+    );
+    final npcs = _authoringStoryCatalogList(
+      selections['npcs'],
+      expectedLength: _maxAuthoringStoryCatalogNpcs,
+      context: 'NPC selections',
+      decode: AuthoringStoryCatalogNpcSelection.fromJson,
+    );
+    final questParents = _authoringStoryCatalogList(
+      selections['quest_parents'],
+      expectedLength: _maxAuthoringStoryCatalogQuestParents,
+      context: 'Quest-parent selections',
+      decode: AuthoringStoryCatalogQuestParentSelection.fromJson,
+    );
+    _authoringStoryCatalogRequireSortedIds(
+      npcs.map((entry) => entry.catalogId),
+      'NPC selections',
+    );
+    _authoringStoryCatalogRequireSortedIds(
+      questParents.map((entry) => entry.catalogId),
+      'Quest-parent selections',
+    );
+    final questCollisionCatalog =
+        AuthoringStoryCatalogCollisionAvailability.fromJson(
+          _authoringRequiredObject(
+            selections['quest_collision_catalog'],
+            'Story catalog collision availability',
+          ),
+        );
+    if (!_authoringStoryCatalogSameSeal(
+      questCollisionCatalog.sourceSeal,
+      generation.shippingCache,
+    )) {
+      throw const FormatException(
+        'authoring Story catalog collision seal is not the generation Shipping cache',
+      );
+    }
+
+    final aliases = <String>{};
+    for (final npc in npcs) {
+      for (final alias in <String>[
+        npc.characterDefinition.authoringSelector,
+        npc.aiAgentConfig.authoringSelector,
+        npc.spawnDefinition.authoringSelector,
+        npc.questGiver.authoringSelector,
+      ]) {
+        if (!aliases.add(alias)) {
+          throw const FormatException(
+            'authoring Story catalog selector aliases are not unique',
+          );
+        }
+      }
+    }
+    for (final parent in questParents) {
+      if (!aliases.add(parent.questClass.authoringSelector)) {
+        throw const FormatException(
+          'authoring Story catalog selector aliases are not unique',
+        );
+      }
+    }
+    final blocksBuild = _authoringRequiredBool(selections, 'blocks_build');
+    if (!blocksBuild ||
+        npcs.any((entry) => !entry.blocksBuild) ||
+        questParents.any((entry) => !entry.blocksBuild) ||
+        !questCollisionCatalog.blocksDraftCreation) {
+      throw const FormatException(
+        'authoring Story catalog readiness gates are inconsistent',
+      );
+    }
+    return AuthoringStoryCatalogSelections._(
+      requestCatalogSha256: requestCatalogSha256,
+      schemaRevision: schemaRevision,
+      generation: generation,
+      catalogSeal: catalogSeal,
+      npcs: List.unmodifiable(npcs),
+      questParents: List.unmodifiable(questParents),
+      questCollisionCatalog: questCollisionCatalog,
+      blocksBuild: blocksBuild,
+    );
+  }
+}
+
+class AuthoringStoryCatalogGeneration {
+  const AuthoringStoryCatalogGeneration._({
+    required this.edition,
+    required this.executable,
+    required this.shippingCache,
+    required this.bindsCache,
+  });
+
+  final String edition;
+  final AuthoringDraftContentSeal executable;
+  final AuthoringDraftContentSeal shippingCache;
+  final AuthoringDraftContentSeal bindsCache;
+
+  factory AuthoringStoryCatalogGeneration.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'edition',
+      'executable',
+      'shipping_cache',
+      'binds_cache',
+    }, 'Story catalog generation');
+    final edition = _authoringRequiredString(json, 'edition', maxBytes: 64);
+    if (edition != 'g1r-steam') {
+      throw const FormatException(
+        'authoring Story catalog edition is not supported',
+      );
+    }
+    return AuthoringStoryCatalogGeneration._(
+      edition: edition,
+      executable: _authoringStoryCatalogSeal(
+        json['executable'],
+        'generation.executable',
+      ),
+      shippingCache: _authoringStoryCatalogSeal(
+        json['shipping_cache'],
+        'generation.shipping_cache',
+      ),
+      bindsCache: _authoringStoryCatalogSeal(
+        json['binds_cache'],
+        'generation.binds_cache',
+      ),
+    );
+  }
+}
+
+class AuthoringStoryCatalogClassSelection {
+  const AuthoringStoryCatalogClassSelection._({
+    required this.catalogLayer,
+    required this.authoringSelector,
+    required this.sourceCatalogSelector,
+    required this.runtimeClass,
+    required this.sourceSeal,
+  });
+
+  final String catalogLayer;
+  final String authoringSelector;
+  final String sourceCatalogSelector;
+  final String runtimeClass;
+  final AuthoringDraftContentSeal sourceSeal;
+
+  factory AuthoringStoryCatalogClassSelection.fromJson(
+    Map<String, Object?> json, {
+    required String catalogId,
+    required String role,
+    required String expectedCatalogLayer,
+  }) {
+    _authoringExactFields(json, const {
+      'catalog_layer',
+      'authoring_selector',
+      'source_catalog_selector',
+      'runtime_class',
+      'source_seal',
+    }, 'Story catalog class selection');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateCatalogLayer(catalogLayer, 'catalog_layer');
+    if (catalogLayer != expectedCatalogLayer) {
+      throw const FormatException(
+        'authoring Story catalog class layer is not the pinned base-game layer',
+      );
+    }
+    final authoringSelector = _authoringStoryCatalogSelectorAlias(
+      json,
+      'authoring_selector',
+    );
+    if (authoringSelector !=
+        _authoringStoryCatalogExpectedSelector(catalogId, role)) {
+      throw const FormatException(
+        'authoring Story catalog class selector alias disagrees with its record and role',
+      );
+    }
+    final sourceCatalogSelector = _authoringRequiredString(
+      json,
+      'source_catalog_selector',
+      maxBytes: 4096,
+    );
+    final runtimeClass = _authoringRequiredString(
+      json,
+      'runtime_class',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateIdentifier(runtimeClass, 'runtime_class');
+    _authoringStoryCatalogSourceSelector(sourceCatalogSelector, runtimeClass);
+    return AuthoringStoryCatalogClassSelection._(
+      catalogLayer: catalogLayer,
+      authoringSelector: authoringSelector,
+      sourceCatalogSelector: sourceCatalogSelector,
+      runtimeClass: runtimeClass,
+      sourceSeal: _authoringStoryCatalogSeal(
+        json['source_seal'],
+        'class.source_seal',
+      ),
+    );
+  }
+}
+
+class AuthoringStoryCatalogQuestGiverSelection {
+  const AuthoringStoryCatalogQuestGiverSelection._({
+    required this.catalogLayer,
+    required this.authoringSelector,
+    required this.sourceCatalogSelector,
+    required this.runtimeUniqueName,
+    required this.sourceSeal,
+  });
+
+  final String catalogLayer;
+  final String authoringSelector;
+  final String sourceCatalogSelector;
+  final String runtimeUniqueName;
+  final AuthoringDraftContentSeal sourceSeal;
+
+  factory AuthoringStoryCatalogQuestGiverSelection.fromJson(
+    Map<String, Object?> json, {
+    required String catalogId,
+    required String expectedCatalogLayer,
+  }) {
+    _authoringExactFields(json, const {
+      'catalog_layer',
+      'authoring_selector',
+      'source_catalog_selector',
+      'runtime_unique_name',
+      'source_seal',
+    }, 'Story catalog Quest-giver selection');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateCatalogLayer(
+      catalogLayer,
+      'quest_giver.catalog_layer',
+    );
+    if (catalogLayer != expectedCatalogLayer) {
+      throw const FormatException(
+        'authoring Story catalog Quest-giver layer is not the pinned base-game layer',
+      );
+    }
+    final sourceCatalogSelector = _authoringRequiredString(
+      json,
+      'source_catalog_selector',
+      maxBytes: 4096,
+    );
+    final runtimeUniqueName = _authoringRequiredString(
+      json,
+      'runtime_unique_name',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateIdentifier(
+      runtimeUniqueName,
+      'quest_giver.runtime_unique_name',
+    );
+    _authoringStoryCatalogSourceSelector(
+      sourceCatalogSelector,
+      'UCharacterDefinition_Human_$runtimeUniqueName',
+    );
+    final authoringSelector = _authoringStoryCatalogSelectorAlias(
+      json,
+      'authoring_selector',
+    );
+    if (authoringSelector !=
+        _authoringStoryCatalogExpectedSelector(catalogId, 'quest_giver')) {
+      throw const FormatException(
+        'authoring Story catalog Quest-giver selector alias disagrees with its record and role',
+      );
+    }
+    return AuthoringStoryCatalogQuestGiverSelection._(
+      catalogLayer: catalogLayer,
+      authoringSelector: authoringSelector,
+      sourceCatalogSelector: sourceCatalogSelector,
+      runtimeUniqueName: runtimeUniqueName,
+      sourceSeal: _authoringStoryCatalogSeal(
+        json['source_seal'],
+        'quest_giver.source_seal',
+      ),
+    );
+  }
+}
+
+class AuthoringStoryCatalogNpcSelection {
+  const AuthoringStoryCatalogNpcSelection._({
+    required this.catalogId,
+    required this.displayName,
+    required this.runtimeUniqueName,
+    required this.characterDefinition,
+    required this.aiAgentConfig,
+    required this.spawnDefinition,
+    required this.questGiver,
+    required this.discoveryStatus,
+    required this.authoringQualification,
+    required this.runtimeQualification,
+    required this.evidenceId,
+    required this.blocksBuild,
+  });
+
+  final String catalogId;
+  final String displayName;
+  final String runtimeUniqueName;
+  final AuthoringStoryCatalogClassSelection characterDefinition;
+  final AuthoringStoryCatalogClassSelection aiAgentConfig;
+  final AuthoringStoryCatalogClassSelection spawnDefinition;
+  final AuthoringStoryCatalogQuestGiverSelection questGiver;
+  final AuthoringStoryCatalogNpcDiscoveryStatus discoveryStatus;
+  final AuthoringStoryCatalogNpcAuthoringQualification authoringQualification;
+  final AuthoringStoryCatalogRuntimeQualification runtimeQualification;
+  final String evidenceId;
+  final bool blocksBuild;
+
+  factory AuthoringStoryCatalogNpcSelection.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'catalog_id',
+      'display_name',
+      'runtime_unique_name',
+      'character_definition',
+      'ai_agent_config',
+      'spawn_definition',
+      'quest_giver',
+      'discovery_status',
+      'authoring_qualification',
+      'runtime_qualification',
+      'evidence_id',
+      'blocks_build',
+    }, 'Story catalog NPC selection');
+    final catalogId = _authoringStoryCatalogId(json, 'catalog_id', 'g1r:npc:');
+    final runtimeUniqueName = _authoringRequiredString(
+      json,
+      'runtime_unique_name',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateIdentifier(runtimeUniqueName, 'runtime_unique_name');
+    final characterDefinition = AuthoringStoryCatalogClassSelection.fromJson(
+      _authoringRequiredObject(
+        json['character_definition'],
+        'Story catalog character definition',
+      ),
+      catalogId: catalogId,
+      role: 'character_definition',
+      expectedCatalogLayer: 'base-game.g1r.scripts',
+    );
+    final aiAgentConfig = AuthoringStoryCatalogClassSelection.fromJson(
+      _authoringRequiredObject(
+        json['ai_agent_config'],
+        'Story catalog AI-agent config',
+      ),
+      catalogId: catalogId,
+      role: 'ai_agent_config',
+      expectedCatalogLayer: 'base-game.g1r.scripts',
+    );
+    final spawnDefinition = AuthoringStoryCatalogClassSelection.fromJson(
+      _authoringRequiredObject(
+        json['spawn_definition'],
+        'Story catalog spawn definition',
+      ),
+      catalogId: catalogId,
+      role: 'spawn_definition',
+      expectedCatalogLayer: 'base-game.g1r.scripts',
+    );
+    if (!characterDefinition.runtimeClass.startsWith('UCharacterDefinition_') ||
+        !aiAgentConfig.runtimeClass.startsWith('UAIAgentConfig_') ||
+        !spawnDefinition.runtimeClass.startsWith('USpawnAIAgentDefinition_')) {
+      throw const FormatException(
+        'authoring Story catalog NPC class roles are inconsistent',
+      );
+    }
+    final questGiver = AuthoringStoryCatalogQuestGiverSelection.fromJson(
+      _authoringRequiredObject(
+        json['quest_giver'],
+        'Story catalog Quest giver',
+      ),
+      catalogId: catalogId,
+      expectedCatalogLayer: 'base-game.g1r.scripts',
+    );
+    if (questGiver.runtimeUniqueName != runtimeUniqueName ||
+        questGiver.catalogLayer != characterDefinition.catalogLayer ||
+        questGiver.sourceCatalogSelector !=
+            characterDefinition.sourceCatalogSelector ||
+        !_authoringStoryCatalogSameSeal(
+          questGiver.sourceSeal,
+          characterDefinition.sourceSeal,
+        )) {
+      throw const FormatException(
+        'authoring Story catalog Quest giver disagrees with its NPC provenance',
+      );
+    }
+    return AuthoringStoryCatalogNpcSelection._(
+      catalogId: catalogId,
+      displayName: _authoringStoryCatalogFriendlyText(json, 'display_name'),
+      runtimeUniqueName: runtimeUniqueName,
+      characterDefinition: characterDefinition,
+      aiAgentConfig: aiAgentConfig,
+      spawnDefinition: spawnDefinition,
+      questGiver: questGiver,
+      discoveryStatus: switch (json['discovery_status']) {
+        'sealed_cache_defaults_verified' =>
+          AuthoringStoryCatalogNpcDiscoveryStatus.sealedCacheDefaultsVerified,
+        _ => throw const FormatException(
+          'authoring Story catalog NPC discovery status is unsupported',
+        ),
+      },
+      authoringQualification: switch (json['authoring_qualification']) {
+        'offline_qualified' =>
+          AuthoringStoryCatalogNpcAuthoringQualification.offlineQualified,
+        _ => throw const FormatException(
+          'authoring Story catalog NPC authoring qualification is unsupported',
+        ),
+      },
+      runtimeQualification: _authoringStoryCatalogRuntimeQualification(
+        json['runtime_qualification'],
+      ),
+      evidenceId: _authoringStoryCatalogEvidenceId(json, 'evidence_id'),
+      blocksBuild: _authoringRequiredBool(json, 'blocks_build'),
+    );
+  }
+}
+
+class AuthoringStoryCatalogQuestParentSelection {
+  const AuthoringStoryCatalogQuestParentSelection._({
+    required this.catalogId,
+    required this.displayName,
+    required this.questClass,
+    required this.parentClassName,
+    required this.role,
+    required this.qualification,
+    required this.transitionQualification,
+    required this.evidenceId,
+    required this.blocksBuild,
+  });
+
+  final String catalogId;
+  final String displayName;
+  final AuthoringStoryCatalogClassSelection questClass;
+  final String parentClassName;
+  final AuthoringStoryCatalogQuestParentRole role;
+  final AuthoringStoryCatalogQuestParentQualification qualification;
+  final AuthoringStoryCatalogRuntimeQualification transitionQualification;
+  final String evidenceId;
+  final bool blocksBuild;
+
+  factory AuthoringStoryCatalogQuestParentSelection.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'catalog_id',
+      'display_name',
+      'quest_class',
+      'parent_class_name',
+      'role',
+      'qualification',
+      'transition_qualification',
+      'evidence_id',
+      'blocks_build',
+    }, 'Story catalog Quest-parent selection');
+    final catalogId = _authoringStoryCatalogId(
+      json,
+      'catalog_id',
+      'g1r:quest-parent:',
+    );
+    final questClass = AuthoringStoryCatalogClassSelection.fromJson(
+      _authoringRequiredObject(
+        json['quest_class'],
+        'Story catalog Quest class',
+      ),
+      catalogId: catalogId,
+      role: 'quest_parent',
+      expectedCatalogLayer: 'base-game.g1r.scripts',
+    );
+    final parentClassName = _authoringRequiredString(
+      json,
+      'parent_class_name',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateIdentifier(parentClassName, 'parent_class_name');
+    if (!questClass.runtimeClass.startsWith('UQuest_') ||
+        !parentClassName.startsWith('UQuest_') ||
+        questClass.runtimeClass == parentClassName) {
+      throw const FormatException(
+        'authoring Story catalog Quest parent classes are inconsistent',
+      );
+    }
+    return AuthoringStoryCatalogQuestParentSelection._(
+      catalogId: catalogId,
+      displayName: _authoringStoryCatalogFriendlyText(json, 'display_name'),
+      questClass: questClass,
+      parentClassName: parentClassName,
+      role: switch (json['role']) {
+        'chapter' => AuthoringStoryCatalogQuestParentRole.chapter,
+        _ => throw const FormatException(
+          'authoring Story catalog Quest-parent role is unsupported',
+        ),
+      },
+      qualification: switch (json['qualification']) {
+        'curated_defaults_verified' =>
+          AuthoringStoryCatalogQuestParentQualification.curatedDefaultsVerified,
+        _ => throw const FormatException(
+          'authoring Story catalog Quest-parent qualification is unsupported',
+        ),
+      },
+      transitionQualification: _authoringStoryCatalogRuntimeQualification(
+        json['transition_qualification'],
+      ),
+      evidenceId: _authoringStoryCatalogEvidenceId(json, 'evidence_id'),
+      blocksBuild: _authoringRequiredBool(json, 'blocks_build'),
+    );
+  }
+}
+
+class AuthoringStoryCatalogCollisionAvailability {
+  const AuthoringStoryCatalogCollisionAvailability._({
+    required this.status,
+    required this.catalogLayer,
+    required this.sourceSeal,
+    required this.blocksDraftCreation,
+  });
+
+  final AuthoringStoryCatalogCollisionStatus status;
+  final String catalogLayer;
+  final AuthoringDraftContentSeal sourceSeal;
+  final bool blocksDraftCreation;
+
+  factory AuthoringStoryCatalogCollisionAvailability.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'status',
+      'catalog_layer',
+      'source_seal',
+      'blocks_draft_creation',
+    }, 'Story catalog collision availability');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    if (catalogLayer != 'resolved-loadout.scripts.v1') {
+      throw const FormatException(
+        'authoring Story catalog collision layer is unsupported',
+      );
+    }
+    final blocksDraftCreation = _authoringRequiredBool(
+      json,
+      'blocks_draft_creation',
+    );
+    if (!blocksDraftCreation) {
+      throw const FormatException(
+        'authoring Story catalog must block Quest Draft creation without an inventory',
+      );
+    }
+    return AuthoringStoryCatalogCollisionAvailability._(
+      status: switch (json['status']) {
+        'inventory_unavailable' =>
+          AuthoringStoryCatalogCollisionStatus.inventoryUnavailable,
+        _ => throw const FormatException(
+          'authoring Story catalog collision status is unsupported',
+        ),
+      },
+      catalogLayer: catalogLayer,
+      sourceSeal: _authoringStoryCatalogSeal(
+        json['source_seal'],
+        'quest_collision_catalog.source_seal',
+      ),
+      blocksDraftCreation: blocksDraftCreation,
+    );
+  }
+}
+
+List<T> _authoringStoryCatalogList<T>(
+  Object? raw, {
+  required int expectedLength,
+  required String context,
+  required T Function(Map<String, Object?>) decode,
+}) {
+  if (raw is! List || raw.length != expectedLength) {
+    throw FormatException('authoring Story catalog $context has invalid size');
+  }
+  return [
+    for (var index = 0; index < raw.length; index++)
+      decode(
+        _authoringRequiredObject(
+          raw[index],
+          'Story catalog $context entry $index',
+        ),
+      ),
+  ];
+}
+
+void _authoringStoryCatalogRequireSortedIds(
+  Iterable<String> values,
+  String context,
+) {
+  String? previous;
+  for (final value in values) {
+    if (previous != null && previous.compareTo(value) >= 0) {
+      throw FormatException(
+        'authoring Story catalog $context is not sorted and unique',
+      );
+    }
+    previous = value;
+  }
+}
+
+AuthoringDraftContentSeal _authoringStoryCatalogSeal(
+  Object? raw,
+  String context,
+) {
+  final seal = AuthoringDraftContentSeal.fromJson(
+    _authoringRequiredObject(raw, 'Story catalog $context'),
+  );
+  if (seal.byteLength > 0x7fffffffffffffff) {
+    throw FormatException(
+      'authoring Story catalog $context exceeds wire range',
+    );
+  }
+  return seal;
+}
+
+bool _authoringStoryCatalogSameSeal(
+  AuthoringDraftContentSeal left,
+  AuthoringDraftContentSeal right,
+) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
+
+String _authoringStoryCatalogSelectorAlias(
+  Map<String, Object?> json,
+  String field,
+) {
+  final value = _authoringRequiredString(json, field, maxBytes: 72);
+  if (!_authoringStoryCatalogAliasPattern.hasMatch(value)) {
+    throw const FormatException(
+      'authoring Story catalog selector alias is invalid',
+    );
+  }
+  return value;
+}
+
+String _authoringStoryCatalogExpectedSelector(String catalogId, String role) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryCatalogSelectorDomain));
+  for (final value in <String>[catalogId, role]) {
+    final bytes = utf8.encode(value);
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+    input
+      ..add(length)
+      ..add(bytes);
+  }
+  input.close();
+  return 'Catalog_${output.value}';
+}
+
+void _authoringStoryCatalogSourceSelector(String value, String runtimeClass) {
+  if (!value.startsWith('script-class:') ||
+      !value.endsWith('/$runtimeClass') ||
+      value.codeUnits.any(
+        (unit) => unit < 0x21 || unit > 0x7e || unit == 0x22 || unit == 0x5c,
+      )) {
+    throw const FormatException(
+      'authoring Story catalog source selector is invalid',
+    );
+  }
+}
+
+String _authoringStoryCatalogId(
+  Map<String, Object?> json,
+  String field,
+  String prefix,
+) {
+  final value = _authoringRequiredString(json, field, maxBytes: 256);
+  if (!value.startsWith(prefix) ||
+      !_authoringStoryCatalogIdPattern.hasMatch(value)) {
+    throw const FormatException('authoring Story catalog ID is invalid');
+  }
+  return value;
+}
+
+String _authoringStoryCatalogFriendlyText(
+  Map<String, Object?> json,
+  String field,
+) {
+  final value = _authoringRequiredString(json, field, maxBytes: 256);
+  if (value.trim() != value ||
+      value.runes.any((rune) => rune < 0x20 || rune == 0x7f)) {
+    throw const FormatException(
+      'authoring Story catalog display text is invalid',
+    );
+  }
+  return value;
+}
+
+String _authoringStoryCatalogEvidenceId(
+  Map<String, Object?> json,
+  String field,
+) {
+  final value = _authoringRequiredString(json, field, maxBytes: 512);
+  if (!_authoringStoryCatalogIdPattern.hasMatch(value)) {
+    throw const FormatException(
+      'authoring Story catalog evidence ID is invalid',
+    );
+  }
+  return value;
+}
+
+AuthoringStoryCatalogRuntimeQualification
+_authoringStoryCatalogRuntimeQualification(Object? value) => switch (value) {
+  'runtime_unqualified' =>
+    AuthoringStoryCatalogRuntimeQualification.runtimeUnqualified,
+  _ => throw const FormatException(
+    'authoring Story catalog runtime qualification is unsupported',
+  ),
+};
 
 enum AuthoringStoryDraftKind {
   npcDraft('npc_draft'),

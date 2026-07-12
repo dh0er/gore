@@ -945,11 +945,13 @@ dependencies = [
  "gore-mod",
  "gore-modgen",
  "gore-reflect",
+ "gore-story-catalog",
  "gore-tex",
  "gore-vo",
  "image",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "zip",
 ]

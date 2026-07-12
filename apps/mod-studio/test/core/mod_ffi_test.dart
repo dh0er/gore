@@ -116,6 +116,134 @@ Map<String, Object?> _invalidNpcDraftResponse() => {
   'diagnostics': <Object?>[_draftDiagnostic()],
 };
 
+const _storyCatalogRequest = '{"format":"story_catalog"}';
+
+Map<String, Object?> _catalogContentSeal(String byte, int byteLength) => {
+  'byte_len': byteLength,
+  'sha256': List.filled(64, byte).join(),
+};
+
+String _storyCatalogAlias(String catalogId, String role) {
+  final bytes = <int>[
+    ...utf8.encode('gore-story-catalog.authoring-selector-v1\u0000'),
+  ];
+  for (final value in <String>[catalogId, role]) {
+    final encoded = utf8.encode(value);
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, encoded.length, Endian.little);
+    bytes
+      ..addAll(length)
+      ..addAll(encoded);
+  }
+  return 'Catalog_${crypto.sha256.convert(bytes)}';
+}
+
+Map<String, Object?> _storyCatalogClass(
+  String catalogId,
+  String role,
+  String sealByte,
+  String runtimeClass,
+) => <String, Object?>{
+  'catalog_layer': 'base-game.g1r.scripts',
+  'authoring_selector': _storyCatalogAlias(catalogId, role),
+  'source_catalog_selector': 'script-class:Trusted/$runtimeClass',
+  'runtime_class': runtimeClass,
+  'source_seal': _catalogContentSeal(sealByte, 100),
+};
+
+Map<String, Object?> _storyCatalogNpc({required bool viper}) {
+  final runtime = viper ? 'OM_STT_Viper_302' : 'OM_GRD_Asghan_263';
+  final catalogId = viper
+      ? 'g1r:npc:om_stt_viper_302'
+      : 'g1r:npc:om_grd_asghan_263';
+  final character = _storyCatalogClass(
+    catalogId,
+    'character_definition',
+    viper ? 'e' : 'a',
+    'UCharacterDefinition_Human_$runtime',
+  );
+  return <String, Object?>{
+    'catalog_id': catalogId,
+    'display_name': viper ? 'Viper' : 'Asghan',
+    'runtime_unique_name': runtime,
+    'character_definition': character,
+    'ai_agent_config': _storyCatalogClass(
+      catalogId,
+      'ai_agent_config',
+      viper ? 'd' : 'b',
+      'UAIAgentConfig_Human_$runtime',
+    ),
+    'spawn_definition': _storyCatalogClass(
+      catalogId,
+      'spawn_definition',
+      'c',
+      'USpawnAIAgentDefinition_$runtime',
+    ),
+    'quest_giver': <String, Object?>{
+      'catalog_layer': character['catalog_layer'],
+      'authoring_selector': _storyCatalogAlias(catalogId, 'quest_giver'),
+      'source_catalog_selector': character['source_catalog_selector'],
+      'runtime_unique_name': runtime,
+      'source_seal': character['source_seal'],
+    },
+    'discovery_status': 'sealed_cache_defaults_verified',
+    'authoring_qualification': 'offline_qualified',
+    'runtime_qualification': 'runtime_unqualified',
+    'evidence_id': viper
+        ? 'npc-logical-clone-v1:viper-current-v1'
+        : 'npc-logical-clone-v1',
+    'blocks_build': true,
+  };
+}
+
+Map<String, Object?> _validStoryCatalogResponse({
+  String catalogJson = _storyCatalogRequest,
+}) => <String, Object?>{
+  'ok': true,
+  'request_catalog_sha256': crypto.sha256
+      .convert(utf8.encode(catalogJson))
+      .toString(),
+  'selections': <String, Object?>{
+    'schema_revision': 1,
+    'generation': <String, Object?>{
+      'edition': 'g1r-steam',
+      'executable': _catalogContentSeal('1', 171698176),
+      'shipping_cache': _catalogContentSeal('2', 123394250),
+      'binds_cache': _catalogContentSeal('3', 5903938),
+    },
+    'catalog_seal': _catalogContentSeal('4', 5611),
+    'npcs': <Object?>[
+      _storyCatalogNpc(viper: false),
+      _storyCatalogNpc(viper: true),
+    ],
+    'quest_parents': <Object?>[
+      <String, Object?>{
+        'catalog_id': 'g1r:quest-parent:swampcamp_scchapter2',
+        'display_name': 'Swamp Camp — Chapter 2',
+        'quest_class': _storyCatalogClass(
+          'g1r:quest-parent:swampcamp_scchapter2',
+          'quest_parent',
+          'f',
+          'UQuest_SwampCamp_SCCHAPTER2',
+        ),
+        'parent_class_name': 'UQuest_SwampCamp',
+        'role': 'chapter',
+        'qualification': 'curated_defaults_verified',
+        'transition_qualification': 'runtime_unqualified',
+        'evidence_id': 'current-cache-defaults-swampcamp-chapter2-20260712',
+        'blocks_build': true,
+      },
+    ],
+    'quest_collision_catalog': <String, Object?>{
+      'status': 'inventory_unavailable',
+      'catalog_layer': 'resolved-loadout.scripts.v1',
+      'source_seal': _catalogContentSeal('2', 123394250),
+      'blocks_draft_creation': true,
+    },
+    'blocks_build': true,
+  },
+};
+
 Map<String, Object?> _draftDiagnostic() => {
   'code': 'NPC_INVALID_IDENTIFIER_CHARACTER',
   'field': 'unique_name',
@@ -848,6 +976,196 @@ void main() {
         () => result.diagnostics.last.relatedEntities.clear(),
         throwsA(isA<UnsupportedError>()),
       );
+    },
+  );
+
+  test(
+    'Story catalog wrapper preserves raw input and parses immutable choices',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_story_catalog_v1_read': _validStoryCatalogResponse(),
+        },
+      );
+
+      final result = await ModFfi(
+        core,
+      ).authoringStoryCatalogV1Read(catalogJson: _storyCatalogRequest);
+
+      expect(core.calls, hasLength(1));
+      expect(core.calls.single.command, 'authoring_story_catalog_v1_read');
+      expect(core.calls.single.payload, {'catalog_json': _storyCatalogRequest});
+      expect(result.schemaRevision, 1);
+      expect(result.generation.edition, 'g1r-steam');
+      expect(result.npcs.map((entry) => entry.displayName), [
+        'Asghan',
+        'Viper',
+      ]);
+      expect(result.npcs.first.runtimeUniqueName, 'OM_GRD_Asghan_263');
+      expect(
+        result.npcs.first.authoringQualification,
+        AuthoringStoryCatalogNpcAuthoringQualification.offlineQualified,
+      );
+      expect(
+        result.npcs.first.runtimeQualification,
+        AuthoringStoryCatalogRuntimeQualification.runtimeUnqualified,
+      );
+      expect(
+        result.questParents.single.questClass.runtimeClass,
+        'UQuest_SwampCamp_SCCHAPTER2',
+      );
+      expect(
+        result.questCollisionCatalog.status,
+        AuthoringStoryCatalogCollisionStatus.inventoryUnavailable,
+      );
+      expect(result.questCollisionCatalog.blocksDraftCreation, isTrue);
+      expect(result.blocksBuild, isTrue);
+      expect(() => result.npcs.clear(), throwsUnsupportedError);
+      expect(() => result.questParents.clear(), throwsUnsupportedError);
+    },
+  );
+
+  test('Story catalog DTO rejects unbound, loose, and inconsistent data', () {
+    final malformed = <void Function(Map<String, Object?>)>[
+      (response) => response['extra'] = true,
+      (response) =>
+          response['request_catalog_sha256'] = List.filled(64, 'a').join(),
+      (response) => response['request_catalog_sha256'] = crypto.sha256
+          .convert(utf8.encode(_storyCatalogRequest))
+          .toString()
+          .toUpperCase(),
+      (response) =>
+          (response['selections'] as Map<String, Object?>)['extra'] = true,
+      (response) =>
+          (response['selections'] as Map<String, Object?>)['schema_revision'] =
+              2,
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final reversed = npcs.reversed.toList();
+        npcs.setAll(0, reversed);
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final first = npcs[0] as Map<String, Object?>;
+        final second = npcs[1] as Map<String, Object?>;
+        (second['character_definition']
+                as Map<String, Object?>)['authoring_selector'] =
+            (first['character_definition']
+                as Map<String, Object?>)['authoring_selector'];
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final first = npcs[0] as Map<String, Object?>;
+        (first['character_definition']
+                as Map<String, Object?>)['authoring_selector'] =
+            'Catalog_${List.filled(64, '0').join()}';
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final first = npcs[0] as Map<String, Object?>;
+        final character = first['character_definition'] as Map<String, Object?>;
+        final ai = first['ai_agent_config'] as Map<String, Object?>;
+        final alias = character['authoring_selector'];
+        character['authoring_selector'] = ai['authoring_selector'];
+        ai['authoring_selector'] = alias;
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final first = npcs[0] as Map<String, Object?>;
+        (first['character_definition']
+                as Map<String, Object?>)['source_catalog_selector'] =
+            'script-class:Trusted/UCharacterDefinition_Human_OTHER';
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        final first = npcs[0] as Map<String, Object?>;
+        (first['character_definition']
+                as Map<String, Object?>)['catalog_layer'] =
+            'base-game.g1r.other';
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        (npcs[0] as Map<String, Object?>)['runtime_qualification'] =
+            'runtime_qualified';
+      },
+      (response) {
+        final npcs =
+            (response['selections'] as Map<String, Object?>)['npcs'] as List;
+        (npcs[0] as Map<String, Object?>)['display_name'] = ' Asghan';
+      },
+      (response) {
+        final selections = response['selections'] as Map<String, Object?>;
+        final collision =
+            selections['quest_collision_catalog'] as Map<String, Object?>;
+        collision['source_seal'] = _catalogContentSeal('f', 123394250);
+      },
+      (response) {
+        final selections = response['selections'] as Map<String, Object?>;
+        final collision =
+            selections['quest_collision_catalog'] as Map<String, Object?>;
+        collision['blocks_draft_creation'] = false;
+      },
+      (response) =>
+          (response['selections'] as Map<String, Object?>)['blocks_build'] =
+              false,
+      (response) {
+        final selections = response['selections'] as Map<String, Object?>;
+        final parents = selections['quest_parents'] as List;
+        final questClass =
+            (parents.single as Map<String, Object?>)['quest_class']
+                as Map<String, Object?>;
+        questClass['source_catalog_selector'] = r'script-class:Bad\Path';
+      },
+      (response) {
+        final selections = response['selections'] as Map<String, Object?>;
+        final generation = selections['generation'] as Map<String, Object?>;
+        (generation['executable'] as Map<String, Object?>)['byte_len'] = 1.0;
+      },
+    ];
+
+    for (final mutate in malformed) {
+      final response = _validStoryCatalogResponse();
+      mutate(response);
+      expect(
+        () => AuthoringStoryCatalogSelections.fromJson(
+          response,
+          catalogJson: _storyCatalogRequest,
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test(
+    'Story catalog wrapper bounds raw and escaped inputs before FFI',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_story_catalog_v1_read': _validStoryCatalogResponse(),
+        },
+      );
+      final ffi = ModFfi(core);
+
+      await expectLater(
+        ffi.authoringStoryCatalogV1Read(
+          catalogJson: String.fromCharCodes(Uint8List(16 * 1024 * 1024 + 1)),
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        ffi.authoringStoryCatalogV1Read(
+          catalogJson: String.fromCharCodes(Uint8List(11 * 1024 * 1024)),
+        ),
+        throwsArgumentError,
+      );
+      expect(core.calls, isEmpty);
     },
   );
 
