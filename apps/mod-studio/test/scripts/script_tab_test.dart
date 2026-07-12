@@ -703,50 +703,33 @@ void main() {
     expect(find.text('Edit'), findsNothing);
   });
 
-  // Fix 3: loadProject treats the script relPath as untrusted (defense-in-depth, matching the
-  // asPath guard + gore-as compile-side check) and drops mods whose relPath is empty/absolute/'..'.
-  test('loadProject drops script mods with an unsafe relPath', () async {
+  // Project persistence is all-or-nothing: an unsafe runtime-relative path is
+  // rejected instead of silently dropping that authored script on reopen.
+  test('saveProject rejects script mods with an unsafe relPath', () async {
     final tmp = await Directory.systemTemp.createTemp('goremod_relpath_test_');
     addTearDown(() => tmp.deleteSync(recursive: true));
     final asFile = File(p.join(tmp.path, 'New.as'))
       ..writeAsStringSync('void Foo(){}');
-    final project = ModProject(
-      name: 'M',
-      scripts: [
-        // Safe sibling — must survive the load.
-        ScriptMod(
-          op: ScriptOp.add,
-          moduleName: 'Good',
-          relPath: 'AI/Good.as',
-          asPath: asFile.path,
+    for (final relative in ['../evil.as', '/etc/evil.as', '']) {
+      final out = p.join(tmp.path, '${relative.hashCode}.goremod');
+      await expectLater(
+        saveProject(
+          ModProject(
+            name: 'M',
+            scripts: [
+              ScriptMod(
+                op: ScriptOp.add,
+                moduleName: 'Unsafe',
+                relPath: relative,
+                asPath: asFile.path,
+              ),
+            ],
+          ),
+          out,
         ),
-        // Escapes the staged tree — must be dropped.
-        ScriptMod(
-          op: ScriptOp.add,
-          moduleName: 'Esc',
-          relPath: '../evil.as',
-          asPath: asFile.path,
-        ),
-        // Absolute — must be dropped.
-        ScriptMod(
-          op: ScriptOp.add,
-          moduleName: 'Abs',
-          relPath: '/etc/evil.as',
-          asPath: asFile.path,
-        ),
-        // Empty — must be dropped.
-        ScriptMod(
-          op: ScriptOp.add,
-          moduleName: 'Empty',
-          relPath: '',
-          asPath: asFile.path,
-        ),
-      ],
-    );
-    final out = p.join(tmp.path, 'm.goremod');
-    await saveProject(project, out);
-    final loaded = await loadProject(out);
-    expect(loaded.scripts.map((s) => s.moduleName).toList(), ['Good']);
-    expect(loaded.scripts.single.relPath, 'AI/Good.as');
+        throwsFormatException,
+      );
+      expect(File(out).existsSync(), isFalse);
+    }
   });
 }

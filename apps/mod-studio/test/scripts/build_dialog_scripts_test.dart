@@ -6,15 +6,28 @@ import 'package:gore_mod/scripts/domain/script_mods_notifier.dart';
 
 void main() {
   testWidgets('build dialog counts script mods', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 500));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final container = ProviderContainer();
     addTearDown(container.dispose);
-    container.read(scriptModsProvider.notifier).setMod(
-      const ScriptMod(op: ScriptOp.add, moduleName: 'M', relPath: 'M.as', asPath: 'a', miniPath: 'm'),
+    container
+        .read(scriptModsProvider.notifier)
+        .setMod(
+          const ScriptMod(
+            op: ScriptOp.add,
+            moduleName: 'M',
+            relPath: 'M.as',
+            asPath: 'a',
+            miniPath: 'm',
+          ),
+        );
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const MaterialApp(home: Scaffold(body: BuildDeployDialog())),
+      ),
     );
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: const MaterialApp(home: Scaffold(body: BuildDeployDialog())),
-    ));
     expect(find.textContaining('1 script'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 }

@@ -44,6 +44,9 @@ void main() {
 
   test('saveProject/loadProject embeds and restores script .as + mini', () async {
     final tmp = await Directory.systemTemp.createTemp('goremod_scripts_test_');
+    addTearDown(() async {
+      if (await tmp.exists()) await tmp.delete(recursive: true);
+    });
     final asFile = File(p.join(tmp.path, 'New.as'))
       ..writeAsStringSync('void Foo(){}');
     final miniFile = File(p.join(tmp.path, 'new.cache'))
@@ -66,8 +69,9 @@ void main() {
     asFile.deleteSync();
     miniFile.deleteSync();
     final loaded = await loadProject(out);
-    expect(loaded.scripts.length, 1);
-    final s = loaded.scripts.single;
+    addTearDown(() async => loaded.workspace?.release());
+    expect(loaded.project.scripts.length, 1);
+    final s = loaded.project.scripts.single;
     expect(File(s.asPath).readAsStringSync(), 'void Foo(){}');
     expect(File(s.miniPath).readAsBytesSync(), [1, 2, 3]);
   });

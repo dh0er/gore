@@ -16,6 +16,7 @@ import '../../project/dialog_topics_notifier.dart';
 import '../../project/project_controller.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
+import '../../voice/domain/voice_edits_notifier.dart';
 
 /// Build the unified mod bundle (overrides + loc + audio + textures + AngelScript) and
 /// optionally deploy it to the game install. Mirrors the loc/audio delivery model: loc, audio,
@@ -111,6 +112,14 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final textures = ref.watch(textureReplacementsProvider).count;
     final scripts = ref.watch(scriptModsProvider).count;
     final dialogTopics = ref.watch(dialogTopicsProvider).count;
+    final voiceEdits = ref.watch(voiceEditsProvider);
+    final voice = voiceEdits.count;
+    // Adding a new archive member is preserved as authoring data, but that path has not yet
+    // passed runtime qualification. Keep it visible as Draft content without presenting Build
+    // or Deploy as safe. Replacing an observed member remains supported.
+    final hasDraftVoiceAdds = voiceEdits.entries.any(
+      (edit) => edit.operation == VoicePatchOperation.add,
+    );
     // Block Build/Deploy while any staged script is uncompiled OR was edited after compiling —
     // building would otherwise read an empty/stale mini-cache. The warning text below uses the
     // same flag.
@@ -121,77 +130,93 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
     // Building/deploying an empty bundle would only retire the active mod, so require content.
     final hasContent =
-        overrides + locEdits + audio + textures + scripts + dialogTopics > 0;
+        overrides +
+            locEdits +
+            audio +
+            textures +
+            scripts +
+            dialogTopics +
+            voice >
+        0;
 
     return AlertDialog(
       title: const Text('Build & Deploy Mod'),
       content: SizedBox(
         width: 460,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextFormField(
-              initialValue: ref.read(modNameProvider),
-              decoration: const InputDecoration(
-                labelText: 'Mod name',
-                isDense: true,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextFormField(
+                initialValue: ref.read(modNameProvider),
+                decoration: const InputDecoration(
+                  labelText: 'Mod name',
+                  isDense: true,
+                ),
+                onChanged: (v) => ref.read(modNameProvider.notifier).state = v,
               ),
-              onChanged: (v) => ref.read(modNameProvider.notifier).state = v,
-            ),
-            const SizedBox(height: 8),
-            TextFormField(
-              initialValue: ref.read(modDelayMsProvider).toString(),
-              decoration: const InputDecoration(
-                labelText: 'UE4SS load delay (ms)',
-                helperText:
-                    'Wait before applying overrides at game start (0 = none)',
-                isDense: true,
+              const SizedBox(height: 8),
+              TextFormField(
+                initialValue: ref.read(modDelayMsProvider).toString(),
+                decoration: const InputDecoration(
+                  labelText: 'UE4SS load delay (ms)',
+                  helperText:
+                      'Wait before applying overrides at game start (0 = none)',
+                  isDense: true,
+                ),
+                keyboardType: TextInputType.number,
+                // Keep the provider in sync so build/deploy uses the chosen delay instead of always
+                // defaulting to 0. Blank or non-numeric input falls back to 0.
+                onChanged: (v) => ref.read(modDelayMsProvider.notifier).state =
+                    int.tryParse(v.trim()) ?? 0,
               ),
-              keyboardType: TextInputType.number,
-              // Keep the provider in sync so build/deploy uses the chosen delay instead of always
-              // defaulting to 0. Blank or non-numeric input falls back to 0.
-              onChanged: (v) => ref.read(modDelayMsProvider.notifier).state =
-                  int.tryParse(v.trim()) ?? 0,
-            ),
-            const SizedBox(height: 12),
-            Text('Contents', style: theme.textTheme.labelMedium),
-            Text('• $overrides item override(s)'),
-            Text('• $locEdits localized text edit(s)'),
-            Text('• $audio audio replacement(s)'),
-            Text('• $textures texture replacement(s)'),
-            Text('• $scripts script mod(s)'),
-            Text('• $dialogTopics runtime dialog topic(s)'),
-            if (scriptsNotReady)
-              Text(
-                'Some script mods are not compiled or were edited after compiling — (re)compile '
-                'them in the AngelScript tab first.',
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            const SizedBox(height: 12),
-            if (gameRoot == null)
-              Text(
-                'Set the game path in Settings to deploy directly.',
-                style: TextStyle(color: theme.colorScheme.error),
-              ),
-            if (_busy)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 8),
-                child: LinearProgressIndicator(),
-              ),
-            if (_status != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _status!,
-                  style: TextStyle(
-                    color: _error
-                        ? theme.colorScheme.error
-                        : theme.colorScheme.onSurfaceVariant,
+              const SizedBox(height: 12),
+              Text('Contents', style: theme.textTheme.labelMedium),
+              Text('• $overrides item override(s)'),
+              Text('• $locEdits localized text edit(s)'),
+              Text('• $audio audio replacement(s)'),
+              Text('• $textures texture replacement(s)'),
+              Text('• $scripts script mod(s)'),
+              Text('• $dialogTopics runtime dialog topic(s)'),
+              Text('• $voice dialog voice edit(s)'),
+              if (scriptsNotReady)
+                Text(
+                  'Some script mods are not compiled or were edited after compiling — (re)compile '
+                  'them in the AngelScript tab first.',
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+              if (hasDraftVoiceAdds)
+                Text(
+                  'New voice archive members are Draft-only and not runtime-qualified yet. '
+                  'Use a replacement to Build or Deploy.',
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+              const SizedBox(height: 12),
+              if (gameRoot == null)
+                Text(
+                  'Set the game path in Settings to deploy directly.',
+                  style: TextStyle(color: theme.colorScheme.error),
+                ),
+              if (_busy)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: LinearProgressIndicator(),
+                ),
+              if (_status != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    _status!,
+                    style: TextStyle(
+                      color: _error
+                          ? theme.colorScheme.error
+                          : theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
       actions: [
@@ -205,7 +230,8 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             child: const Text('Undeploy'),
           ),
         OutlinedButton.icon(
-          onPressed: (_busy || !hasContent || scriptsNotReady)
+          onPressed:
+              (_busy || !hasContent || scriptsNotReady || hasDraftVoiceAdds)
               ? null
               : _buildToFolder,
           icon: const Icon(Icons.folder_zip_outlined, size: 18),
@@ -213,7 +239,11 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
         ),
         FilledButton.icon(
           onPressed:
-              (_busy || gameRoot == null || !hasContent || scriptsNotReady)
+              (_busy ||
+                  gameRoot == null ||
+                  !hasContent ||
+                  scriptsNotReady ||
+                  hasDraftVoiceAdds)
               ? null
               : () => _deploy(gameRoot),
           icon: const Icon(Icons.rocket_launch_outlined, size: 18),

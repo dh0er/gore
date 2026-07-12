@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'app/domain/asset_entry_tracker.dart';
 import 'app/domain/ui_settings.dart';
@@ -165,6 +166,15 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   }
 
+  Future<void> _saveProjectAs() async {
+    try {
+      final path = await saveProjectAsInteractive(ref);
+      if (path != null) _snack('Saved project to $path');
+    } catch (e) {
+      _snack('Save failed: $e');
+    }
+  }
+
   // Unsaved = there is staged content AND it differs from the last saved/loaded project, so a
   // project that was just saved doesn't prompt to discard on New/Open.
   bool _hasUnsavedEdits() => hasUnsavedChanges(ref);
@@ -195,7 +205,7 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _newProject() async {
-    if (await _confirmDiscardIfDirty()) newProject(ref);
+    if (await _confirmDiscardIfDirty()) await newProject(ref);
   }
 
   Future<void> _openProject() async {
@@ -234,7 +244,7 @@ class _HomePageState extends ConsumerState<HomePage>
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final l10n = AppLocalizations.of(context);
 
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(
         title: WindowDragArea(
           child: Row(
@@ -263,20 +273,23 @@ class _HomePageState extends ConsumerState<HomePage>
           PopupMenuButton<String>(
             icon: const Icon(Icons.folder_open_outlined),
             tooltip: 'Project',
-            onSelected: (v) {
-              switch (v) {
+            onSelected: (value) async {
+              switch (value) {
                 case 'new':
-                  _newProject();
+                  await _newProject();
                 case 'open':
-                  _openProject();
+                  await _openProject();
                 case 'save':
-                  _saveProject();
+                  await _saveProject();
+                case 'saveAs':
+                  await _saveProjectAs();
               }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'new', child: Text('New project')),
               PopupMenuItem(value: 'open', child: Text('Open project…')),
-              PopupMenuItem(value: 'save', child: Text('Save project as…')),
+              PopupMenuItem(value: 'save', child: Text('Save project')),
+              PopupMenuItem(value: 'saveAs', child: Text('Save project as…')),
             ],
           ),
           Padding(
@@ -396,6 +409,15 @@ class _HomePageState extends ConsumerState<HomePage>
           ),
         ),
       ),
+    );
+
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
+          _saveProject();
+        },
+      },
+      child: scaffold,
     );
   }
 }
