@@ -5,6 +5,7 @@
 //! Response: `{"ok": true, ...}` or `{"ok": false, "error": {"code","message"}}`
 //!
 //! Commands:
+//! - `core_info` — returns the stable FFI ABI, crate version, and sorted command capabilities.
 //! - `generate_mod` — payload is an [`OverridesConfig`] (keys `meta` +
 //!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
@@ -41,6 +42,43 @@ use gore_loc::{loc_store, paths};
 use gore_modgen::gen::{gen_lua, OverridesConfig};
 use gore_modgen::validate::validate_config;
 use gore_reflect::model::ReflectionModel;
+
+/// Increment only when the JSON/ownership contract used by the Studio bridge is incompatible.
+const CORE_ABI: u32 = 1;
+
+/// Every command understood by [`dispatch`], kept in bytewise ascending order so capability
+/// negotiation is deterministic across builds and platforms.
+const CORE_COMMANDS: &[&str] = &[
+    "audio_extract",
+    "audio_list",
+    "authoring_project_check",
+    "core_info",
+    "find_game",
+    "generate_mod",
+    "loc_extract",
+    "loc_find",
+    "loc_status",
+    "mgr_analyze",
+    "mgr_apply",
+    "mgr_import",
+    "mgr_library_list",
+    "mgr_remove",
+    "mgr_set_loadout",
+    "mgr_status",
+    "mgr_undeploy_all",
+    "mod_build",
+    "mod_deploy",
+    "mod_undeploy",
+    "script_compile",
+    "script_emit_module",
+    "script_list_modules",
+    "texture_extract",
+    "texture_index",
+    "validate",
+    "voice_archive_extract",
+    "voice_archive_list",
+    "voice_archive_match_line",
+];
 
 /// # Safety
 /// `request_json` must be null or a valid, NUL-terminated C string pointer that
@@ -99,6 +137,7 @@ fn dispatch(input: &str) -> Value {
     let command = req.get("command").and_then(Value::as_str).unwrap_or("");
     let payload = req.get("payload").cloned().unwrap_or(Value::Null);
     match command {
+        "core_info" => core_info(),
         "generate_mod" => generate_mod(payload),
         "validate" => validate(payload),
         "loc_status" => loc_status(),
@@ -129,6 +168,17 @@ fn dispatch(input: &str) -> Value {
         "voice_archive_extract" => voice::archive_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
+}
+
+/// Cheap, read-only compatibility handshake. This deliberately does not inspect the game,
+/// filesystem, caches, or any other mutable state.
+fn core_info() -> Value {
+    json!({
+        "ok": true,
+        "abi": CORE_ABI,
+        "version": env!("CARGO_PKG_VERSION"),
+        "commands": CORE_COMMANDS,
+    })
 }
 
 /// `{ok, present, meta?, catalog_path, dir}` — is the shared catalog extracted?
@@ -942,6 +992,65 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert!(v["catalog_path"].as_str().unwrap().contains("gore"));
         assert!(v.get("present").is_some());
+    }
+
+    #[test]
+    fn core_info_has_exact_schema_and_sorted_commands() {
+        let v: Value = serde_json::from_str(&execute_json(
+            r#"{"command":"core_info","payload":{"ignored":true}}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            v,
+            json!({
+                "ok": true,
+                "abi": 1,
+                "version": env!("CARGO_PKG_VERSION"),
+                "commands": [
+                    "audio_extract",
+                    "audio_list",
+                    "authoring_project_check",
+                    "core_info",
+                    "find_game",
+                    "generate_mod",
+                    "loc_extract",
+                    "loc_find",
+                    "loc_status",
+                    "mgr_analyze",
+                    "mgr_apply",
+                    "mgr_import",
+                    "mgr_library_list",
+                    "mgr_remove",
+                    "mgr_set_loadout",
+                    "mgr_status",
+                    "mgr_undeploy_all",
+                    "mod_build",
+                    "mod_deploy",
+                    "mod_undeploy",
+                    "script_compile",
+                    "script_emit_module",
+                    "script_list_modules",
+                    "texture_extract",
+                    "texture_index",
+                    "validate",
+                    "voice_archive_extract",
+                    "voice_archive_list",
+                    "voice_archive_match_line",
+                ],
+            })
+        );
+
+        let commands = v["commands"].as_array().unwrap();
+        assert!(commands
+            .windows(2)
+            .all(|pair| pair[0].as_str() < pair[1].as_str()));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_project_check"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "voice_archive_match_line"));
     }
 
     #[test]
