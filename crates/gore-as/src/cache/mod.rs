@@ -19,6 +19,7 @@ pub mod header;
 pub mod isa;
 pub mod model;
 pub mod native_tag_map;
+pub mod npc_archetypes;
 pub mod refs;
 pub mod remap;
 pub mod scan;
