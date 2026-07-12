@@ -211,6 +211,8 @@ pub enum WorkingStoreError {
     },
     #[error("working-store head does not exist at {0:?}")]
     MissingHead(PathBuf),
+    #[error("working-store root does not exist at {0:?}")]
+    MissingRoot(PathBuf),
     #[error("immutable object is missing at {0:?}")]
     MissingObject(PathBuf),
     #[error("immutable object at {path:?} has an invalid seal: {reason}")]
@@ -305,6 +307,25 @@ impl WorkingProjectStore {
         let root = absolute_path(root.as_ref())?;
         create_directory_chain(&root)?;
         ensure_safe_directory_chain(&root)?;
+        Ok(Self { root, limits })
+    }
+
+    /// Open an existing store root without creating the root or any missing parent directory.
+    ///
+    /// This is the side-effect-free counterpart to [`Self::at`] for probes and read paths.
+    pub fn open_existing(
+        root: impl AsRef<Path>,
+        limits: WorkingStoreLimits,
+    ) -> Result<Self, WorkingStoreError> {
+        let limits = limits.validate()?;
+        let root = absolute_path(root.as_ref())?;
+        match fs::symlink_metadata(&root) {
+            Ok(_) => ensure_safe_directory_chain(&root)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(WorkingStoreError::MissingRoot(root));
+            }
+            Err(error) => return Err(error.into()),
+        }
         Ok(Self { root, limits })
     }
 
