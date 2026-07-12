@@ -183,6 +183,14 @@ class _DialogTopicsSection extends ConsumerWidget {
                   trailing: Wrap(
                     spacing: 4,
                     children: [
+                      if (topic.allowHidden)
+                        const Tooltip(
+                          message: 'Topic may be hidden in its current state',
+                          child: Padding(
+                            padding: EdgeInsets.all(8),
+                            child: Icon(Icons.visibility_off_outlined),
+                          ),
+                        ),
                       IconButton(
                         icon: const Icon(Icons.edit_outlined),
                         tooltip: 'Edit runtime dialog topic ${topic.id}',
@@ -241,6 +249,7 @@ class _DialogTopicEditorDialogState extends State<_DialogTopicEditorDialog> {
   late final TextEditingController _participantController;
   late final TextEditingController _topicClassController;
   late final TextEditingController _sentinelClassController;
+  late bool _allowHidden;
   String? _error;
 
   @override
@@ -257,6 +266,7 @@ class _DialogTopicEditorDialogState extends State<_DialogTopicEditorDialog> {
     _sentinelClassController = TextEditingController(
       text: initial?.sentinelClass ?? '',
     );
+    _allowHidden = initial?.allowHidden ?? false;
   }
 
   @override
@@ -319,6 +329,7 @@ class _DialogTopicEditorDialogState extends State<_DialogTopicEditorDialog> {
         participantName: participant,
         topicClass: topicClass,
         sentinelClass: sentinelClass,
+        allowHidden: _allowHidden,
       ),
     );
   }
@@ -392,6 +403,21 @@ class _DialogTopicEditorDialogState extends State<_DialogTopicEditorDialog> {
                   if (_error != null) setState(() => _error = null);
                 },
                 onSubmitted: (_) => _submit(),
+              ),
+              const SizedBox(height: 12),
+              CheckboxListTile(
+                key: const ValueKey('dialog-topic-allow-hidden'),
+                contentPadding: EdgeInsets.zero,
+                value: _allowHidden,
+                onChanged: (value) {
+                  setState(() => _allowHidden = value ?? false);
+                },
+                title: const Text('Allow topic to be hidden in this state'),
+                subtitle: const Text(
+                  'For state-dependent AngelScript visibility. A clean '
+                  'zero-match is reported as HIDDEN instead of a failure; '
+                  'visible matches still require exact identity.',
+                ),
               ),
             ],
           ),

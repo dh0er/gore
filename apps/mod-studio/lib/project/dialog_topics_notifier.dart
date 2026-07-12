@@ -2,15 +2,16 @@ import 'package:flutter_riverpod/legacy.dart';
 
 /// One explicitly authored conversation-topic registration.
 ///
-/// All four values are passed through verbatim to `BuildSpec.dialog_topics`.
-/// In particular, the editor never guesses a participant or sentinel from the
-/// authored topic class.
+/// The identity values and visibility policy are passed through verbatim to
+/// `BuildSpec.dialog_topics`. In particular, the editor never guesses a
+/// participant or sentinel from the authored topic class.
 class DialogTopicDefinition {
   const DialogTopicDefinition({
     required this.id,
     required this.participantName,
     required this.topicClass,
     required this.sentinelClass,
+    this.allowHidden = false,
   });
 
   /// Human-readable diagnostic identifier. IDs are unique case-insensitively.
@@ -25,6 +26,10 @@ class DialogTopicDefinition {
   /// Exact reflected UClass path for a vanilla topic proving locality.
   final String sentinelClass;
 
+  /// Whether a state-dependent topic may be cleanly absent from the visible
+  /// choice array after registration.
+  final bool allowHidden;
+
   String get key => id.toLowerCase();
 
   Map<String, Object?> toJson() => {
@@ -32,6 +37,7 @@ class DialogTopicDefinition {
     'participant_name': participantName,
     'topic_class': topicClass,
     'sentinel_class': sentinelClass,
+    if (allowHidden) 'allow_hidden': true,
   };
 
   factory DialogTopicDefinition.fromJson(Map<String, Object?> json) =>
@@ -40,6 +46,7 @@ class DialogTopicDefinition {
         participantName: json['participant_name'] as String,
         topicClass: json['topic_class'] as String,
         sentinelClass: json['sentinel_class'] as String,
+        allowHidden: (json['allow_hidden'] as bool?) ?? false,
       );
 }
 

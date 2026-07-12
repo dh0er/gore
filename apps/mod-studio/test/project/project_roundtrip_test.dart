@@ -36,6 +36,7 @@ void main() {
           participantName: 'om_viper_001',
           topicClass: '/Script/Angelscript.ChoiceGoreViperFixture',
           sentinelClass: '/Script/Angelscript.ChoiceViperVanilla',
+          allowHidden: true,
         ),
       ],
     );
@@ -69,6 +70,7 @@ void main() {
     expect(loaded.dialogTopics.single.participantName, 'om_viper_001');
     expect(loaded.dialogTopics.single.topicClass, '/Script/Angelscript.ChoiceGoreViperFixture');
     expect(loaded.dialogTopics.single.sentinelClass, '/Script/Angelscript.ChoiceViperVanilla');
+    expect(loaded.dialogTopics.single.allowHidden, isTrue);
 
     // build spec carries all editor domains in FFI shape
     final spec = loaded.toBuildSpec();
@@ -81,6 +83,7 @@ void main() {
         'participant_name': 'om_viper_001',
         'topic_class': '/Script/Angelscript.ChoiceGoreViperFixture',
         'sentinel_class': '/Script/Angelscript.ChoiceViperVanilla',
+        'allow_hidden': true,
       }
     ]);
   });

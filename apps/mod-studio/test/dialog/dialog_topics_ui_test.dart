@@ -40,6 +40,7 @@ void main() {
         required String participant,
         required String topicClass,
         required String sentinelClass,
+        bool allowHidden = false,
       }) async {
         await tester.tap(find.text('Add runtime topic'));
         await tester.pumpAndSettle();
@@ -56,6 +57,12 @@ void main() {
           find.widgetWithText(TextField, 'Sentinel class'),
           sentinelClass,
         );
+        if (allowHidden) {
+          await tester.tap(
+            find.byKey(const ValueKey('dialog-topic-allow-hidden')),
+          );
+          await tester.pumpAndSettle();
+        }
         await tester.tap(find.widgetWithText(FilledButton, 'Add'));
         await tester.pumpAndSettle();
       }
@@ -65,6 +72,7 @@ void main() {
         participant: 'om_stt_viper_302',
         topicClass: '/Script/Angelscript.ChoiceGoreFirst',
         sentinelClass: '/Script/Angelscript.ChoiceStt302ViperExit',
+        allowHidden: true,
       );
       await addTopic(
         id: 'second',
@@ -81,6 +89,12 @@ void main() {
         topics.first.sentinelClass,
         '/Script/Angelscript.ChoiceStt302ViperExit',
       );
+      expect(topics.first.allowHidden, isTrue);
+      expect(topics.last.allowHidden, isFalse);
+      expect(
+        find.byTooltip('Topic may be hidden in its current state'),
+        findsOneWidget,
+      );
       expect(
         tester.getTopLeft(find.text('first')).dy,
         lessThan(tester.getTopLeft(find.text('second')).dy),
@@ -88,6 +102,14 @@ void main() {
 
       await tester.tap(find.byTooltip('Edit runtime dialog topic first'));
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<CheckboxListTile>(
+              find.byKey(const ValueKey('dialog-topic-allow-hidden')),
+            )
+            .value,
+        isTrue,
+      );
       await tester.enterText(
         find.widgetWithText(TextField, 'Topic ID'),
         'first-renamed',
@@ -106,6 +128,22 @@ void main() {
       expect(
         topics.first.sentinelClass,
         '/Script/Angelscript.ChoiceStt302ViperExit',
+      );
+      expect(topics.first.allowHidden, isTrue);
+
+      await tester.tap(
+        find.byTooltip('Edit runtime dialog topic first-renamed'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('dialog-topic-allow-hidden')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Save'));
+      await tester.pumpAndSettle();
+      topics = container.read(dialogTopicsProvider).entries;
+      expect(topics.first.allowHidden, isFalse);
+      expect(
+        find.byTooltip('Topic may be hidden in its current state'),
+        findsNothing,
       );
 
       await tester.tap(find.byTooltip('Delete runtime dialog topic second'));
