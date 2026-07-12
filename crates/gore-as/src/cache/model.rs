@@ -13,6 +13,17 @@ use super::refs::RefResolver;
 use super::types::{DataType, DATA_TYPE_SIZE};
 use super::wire::{Cursor, WireError};
 
+// Exact conservative wire minima. These include every fixed field and the four-byte count/string
+// header for every variable-width member, but no optional payload. Proving them against the bytes
+// that remain keeps attacker-controlled counts from driving allocations or loops after a desync.
+const MIN_MODULE_ENTRY_BYTES: usize = 60;
+const MIN_FUNCTION_BYTES: usize = 120;
+const MIN_CLASS_BYTES: usize = 64;
+const MIN_PROPERTY_BYTES: usize = 52;
+const MIN_ENUM_BYTES: usize = 16;
+const MIN_GLOBAL_BYTES: usize = 48;
+const MIN_IMPORT_BYTES: usize = 60;
+
 /// AngelScript value-pointer size in dwords on x64 (`AS_PTR_SIZE`). Every handle/reference
 /// and every 64-bit scalar occupies this many frame slots; mirrors `isa.rs`/`decompile.rs`.
 pub const AS_PTR_SIZE: i32 = 2;
@@ -179,6 +190,55 @@ pub struct Module {
     pub globals: Vec<Global>,
 }
 
+fn bounded_count(
+    c: &mut Cursor<'_>,
+    field: &'static str,
+    minimum_element_bytes: usize,
+) -> Result<usize, WireError> {
+    let count = c.read_count(field)?;
+    c.ensure_minimum_remaining(count, minimum_element_bytes, field)?;
+    Ok(count)
+}
+
+fn skip_tarray_fixed_checked(
+    c: &mut Cursor<'_>,
+    element_bytes: usize,
+    field: &'static str,
+) -> Result<(), WireError> {
+    let count = bounded_count(c, field, element_bytes)?;
+    // `bounded_count` proved this product does not overflow.
+    c.skip(count * element_bytes)
+}
+
+fn skip_tarray_sia_checked(c: &mut Cursor<'_>, field: &'static str) -> Result<(), WireError> {
+    let count = bounded_count(c, field, 4)?;
+    for _ in 0..count {
+        c.read_sia()?;
+    }
+    Ok(())
+}
+
+fn read_tarray_i32_checked(c: &mut Cursor<'_>, field: &'static str) -> Result<Vec<i32>, WireError> {
+    let count = bounded_count(c, field, 4)?;
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(c.read_i32()?);
+    }
+    Ok(values)
+}
+
+fn read_tarray_sia_checked(
+    c: &mut Cursor<'_>,
+    field: &'static str,
+) -> Result<Vec<String>, WireError> {
+    let count = bounded_count(c, field, 4)?;
+    let mut values = Vec::with_capacity(count);
+    for _ in 0..count {
+        values.push(c.read_sia()?);
+    }
+    Ok(values)
+}
+
 pub fn parse_modules(bytes: &[u8]) -> Result<Vec<Module>, WireError> {
     if bytes.len() < CacheHeader::SIZE {
         return Err(WireError::Eof {
@@ -189,6 +249,7 @@ pub fn parse_modules(bytes: &[u8]) -> Result<Vec<Module>, WireError> {
     }
     let mut c = Cursor::at(bytes, CacheHeader::SIZE);
     let count = u32::from_le_bytes(bytes[0x14..0x18].try_into().unwrap()) as usize;
+    c.ensure_minimum_remaining(count, MIN_MODULE_ENTRY_BYTES, "Modules")?;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         c.read_fstring()?; // TMap key
@@ -201,46 +262,46 @@ fn read_function(c: &mut Cursor) -> Result<Func, WireError> {
     let name = c.read_sia()?;
     let namespace = c.read_sia()?;
     let ret = DataType::read(c)?;
-    let nptypes = c.read_count("ParameterTypes")?;
+    let nptypes = bounded_count(c, "ParameterTypes", DATA_TYPE_SIZE)?;
     let mut ptypes = Vec::with_capacity(nptypes);
     for _ in 0..nptypes {
         ptypes.push(DataType::read(c)?);
     }
-    let pnames = c.read_tarray_sia("ParameterNames")?;
-    let nflags = c.read_count("ParameterFlags")?;
+    let pnames = read_tarray_sia_checked(c, "ParameterNames")?;
+    let nflags = bounded_count(c, "ParameterFlags", 4)?;
     let mut pflags = Vec::with_capacity(nflags);
     for _ in 0..nflags {
         pflags.push(c.read_i32()?);
     }
-    c.skip_tarray_sia("ParameterDefaultArgs")?;
+    skip_tarray_sia_checked(c, "ParameterDefaultArgs")?;
     let traits = c.read_i32()?; // FunctionTraits (asSFunctionTraits bitfield)
-    let bytecode = c.read_tarray_i32("ByteCode")?;
-    c.skip_tarray_fixed(4, "ByteCodeReferences")?;
+    let bytecode = read_tarray_i32_checked(c, "ByteCode")?;
+    skip_tarray_fixed_checked(c, 4, "ByteCodeReferences")?;
     c.skip(4)?; // VariableSpace
                 // ObjVariableTypes: TArray<int64 ref>; ObjVariablePos: TArray<int32>
-    let nobj = c.read_count("ObjVariableTypes")?;
+    let nobj = bounded_count(c, "ObjVariableTypes", 8)?;
     let mut obj_types = Vec::with_capacity(nobj);
     for _ in 0..nobj {
         obj_types.push(c.read_i64()?);
     }
-    let nobjpos = c.read_count("ObjVariablePos")?;
+    let nobjpos = bounded_count(c, "ObjVariablePos", 4)?;
     let mut obj_pos = Vec::with_capacity(nobjpos);
     for _ in 0..nobjpos {
         obj_pos.push(c.read_i32()?);
     }
     c.skip(4)?; // ObjVariablesOnHeap
-    c.skip_tarray_fixed(4, "VarInfoProgramPos")?;
-    c.skip_tarray_fixed(4, "VarInfoOffset")?;
-    c.skip_tarray_fixed(4, "VarInfoOption")?;
+    skip_tarray_fixed_checked(c, 4, "VarInfoProgramPos")?;
+    skip_tarray_fixed_checked(c, 4, "VarInfoOffset")?;
+    skip_tarray_fixed_checked(c, 4, "VarInfoOption")?;
     c.skip(4)?; // StackNeeded
     c.skip(4)?; // Id
     c.skip(4)?; // DeclaredAt
-    c.skip_tarray_fixed(4, "LineNumbers")?;
+    skip_tarray_fixed_checked(c, 4, "LineNumbers")?;
     let is_ufunction = c.read_bool4()?;
     if is_ufunction {
         c.read_sia()?; // UnrealFunctionName
-        c.skip_tarray_sia("UF.MetaSpec")?;
-        c.skip_tarray_sia("UF.MetaValues")?;
+        skip_tarray_sia_checked(c, "UF.MetaSpec")?;
+        skip_tarray_sia_checked(c, "UF.MetaValues")?;
         c.skip(18 * 4)?;
     }
     // build params (zip names/types/flags by index)
@@ -272,8 +333,8 @@ fn read_property(c: &mut Cursor) -> Result<Field, WireError> {
     c.skip(4)?; // bIsProtected
     let is_uproperty = c.read_bool4()?;
     if is_uproperty {
-        c.skip_tarray_sia("UP.MetaSpec")?;
-        c.skip_tarray_sia("UP.MetaValues")?;
+        skip_tarray_sia_checked(c, "UP.MetaSpec")?;
+        skip_tarray_sia_checked(c, "UP.MetaValues")?;
         c.skip(9 * 4)?;
         let replicated = c.read_bool4()?;
         c.skip(4)?; // bSkipReplication
@@ -298,31 +359,31 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
     let flags = c.read_i32()? as u32; // asCObjectType Flags (asOBJ_* bitfield)
-    let nprops = c.read_count("Class.Properties")?;
+    let nprops = bounded_count(c, "Class.Properties", MIN_PROPERTY_BYTES)?;
     let mut fields = Vec::with_capacity(nprops);
     for _ in 0..nprops {
         fields.push(read_property(c)?);
     }
-    let nmethods = c.read_count("Class.Methods")?;
+    let nmethods = bounded_count(c, "Class.Methods", MIN_FUNCTION_BYTES)?;
     let mut methods = Vec::with_capacity(nmethods);
     for _ in 0..nmethods {
         methods.push(read_function(c)?);
     }
-    c.skip_tarray_fixed(4, "Class.MethodTable")?;
+    skip_tarray_fixed_checked(c, 4, "Class.MethodTable")?;
     c.skip(8)?; // DerivedFrom
     c.skip(8)?; // ShadowType
-    let nctors = c.read_count("Class.Constructors")?;
+    let nctors = bounded_count(c, "Class.Constructors", MIN_FUNCTION_BYTES)?;
     let mut ctors = Vec::with_capacity(nctors);
     for _ in 0..nctors {
         ctors.push(read_function(c)?);
     }
-    c.skip_tarray_fixed(8, "Class.FactoryRefs")?;
-    c.skip_tarray_fixed(8, "Class.BehaviorRefs")?;
-    let nbehav = c.read_count("Class.BehaviorFunctions")?;
+    skip_tarray_fixed_checked(c, 8, "Class.FactoryRefs")?;
+    skip_tarray_fixed_checked(c, 8, "Class.BehaviorRefs")?;
+    let nbehav = bounded_count(c, "Class.BehaviorFunctions", MIN_FUNCTION_BYTES)?;
     for _ in 0..nbehav {
         read_function(c)?;
     }
-    c.skip_tarray_fixed(4, "Class.BehaviorFunctionTypes")?;
+    skip_tarray_fixed_checked(c, 4, "Class.BehaviorFunctionTypes")?;
     let mut super_class = None;
     if c.read_bool4()? {
         super_class = Some(c.read_sia()?); // SuperClass
@@ -330,8 +391,8 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
         c.skip(8 * 4)?;
         c.read_sia()?; // StaticClassGVName
         c.skip(4)?; // bPlaceable
-        c.skip_tarray_sia("Class.MetaSpec")?;
-        c.skip_tarray_sia("Class.MetaValues")?;
+        skip_tarray_sia_checked(c, "Class.MetaSpec")?;
+        skip_tarray_sia_checked(c, "Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
     }
     Ok(Class {
@@ -347,8 +408,8 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
 fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
-    let names = c.read_tarray_sia("Enum.Names")?;
-    let nvals = c.read_count("Enum.Values")?;
+    let names = read_tarray_sia_checked(c, "Enum.Names")?;
+    let nvals = bounded_count(c, "Enum.Values", 4)?;
     let mut vals = Vec::with_capacity(nvals);
     for _ in 0..nvals {
         vals.push(c.read_i32()?);
@@ -377,46 +438,46 @@ fn read_function_import(c: &mut Cursor) -> Result<(), WireError> {
     c.read_sia()?; // ImportedFromModule
     c.read_sia()?; // Name
     c.read_sia()?; // Namespace
-    c.skip_tarray_fixed(DATA_TYPE_SIZE, "Import.ParameterTypes")?;
-    c.skip_tarray_fixed(4, "Import.ParameterFlags")?;
-    c.skip_tarray_sia("Import.ParameterDefaultArgs")?;
+    skip_tarray_fixed_checked(c, DATA_TYPE_SIZE, "Import.ParameterTypes")?;
+    skip_tarray_fixed_checked(c, 4, "Import.ParameterFlags")?;
+    skip_tarray_sia_checked(c, "Import.ParameterDefaultArgs")?;
     c.skip(DATA_TYPE_SIZE)?; // ReturnType
     Ok(())
 }
 
 fn read_module(c: &mut Cursor) -> Result<Module, WireError> {
     let name = c.read_sia()?;
-    let nfns = c.read_count("Module.Functions")?;
+    let nfns = bounded_count(c, "Module.Functions", MIN_FUNCTION_BYTES)?;
     let mut functions = Vec::with_capacity(nfns);
     for _ in 0..nfns {
         functions.push(read_function(c)?);
     }
-    let nclasses = c.read_count("Module.Classes")?;
+    let nclasses = bounded_count(c, "Module.Classes", MIN_CLASS_BYTES)?;
     let mut classes = Vec::with_capacity(nclasses);
     for _ in 0..nclasses {
         classes.push(read_class(c)?);
     }
-    let nenums = c.read_count("Module.Enums")?;
+    let nenums = bounded_count(c, "Module.Enums", MIN_ENUM_BYTES)?;
     let mut enums = Vec::with_capacity(nenums);
     for _ in 0..nenums {
         enums.push(read_enum(c)?);
     }
-    let nglobals = c.read_count("Module.GlobalVariables")?;
+    let nglobals = bounded_count(c, "Module.GlobalVariables", MIN_GLOBAL_BYTES)?;
     let mut globals = Vec::with_capacity(nglobals);
     for _ in 0..nglobals {
         globals.push(read_global(c)?);
     }
-    let nimports = c.read_count("Module.FunctionImports")?;
+    let nimports = bounded_count(c, "Module.FunctionImports", MIN_IMPORT_BYTES)?;
     for _ in 0..nimports {
         read_function_import(c)?;
     }
     c.skip(8)?; // CodeHash
-    c.skip_tarray_sia("Module.ImportedModules")?;
+    skip_tarray_sia_checked(c, "Module.ImportedModules")?;
     c.read_sia()?; // StaticsClassName
-    c.skip_tarray_sia("Module.DeclaredEvents")?;
-    c.skip_tarray_sia("Module.DeclaredDelegates")?;
+    skip_tarray_sia_checked(c, "Module.DeclaredEvents")?;
+    skip_tarray_sia_checked(c, "Module.DeclaredDelegates")?;
     let file = c.read_sia()?; // ScriptRelativeFilename
-    c.skip_tarray_sia("Module.PostInitFunctions")?;
+    skip_tarray_sia_checked(c, "Module.PostInitFunctions")?;
     Ok(Module {
         name,
         file,
@@ -425,4 +486,81 @@ fn read_module(c: &mut Cursor) -> Result<Module, WireError> {
         enums,
         globals,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HUGE_COUNT: i32 = 50_000_000;
+
+    fn cache_with_module_count(count: u32) -> Vec<u8> {
+        let mut bytes = vec![0; CacheHeader::SIZE];
+        bytes[0x14..0x18].copy_from_slice(&count.to_le_bytes());
+        bytes
+    }
+
+    fn push_i32(bytes: &mut Vec<u8>, value: i32) {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    #[test]
+    fn rejects_unbacked_header_module_count_before_allocating() {
+        let bytes = cache_with_module_count(u32::MAX);
+        let error = parse_modules(&bytes).unwrap_err();
+
+        match error {
+            WireError::Eof {
+                pos, need, have, ..
+            } => {
+                assert_eq!(pos, CacheHeader::SIZE);
+                assert_eq!(need, u32::MAX as usize * MIN_MODULE_ENTRY_BYTES);
+                assert_eq!(have, 0);
+            }
+            other => panic!("expected module-count EOF, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_unbacked_function_count_before_allocating() {
+        let mut bytes = cache_with_module_count(1);
+        push_i32(&mut bytes, 0); // empty TMap key
+        push_i32(&mut bytes, 0); // empty module name
+        push_i32(&mut bytes, HUGE_COUNT); // Module.Functions
+        bytes.resize(CacheHeader::SIZE + MIN_MODULE_ENTRY_BYTES, 0);
+
+        let error = parse_modules(&bytes).unwrap_err();
+        assert!(matches!(
+            error,
+            WireError::Eof {
+                pos: 36,
+                need: 6_000_000_000,
+                have: 48,
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_unbacked_variable_string_count_before_allocating() {
+        let mut bytes = cache_with_module_count(1);
+        push_i32(&mut bytes, 0); // empty TMap key
+        push_i32(&mut bytes, 0); // empty module name
+        push_i32(&mut bytes, 1); // Module.Functions
+        push_i32(&mut bytes, 0); // Function.Name
+        push_i32(&mut bytes, 0); // Function.Namespace
+        bytes.extend_from_slice(&[0; DATA_TYPE_SIZE]); // Function.ReturnType
+        push_i32(&mut bytes, 0); // ParameterTypes
+        push_i32(&mut bytes, HUGE_COUNT); // ParameterNames
+        bytes.resize(36 + MIN_FUNCTION_BYTES, 0);
+
+        let error = parse_modules(&bytes).unwrap_err();
+        assert!(matches!(
+            error,
+            WireError::Eof {
+                pos: 88,
+                need: 200_000_000,
+                have: 68,
+            }
+        ));
+    }
 }
