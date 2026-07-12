@@ -56,6 +56,32 @@ impl<'a> Cursor<'a> {
         self.buf.len().saturating_sub(self.pos)
     }
 
+    /// Prove that a serialized count has enough backing bytes for even its smallest possible
+    /// elements before a caller loops or allocates from it. Variable-width records pass their
+    /// format minimum; fixed-width records pass their exact width.
+    pub fn ensure_minimum_remaining(
+        &self,
+        count: usize,
+        minimum_element_bytes: usize,
+        field: &'static str,
+    ) -> Result<(), WireError> {
+        let need = count
+            .checked_mul(minimum_element_bytes)
+            .ok_or(WireError::BadLen {
+                pos: self.pos.saturating_sub(4),
+                len: count as i64,
+                field,
+            })?;
+        if need > self.remaining() {
+            return Err(WireError::Eof {
+                pos: self.pos,
+                need,
+                have: self.remaining(),
+            });
+        }
+        Ok(())
+    }
+
     fn take(&mut self, n: usize) -> Result<&'a [u8], WireError> {
         if self.pos + n > self.buf.len() {
             return Err(WireError::Eof {

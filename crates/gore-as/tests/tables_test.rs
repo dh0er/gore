@@ -60,3 +60,13 @@ fn minimal_tail_tables_all_empty() {
     assert!(tt.tables.iter().all(|t| t.count == 0), "all 7 tables empty");
     assert_eq!(tt.end, b.len());
 }
+
+#[test]
+fn truncated_huge_tail_count_fails_before_allocation() {
+    let bytes = 50_000_000i32.to_le_bytes();
+    let error = parse_tail_tables(&bytes, 0).unwrap_err();
+    assert!(
+        error.to_string().contains("unexpected end of data"),
+        "{error}"
+    );
+}

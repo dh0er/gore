@@ -87,14 +87,17 @@ impl RefResolver {
         let mut r = RefResolver::default();
 
         // T1 TypeReferences: int64 key + (Name, Module, Namespace, TArray<DataType>)
-        for _ in 0..c.read_count("TypeReferences")? {
+        let type_reference_count = c.read_count("TypeReferences")?;
+        c.ensure_minimum_remaining(type_reference_count, 24, "TypeReferences")?;
+        for _ in 0..type_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             c.read_sia()?; // Module
             c.read_sia()?; // Namespace
             let nsub = c.read_count("TypeRef.SubTypes")?;
+            c.ensure_minimum_remaining(nsub, 36, "TypeRef.SubTypes")?;
             if nsub > 0 {
-                let mut subs = Vec::with_capacity(nsub);
+                let mut subs = Vec::new();
                 for _ in 0..nsub {
                     subs.push(DataType::read(&mut c)?);
                 }
@@ -104,13 +107,17 @@ impl RefResolver {
             r.type_by_ptr.insert(key, name);
         }
         // T2 TypeIdReferenceToPointer: int32 id -> int64 ptr
-        for _ in 0..c.read_count("TypeIdRef")? {
+        let type_id_count = c.read_count("TypeIdRef")?;
+        c.ensure_minimum_remaining(type_id_count, 12, "TypeIdRef")?;
+        for _ in 0..type_id_count {
             let id = c.read_i32()?;
             let ptr = c.read_i64()?;
             r.typeid_to_ptr.insert(id, ptr);
         }
         // T3 FunctionReferences: int64 key + (Name, Module, Namespace, 3 bool, int64, params, ret)
-        for _ in 0..c.read_count("FunctionReferences")? {
+        let function_reference_count = c.read_count("FunctionReferences")?;
+        c.ensure_minimum_remaining(function_reference_count, 80, "FunctionReferences")?;
+        for _ in 0..function_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             let module = c.read_sia()?; // Module (declaring module name, batch-25f)
@@ -120,7 +127,8 @@ impl RefResolver {
             let is_method = c.read_bool4()?;
             let objtype = c.read_i64()?; // ObjectType ptr (owning class)
             let nparams = c.read_count("FuncRef.Params")?;
-            let mut params = Vec::with_capacity(nparams);
+            c.ensure_minimum_remaining(nparams, 36, "FuncRef.Params")?;
+            let mut params = Vec::new();
             for _ in 0..nparams {
                 params.push(DataType::read(&mut c)?);
             }
@@ -149,13 +157,17 @@ impl RefResolver {
             r.func_by_ptr.insert(key, name);
         }
         // T4 FunctionIdReferenceToPointer: int32 id -> int64 ptr
-        for _ in 0..c.read_count("FuncIdRef")? {
+        let function_id_count = c.read_count("FuncIdRef")?;
+        c.ensure_minimum_remaining(function_id_count, 12, "FuncIdRef")?;
+        for _ in 0..function_id_count {
             let id = c.read_i32()?;
             let ptr = c.read_i64()?;
             r.funcid_to_ptr.insert(id, ptr);
         }
         // T5 GlobalReferences: int64 key + (Name, Module, Namespace, int32 bIsString)
-        for _ in 0..c.read_count("GlobalReferences")? {
+        let global_reference_count = c.read_count("GlobalReferences")?;
+        c.ensure_minimum_remaining(global_reference_count, 24, "GlobalReferences")?;
+        for _ in 0..global_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             c.read_sia()?; // Module
@@ -171,12 +183,14 @@ impl RefResolver {
         }
         // T6 StaticNames: TArray<SIA> — the FName-literal pool `__STATIC_NAME(Id)` indexes.
         let n_static = c.read_count("StaticNames")?;
-        r.static_names.reserve_exact(n_static);
+        c.ensure_minimum_remaining(n_static, 4, "StaticNames")?;
         for _ in 0..n_static {
             r.static_names.push(c.read_sia()?);
         }
         // T7 PropertyReferences: int64 key + (Name, int32 OldTypeId)
-        for _ in 0..c.read_count("PropertyReferences")? {
+        let property_reference_count = c.read_count("PropertyReferences")?;
+        c.ensure_minimum_remaining(property_reference_count, 16, "PropertyReferences")?;
+        for _ in 0..property_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
             let old_type_id = c.read_i32()?; // OldTypeId
@@ -897,6 +911,19 @@ impl RefResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncated_huge_tail_count_fails_before_resolver_allocation() {
+        let mut bytes = vec![0u8; 16];
+        bytes.extend_from_slice(&super::super::header::CACHE_MAGIC.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&50_000_000i32.to_le_bytes());
+        let error = RefResolver::build(&bytes).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected end of data"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn native_arity_never_borrows_a_name_match_from_an_unrelated_owner() {
