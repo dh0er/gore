@@ -22,6 +22,9 @@
 //! - `authoring_project_story_draft_insert_v1` atomically evaluates one raw, duplicate-safe Story
 //!   Draft mutation against one exact canonical schema-revision-2 project. Rejections never carry
 //!   candidate project JSON.
+//! - `authoring_story_build_plan_v1_generate` derives one deterministic, sealed source-inspection
+//!   plan from exact canonical revision-2 project bytes. It always remains runtime-unqualified,
+//!   build-blocked, and non-publishable and never compiles, writes, deploys, or launches the game.
 //! - `authoring_story_catalog_v1_build` reads three bounded generation paths and builds the pinned
 //!   catalog entirely in memory; `authoring_story_catalog_v1_read` accepts one bounded raw
 //!   canonical catalog string and returns a request-bound read-only chooser projection. Neither
@@ -59,6 +62,7 @@ mod authoring;
 mod authoring_drafts;
 mod authoring_store;
 mod authoring_story;
+mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_inventory;
 mod transport;
@@ -99,6 +103,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_verify_asset",
+    "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
     "authoring_story_catalog_v1_build_for_game_root",
     "authoring_story_catalog_v1_read",
@@ -187,6 +192,9 @@ fn dispatch(input: &str) -> Value {
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_project_story_draft_insert_v1" => {
             authoring_story::insert_story_draft_v1(payload)
+        }
+        "authoring_story_build_plan_v1_generate" => {
+            authoring_story_build::generate_story_build_plan_v1(payload)
         }
         "authoring_story_catalog_v1_build" => {
             authoring_story_catalog::build_story_catalog_v1(payload)
@@ -1071,6 +1079,7 @@ mod tests {
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_verify_asset",
+                    "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
                     "authoring_story_catalog_v1_build_for_game_root",
                     "authoring_story_catalog_v1_read",
@@ -1115,6 +1124,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_project_story_draft_insert_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_story_build_plan_v1_generate"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_story_catalog_v1_build"));

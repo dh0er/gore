@@ -945,6 +945,7 @@ dependencies = [
  "gore-mod",
  "gore-modgen",
  "gore-reflect",
+ "gore-story-build",
  "gore-story-catalog",
  "gore-story-inventory",
  "gore-tex",
