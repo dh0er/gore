@@ -946,13 +946,16 @@ dependencies = [
  "gore-modgen",
  "gore-reflect",
  "gore-story-catalog",
+ "gore-story-inventory",
  "gore-tex",
  "gore-vo",
  "image",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
