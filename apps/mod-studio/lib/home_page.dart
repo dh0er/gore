@@ -25,6 +25,8 @@ import 'project/project_controller.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
+import 'story/domain/story_workspace_launcher.dart';
+import 'story/ui/story_workspace_flow.dart';
 import 'textures/domain/texture_index_provider.dart';
 import 'textures/ui/texture_tab.dart';
 
@@ -218,6 +220,24 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   }
 
+  Future<void> _openStoryWorkspace(StoryWorkspaceFlowMode mode) async {
+    final configuredGamePath = ref.read(gameExePathProvider);
+    if (configuredGamePath == null || configuredGamePath.isEmpty) {
+      _snack('Set the Gothic 1 Remake game path in Settings first.');
+      return;
+    }
+    await runStoryWorkspaceFlow(
+      context: context,
+      mode: mode,
+      // Pass the configured value through unchanged. The hardened Story
+      // launcher owns exact install-root/executable resolution.
+      configuredGamePath: configuredGamePath,
+      launcher: ManagedStoryWorkspaceFlowLauncher(
+        StoryWorkspaceLauncher(ModFfi(ref.read(coreServiceProvider))),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Switching the model data source invalidates pending overrides and the
@@ -283,13 +303,28 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _saveProject();
                 case 'saveAs':
                   await _saveProjectAs();
+                case 'storyCreate':
+                  await _openStoryWorkspace(StoryWorkspaceFlowMode.create);
+                case 'storyOpen':
+                  await _openStoryWorkspace(StoryWorkspaceFlowMode.open);
               }
             },
-            itemBuilder: (_) => const [
+            itemBuilder: (_) => const <PopupMenuEntry<String>>[
               PopupMenuItem(value: 'new', child: Text('New project')),
               PopupMenuItem(value: 'open', child: Text('Open project…')),
               PopupMenuItem(value: 'save', child: Text('Save project')),
               PopupMenuItem(value: 'saveAs', child: Text('Save project as…')),
+              PopupMenuDivider(),
+              PopupMenuItem(
+                key: Key('project-create-story-workspace'),
+                value: 'storyCreate',
+                child: Text('Create Story workspace (drafts)...'),
+              ),
+              PopupMenuItem(
+                key: Key('project-open-story-workspace'),
+                value: 'storyOpen',
+                child: Text('Open Story workspace (drafts)...'),
+              ),
             ],
           ),
           Padding(
