@@ -62,6 +62,11 @@ pub enum DiagnosticCode {
     InvalidGenerationAnchor,
     InvalidOrigin,
     OriginGenerationMismatch,
+    InvalidGeneratorInput,
+    GeneratorContractDrift,
+    GeneratedScriptDrift,
+    ScriptModuleOwnershipMismatch,
+    RuntimeUnqualified,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +85,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    fn error(
+    pub(crate) fn error(
         code: DiagnosticCode,
         entity: EntityId,
         property_path: impl Into<String>,
@@ -97,7 +102,7 @@ impl Diagnostic {
         }
     }
 
-    fn project_error(
+    pub(crate) fn project_error(
         code: DiagnosticCode,
         property_path: impl Into<String>,
         message: impl Into<String>,
@@ -113,7 +118,7 @@ impl Diagnostic {
         }
     }
 
-    fn warning(
+    pub(crate) fn warning(
         code: DiagnosticCode,
         entity: EntityId,
         property_path: impl Into<String>,
@@ -130,7 +135,7 @@ impl Diagnostic {
         }
     }
 
-    fn related(mut self, related: EntityId) -> Self {
+    pub(crate) fn related(mut self, related: EntityId) -> Self {
         self.related_entities.push(related);
         self
     }

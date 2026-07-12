@@ -11,6 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 
+/// Stable generator identity for the discovery-only quest skeleton.
+pub const DRAFT_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 1;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
@@ -20,9 +22,9 @@ pub const MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES: usize = 128;
 const MAX_IDENTIFIER_BYTES: usize = 96;
 const MAX_MODULE_BYTES: usize = 255;
 const MAX_MODULE_SEGMENTS: usize = 16;
-const MAX_COLLISION_ENTRIES: usize = 100_000;
-const MAX_COLLISION_ENTRY_BYTES: usize = 512;
-const MAX_COLLISION_TOTAL_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_COLLISION_ENTRIES: usize = 100_000;
+pub(crate) const MAX_COLLISION_ENTRY_BYTES: usize = 512;
+pub(crate) const MAX_COLLISION_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 
 const QUEST_BASE_CLASS: &str = "UG1RQuest";
 const HERO_UNIQUE_NAME: &str = "Hero";
@@ -616,6 +618,7 @@ impl DraftQuestSkeletonV1 {
         DraftQuestGeneratedSource {
             target: self.input.target.clone(),
             quest_id: self.input.quest_id,
+            generator_id: DRAFT_QUEST_GENERATOR_ID,
             generator_version: DRAFT_QUEST_GENERATOR_VERSION,
             giver: self.input.giver.clone(),
             parent_quest: self.input.parent_quest.clone(),
@@ -634,6 +637,7 @@ impl DraftQuestSkeletonV1 {
 pub struct DraftQuestGeneratedSource {
     pub target: GameGenerationAnchor,
     pub quest_id: EntityId,
+    pub generator_id: &'static str,
     pub generator_version: u32,
     pub giver: CatalogQualifiedQuestGiver,
     pub parent_quest: CatalogQualifiedParentQuest,

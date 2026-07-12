@@ -183,6 +183,15 @@ fn revision2_project_ref_ids(project: &revision2::ProjectRevision2) -> Vec<Proje
                 ids.extend(slot.candidates.iter().map(|reference| reference.project_id));
                 ids.extend(slot.selected.iter().map(|reference| reference.project_id));
             }
+            revision2::EntityPayload::NpcDraft(draft) => {
+                ids.push(draft.script_module.project_id);
+            }
+            revision2::EntityPayload::QuestDraft(draft) => {
+                ids.push(draft.script_module.project_id);
+            }
+            revision2::EntityPayload::ScriptModule(module) => {
+                ids.push(module.owner.project_id);
+            }
         }
     }
     ids

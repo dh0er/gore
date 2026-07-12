@@ -3,7 +3,7 @@ use gore_authoring::{
     DraftQuestAuthoringStatus, DraftQuestCollisionCatalog, DraftQuestCollisionKind,
     DraftQuestDiscoveryStatus, DraftQuestSkeletonError, DraftQuestSkeletonInput,
     DraftQuestSkeletonV1, DraftQuestTransitionStatus, EntityId, GameGenerationAnchor, Sha256Digest,
-    DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
+    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
 };
 
@@ -217,6 +217,7 @@ UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE GetGoreProbeAsghanMiniObjective()
 #[test]
 fn capability_is_always_offline_and_runtime_unqualified() {
     let generated = DraftQuestSkeletonV1::new(input()).unwrap().generate();
+    assert_eq!(generated.generator_id, DRAFT_QUEST_GENERATOR_ID);
     assert_eq!(generated.generator_version, DRAFT_QUEST_GENERATOR_VERSION);
     assert_eq!(
         generated.status.authoring,
