@@ -3,13 +3,16 @@
 GORE can compile a new dialog-topic class into an additive AngelScript module,
 carry its new symbols in a mini-cache, compose that mini-cache into the shipping
 cache, and deploy/undeploy the result transactionally. The complete visual path
-has been validated in Gothic 1 Remake 1.0.3; automatic discovery and topic
-selection are separate concerns described below.
+was validated with version 1 of the generated registration runtime in Gothic 1
+Remake 1.0.3. The current version-3 artifact retains the same intended hook and
+mutation path and passes deterministic mock tests, but has not yet completed
+controlled live visual requalification. Automatic discovery and topic selection
+are separate concerns described below.
 
 ## Proven runtime boundary
 
-The controlled Viper fixture and the public `BuildSpec.dialog_topics` generator
-both validated this chain:
+The controlled Viper fixture and version 1 of the public
+`BuildSpec.dialog_topics` generator both validated this chain:
 
 ```text
 new UChoice subclass
@@ -31,10 +34,10 @@ status=CHOICE_PASS topics=3 identity_count=1 class_count=1 exact_count=1
 status=RENDER_PASS topics=3 identity_count=1 class_count=1 exact_count=1
 ```
 
-For the final production-generated run, the user independently confirmed the
-caption `[Gore probe] UI fixture`. The same object address and exact class
-occurred once in both observed arrays, and the render callback belonged to the
-same widget. No topic was selected.
+For the final version-1 production-generated run, the user independently
+confirmed the caption `[Gore probe] UI fixture`. The same object address and
+exact class occurred once in both observed arrays, and the render callback
+belonged to the same widget. No topic was selected.
 
 Afterwards `gore mod undeploy` restored the 123,394,250-byte shipping cache to
 SHA-256
@@ -166,11 +169,21 @@ both registrations.
 
 Any missing class/hook, unreadable or malformed array, participant-name failure,
 identity/class split, duplicate, or changed conversation object fails closed.
-All declared authored and sentinel classes are preflighted as one batch before
-the first mutation; a class failure prevents every registration from mutating.
-Conversation-local context mismatches skip the current attempt. Classes are
-resolved at the natural callback rather than loader startup because they may
-load lazily.
+The bounded participant set is inspected first without resolving classes. All
+authored and sentinel classes declared for participants in that exact current
+conversation are then preflighted as one batch before the first mutation; an
+unrelated NPC's unavailable class cannot poison the active conversation. A
+missing or malformed active class records `BATCH_FAIL` and prevents every
+active registration from calling `AddTopic` or reaching `ARMED` in that
+attempt. Existing authored-topic lookups are likewise completed for all
+locality-qualified registrations before mutation. Conversation-local
+participant or exact-sentinel-topic mismatches remain registration-specific
+skips. Classes are resolved at the natural callback rather than loader startup
+because they may load lazily. This preflight-atomic behavior is covered by the
+version-3 mock-runtime suite; it is not transactional if a native `AddTopic`
+call itself fails. Such a failure stops all later mutation attempts, but the
+failing call or an earlier successful call may already have mutated and neither
+has a proven safe inverse. Version 3 is not yet a live-game proof.
 The runtime never selects or removes a topic, scans global objects, starts a
 conversation, uses a timer or console command, grants/activates an ability, or
 writes a save/quest/knowledge field.
@@ -219,9 +232,12 @@ therefore be tested on a disposable save with semantic before/after inspection.
 
 - Automatic discovery for a new module remains unproven.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
-  UE4SS 3.0.1. Both the reviewed v0.4 fixture and the exact adapter emitted by
-  the parameterized production generator completed the clean live visual proof.
-  Other runtime combinations remain to be qualified.
+  UE4SS 3.0.1. Both the reviewed v0.4 fixture and version 1 of the exact adapter
+  emitted by the parameterized production generator completed the clean live
+  visual proof. The current generated runtime is version 3: its batch class
+  preflight and observer behavior have deterministic mock coverage, but the
+  exact version-3 artifact still needs the same clean visual requalification.
+  Other game, UE4SS, and runtime combinations remain to be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
   selection-side save effects are not certified by the insertion proof.
 - The exact native ordering of knowledge rules, `IsVisible_Implementation`,

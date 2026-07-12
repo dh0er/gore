@@ -2,7 +2,7 @@
 -- bundle must not require a separately installed shared Lua library.
 do
 local PREFIX = "[GoreDialogRuntime]"
-local VERSION = "2"
+local VERSION = "3"
 local MOD_NAME = __GORE_DIALOG_MOD_NAME__
 local REGISTRATIONS = {
 __GORE_DIALOG_REGISTRATIONS__}
@@ -88,6 +88,22 @@ local function find_class(path)
     if not is_class then pcall(function() is_class = found:IsClass() end) end
     if not is_class then return nil end
     return found
+end
+
+local function preflight_declared_class(resolved_classes, path)
+    local cached = resolved_classes[path]
+    if cached ~= nil then return cached.object, cached.address, nil end
+
+    local class_object = find_class(path)
+    if class_object == nil then return nil, nil, "missing" end
+    local class_address = address_of(class_object)
+    if class_address == nil then return nil, nil, "malformed" end
+
+    resolved_classes[path] = {
+        object = class_object,
+        address = class_address,
+    }
+    return class_object, class_address, nil
 end
 
 local function lower_name(value)
@@ -198,7 +214,7 @@ local function find_topic_instance(topic_set, topic_class)
     return topic, "found"
 end
 
-local function resolve_context(ability, registration)
+local function resolve_participant_context(ability, registration)
     ability = unwrap(ability)
     local ability_address = address_of(ability)
     if ability_address == nil then return nil, "invalid-ability" end
@@ -220,6 +236,20 @@ local function resolve_context(ability, registration)
         has_exact_participant(group, registration.participant_name)
     if not participant_ok then return nil, participant_error end
 
+    return {
+        ability_address = ability_address,
+        group = group,
+        group_address = group_address,
+    }, nil
+end
+
+local function resolve_context(ability, registration, sentinel_class)
+    local participant_context, context_error =
+        resolve_participant_context(ability, registration)
+    if participant_context == nil then return nil, context_error end
+
+    local group = participant_context.group
+
     local topic_set = nil
     local set_ok = pcall(function() topic_set = group.TopicSet end)
     topic_set = set_ok and unwrap(topic_set) or nil
@@ -227,16 +257,19 @@ local function resolve_context(ability, registration)
     if topic_set_address == nil then return nil, "invalid-topic-set" end
 
     -- The exact vanilla sentinel in this exact set is an independent locality proof.
-    local sentinel_class = find_class(registration.sentinel_class_path)
+    if sentinel_class == nil then
+        sentinel_class = find_class(registration.sentinel_class_path)
+    end
     if sentinel_class == nil then return nil, "sentinel-class-missing" end
+    if address_of(sentinel_class) == nil then return nil, "sentinel-class-malformed" end
     local _, sentinel_state = find_topic_instance(topic_set, sentinel_class)
     if sentinel_state ~= "found" then
         return nil, "sentinel-topic-" .. tostring(sentinel_state)
     end
 
     return {
-        ability_address = ability_address,
-        group_address = group_address,
+        ability_address = participant_context.ability_address,
+        group_address = participant_context.group_address,
         topic_set = topic_set,
         topic_set_address = topic_set_address,
     }, nil
@@ -251,12 +284,9 @@ local function resolve_widget_address(ability)
     return address_of(widget)
 end
 
-local function add_or_reuse_topic(context, topic_class)
-    local existing, existing_state = find_topic_instance(context.topic_set, topic_class)
+local function add_or_reuse_topic(context, topic_class, existing, existing_state)
     if existing_state == "found" then return existing, "reused" end
-    if existing_state ~= "missing" then
-        return nil, "topic-lookup-" .. tostring(existing_state)
-    end
+    if existing_state ~= "missing" then return nil, "topic-preflight-invalid" end
 
     -- Sole gameplay mutation. It runs only after participant and sentinel locality proofs pass.
     local replacement_name = FName("None", EFindName.FNAME_Find)
@@ -295,39 +325,168 @@ local function on_show_conversation(context_param)
         return
     end
 
-    -- Resolve every locality proof and authored class before the first mutation. This prevents an
-    -- earlier registration's newly-added topic from satisfying a later registration's sentinel.
-    -- Registrations are intentionally independent: a class can load lazily and one NPC/state may
-    -- be absent, so a failed entry is skipped for this attempt without disabling unrelated entries.
-    local candidates = {}
+    -- First select only registrations for an exact participant in this bounded conversation. This
+    -- is read-only and prevents a missing class for an unrelated NPC from poisoning the active
+    -- conversation in a large multi-NPC component.
+    local active_registrations = {}
+    local participant_scopes = {}
     for registration_index, registration in ipairs(REGISTRATIONS) do
-        local context, context_error = resolve_context(ability, registration)
+        local participant_context, participant_error =
+            resolve_participant_context(ability, registration)
+        if participant_context == nil then
+            log(
+                registration.id,
+                attempt_id,
+                "SKIP",
+                "stage=participant-preflight reason=" .. tostring(participant_error)
+            )
+        else
+            active_registrations[#active_registrations + 1] = registration_index
+            -- Retain only scalar identity tokens across the class lookups below, never UObjects.
+            participant_scopes[registration_index] = {
+                ability_address = participant_context.ability_address,
+                group_address = participant_context.group_address,
+            }
+        end
+    end
+    if #active_registrations == 0 then return end
+
+    -- Resolve every class declared by the active conversation as one fail-closed batch at the
+    -- natural callback. Classes can load lazily, so this must not run at loader startup. A single
+    -- unavailable active class aborts the attempt before locality or mutation work begins.
+    local declared_classes = {}
+    local resolved_classes = {}
+    local class_preflight_failed = false
+    for _, registration_index in ipairs(active_registrations) do
+        local registration = REGISTRATIONS[registration_index]
+        local topic_class, topic_class_address, topic_class_error =
+            preflight_declared_class(resolved_classes, registration.topic_class_path)
+        if topic_class == nil then
+            class_preflight_failed = true
+            log(
+                registration.id,
+                attempt_id,
+                "BATCH_FAIL",
+                "stage=class-preflight role=authored reason=" .. tostring(topic_class_error) ..
+                    " path=" .. tostring(registration.topic_class_path)
+            )
+        end
+
+        local sentinel_class, _, sentinel_class_error =
+            preflight_declared_class(resolved_classes, registration.sentinel_class_path)
+        if sentinel_class == nil then
+            class_preflight_failed = true
+            log(
+                registration.id,
+                attempt_id,
+                "BATCH_FAIL",
+                "stage=class-preflight role=sentinel reason=" .. tostring(sentinel_class_error) ..
+                    " path=" .. tostring(registration.sentinel_class_path)
+            )
+        end
+
+        declared_classes[registration_index] = {
+            topic_class = topic_class,
+            topic_class_address = topic_class_address,
+            sentinel_class = sentinel_class,
+        }
+    end
+    if class_preflight_failed then
+        log_global(
+            "BATCH_FAIL",
+            "attempt=" .. attempt_id ..
+                " stage=class-preflight reason=active-class-unavailable"
+        )
+        return
+    end
+
+    -- Participant and exact-sentinel locality remain registration-specific context gates. Every
+    -- declared class above is already proven before one context can reach the sole mutation.
+    local candidates = {}
+    local context_preflight_failed = false
+    for _, registration_index in ipairs(active_registrations) do
+        local registration = REGISTRATIONS[registration_index]
+        local declared = declared_classes[registration_index]
+        -- Re-read the live ability/group after StaticFindObject rather than trusting a retained
+        -- UObject. The exact scalar identities from participant preflight must remain stable.
+        local context, context_error =
+            resolve_context(ability, registration, declared.sentinel_class)
         if context == nil then
             log(registration.id, attempt_id, "SKIP", "reason=" .. tostring(context_error))
         else
-            local topic_class = find_class(registration.topic_class_path)
-            local topic_class_address = address_of(topic_class)
-            if topic_class_address == nil then
-                log(registration.id, attempt_id, "SKIP", "reason=topic-class-missing")
+            local scope = participant_scopes[registration_index]
+            if context.ability_address ~= scope.ability_address or
+                context.group_address ~= scope.group_address then
+                context_preflight_failed = true
+                log(
+                    registration.id,
+                    attempt_id,
+                    "BATCH_FAIL",
+                    "stage=context-preflight reason=identity-changed"
+                )
             else
                 candidates[#candidates + 1] = {
                     registration_index = registration_index,
                     context = context,
-                    topic_class = topic_class,
-                    topic_class_address = topic_class_address,
+                    topic_class = declared.topic_class,
+                    topic_class_address = declared.topic_class_address,
                 }
             end
         end
+    end
+    if context_preflight_failed then
+        log_global(
+            "BATCH_FAIL",
+            "attempt=" .. attempt_id ..
+                " stage=context-preflight reason=conversation-identity-changed"
+        )
+        return
+    end
+
+    -- Existing-topic lookup is also read-only. Complete it for every locality-qualified
+    -- registration before the first AddTopic so a later malformed/error result cannot leave an
+    -- earlier, otherwise avoidable partial mutation.
+    local topic_preflight_failed = false
+    for _, candidate in ipairs(candidates) do
+        local registration = REGISTRATIONS[candidate.registration_index]
+        local existing, existing_state =
+            find_topic_instance(candidate.context.topic_set, candidate.topic_class)
+        candidate.existing_topic = existing
+        candidate.existing_state = existing_state
+        if existing_state ~= "found" and existing_state ~= "missing" then
+            topic_preflight_failed = true
+            log(
+                registration.id,
+                attempt_id,
+                "BATCH_FAIL",
+                "stage=topic-preflight reason=topic-lookup-" .. tostring(existing_state)
+            )
+        end
+    end
+    if topic_preflight_failed then
+        log_global(
+            "BATCH_FAIL",
+            "attempt=" .. attempt_id ..
+                " stage=topic-preflight reason=active-topic-unavailable"
+        )
+        return
     end
 
     local entries = {}
     for _, candidate in ipairs(candidates) do
         local registration = REGISTRATIONS[candidate.registration_index]
-        local topic, add_result =
-            add_or_reuse_topic(candidate.context, candidate.topic_class)
+        local topic, add_result = add_or_reuse_topic(
+            candidate.context,
+            candidate.topic_class,
+            candidate.existing_topic,
+            candidate.existing_state
+        )
         local topic_address = address_of(topic)
         if topic_address == nil then
             log(registration.id, attempt_id, "FAIL", "reason=" .. tostring(add_result))
+            -- AddTopic has no proven safe inverse. Stop immediately so one native failure cannot
+            -- trigger further mutation attempts in this conversation.
+            return
         else
             local membership_ok, membership_error = verify_topic_membership(
                 candidate.context,
@@ -336,6 +495,7 @@ local function on_show_conversation(context_param)
             )
             if not membership_ok then
                 log(registration.id, attempt_id, "FAIL", "reason=post-mutation-membership:" .. tostring(membership_error))
+                return
             else
                 entries[#entries + 1] = {
                     registration_index = candidate.registration_index,

@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_preflights_all_sentinels_before_any_topic_mutation() {
+    fn context_local_missing_sentinel_topic_skips_after_batch_class_preflight() {
         let first = topic("first");
         let second = DialogTopicSpec {
             id: "second".into(),
@@ -603,6 +603,250 @@ mod tests {
             ),
             "{output}"
         );
+    }
+
+    #[test]
+    fn unavailable_declared_class_aborts_entire_batch_before_mutation() {
+        const SECOND_TOPIC: &str = "/Script/Angelscript.ChoiceSecondFixture";
+        const SECOND_SENTINEL: &str = "/Script/Angelscript.ChoiceSecondSentinel";
+
+        let runtime = render_dialog_runtime(
+            "Dialog Test",
+            &[
+                topic("first"),
+                DialogTopicSpec {
+                    id: "second".into(),
+                    participant_name: "om_test_target_001".into(),
+                    topic_class: SECOND_TOPIC.into(),
+                    sentinel_class: SECOND_SENTINEL.into(),
+                    allow_hidden: false,
+                },
+            ],
+        )
+        .unwrap();
+        let scenarios = [
+            (
+                format!(
+                    r#"
+                        gore_test_setup("om_test_target_001", true)
+                        gore_test_class({SECOND_SENTINEL:?})
+                        gore_test_open()
+                    "#
+                ),
+                "authored",
+                "missing",
+            ),
+            (
+                format!(
+                    r#"
+                        gore_test_setup("om_test_target_001", true)
+                        gore_test_class({SECOND_TOPIC:?})
+                        gore_test_open()
+                    "#
+                ),
+                "sentinel",
+                "missing",
+            ),
+            (
+                format!(
+                    r#"
+                        gore_test_setup("om_test_target_001", true)
+                        local malformed = gore_test_class({SECOND_TOPIC:?})
+                        gore_test_class({SECOND_SENTINEL:?})
+                        malformed.GetAddress = function() return 12.5 end
+                        gore_test_open()
+                    "#
+                ),
+                "authored",
+                "malformed",
+            ),
+            (
+                format!(
+                    r#"
+                        gore_test_setup("om_test_target_001", true)
+                        gore_test_class({SECOND_TOPIC:?})
+                        local malformed = gore_test_class({SECOND_SENTINEL:?})
+                        malformed.GetAddress = function() return 12.5 end
+                        gore_test_open()
+                    "#
+                ),
+                "sentinel",
+                "malformed",
+            ),
+        ];
+
+        for (scenario, role, reason) in scenarios {
+            let lua = mock_lua(&runtime, &scenario);
+            assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 0);
+            let output = logs(&lua);
+            assert!(!output.contains("status=ARMED"), "{output}");
+            assert!(
+                output.contains(&format!(
+                    "registration=\"second\" attempt=1 status=BATCH_FAIL stage=class-preflight role={role} reason={reason}"
+                )),
+                "{output}"
+            );
+            assert!(
+                output.contains(
+                    "status=BATCH_FAIL attempt=1 stage=class-preflight reason=active-class-unavailable"
+                ),
+                "{output}"
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_class_for_unrelated_participant_does_not_poison_active_conversation() {
+        let runtime = render_dialog_runtime(
+            "Dialog Test",
+            &[
+                topic("active"),
+                DialogTopicSpec {
+                    id: "unrelated".into(),
+                    participant_name: "om_other_target_999".into(),
+                    topic_class: "/Script/Angelscript.ChoiceMissingOther".into(),
+                    sentinel_class: "/Script/Angelscript.ChoiceMissingOtherSentinel".into(),
+                    allow_hidden: false,
+                },
+            ],
+        )
+        .unwrap();
+        let lua = mock_lua(
+            &runtime,
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                gore_test_open()
+            "#,
+        );
+        assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 1);
+        let output = logs(&lua);
+        assert!(
+            output.contains("registration=\"active\" attempt=1 status=ARMED"),
+            "{output}"
+        );
+        assert!(output.contains("status=CHOICE_PASS"), "{output}");
+        assert!(output.contains("status=RENDER_PASS"), "{output}");
+        assert!(
+            output.contains(
+                "registration=\"unrelated\" attempt=1 status=SKIP stage=participant-preflight reason=target-participants:0"
+            ),
+            "{output}"
+        );
+        assert!(!output.contains("status=BATCH_FAIL"), "{output}");
+    }
+
+    #[test]
+    fn later_authored_lookup_failure_aborts_active_batch_before_mutation() {
+        let second_path = "/Script/Angelscript.ChoiceSecondFixture";
+        let runtime = render_dialog_runtime(
+            "Dialog Test",
+            &[
+                topic("first"),
+                DialogTopicSpec {
+                    id: "second".into(),
+                    participant_name: "om_test_target_001".into(),
+                    topic_class: second_path.into(),
+                    sentinel_class: SENTINEL_PATH.into(),
+                    allow_hidden: false,
+                },
+            ],
+        )
+        .unwrap();
+        let lua = mock_lua(
+            &runtime,
+            &format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    local second_class = gore_test_class({second_path:?})
+                    local original_find = gore_test_topic_set.FindTopicInstanceOfClass
+                    gore_test_topic_set.FindTopicInstanceOfClass = function(self, wanted)
+                        if wanted == second_class then error("lookup failed") end
+                        return original_find(self, wanted)
+                    end
+                    gore_test_open()
+                "#
+            ),
+        );
+        assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 0);
+        let output = logs(&lua);
+        assert!(
+            output.contains(
+                "registration=\"second\" attempt=1 status=BATCH_FAIL stage=topic-preflight reason=topic-lookup-error"
+            ),
+            "{output}"
+        );
+        assert!(!output.contains("status=ARMED"), "{output}");
+    }
+
+    #[test]
+    fn first_add_failure_prevents_later_mutation_attempts() {
+        let second_path = "/Script/Angelscript.ChoiceSecondFixture";
+        let runtime = render_dialog_runtime(
+            "Dialog Test",
+            &[
+                topic("first"),
+                DialogTopicSpec {
+                    id: "second".into(),
+                    participant_name: "om_test_target_001".into(),
+                    topic_class: second_path.into(),
+                    sentinel_class: SENTINEL_PATH.into(),
+                    allow_hidden: false,
+                },
+            ],
+        )
+        .unwrap();
+        let lua = mock_lua(
+            &runtime,
+            &format!(
+                r#"
+                    gore_test_setup("om_test_target_001", true)
+                    gore_test_class({second_path:?})
+                    gore_test_topic_set.AddTopic = function(_self, _wanted, _replacement)
+                        gore_test_add_calls = gore_test_add_calls + 1
+                        error("injected add failure")
+                    end
+                    gore_test_open()
+                "#
+            ),
+        );
+        assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 1);
+        let output = logs(&lua);
+        assert!(
+            output.contains("registration=\"first\" attempt=1 status=FAIL"),
+            "{output}"
+        );
+        assert!(
+            !output.contains("registration=\"second\" attempt=1 status=ARMED"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn conversation_identity_change_during_class_preflight_aborts_before_mutation() {
+        let lua = mock_lua(
+            &loader(topic("fixture")),
+            r#"
+                gore_test_setup("om_test_target_001", true)
+                local original_find = StaticFindObject
+                local find_calls = 0
+                StaticFindObject = function(path)
+                    find_calls = find_calls + 1
+                    local found = original_find(path)
+                    if find_calls == 2 then gore_test_replace_group() end
+                    return found
+                end
+                gore_test_open()
+            "#,
+        );
+        assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 0);
+        let output = logs(&lua);
+        assert!(
+            output.contains(
+                "registration=\"fixture\" attempt=1 status=BATCH_FAIL stage=context-preflight reason=identity-changed"
+            ),
+            "{output}"
+        );
+        assert!(!output.contains("status=ARMED"), "{output}");
     }
 
     #[test]
@@ -761,7 +1005,9 @@ mod tests {
             assert_eq!(lua.globals().get::<i64>("gore_test_add_calls").unwrap(), 0);
             let output = logs(&lua);
             assert!(
-                output.contains(&format!("status=FAIL reason={expected_reason}")),
+                output.contains(&format!(
+                    "status=BATCH_FAIL stage=topic-preflight reason={expected_reason}"
+                )),
                 "{output}"
             );
             assert!(!output.contains("status=ARMED"), "{output}");
@@ -837,6 +1083,7 @@ mod tests {
         assert_eq!(output.matches("status=ARMED").count(), 2, "{output}");
         assert_eq!(output.matches("status=CHOICE_PASS").count(), 2, "{output}");
         assert_eq!(output.matches("status=RENDER_PASS").count(), 2, "{output}");
+        assert!(!output.contains("status=BATCH_FAIL"), "{output}");
     }
 
     #[test]
