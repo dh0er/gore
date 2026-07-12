@@ -9,6 +9,10 @@
 //!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
 //!   returns `{ok, valid, errors:[..]}`.
+//! - `authoring_project_check` — payload `{project_json, profile}` where `project_json` is the
+//!   untouched format-2 JSON string and `profile` is `production|experimental`; returns canonical
+//!   project JSON, deterministic structured diagnostics, and `blocks_build`. Project input is
+//!   capped at 16 MiB by `gore-authoring`; serialized success responses are capped at 64 MiB.
 //! - `voice_archive_list` — payload `{archive}`; returns exact entries plus the captured
 //!   `archive_size`/`archive_sha256` seal. Fails with `VOICE_ARCHIVE_LIMIT` for bounded ZIP
 //!   metadata violations or `VOICE_RESPONSE_LIMIT` before an oversized JSON result is built.
@@ -23,6 +27,7 @@
 //!   8 MiB. Line-match localization IDs are capped at 512 bytes and match JSON at 1 MiB.
 //!   Filesystem-path request strings are capped at 32 KiB.
 
+mod authoring;
 mod voice;
 
 use std::ffi::{c_char, CStr, CString};
@@ -118,6 +123,7 @@ fn dispatch(input: &str) -> Value {
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
+        "authoring_project_check" => authoring::project_check(payload),
         "voice_archive_list" => voice::archive_list(payload),
         "voice_archive_match_line" => voice::archive_match_line(payload),
         "voice_archive_extract" => voice::archive_extract(payload),

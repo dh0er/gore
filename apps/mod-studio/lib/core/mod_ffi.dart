@@ -1,7 +1,7 @@
 import 'core_service.dart';
 
-/// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, and unified
-/// mod build/deploy.
+/// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, stateless
+/// authoring checks, and unified mod build/deploy.
 class ModFfi {
   ModFfi(this._core);
   final GoreCoreFfiService _core;
@@ -50,6 +50,18 @@ class ModFfi {
       'loc_id': locId,
     });
     return VoiceArchiveMatchLineResult.fromJson(r);
+  }
+
+  /// Parse, canonicalize, and validate one format-2 authoring snapshot without retaining state.
+  Future<AuthoringProjectCheckResult> authoringProjectCheck({
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    final r = await _call('authoring_project_check', {
+      'project_json': projectJson,
+      'profile': profile.wireName,
+    });
+    return AuthoringProjectCheckResult.fromJson(r);
   }
 
   /// Build the unified bundle into `outDir`; returns the bundle dir.
@@ -164,6 +176,208 @@ class AudioSampleInfo {
     channels: (j['channels'] as num).toInt(),
     seconds: (j['seconds'] as num).toDouble(),
   );
+}
+
+enum AuthoringValidationProfile {
+  production('production'),
+  experimental('experimental');
+
+  const AuthoringValidationProfile(this.wireName);
+  final String wireName;
+}
+
+enum AuthoringDiagnosticSeverity { error, warning, info }
+
+final _authoringDiagnosticCodePattern = RegExp(
+  r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$',
+);
+final _authoringEntityIdPattern = RegExp(r'^[0-9a-f]{32}$');
+
+String _authoringRequiredString(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! String || value.isEmpty) {
+    throw FormatException(
+      'authoring response field $field is not a valid string',
+    );
+  }
+  return value;
+}
+
+bool _authoringRequiredBool(Map<String, Object?> json, String field) {
+  final value = json[field];
+  if (value is! bool) {
+    throw FormatException('authoring response field $field is not a bool');
+  }
+  return value;
+}
+
+String? _authoringRequiredNullableString(
+  Map<String, Object?> json,
+  String field,
+) {
+  if (!json.containsKey(field)) {
+    throw FormatException('authoring response is missing field $field');
+  }
+  final value = json[field];
+  if (value == null) return null;
+  if (value is! String || value.isEmpty) {
+    throw FormatException(
+      'authoring response field $field is not a valid nullable string',
+    );
+  }
+  return value;
+}
+
+Map<String, Object?> _authoringRequiredObject(Object? value, String context) {
+  if (value is! Map) {
+    throw FormatException('authoring response $context is not an object');
+  }
+  final object = <String, Object?>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String) {
+      throw FormatException(
+        'authoring response $context contains a non-string key',
+      );
+    }
+    object[entry.key as String] = entry.value;
+  }
+  return object;
+}
+
+String _authoringEntityId(String value, String field) {
+  if (!_authoringEntityIdPattern.hasMatch(value)) {
+    throw FormatException(
+      'authoring response field $field is not a canonical entity ID',
+    );
+  }
+  return value;
+}
+
+class AuthoringProjectCheckResult {
+  const AuthoringProjectCheckResult._({
+    required this.canonicalProjectJson,
+    required this.diagnostics,
+    required this.blocksBuild,
+  });
+
+  final String canonicalProjectJson;
+  final List<AuthoringDiagnostic> diagnostics;
+  final bool blocksBuild;
+
+  factory AuthoringProjectCheckResult.fromJson(Map<String, Object?> json) {
+    final canonicalProjectJson = _authoringRequiredString(
+      json,
+      'canonical_project_json',
+    );
+    final rawDiagnostics = json['diagnostics'];
+    if (rawDiagnostics is! List) {
+      throw const FormatException(
+        'authoring response diagnostics is not an array',
+      );
+    }
+    final diagnostics = <AuthoringDiagnostic>[];
+    for (var index = 0; index < rawDiagnostics.length; index++) {
+      diagnostics.add(
+        AuthoringDiagnostic.fromJson(
+          _authoringRequiredObject(
+            rawDiagnostics[index],
+            'diagnostic at index $index',
+          ),
+        ),
+      );
+    }
+
+    final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
+    if (blocksBuild !=
+        diagnostics.any((diagnostic) => diagnostic.blocksBuild)) {
+      throw const FormatException(
+        'authoring response blocks_build is inconsistent with diagnostics',
+      );
+    }
+    return AuthoringProjectCheckResult._(
+      canonicalProjectJson: canonicalProjectJson,
+      diagnostics: List.unmodifiable(diagnostics),
+      blocksBuild: blocksBuild,
+    );
+  }
+}
+
+class AuthoringDiagnostic {
+  const AuthoringDiagnostic._({
+    required this.code,
+    required this.severity,
+    required this.entity,
+    required this.propertyPath,
+    required this.message,
+    required this.relatedEntities,
+    required this.blocksBuild,
+  });
+
+  final String code;
+  final AuthoringDiagnosticSeverity severity;
+  final String? entity;
+  final String? propertyPath;
+  final String message;
+  final List<String> relatedEntities;
+  final bool blocksBuild;
+
+  factory AuthoringDiagnostic.fromJson(Map<String, Object?> json) {
+    final code = _authoringRequiredString(json, 'code');
+    if (!_authoringDiagnosticCodePattern.hasMatch(code)) {
+      throw const FormatException('authoring diagnostic code is not canonical');
+    }
+    final severity = switch (json['severity']) {
+      'error' => AuthoringDiagnosticSeverity.error,
+      'warning' => AuthoringDiagnosticSeverity.warning,
+      'info' => AuthoringDiagnosticSeverity.info,
+      final value => throw FormatException(
+        'unknown authoring diagnostic severity: $value',
+      ),
+    };
+    final entityValue = _authoringRequiredNullableString(json, 'entity');
+    final entity = entityValue == null
+        ? null
+        : _authoringEntityId(entityValue, 'entity');
+    final propertyPath = _authoringRequiredNullableString(
+      json,
+      'property_path',
+    );
+    final message = _authoringRequiredString(json, 'message');
+
+    final rawRelatedEntities = json['related_entities'];
+    if (rawRelatedEntities is! List) {
+      throw const FormatException(
+        'authoring diagnostic related_entities is not an array',
+      );
+    }
+    final relatedEntities = <String>[];
+    for (var index = 0; index < rawRelatedEntities.length; index++) {
+      final value = rawRelatedEntities[index];
+      if (value is! String) {
+        throw FormatException(
+          'authoring diagnostic related entity at index $index is not a string',
+        );
+      }
+      final id = _authoringEntityId(value, 'related_entities[$index]');
+      if (relatedEntities.isNotEmpty &&
+          relatedEntities.last.compareTo(id) >= 0) {
+        throw const FormatException(
+          'authoring diagnostic related entities are not canonical and unique',
+        );
+      }
+      relatedEntities.add(id);
+    }
+
+    return AuthoringDiagnostic._(
+      code: code,
+      severity: severity,
+      entity: entity,
+      propertyPath: propertyPath,
+      message: message,
+      relatedEntities: List.unmodifiable(relatedEntities),
+      blocksBuild: _authoringRequiredBool(json, 'blocks_build'),
+    );
+  }
 }
 
 enum VoiceArchiveLineResolution { unresolved, unique, ambiguous }

@@ -937,6 +937,7 @@ name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
  "gore-as",
+ "gore-authoring",
  "gore-fmod",
  "gore-loc",
  "gore-mod",

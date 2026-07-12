@@ -9,6 +9,7 @@ description = "C ABI (dart:ffi) bridge for gore-mod: JSON-in/JSON-out mod engine
 crate-type = ["cdylib"]
 
 [dependencies]
+gore-authoring = { path = "../gore-authoring" }
 gore-reflect = { path = "../gore-reflect" }
 gore-modgen = { path = "../gore-modgen" }
 gore-loc = { path = "../gore-loc" }

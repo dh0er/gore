@@ -45,6 +45,43 @@ Map<String, Object?> _voiceTimestamp(Map<String, Object?> response) =>
     (_firstVoiceMatch(response)['last_modified'] as Map)
         .cast<String, Object?>();
 
+Map<String, Object?> _validAuthoringCheckResponse() => {
+  'ok': true,
+  'canonical_project_json':
+      '{"format":2,"schema_revision":1,"project_id":"00000000000000000000000000000001"}',
+  'diagnostics': <Object?>[
+    <String, Object?>{
+      'code': 'INVALID_GENERATION_ANCHOR',
+      'severity': 'error',
+      'entity': null,
+      'property_path': 'target.executable.byte_len',
+      'message':
+          'game generation executable seal must have a non-zero byte length',
+      'related_entities': <Object?>[],
+      'blocks_build': true,
+    },
+    <String, Object?>{
+      'code': 'UNQUALIFIED_VOICE_ADD',
+      'severity': 'warning',
+      'entity': '00000000000000000000000000000001',
+      'property_path': 'payload.data.target_resolution.target.operation',
+      'message': 'new voice-member runtime binding is not qualified',
+      'related_entities': <Object?>[
+        '00000000000000000000000000000002',
+        '00000000000000000000000000000003',
+      ],
+      'blocks_build': false,
+    },
+  ],
+  'blocks_build': true,
+};
+
+Map<String, Object?> _authoringDiagnostic(
+  Map<String, Object?> response,
+  int index,
+) => ((response['diagnostics'] as List<Object?>)[index] as Map)
+    .cast<String, Object?>();
+
 void main() {
   test('scriptCompile propagates the new-symbol opt-in', () async {
     final core = FakeGoreCoreFfiService(
@@ -94,6 +131,78 @@ void main() {
       });
     },
   );
+
+  test(
+    'authoringProjectCheck preserves raw JSON and uses a closed profile',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {'authoring_project_check': _validAuthoringCheckResponse()},
+      );
+      const rawProject = '{"revision":0,"revision":1}';
+
+      final result = await ModFfi(core).authoringProjectCheck(
+        projectJson: rawProject,
+        profile: AuthoringValidationProfile.experimental,
+      );
+
+      expect(core.calls, hasLength(1));
+      expect(core.calls.single.command, 'authoring_project_check');
+      expect(core.calls.single.payload, {
+        'project_json': rawProject,
+        'profile': 'experimental',
+      });
+      expect(result.blocksBuild, isTrue);
+      expect(result.diagnostics, hasLength(2));
+      expect(
+        result.diagnostics.first.severity,
+        AuthoringDiagnosticSeverity.error,
+      );
+      expect(
+        result.diagnostics.last.entity,
+        '00000000000000000000000000000001',
+      );
+      expect(
+        () => result.diagnostics.clear(),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(
+        () => result.diagnostics.last.relatedEntities.clear(),
+        throwsA(isA<UnsupportedError>()),
+      );
+    },
+  );
+
+  test('authoring DTO rejects malformed and inconsistent wire data', () {
+    final malformed = <void Function(Map<String, Object?>)>[
+      (response) => response['canonical_project_json'] = '',
+      (response) => response['diagnostics'] = <String, Object?>{},
+      (response) => (response['diagnostics'] as List<Object?>)[0] = 'bad',
+      (response) => _authoringDiagnostic(response, 0)['code'] = 'bad_code',
+      (response) => _authoringDiagnostic(response, 0)['severity'] = 'fatal',
+      (response) => _authoringDiagnostic(response, 1)['entity'] =
+          '0000000000000000000000000000000A',
+      (response) => _authoringDiagnostic(response, 0).remove('entity'),
+      (response) => _authoringDiagnostic(response, 0)['property_path'] = '',
+      (response) => _authoringDiagnostic(response, 0)['message'] = '',
+      (response) =>
+          _authoringDiagnostic(response, 1)['related_entities'] = <Object?>[
+            '00000000000000000000000000000003',
+            '00000000000000000000000000000002',
+          ],
+      (response) => _authoringDiagnostic(response, 0)['blocks_build'] = 'true',
+      (response) => response['blocks_build'] = false,
+      (response) => response['blocks_build'] = 1,
+    ];
+
+    for (final mutate in malformed) {
+      final response = _validAuthoringCheckResponse();
+      mutate(response);
+      expect(
+        () => AuthoringProjectCheckResult.fromJson(response),
+        throwsFormatException,
+      );
+    }
+  });
 
   test(
     'voice match DTO rejects fractional, negative, and out-of-range integers',
