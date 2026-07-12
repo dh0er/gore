@@ -70,6 +70,15 @@ pub enum DiagnosticCode {
     /// Schema revision 2 has story validation, but not yet the combined voice/localization/story
     /// validator required to make a production-readiness claim.
     Revision2CombinedValidationUnavailable,
+    ProjectIdentityMismatch,
+    ProjectRevisionConflict,
+    ProjectRevisionOverflow,
+    InvalidStoryMutation,
+    DuplicateEntityId,
+    DuplicateAuthoredRuntimeId,
+    DuplicateScriptModuleNamespace,
+    DuplicateScriptModulePath,
+    DuplicateGeneratedSymbol,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

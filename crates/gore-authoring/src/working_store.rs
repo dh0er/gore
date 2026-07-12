@@ -669,28 +669,14 @@ impl WorkingProjectStore {
     ) -> Result<CheckpointPreparation, WorkingStoreError> {
         self.ensure_root_safe()?;
         self.check_expected_head(expected_head)?;
-        self.validate_revision2_project_limits(project)?;
+        validate_revision2_persistability(project, &self.limits)?;
 
         // Finish every cheap, read-only entity rejection before hashing potentially large asset
         // files. Besides deterministic error ordering, this guarantees malformed/oversized
         // in-memory documents cannot leave immutable entity or snapshot objects behind.
         let mut prepared_entities = Vec::with_capacity(project.entities.len());
-        let mut total_entity_bytes = 0u64;
         for (id, entity) in &project.entities {
-            if id != &entity.id {
-                return Err(WorkingStoreError::Invariant(format!(
-                    "revision-2 entity map key {id} does not match embedded id {}",
-                    entity.id
-                )));
-            }
             let bytes = canonical_json(entity)?;
-            enforce_limit("entity bytes", bytes.len(), self.limits.max_entity_bytes)?;
-            total_entity_bytes = checked_bounded_sum(
-                "aggregate referenced entity bytes",
-                total_entity_bytes,
-                bytes.len() as u64,
-                self.limits.max_referenced_entity_bytes,
-            )?;
             let seal = seal_bytes(&bytes);
             prepared_entities.push((*id, bytes, seal));
         }
@@ -784,7 +770,7 @@ impl WorkingProjectStore {
         }
 
         let project = snapshot.into_project(entities);
-        self.validate_revision2_project_limits(&project)?;
+        validate_revision2_persistability(&project, &self.limits)?;
         self.verify_revision2_voice_take_ogg_metadata(&project, verification)?;
         let diagnostics = revision2_checkpoint_diagnostics(&project, profile);
         let blocks_build = diagnostics.iter().any(|item| item.blocks_build);
@@ -974,31 +960,6 @@ impl WorkingProjectStore {
         Ok(())
     }
 
-    fn validate_revision2_project_limits(
-        &self,
-        project: &ProjectRevision2,
-    ) -> Result<(), WorkingStoreError> {
-        enforce_limit(
-            "entity count",
-            project.entities.len(),
-            self.limits.max_entities,
-        )?;
-        self.validate_asset_index_limits(&project.asset_store)?;
-        for entity in project.entities.values() {
-            if let Revision2EntityPayload::VoiceTake(take) = &entity.payload {
-                self.validate_logical_name(&take.asset.logical_name)?;
-                if take.asset.byte_len > self.limits.max_ogg_bytes as u64 {
-                    return Err(WorkingStoreError::LimitExceeded {
-                        kind: "Ogg bytes",
-                        actual: take.asset.byte_len,
-                        limit: self.limits.max_ogg_bytes as u64,
-                    });
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn validate_manifest_limits(
         &self,
         snapshot: &SnapshotManifest,
@@ -1027,43 +988,11 @@ impl WorkingProjectStore {
         &self,
         index: &AssetStoreIndex,
     ) -> Result<(), WorkingStoreError> {
-        enforce_limit("asset count", index.assets.len(), self.limits.max_assets)?;
-        let mut total = 0u64;
-        for meta in index.assets.values() {
-            total = checked_bounded_sum(
-                "aggregate referenced asset bytes",
-                total,
-                meta.byte_len,
-                self.limits.max_referenced_asset_bytes,
-            )?;
-            if meta.media_type == "audio/ogg" && meta.byte_len > self.limits.max_ogg_bytes as u64 {
-                return Err(WorkingStoreError::LimitExceeded {
-                    kind: "Ogg bytes",
-                    actual: meta.byte_len,
-                    limit: self.limits.max_ogg_bytes as u64,
-                });
-            }
-        }
-        Ok(())
+        validate_asset_index_persistability(index, &self.limits)
     }
 
     fn validate_logical_name(&self, name: &str) -> Result<(), WorkingStoreError> {
-        if name.is_empty() {
-            return Err(WorkingStoreError::Invariant(
-                "asset logical_name must not be empty".to_owned(),
-            ));
-        }
-        enforce_limit(
-            "logical_name UTF-8 bytes",
-            name.len(),
-            self.limits.max_logical_name_bytes,
-        )?;
-        if name.chars().any(char::is_control) {
-            return Err(WorkingStoreError::Invariant(
-                "asset logical_name must not contain control characters".to_owned(),
-            ));
-        }
-        Ok(())
+        validate_logical_name_persistability(name, &self.limits)
     }
 
     fn verify_asset_index(
@@ -1586,6 +1515,98 @@ where
     }
 
     deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
+}
+
+/// Cheap, filesystem-free proof that one programmatically constructed revision-2 document fits
+/// every byte/count boundary required by the working store. Both mutation and store publication
+/// use this exact helper, so a successful in-memory transaction cannot defer a store-format limit
+/// failure until checkpoint preparation. Eager wire/API limits remain caller policy and are not
+/// imposed on the general store's larger lazy-document contract here.
+pub(crate) fn validate_revision2_persistability(
+    project: &ProjectRevision2,
+    limits: &WorkingStoreLimits,
+) -> Result<(), WorkingStoreError> {
+    let limits = (*limits).validate()?;
+    enforce_limit("entity count", project.entities.len(), limits.max_entities)?;
+    validate_asset_index_persistability(&project.asset_store, &limits)?;
+
+    for entity in project.entities.values() {
+        if let Revision2EntityPayload::VoiceTake(take) = &entity.payload {
+            validate_logical_name_persistability(&take.asset.logical_name, &limits)?;
+            if take.asset.byte_len > limits.max_ogg_bytes as u64 {
+                return Err(WorkingStoreError::LimitExceeded {
+                    kind: "Ogg bytes",
+                    actual: take.asset.byte_len,
+                    limit: limits.max_ogg_bytes as u64,
+                });
+            }
+        }
+    }
+
+    let mut total_entity_bytes = 0u64;
+    for (id, entity) in &project.entities {
+        if id != &entity.id {
+            return Err(WorkingStoreError::Invariant(format!(
+                "revision-2 entity map key {id} does not match embedded id {}",
+                entity.id
+            )));
+        }
+        let bytes = canonical_json(entity)?;
+        enforce_limit("entity bytes", bytes.len(), limits.max_entity_bytes)?;
+        total_entity_bytes = checked_bounded_sum(
+            "aggregate referenced entity bytes",
+            total_entity_bytes,
+            bytes.len() as u64,
+            limits.max_referenced_entity_bytes,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_asset_index_persistability(
+    index: &AssetStoreIndex,
+    limits: &WorkingStoreLimits,
+) -> Result<(), WorkingStoreError> {
+    enforce_limit("asset count", index.assets.len(), limits.max_assets)?;
+    let mut total = 0u64;
+    for meta in index.assets.values() {
+        total = checked_bounded_sum(
+            "aggregate referenced asset bytes",
+            total,
+            meta.byte_len,
+            limits.max_referenced_asset_bytes,
+        )?;
+        if meta.media_type == "audio/ogg" && meta.byte_len > limits.max_ogg_bytes as u64 {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind: "Ogg bytes",
+                actual: meta.byte_len,
+                limit: limits.max_ogg_bytes as u64,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_logical_name_persistability(
+    name: &str,
+    limits: &WorkingStoreLimits,
+) -> Result<(), WorkingStoreError> {
+    if name.is_empty() {
+        return Err(WorkingStoreError::Invariant(
+            "asset logical_name must not be empty".to_owned(),
+        ));
+    }
+    enforce_limit(
+        "logical_name UTF-8 bytes",
+        name.len(),
+        limits.max_logical_name_bytes,
+    )?;
+    if name.chars().any(char::is_control) {
+        return Err(WorkingStoreError::Invariant(
+            "asset logical_name must not contain control characters".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, WorkingStoreError> {

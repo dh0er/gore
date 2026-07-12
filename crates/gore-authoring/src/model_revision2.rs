@@ -620,6 +620,17 @@ pub struct ScriptModule {
     pub status: ScriptModuleStatus,
 }
 
+/// Generated names that must remain unique across every story module in one project.
+///
+/// Kept crate-private because this is validation/transaction evidence, not another durable wire
+/// shape. The durable draft input remains the single source from which it is regenerated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GeneratedStoryIdentity {
+    pub module_namespace: String,
+    pub module_relative_path: String,
+    pub symbols: Vec<String>,
+}
+
 /// Fail-closed errors returned while regenerating a persisted revision-2 story draft.
 #[derive(Debug, thiserror::Error)]
 pub enum StoryRegenerationError {
@@ -653,6 +664,14 @@ impl NpcDraft {
         &self,
         owner: TypedRef,
     ) -> Result<ScriptModule, StoryRegenerationError> {
+        self.regenerate_script_module_with_identity(owner)
+            .map(|(module, _)| module)
+    }
+
+    pub(crate) fn regenerate_script_module_with_identity(
+        &self,
+        owner: TypedRef,
+    ) -> Result<(ScriptModule, GeneratedStoryIdentity), StoryRegenerationError> {
         validate_generator_contract(
             &self.generator_id,
             self.generator_version,
@@ -677,7 +696,16 @@ impl NpcDraft {
         let generated = draft.generate();
         let input_fingerprint = fingerprint_npc_revision2_input(&self.input)
             .map_err(StoryRegenerationError::NpcFingerprint)?;
-        Ok(ScriptModule {
+        let identity = GeneratedStoryIdentity {
+            module_namespace: generated.module_namespace.clone(),
+            module_relative_path: generated.module_relative_path.clone(),
+            symbols: vec![
+                generated.classes.character_definition.clone(),
+                generated.classes.ai_agent_config.clone(),
+                generated.classes.spawn_definition.clone(),
+            ],
+        };
+        let module = ScriptModule {
             generator_id: generated.generator_id.to_owned(),
             generator_version: generated.generator_version,
             owner,
@@ -687,7 +715,8 @@ impl NpcDraft {
             source_sha256: generated.source_sha256,
             input_fingerprint,
             status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-        })
+        };
+        Ok((module, identity))
     }
 }
 
@@ -697,6 +726,14 @@ impl QuestDraft {
         &self,
         owner: TypedRef,
     ) -> Result<ScriptModule, StoryRegenerationError> {
+        self.regenerate_script_module_with_identity(owner)
+            .map(|(module, _)| module)
+    }
+
+    pub(crate) fn regenerate_script_module_with_identity(
+        &self,
+        owner: TypedRef,
+    ) -> Result<(ScriptModule, GeneratedStoryIdentity), StoryRegenerationError> {
         validate_generator_contract(
             &self.generator_id,
             self.generator_version,
@@ -753,7 +790,18 @@ impl QuestDraft {
         })
         .map_err(StoryRegenerationError::InvalidQuestIntent)?
         .generate();
-        Ok(ScriptModule {
+        let identity = GeneratedStoryIdentity {
+            module_namespace: generated.technical_names.module_namespace.clone(),
+            module_relative_path: generated.technical_names.module_relative_path.clone(),
+            symbols: vec![
+                generated.technical_names.root_class.clone(),
+                generated.technical_names.objective_class.clone(),
+                generated.technical_names.text_helper.clone(),
+                generated.technical_names.root_getter.clone(),
+                generated.technical_names.objective_getter.clone(),
+            ],
+        };
+        let module = ScriptModule {
             generator_id: generated.generator_id.to_owned(),
             generator_version: generated.generator_version,
             owner,
@@ -763,7 +811,8 @@ impl QuestDraft {
             source_sha256: generated.source_sha256,
             input_fingerprint: generated.input_fingerprint,
             status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-        })
+        };
+        Ok((module, identity))
     }
 }
 

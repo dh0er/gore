@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use sha2::{Digest, Sha256};
 
 use crate::model_revision2::{
-    Entity, EntityKind, EntityPayload, NpcDraft, OriginRef, ProjectRevision2, QuestDraft,
-    ScriptModule, StoryRegenerationError, TypedRef,
+    Entity, EntityKind, EntityPayload, GeneratedStoryIdentity, NpcDraft, OriginRef,
+    ProjectRevision2, QuestDraft, ScriptModule, StoryRegenerationError, TypedRef,
 };
 use crate::{
     Diagnostic, DiagnosticCode, EntityId, Sha256Digest, ValidationProfile,
@@ -84,6 +86,8 @@ impl ProjectRevision2 {
             }
         }
 
+        validate_global_story_identities(self, &mut diagnostics);
+
         for diagnostic in &mut diagnostics {
             diagnostic.related_entities.sort_unstable();
             diagnostic.related_entities.dedup();
@@ -107,6 +111,116 @@ impl ProjectRevision2 {
                 ))
         });
         diagnostics
+    }
+}
+
+fn validate_global_story_identities(project: &ProjectRevision2, diagnostics: &mut Vec<Diagnostic>) {
+    let mut runtime_ids = BTreeMap::<String, (EntityId, String)>::new();
+    let mut module_namespaces = BTreeMap::<String, (EntityId, String)>::new();
+    let mut module_paths = BTreeMap::<String, (EntityId, String)>::new();
+    let mut symbols = BTreeMap::<String, (EntityId, String)>::new();
+
+    for (id, entity) in &project.entities {
+        if matches!(
+            &entity.payload,
+            EntityPayload::NpcDraft(_) | EntityPayload::QuestDraft(_)
+        ) {
+            if let OriginRef::New {
+                authored_runtime_id,
+            } = &entity.origin
+            {
+                push_identity_collision(
+                    &mut runtime_ids,
+                    authored_runtime_id,
+                    *id,
+                    DiagnosticCode::DuplicateAuthoredRuntimeId,
+                    "origin.authored_runtime_id",
+                    "authored runtime identity",
+                    diagnostics,
+                );
+            }
+        }
+
+        if let EntityPayload::ScriptModule(module) = &entity.payload {
+            push_identity_collision(
+                &mut module_namespaces,
+                &module.module_namespace,
+                *id,
+                DiagnosticCode::DuplicateScriptModuleNamespace,
+                "payload.data.module_namespace",
+                "script module namespace",
+                diagnostics,
+            );
+            push_identity_collision(
+                &mut module_paths,
+                &module.module_relative_path,
+                *id,
+                DiagnosticCode::DuplicateScriptModulePath,
+                "payload.data.module_relative_path",
+                "script module path",
+                diagnostics,
+            );
+        }
+    }
+
+    for (id, entity) in &project.entities {
+        let generated = match &entity.payload {
+            EntityPayload::NpcDraft(draft) => draft.regenerate_script_module_with_identity(
+                TypedRef::new(project.project_id, *id, EntityKind::NpcDraft),
+            ),
+            EntityPayload::QuestDraft(draft) => draft.regenerate_script_module_with_identity(
+                TypedRef::new(project.project_id, *id, EntityKind::QuestDraft),
+            ),
+            _ => continue,
+        };
+        let Ok((_, GeneratedStoryIdentity { symbols: names, .. })) = generated else {
+            // The draft-specific validator already emits the authoritative regeneration error.
+            continue;
+        };
+        let module_id = match &entity.payload {
+            EntityPayload::NpcDraft(draft) => draft.script_module.id,
+            EntityPayload::QuestDraft(draft) => draft.script_module.id,
+            _ => unreachable!(),
+        };
+        for symbol in names {
+            push_identity_collision(
+                &mut symbols,
+                &symbol,
+                module_id,
+                DiagnosticCode::DuplicateGeneratedSymbol,
+                "payload.data.source",
+                "generated AngelScript symbol",
+                diagnostics,
+            );
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_identity_collision(
+    seen: &mut BTreeMap<String, (EntityId, String)>,
+    value: &str,
+    owner: EntityId,
+    code: DiagnosticCode,
+    property_path: &str,
+    label: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let folded = value.to_ascii_lowercase();
+    match seen.get(&folded) {
+        Some((first_owner, first_value)) if first_owner != &owner => diagnostics.push(
+            Diagnostic::error(
+                code,
+                owner,
+                property_path,
+                format!("{label} {value:?} collides case-insensitively with {first_value:?}"),
+            )
+            .related(*first_owner),
+        ),
+        Some(_) => {}
+        None => {
+            seen.insert(folded, (owner, value.to_owned()));
+        }
     }
 }
 
@@ -484,9 +598,13 @@ fn push_runtime_unqualified(
     profile: ValidationProfile,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let message = format!(
-        "{kind:?} has deterministic offline source but no verified runtime qualification evidence"
-    );
+    let message = match kind {
+        EntityKind::NpcDraft => "NpcDraft has deterministic offline source, but external vanilla/dependency symbol collision freedom and runtime behavior remain unqualified".to_owned(),
+        EntityKind::QuestDraft => "QuestDraft has deterministic offline source, but runtime discovery, transitions, effects, and persistence remain unqualified".to_owned(),
+        _ => format!(
+            "{kind:?} has deterministic offline source but no verified runtime qualification evidence"
+        ),
+    };
     diagnostics.push(match profile {
         ValidationProfile::Production => Diagnostic::error(
             DiagnosticCode::RuntimeUnqualified,

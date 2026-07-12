@@ -12,6 +12,8 @@ mod model;
 pub mod model_revision2;
 mod npc;
 mod quest;
+mod story_transaction;
+mod strict_json;
 mod validate;
 mod validate_revision2;
 mod working_store;
@@ -62,6 +64,12 @@ pub use quest::{
     DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
     MAX_DRAFT_QUEST_TITLE_BYTES,
+};
+pub use story_transaction::{
+    NpcDraftCreateInput, QuestDraftCreateInput, StoryDraftCreate, StoryDraftInsertError,
+    StoryDraftInsertEvaluation, StoryDraftInsertJsonError, StoryDraftInsertOutcome,
+    StoryDraftInsertRejection, StoryDraftInsertRequest, MAX_STORY_DRAFT_DISPLAY_NAME_BYTES,
+    MAX_STORY_DRAFT_INSERT_JSON_BYTES,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
