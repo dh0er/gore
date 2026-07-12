@@ -1,0 +1,14 @@
+[package]
+name = "gore-story-inventory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Canonical, sealed base-game script collision inventories for GORE Mod Studio."
+
+[dependencies]
+gore-as = { path = "../gore-as" }
+gore-story-catalog = { path = "../gore-story-catalog" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "2"

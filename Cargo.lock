@@ -1067,6 +1067,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-story-inventory"
+version = "0.0.0"
+dependencies = [
+ "gore-as",
+ "gore-story-catalog",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gore-tex"
 version = "0.0.0"
 dependencies = [
