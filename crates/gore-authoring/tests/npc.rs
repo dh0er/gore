@@ -1,6 +1,7 @@
 use gore_authoring::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneDraft, LogicalNpcCloneDraftError,
-    LogicalNpcCloneField, LogicalNpcCloneRuntimeStatus, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
+    LogicalNpcCloneField, LogicalNpcCloneRuntimeStatus, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
     MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_ANGELSCRIPT_MODULE_SEGMENTS,
     MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES,
 };
@@ -24,8 +25,14 @@ fn valid_draft() -> LogicalNpcCloneDraft {
 
 #[test]
 fn asghan_fixture_generates_the_offline_proven_three_class_shape() {
-    let generated = valid_draft().generate();
+    let draft = valid_draft();
+    let generated = draft.generate();
 
+    assert_eq!(generated.generator_id, LOGICAL_NPC_CLONE_GENERATOR_ID);
+    assert_eq!(
+        generated.generator_version,
+        LOGICAL_NPC_CLONE_GENERATOR_VERSION
+    );
     assert_eq!(generated.module_namespace, MODULE);
     assert_eq!(
         generated.module_relative_path,
@@ -68,6 +75,16 @@ fn asghan_fixture_generates_the_offline_proven_three_class_shape() {
             "}\n",
         )
     );
+    assert_eq!(generated.source.len(), 618);
+    assert_eq!(
+        generated.source_sha256.to_string(),
+        "c78f366a3701393b2657693b29a7673c38dbe59d1ac2ff6c4fb3c2a51163e5d0"
+    );
+    assert_eq!(
+        generated.input_fingerprint.to_string(),
+        "5f27b386533f60b0c7878f53c32ce5cfdccc93cf77f7a4b85d966d3b0125b7d2"
+    );
+    assert_eq!(generated.input_fingerprint, draft.input_fingerprint());
     assert_eq!(
         generated.status.authoring,
         LogicalNpcCloneAuthoringStatus::OfflineDraft
@@ -303,4 +320,129 @@ fn generation_is_deterministic_and_side_effect_free() {
     assert_eq!(draft.parent_ai_agent_config(), PARENT_AGENT);
     assert_eq!(draft.parent_spawn_definition(), PARENT_SPAWN);
     assert_eq!(draft.class_names(), &first.classes);
+    assert_eq!(draft.input_fingerprint(), first.input_fingerprint);
+    assert_eq!(first.generator_id, LOGICAL_NPC_CLONE_GENERATOR_ID);
+    assert_eq!(first.generator_version, LOGICAL_NPC_CLONE_GENERATOR_VERSION);
+}
+
+#[test]
+fn input_fingerprint_covers_every_input_without_upgrading_runtime() {
+    let baseline = valid_draft().generate();
+    let variants = [
+        (
+            "module namespace",
+            "GoreMods.Probe.NpcLogicalCloneAlternate",
+            UNIQUE_NAME,
+            PARENT_CHARACTER,
+            PARENT_AGENT,
+            PARENT_SPAWN,
+            true,
+        ),
+        (
+            "unique name",
+            MODULE,
+            "GORE_LOGICAL_ASGHAN_CLONE_ALTERNATE",
+            PARENT_CHARACTER,
+            PARENT_AGENT,
+            PARENT_SPAWN,
+            false,
+        ),
+        (
+            "character parent",
+            MODULE,
+            UNIQUE_NAME,
+            "UCharacterDefinition_Human_OM_GRD_Asghan_264",
+            PARENT_AGENT,
+            PARENT_SPAWN,
+            false,
+        ),
+        (
+            "AI agent parent",
+            MODULE,
+            UNIQUE_NAME,
+            PARENT_CHARACTER,
+            "UAIAgentConfig_Human_OM_GRD_Asghan_264",
+            PARENT_SPAWN,
+            false,
+        ),
+        (
+            "spawn parent",
+            MODULE,
+            UNIQUE_NAME,
+            PARENT_CHARACTER,
+            PARENT_AGENT,
+            "USpawnAIAgentDefinition_OM_GRD_Asghan_264",
+            false,
+        ),
+    ];
+
+    for (
+        label,
+        module_namespace,
+        unique_name,
+        parent_character,
+        parent_agent,
+        parent_spawn,
+        source_alias,
+    ) in variants
+    {
+        let generated = LogicalNpcCloneDraft::new(
+            module_namespace,
+            unique_name,
+            parent_character,
+            parent_agent,
+            parent_spawn,
+        )
+        .unwrap()
+        .generate();
+
+        assert_ne!(
+            generated.input_fingerprint, baseline.input_fingerprint,
+            "fingerprint aliased after changing {label}"
+        );
+        if source_alias {
+            assert_eq!(
+                generated.source_sha256, baseline.source_sha256,
+                "non-source provenance change {label} unexpectedly changed source bytes"
+            );
+        } else {
+            assert_ne!(
+                generated.source_sha256, baseline.source_sha256,
+                "source input change {label} aliased source bytes"
+            );
+        }
+        assert_eq!(generated.generator_id, baseline.generator_id);
+        assert_eq!(generated.generator_version, baseline.generator_version);
+        assert_eq!(generated.status, baseline.status);
+        assert_eq!(
+            generated.status.authoring,
+            LogicalNpcCloneAuthoringStatus::OfflineDraft
+        );
+        assert_eq!(
+            generated.status.runtime,
+            LogicalNpcCloneRuntimeStatus::RuntimeUnqualified
+        );
+    }
+}
+
+#[test]
+fn input_fingerprint_length_prefixes_adjacent_field_boundaries() {
+    let first = LogicalNpcCloneDraft::new(
+        "GoreMods.Probe.AB",
+        "C",
+        PARENT_CHARACTER,
+        PARENT_AGENT,
+        PARENT_SPAWN,
+    )
+    .unwrap();
+    let second = LogicalNpcCloneDraft::new(
+        "GoreMods.Probe.A",
+        "BC",
+        PARENT_CHARACTER,
+        PARENT_AGENT,
+        PARENT_SPAWN,
+    )
+    .unwrap();
+
+    assert_ne!(first.input_fingerprint(), second.input_fingerprint());
 }

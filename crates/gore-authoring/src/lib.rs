@@ -23,7 +23,8 @@ pub use model::{
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
     LogicalNpcCloneDraft, LogicalNpcCloneDraftError, LogicalNpcCloneField,
-    LogicalNpcCloneRuntimeStatus, LogicalNpcCloneSource, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
+    LogicalNpcCloneRuntimeStatus, LogicalNpcCloneSource, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_ANGELSCRIPT_IDENTIFIER_BYTES,
     MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_ANGELSCRIPT_MODULE_SEGMENTS,
     MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES,
 };

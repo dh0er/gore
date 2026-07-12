@@ -4,6 +4,15 @@
 
 use std::fmt;
 
+use sha2::{Digest, Sha256};
+
+use crate::Sha256Digest;
+
+/// Stable generator identity carried by every logical NPC clone draft.
+pub const LOGICAL_NPC_CLONE_GENERATOR_ID: &str = "gore-authoring.logical-npc-clone-draft";
+/// Increment when the accepted inputs, fixed semantics, or emitted source shape changes.
+pub const LOGICAL_NPC_CLONE_GENERATOR_VERSION: u32 = 1;
+
 /// Maximum byte length accepted for one AngelScript identifier.
 pub const MAX_ANGELSCRIPT_IDENTIFIER_BYTES: usize = 96;
 /// Conservative bound for the `m_UniqueName` value appended to generated class prefixes.
@@ -140,6 +149,7 @@ pub struct LogicalNpcCloneDraft {
     parent_ai_agent_config: String,
     parent_spawn_definition: String,
     class_names: LogicalNpcCloneClassNames,
+    input_fingerprint: Sha256Digest,
 }
 
 impl LogicalNpcCloneDraft {
@@ -186,6 +196,13 @@ impl LogicalNpcCloneDraft {
             &parent_ai_agent_config,
             &parent_spawn_definition,
         )?;
+        let input_fingerprint = fingerprint_input(
+            &module_namespace,
+            &unique_name,
+            &parent_character_definition,
+            &parent_ai_agent_config,
+            &parent_spawn_definition,
+        );
 
         Ok(Self {
             module_namespace,
@@ -194,6 +211,7 @@ impl LogicalNpcCloneDraft {
             parent_ai_agent_config,
             parent_spawn_definition,
             class_names,
+            input_fingerprint,
         })
     }
 
@@ -222,6 +240,11 @@ impl LogicalNpcCloneDraft {
         &self.class_names
     }
 
+    /// Canonical hash of every semantic input plus the fixed generator semantics.
+    pub const fn input_fingerprint(&self) -> Sha256Digest {
+        self.input_fingerprint
+    }
+
     /// Generate deterministic source and module metadata without filesystem or runtime actions.
     pub fn generate(&self) -> LogicalNpcCloneSource {
         let classes = self.class_names.clone();
@@ -235,13 +258,18 @@ impl LogicalNpcCloneDraft {
             spawn = classes.spawn_definition,
             parent_spawn = self.parent_spawn_definition,
         );
+        let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
 
         LogicalNpcCloneSource {
+            generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID,
+            generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
             module_relative_path: format!("{}.as", self.module_namespace.replace('.', "/")),
             module_namespace: self.module_namespace.clone(),
             unique_name: self.unique_name.clone(),
             classes,
             source,
+            source_sha256,
+            input_fingerprint: self.input_fingerprint,
             status: LogicalNpcCloneCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
         }
     }
@@ -253,11 +281,16 @@ impl LogicalNpcCloneDraft {
 /// does not write it, compile it, deploy it, start the game, or mutate a save.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicalNpcCloneSource {
+    pub generator_id: &'static str,
+    pub generator_version: u32,
     pub module_namespace: String,
     pub module_relative_path: String,
     pub unique_name: String,
     pub classes: LogicalNpcCloneClassNames,
     pub source: String,
+    pub source_sha256: Sha256Digest,
+    /// Includes non-source provenance such as the module namespace as well as fixed semantics.
+    pub input_fingerprint: Sha256Digest,
     pub status: LogicalNpcCloneCapabilityStatus,
 }
 
@@ -267,6 +300,96 @@ fn derive_class_names(unique_name: &str) -> LogicalNpcCloneClassNames {
         ai_agent_config: format!("{AI_AGENT_CONFIG_CLASS_PREFIX}{unique_name}"),
         spawn_definition: format!("{SPAWN_DEFINITION_CLASS_PREFIX}{unique_name}"),
     }
+}
+
+fn fingerprint_input(
+    module_namespace: &str,
+    unique_name: &str,
+    parent_character_definition: &str,
+    parent_ai_agent_config: &str,
+    parent_spawn_definition: &str,
+) -> Sha256Digest {
+    let mut hasher = Sha256::new();
+    fingerprint_bytes(
+        &mut hasher,
+        "schema",
+        b"gore-authoring.logical-npc-clone-draft-v1.input-fingerprint",
+    );
+    fingerprint_string(&mut hasher, "generator.id", LOGICAL_NPC_CLONE_GENERATOR_ID);
+    fingerprint_u64(
+        &mut hasher,
+        "generator.version",
+        u64::from(LOGICAL_NPC_CLONE_GENERATOR_VERSION),
+    );
+    fingerprint_string(&mut hasher, "module.namespace", module_namespace);
+    fingerprint_string(&mut hasher, "npc.unique-name", unique_name);
+    fingerprint_string(
+        &mut hasher,
+        "parent.character-definition",
+        parent_character_definition,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "parent.ai-agent-config",
+        parent_ai_agent_config,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "parent.spawn-definition",
+        parent_spawn_definition,
+    );
+
+    // Fixed validation/lowering semantics are bound as defense-in-depth if an implementation
+    // constant ever changes without the required generator-version bump.
+    fingerprint_string(
+        &mut hasher,
+        "shape.character-definition-class-prefix",
+        CHARACTER_DEFINITION_CLASS_PREFIX,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "shape.ai-agent-config-class-prefix",
+        AI_AGENT_CONFIG_CLASS_PREFIX,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "shape.spawn-definition-class-prefix",
+        SPAWN_DEFINITION_CLASS_PREFIX,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "validation.character-definition-parent-prefix",
+        CHARACTER_DEFINITION_PARENT_PREFIX,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "validation.ai-agent-config-parent-prefix",
+        AI_AGENT_CONFIG_PARENT_PREFIX,
+    );
+    fingerprint_string(
+        &mut hasher,
+        "validation.spawn-definition-parent-prefix",
+        SPAWN_DEFINITION_PARENT_PREFIX,
+    );
+    fingerprint_string(&mut hasher, "capability.authoring", "OfflineDraft");
+    fingerprint_string(&mut hasher, "capability.runtime", "RuntimeUnqualified");
+
+    Sha256Digest::from_bytes(hasher.finalize().into())
+}
+
+fn fingerprint_string(hasher: &mut Sha256, field: &str, value: &str) {
+    fingerprint_bytes(hasher, field, value.as_bytes());
+}
+
+fn fingerprint_u64(hasher: &mut Sha256, field: &str, value: u64) {
+    fingerprint_bytes(hasher, field, &value.to_be_bytes());
+}
+
+fn fingerprint_bytes(hasher: &mut Sha256, field: &str, value: &[u8]) {
+    hasher.update((field.len() as u64).to_be_bytes());
+    hasher.update(field.as_bytes());
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 fn validate_module_namespace(value: &str) -> Result<(), LogicalNpcCloneDraftError> {
