@@ -120,7 +120,7 @@ enum Commands {
         #[command(subcommand)]
         cmd: cmd::as_cache::AsCmd,
     },
-    /// Inspect and copy-on-write patch fixed-width cooked DataAsset leaves.
+    /// Extract, inspect, copy-on-write patch, and pack cooked DataAssets.
     Asset {
         #[command(subcommand)]
         action: cmd::asset::AssetAction,

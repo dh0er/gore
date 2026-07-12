@@ -1,9 +1,17 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use byteorder::{LE, ReadBytesExt, WriteBytesExt};
 use std::fmt::{Display, Formatter};
 use std::ops::{Deref, DerefMut};
 use std::{io::Read, io::Write};
 use tracing::instrument;
+
+// Deserializers in this crate are used on game and third-party container data.
+// Keep generic collections bounded even when a format-specific preflight was
+// accidentally omitted. Byte buffers have a separate, larger ceiling below.
+// The current game peaks just below one million compression-block entries.
+const MAX_GENERIC_ARRAY_ELEMENTS: usize = 1_200_000;
+const MAX_BYTE_BUFFER_BYTES: usize = 512 * 1024 * 1024;
+const MAX_STRING_CODE_UNITS: usize = 16 * 1024 * 1024;
 
 pub trait Readable {
     fn de<S: Read>(stream: &mut S) -> Result<Self>
@@ -143,7 +151,13 @@ impl Readable for u8 {
     where
         Self: Sized,
     {
-        let mut buf = vec![0; len];
+        if len > MAX_BYTE_BUFFER_BYTES {
+            bail!("byte buffer length {len} exceeds limit {MAX_BYTE_BUFFER_BYTES}");
+        }
+        let mut buf = Vec::new();
+        buf.try_reserve_exact(len)
+            .context("reserving bounded byte buffer")?;
+        buf.resize(len, 0);
         stream.read_exact(&mut buf)?;
         Ok(buf)
     }
@@ -263,7 +277,13 @@ pub fn read_array<S: Read, T, F>(len: usize, stream: &mut S, mut f: F) -> Result
 where
     F: FnMut(&mut S) -> Result<T>,
 {
-    let mut array = Vec::with_capacity(len);
+    if len > MAX_GENERIC_ARRAY_ELEMENTS {
+        bail!("array element count {len} exceeds limit {MAX_GENERIC_ARRAY_ELEMENTS}");
+    }
+    let mut array = Vec::new();
+    array
+        .try_reserve_exact(len)
+        .context("reserving bounded deserialization array")?;
     for _ in 0..len {
         array.push(f(stream)?);
     }
@@ -273,11 +293,25 @@ where
 #[instrument(skip_all)]
 pub fn read_string_data<S: Read>(len: i32, stream: &mut S) -> Result<String> {
     if len < 0 {
-        let chars = read_array((-len) as usize, stream, |r| Ok(r.read_u16::<LE>()?))?;
+        let count = len
+            .checked_abs()
+            .context("string code-unit count cannot be i32::MIN")? as usize;
+        if count > MAX_STRING_CODE_UNITS {
+            bail!("UTF-16 string length {count} exceeds limit {MAX_STRING_CODE_UNITS}");
+        }
+        let chars = read_array(count, stream, |r| Ok(r.read_u16::<LE>()?))?;
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
-        Ok(String::from_utf16(&chars[..length]).unwrap())
+        String::from_utf16(&chars[..length]).context("invalid UTF-16 string")
     } else {
-        let mut chars = vec![0; len as usize];
+        let count = len as usize;
+        if count > MAX_STRING_CODE_UNITS {
+            bail!("UTF-8 string length {count} exceeds limit {MAX_STRING_CODE_UNITS}");
+        }
+        let mut chars = Vec::new();
+        chars
+            .try_reserve_exact(count)
+            .context("reserving bounded string")?;
+        chars.resize(count, 0);
         stream.read_exact(&mut chars)?;
         let length = chars.iter().position(|&c| c == 0).unwrap_or(chars.len());
         Ok(String::from_utf8_lossy(&chars[..length]).into_owned())
@@ -331,9 +365,20 @@ pub fn write_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {
 #[instrument(skip_all)]
 pub fn read_utf8_string<S: Read>(stream: &mut S) -> Result<String> {
     let len: i32 = stream.de()?;
-    let mut chars = vec![0; len as usize];
+    if len < 0 {
+        bail!("negative UTF-8 string length {len}");
+    }
+    let len = len as usize;
+    if len > MAX_STRING_CODE_UNITS {
+        bail!("UTF-8 string length {len} exceeds limit {MAX_STRING_CODE_UNITS}");
+    }
+    let mut chars = Vec::new();
+    chars
+        .try_reserve_exact(len)
+        .context("reserving bounded UTF-8 string")?;
+    chars.resize(len, 0);
     stream.read_exact(&mut chars)?;
-    Ok(String::from_utf8(chars).unwrap())
+    String::from_utf8(chars).context("invalid UTF-8 string")
 }
 
 pub fn write_utf8_string<S: Write>(stream: &mut S, value: &str) -> Result<()> {

@@ -18,16 +18,22 @@
 //! (cityhash64 of the lower-cased, slash-normalised path) and compare each
 //! export's `class_index` against it. This is an exact, table-free match.
 
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use anyhow::Context as _;
 use retoc::asset_conversion::{build_legacy, FZenPackageContext};
+use retoc::container_header::{EIoContainerHeaderVersion, StoreEntry};
 use retoc::iostore;
+use retoc::iostore::IoStoreTrait as _;
 use retoc::logging::Log;
 use retoc::script_objects::FPackageObjectIndex;
 use retoc::zen::FZenPackageHeader;
-use retoc::{Config, EIoChunkType, FIoChunkId, FPackageId, FSFileWriter, UEPath, UEPathBuf};
+use retoc::{
+    Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FIoChunkIdRaw, FIoContainerId,
+    FPackageId, FSFileWriter, UEPath, UEPathBuf,
+};
 
 use crate::error::{Result, TexError};
 
@@ -38,8 +44,271 @@ pub struct TextureEntry {
     pub asset_path: String,
 }
 
+/// Exact verified IoStore chunk consumed while converting one package.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct VerifiedChunkReceipt {
+    pub chunk_id: String,
+    pub chunk_type: String,
+    pub source_utoc: PathBuf,
+    pub length: u64,
+    pub blake3: String,
+    pub toc_hash: String,
+    pub toc_hash_bytes: usize,
+}
+
+/// Result of snapshot-backed Zen-to-legacy conversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedUnpackedAsset {
+    pub uasset: PathBuf,
+    pub consumed_chunks: Vec<VerifiedChunkReceipt>,
+    pub metadata_utocs: Vec<PathBuf>,
+}
+
+/// Exact, write-free generation probe for one package in a composite store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedAssetGeneration {
+    pub consumed_chunks: Vec<VerifiedChunkReceipt>,
+    pub metadata_utocs: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedChunk {
+    bytes: Vec<u8>,
+    receipt: VerifiedChunkReceipt,
+}
+
+/// Read-through IoStore snapshot. Every first read selects the exact composite
+/// winner, verifies its decompressed bytes against the TOC BLAKE3 chunk hash,
+/// and caches those bytes. All conversion re-reads then use the immutable cache.
+struct VerifiedSnapshotStore<'a> {
+    inner: &'a dyn iostore::IoStoreTrait,
+    chunks: Mutex<std::collections::HashMap<FIoChunkId, CachedChunk>>,
+}
+
+impl<'a> VerifiedSnapshotStore<'a> {
+    fn new(inner: &'a dyn iostore::IoStoreTrait) -> Self {
+        Self {
+            inner,
+            chunks: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn receipts(&self) -> anyhow::Result<Vec<VerifiedChunkReceipt>> {
+        let chunks = self
+            .chunks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("verified chunk cache was poisoned"))?;
+        let mut receipts: Vec<_> = chunks.values().map(|chunk| chunk.receipt.clone()).collect();
+        receipts.sort_by(|left, right| left.chunk_id.cmp(&right.chunk_id));
+        Ok(receipts)
+    }
+
+    fn prime_container_metadata(&self) -> anyhow::Result<()> {
+        let header_ids: Vec<_> = self
+            .inner
+            .child_containers()
+            .flat_map(|container| container.chunks())
+            .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
+            .map(|chunk| chunk.id())
+            .collect();
+        if header_ids.is_empty() {
+            anyhow::bail!("composite IoStore exposes no ContainerHeader chunks");
+        }
+        for chunk_id in header_ids {
+            self.read_verified(chunk_id)?;
+        }
+        Ok(())
+    }
+
+    fn metadata_utocs(&self) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = self
+            .inner
+            .child_containers()
+            .filter_map(|container| {
+                container
+                    .chunks()
+                    .next()
+                    .map(|chunk| chunk.container().container_path().to_path_buf())
+            })
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
+    fn read_verified(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
+        let version = self
+            .inner
+            .container_file_version()
+            .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
+        let chunk_id = chunk_id.with_version(version);
+        let mut chunks = self
+            .chunks
+            .lock()
+            .map_err(|_| anyhow::anyhow!("verified chunk cache was poisoned"))?;
+        if let Some(cached) = chunks.get(&chunk_id).cloned() {
+            return Ok(cached.bytes);
+        }
+
+        // `chunks()` applies the composite store's same first-winner precedence
+        // as `read()`, but retains the concrete source container + TOC hash.
+        let info = self
+            .inner
+            .chunks()
+            .find(|info| info.id() == chunk_id)
+            .ok_or_else(|| anyhow::anyhow!("{chunk_id:?} not found in composite IoStore"))?;
+        let advertised = info.size();
+        if advertised > MAX_SNAPSHOT_CHUNK_BYTES {
+            anyhow::bail!(
+                "IoStore chunk {chunk_id:?} advertises {advertised} bytes; per-chunk snapshot limit is {MAX_SNAPSHOT_CHUNK_BYTES}"
+            );
+        }
+        let cached_total = chunks.values().try_fold(0u64, |total, cached| {
+            total
+                .checked_add(cached.receipt.length)
+                .ok_or_else(|| anyhow::anyhow!("verified chunk cache size overflowed"))
+        })?;
+        let prospective_total = cached_total
+            .checked_add(advertised)
+            .ok_or_else(|| anyhow::anyhow!("verified chunk cache size overflowed"))?;
+        if prospective_total > MAX_SNAPSHOT_TOTAL_BYTES {
+            anyhow::bail!(
+                "IoStore snapshot would reach {prospective_total} bytes; aggregate limit is {MAX_SNAPSHOT_TOTAL_BYTES}"
+            );
+        }
+        let bytes = info.read()?;
+        if u64::try_from(bytes.len())? != advertised {
+            anyhow::bail!(
+                "IoStore chunk {chunk_id:?} length mismatch: advertised {advertised}, read {}",
+                bytes.len()
+            );
+        }
+        let receipt = verified_chunk_receipt(&info, &bytes)?;
+        let cached = CachedChunk { bytes, receipt };
+        let result = cached.bytes.clone();
+        chunks.insert(chunk_id, cached);
+        Ok(result)
+    }
+}
+
+impl iostore::IoStoreTrait for VerifiedSnapshotStore<'_> {
+    fn container_name(&self) -> &str {
+        self.inner.container_name()
+    }
+
+    fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
+        self.inner.container_file_version()
+    }
+
+    fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
+        self.inner.container_header_version()
+    }
+
+    fn print_info(&self, depth: usize) {
+        self.inner.print_info(depth);
+    }
+
+    fn read(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
+        self.read_verified(chunk_id)
+    }
+
+    fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> anyhow::Result<Vec<u8>> {
+        let version = self
+            .inner
+            .container_file_version()
+            .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
+        self.read_verified(FIoChunkId::from_raw(chunk_id_raw, version))
+    }
+
+    fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
+        self.inner.has_chunk_id(chunk_id)
+    }
+
+    fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
+        self.inner.has_chunk_id_raw(chunk_id_raw)
+    }
+
+    fn chunks(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
+        self.inner.chunks()
+    }
+
+    fn chunks_all(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
+        self.inner.chunks_all()
+    }
+
+    fn packages(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
+        self.inner.packages()
+    }
+
+    fn packages_all(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
+        self.inner.packages_all()
+    }
+
+    fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn iostore::IoStoreTrait> + '_> {
+        self.inner.child_containers()
+    }
+
+    fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
+        self.inner.chunk_path(chunk_id)
+    }
+
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
+        self.inner.package_store_entry(package_id)
+    }
+
+    fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
+        self.inner.lookup_package_redirect(source_package_id)
+    }
+}
+
+fn encode_bytes(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("writing into String cannot fail");
+    }
+    encoded
+}
+
+fn verified_chunk_receipt(
+    info: &iostore::ChunkInfo<'_>,
+    bytes: &[u8],
+) -> anyhow::Result<VerifiedChunkReceipt> {
+    let chunk_id = info.id();
+    let actual = blake3::hash(bytes);
+    let expected = &info.hash().0;
+    // Older TOCs serialize 20 BLAKE3 bytes and retoc zero-fills the tail;
+    // newer TOCs carry all 32.
+    let toc_hash_bytes = if expected[20..].iter().any(|byte| *byte != 0) {
+        32
+    } else {
+        20
+    };
+    if actual.as_bytes()[..toc_hash_bytes] != expected[..toc_hash_bytes] {
+        anyhow::bail!(
+            "IoStore chunk hash mismatch for {chunk_id:?} from {}",
+            info.container().container_path().display()
+        );
+    }
+    Ok(VerifiedChunkReceipt {
+        chunk_id: encode_bytes(&chunk_id.get_raw().id),
+        chunk_type: format!("{:?}", chunk_id.get_chunk_type()),
+        source_utoc: info.container().container_path().to_path_buf(),
+        length: u64::try_from(bytes.len())?,
+        blake3: encode_bytes(actual.as_bytes()),
+        toc_hash: encode_bytes(&expected[..toc_hash_bytes]),
+        toc_hash_bytes,
+    })
+}
+
 /// Full script-object path of the cooked Texture2D class.
 const TEXTURE2D_CLASS_PATH: &str = "/Script/Engine.Texture2D";
+const MAX_REPACK_TREE_DEPTH: usize = 128;
+const MAX_REPACK_ASSETS: usize = 4096;
+const MAX_REPACK_COMPONENT_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_REPACK_BUNDLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_SNAPSHOT_CHUNK_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_SNAPSHOT_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// List texture assets in an IoStore container, using `usmap` to resolve types.
 ///
@@ -177,6 +446,225 @@ pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
     Ok(files)
 }
 
+/// Strictly reopen a freshly produced one-package additive triplet. Unlike the
+/// tolerant foreign-mod listing APIs, this fails on any malformed/extra package
+/// chunk, verifies every chunk against its TOC BLAKE3 hash, checks the exact
+/// package/header/path mapping, and reopens the empty V11 `.pak` sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct StrictTripletVerification {
+    pub package: String,
+    pub export_path: String,
+    pub chunk_count: usize,
+    pub chunks: Vec<VerifiedChunkReceipt>,
+    pub pak_mount_point: String,
+    pub pak_files: Vec<String>,
+    pub bulk_chunks: usize,
+    pub optional_bulk_chunks: usize,
+    pub memory_mapped_bulk_chunks: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedSidecars {
+    pub bulk: bool,
+    pub optional_bulk: bool,
+    pub memory_mapped_bulk: bool,
+}
+
+pub fn verify_single_package_triplet(
+    utoc: &Path,
+    pak: &Path,
+    expected_asset: &str,
+    expected_sidecars: ExpectedSidecars,
+) -> Result<StrictTripletVerification> {
+    let store = iostore::open(utoc, Arc::new(Config::default()))?;
+    let container_version = store
+        .container_file_version()
+        .ok_or_else(|| anyhow::anyhow!("triplet container has no TOC version"))?;
+    let header_version = store
+        .container_header_version()
+        .ok_or_else(|| anyhow::anyhow!("triplet container has no header version"))?;
+    let expected_package_id = package_id_from_asset_path(expected_asset);
+    let packages: Vec<_> = store.packages().map(|package| package.id()).collect();
+    if packages != [expected_package_id] {
+        return Err(anyhow::anyhow!(
+            "triplet package set mismatch: expected {:016x}, got {:?}",
+            expected_package_id.0,
+            packages
+        )
+        .into());
+    }
+
+    let mut seen_ids = std::collections::HashSet::new();
+    let mut chunks = Vec::new();
+    let mut export_data: Option<Vec<u8>> = None;
+    let mut export_path: Option<String> = None;
+    let mut container_headers = 0usize;
+    let mut bulk_chunks = 0usize;
+    let mut optional_bulk_chunks = 0usize;
+    let mut memory_mapped_bulk_chunks = 0usize;
+    let mut chunk_total = 0u64;
+    for info in store.chunks_all() {
+        let chunk_id = info.id();
+        if !seen_ids.insert(chunk_id.get_raw()) {
+            return Err(anyhow::anyhow!("duplicate chunk id in triplet: {chunk_id:?}").into());
+        }
+        let advertised = info.size();
+        if advertised > MAX_SNAPSHOT_CHUNK_BYTES {
+            return Err(anyhow::anyhow!(
+                "triplet chunk {chunk_id:?} is {advertised} bytes; limit is {MAX_SNAPSHOT_CHUNK_BYTES}"
+            )
+            .into());
+        }
+        chunk_total = chunk_total
+            .checked_add(advertised)
+            .ok_or_else(|| anyhow::anyhow!("triplet chunk size overflowed"))?;
+        if chunk_total > MAX_SNAPSHOT_TOTAL_BYTES {
+            return Err(anyhow::anyhow!(
+                "triplet chunks total {chunk_total} bytes; limit is {MAX_SNAPSHOT_TOTAL_BYTES}"
+            )
+            .into());
+        }
+        let bytes = info.read()?;
+        if u64::try_from(bytes.len()).map_err(|_| anyhow::anyhow!("chunk length overflowed"))?
+            != advertised
+        {
+            return Err(anyhow::anyhow!(
+                "triplet chunk {chunk_id:?} length differs from its TOC size"
+            )
+            .into());
+        }
+        chunks.push(verified_chunk_receipt(&info, &bytes)?);
+        match chunk_id.get_chunk_type() {
+            EIoChunkType::ContainerHeader => {
+                container_headers += 1;
+            }
+            EIoChunkType::ExportBundleData => {
+                if chunk_id.get_package_id() != expected_package_id || export_data.is_some() {
+                    return Err(anyhow::anyhow!(
+                        "triplet contains an extra or mismatched export-bundle chunk"
+                    )
+                    .into());
+                }
+                export_path = info.path();
+                export_data = Some(bytes);
+            }
+            EIoChunkType::BulkData => {
+                if chunk_id.get_package_id() != expected_package_id {
+                    return Err(anyhow::anyhow!(
+                        "triplet contains bulk data for a different package"
+                    )
+                    .into());
+                }
+                bulk_chunks += 1;
+            }
+            EIoChunkType::OptionalBulkData => {
+                if chunk_id.get_package_id() != expected_package_id {
+                    return Err(anyhow::anyhow!(
+                        "triplet contains optional bulk data for a different package"
+                    )
+                    .into());
+                }
+                optional_bulk_chunks += 1;
+            }
+            EIoChunkType::MemoryMappedBulkData => {
+                if chunk_id.get_package_id() != expected_package_id {
+                    return Err(anyhow::anyhow!(
+                        "triplet contains memory-mapped bulk data for a different package"
+                    )
+                    .into());
+                }
+                memory_mapped_bulk_chunks += 1;
+            }
+            other => {
+                return Err(
+                    anyhow::anyhow!("unexpected {:?} chunk in one-package triplet", other).into(),
+                );
+            }
+        }
+    }
+    if container_headers != 1 {
+        return Err(anyhow::anyhow!(
+            "triplet must contain exactly one ContainerHeader chunk, got {container_headers}"
+        )
+        .into());
+    }
+    let expected_counts = [
+        usize::from(expected_sidecars.bulk),
+        usize::from(expected_sidecars.optional_bulk),
+        usize::from(expected_sidecars.memory_mapped_bulk),
+    ];
+    let actual_counts = [bulk_chunks, optional_bulk_chunks, memory_mapped_bulk_chunks];
+    if actual_counts != expected_counts {
+        return Err(anyhow::anyhow!(
+            "triplet sidecar chunk mismatch: expected {:?}, got {:?}",
+            expected_counts,
+            actual_counts
+        )
+        .into());
+    }
+    let export_data = export_data.ok_or_else(|| {
+        anyhow::anyhow!("triplet has no export-bundle chunk for expected package")
+    })?;
+    let package = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let header = FZenPackageHeader::deserialize(
+                &mut Cursor::new(&export_data),
+                store.package_store_entry(expected_package_id),
+                container_version,
+                header_version,
+                None,
+            )?;
+            Ok(header.package_name())
+        },
+    ))
+    .map_err(|_| anyhow::anyhow!("triplet package header panicked while reopening"))??;
+    if package != expected_asset {
+        return Err(anyhow::anyhow!(
+            "triplet package name mismatch: expected {expected_asset:?}, got {package:?}"
+        )
+        .into());
+    }
+    let expected_export_path = format!(
+        "../../../{}.uasset",
+        crate::paths::content_mount_rel(expected_asset)
+            .ok_or_else(|| anyhow::anyhow!("unsupported package mount: {expected_asset}"))?
+    );
+    let export_path = export_path
+        .ok_or_else(|| anyhow::anyhow!("triplet export chunk has no directory-index path"))?;
+    if export_path != expected_export_path {
+        return Err(anyhow::anyhow!(
+            "triplet mount path mismatch: expected {expected_export_path:?}, got {export_path:?}"
+        )
+        .into());
+    }
+
+    let mut pak_file = std::io::BufReader::new(std::fs::File::open(pak)?);
+    let pak_reader = repak::PakBuilder::new()
+        .reader(&mut pak_file)
+        .map_err(|error| anyhow::anyhow!("failed to reopen pak index: {error}"))?;
+    let pak_mount_point = pak_reader.mount_point().to_owned();
+    let mut pak_files = pak_reader.files();
+    pak_files.sort();
+    if pak_mount_point != "../../../" || !pak_files.is_empty() {
+        return Err(anyhow::anyhow!(
+            "pak sidecar invariant failed: mount={pak_mount_point:?}, files={pak_files:?}"
+        )
+        .into());
+    }
+    chunks.sort_by(|left, right| left.chunk_id.cmp(&right.chunk_id));
+    Ok(StrictTripletVerification {
+        package,
+        export_path,
+        chunk_count: chunks.len(),
+        chunks,
+        pak_mount_point,
+        pak_files,
+        bulk_chunks,
+        optional_bulk_chunks,
+        memory_mapped_bulk_chunks,
+    })
+}
+
 /// Unpack a single asset's cooked files (.uasset/.uexp/.ubulk) from the
 /// container into `out_dir`. Returns the path to the written `.uasset`.
 ///
@@ -196,68 +684,226 @@ pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
 /// does not need property mappings.
 pub fn unpack_asset(
     utoc: &Path,
-    _usmap: &Path,
+    usmap: &Path,
     asset_path: &str,
     out_dir: &Path,
 ) -> Result<PathBuf> {
+    Ok(unpack_asset_verified(utoc, usmap, asset_path, out_dir)?.uasset)
+}
+
+/// Snapshot-backed form of [`unpack_asset`]. In addition to the legacy output,
+/// returns every exact IoStore chunk consumed by conversion, including the
+/// winning sibling container and verified TOC BLAKE3 identity. Repeated reads
+/// during conversion use immutable cached bytes.
+pub fn unpack_asset_verified(
+    utoc: &Path,
+    _usmap: &Path,
+    asset_path: &str,
+    out_dir: &Path,
+) -> Result<VerifiedUnpackedAsset> {
     // Open the directory holding the .utoc so the composite store also picks up
     // `global.utoc` (script objects) -- required for build_legacy to resolve
     // script imports. Fall back to the file itself if it has no parent.
     let store_path = utoc.parent().unwrap_or(utoc);
     let store = iostore::open(store_path, Arc::new(Config::default()))?;
+    let snapshot = VerifiedSnapshotStore::new(store.as_ref());
+    snapshot.prime_container_metadata()?;
 
-    let container_version = store
+    let container_version = snapshot
         .container_file_version()
         .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
-    let header_version = store
+    let header_version = snapshot
         .container_header_version()
         .ok_or_else(|| anyhow::anyhow!("container has no header version"))?;
 
-    // Locate the package whose name == asset_path. Reuses the per-package
-    // header-parsing route from `list_textures` (panic-safe: a malformed package
-    // can panic deep in retoc; one bad package must not abort the whole search).
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-
-    let mut found: Option<FPackageId> = None;
-    for pkg in store.packages() {
-        let pkg_id = pkg.id();
-        let matches = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let chunk_id = FIoChunkId::from_package_id(pkg_id, 0, EIoChunkType::ExportBundleData);
-            let data = match store.read(chunk_id) {
-                Ok(d) => d,
-                Err(_) => return false,
-            };
-            let header = match FZenPackageHeader::deserialize(
+    // UE package IDs are the lower-cased UTF-16 CityHash of the virtual package
+    // path. `FIoContainerId::from_name` is public and uses that exact shared hash
+    // routine; wrapping its u64 as an FPackageId avoids a full O(n) package scan.
+    // We still deserialize the one resolved header and compare its full package
+    // name before extraction, so a missing package or hash collision fails closed.
+    let package_id = package_id_from_asset_path(asset_path);
+    let chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+    if !snapshot.has_chunk_id(chunk_id) {
+        return Err(TexError::AssetNotFound(asset_path.into()));
+    }
+    let verified_name = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let data = snapshot.read(chunk_id)?;
+            let header = FZenPackageHeader::deserialize(
                 &mut Cursor::new(&data),
-                store.package_store_entry(pkg_id),
+                snapshot.package_store_entry(package_id),
                 container_version,
                 header_version,
                 None,
-            ) {
-                Ok(h) => h,
-                Err(_) => return false,
-            };
-            header.package_name() == asset_path
-        }));
-        if let Ok(true) = matches {
-            found = Some(pkg_id);
-            break;
-        }
+            )?;
+            Ok(header.package_name())
+        },
+    ))
+    .map_err(|_| anyhow::anyhow!("resolved package header panicked while validating its name"))??;
+    if verified_name != asset_path {
+        return Err(TexError::AssetNotFound(asset_path.into()));
     }
-
-    std::panic::set_hook(prev_hook);
-
-    let package_id = found.ok_or_else(|| TexError::AssetNotFound(asset_path.into()))?;
 
     std::fs::create_dir_all(out_dir)?;
     let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
-    legacy_from_package(store.as_ref(), package_id, leaf, out_dir)
+    let uasset = legacy_from_package(&snapshot, package_id, leaf, out_dir)?;
+    Ok(VerifiedUnpackedAsset {
+        uasset,
+        consumed_chunks: snapshot.receipts()?,
+        metadata_utocs: snapshot.metadata_utocs(),
+    })
 }
 
-/// Like `unpack_asset` but takes the package id directly (from the texture index),
-/// skipping the full-container name scan. Opens the parent Paks dir so global script
-/// objects resolve (same as `unpack_asset`). `leaf` is the output filename stem.
+/// Bind one virtual package to the concrete winning package/bulk chunks and all
+/// ContainerHeader chunks used by the current composite store. Unlike
+/// [`unpack_asset_verified`], this performs no filesystem output and does not
+/// deserialize global script objects; callers can therefore compare generation
+/// provenance before creating an output staging directory.
+pub fn probe_asset_generation_verified(
+    utoc: &Path,
+    asset_path: &str,
+) -> Result<VerifiedAssetGeneration> {
+    probe_asset_generation_inner(utoc, asset_path, None)
+}
+
+/// As [`probe_asset_generation_verified`], but re-reads an exact prior set of
+/// package/dependency chunk IDs. This lets a provenance verifier reproduce the
+/// chunks consumed by legacy conversion, including imported package headers,
+/// rather than silently narrowing the comparison to the target package alone.
+pub fn probe_asset_generation_for_chunks_verified(
+    utoc: &Path,
+    asset_path: &str,
+    required_chunk_ids: &[String],
+) -> Result<VerifiedAssetGeneration> {
+    probe_asset_generation_inner(utoc, asset_path, Some(required_chunk_ids))
+}
+
+fn probe_asset_generation_inner(
+    utoc: &Path,
+    asset_path: &str,
+    required_chunk_ids: Option<&[String]>,
+) -> Result<VerifiedAssetGeneration> {
+    let store_path = utoc.parent().unwrap_or(utoc);
+    let store = iostore::open(store_path, Arc::new(Config::default()))?;
+    let snapshot = VerifiedSnapshotStore::new(store.as_ref());
+    snapshot.prime_container_metadata()?;
+
+    let container_version = snapshot
+        .container_file_version()
+        .ok_or_else(|| anyhow::anyhow!("container has no TOC version"))?;
+    let header_version = snapshot
+        .container_header_version()
+        .ok_or_else(|| anyhow::anyhow!("container has no header version"))?;
+    let package_id = package_id_from_asset_path(asset_path);
+    let export_chunk = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
+    if !snapshot.has_chunk_id(export_chunk) {
+        return Err(TexError::AssetNotFound(asset_path.into()));
+    }
+
+    let verified_name = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        || -> anyhow::Result<String> {
+            let data = snapshot.read(export_chunk)?;
+            let header = FZenPackageHeader::deserialize(
+                &mut Cursor::new(&data),
+                snapshot.package_store_entry(package_id),
+                container_version,
+                header_version,
+                None,
+            )?;
+            Ok(header.package_name())
+        },
+    ))
+    .map_err(|_| anyhow::anyhow!("resolved package header panicked while probing generation"))??;
+    if verified_name != asset_path {
+        return Err(TexError::AssetNotFound(asset_path.into()));
+    }
+
+    let package_chunks: Vec<_> = if let Some(required) = required_chunk_ids {
+        required
+            .iter()
+            .map(|encoded| -> anyhow::Result<Option<FIoChunkId>> {
+                let raw = encoded
+                    .parse::<retoc::FIoChunkIdRaw>()
+                    .with_context(|| format!("invalid provenance chunk id {encoded:?}"))?;
+                let id = FIoChunkId::from_raw(raw, container_version);
+                match id.get_chunk_type() {
+                    EIoChunkType::ContainerHeader => Ok(None),
+                    EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData => Ok(Some(id)),
+                    other => {
+                        anyhow::bail!("unsupported provenance chunk type {other:?} for {encoded}")
+                    }
+                }
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        snapshot
+            .chunks()
+            .filter(|chunk| {
+                chunk.id().get_package_id() == package_id
+                    && matches!(
+                        chunk.id().get_chunk_type(),
+                        EIoChunkType::ExportBundleData
+                            | EIoChunkType::BulkData
+                            | EIoChunkType::OptionalBulkData
+                            | EIoChunkType::MemoryMappedBulkData
+                    )
+            })
+            .map(|chunk| chunk.id())
+            .collect()
+    };
+    for chunk_id in package_chunks {
+        snapshot.read_verified(chunk_id)?;
+    }
+
+    Ok(VerifiedAssetGeneration {
+        consumed_chunks: snapshot.receipts()?,
+        metadata_utocs: snapshot.metadata_utocs(),
+    })
+}
+
+fn package_id_from_asset_path(asset_path: &str) -> FPackageId {
+    FPackageId(FIoContainerId::from_name(asset_path).0)
+}
+
+/// Return whether a canonical 12-byte raw IoStore chunk id belongs to the
+/// package identified by `asset_path`. The package id is the little-endian
+/// first eight bytes; this comparison is independent of TOC chunk-type version.
+pub fn chunk_id_matches_asset_path(chunk_id: &str, asset_path: &str) -> bool {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    if chunk_id.len() != 24 || !chunk_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    let expected = package_id_from_asset_path(asset_path).0.to_le_bytes();
+    chunk_id.as_bytes()[..16]
+        .chunks_exact(2)
+        .zip(expected)
+        .all(|(pair, expected)| {
+            let high = nibble(pair[0]);
+            let low = nibble(pair[1]);
+            high.zip(low)
+                .is_some_and(|(high, low)| (high << 4 | low) == expected)
+        })
+}
+
+/// Like `unpack_asset` but takes an already-known package id (from the texture
+/// index) and caller-supplied output leaf directly. This bypasses
+/// `unpack_asset`'s exact virtual-path/header-name verification, so public callers
+/// should prefer that API unless they own a sealed index. Opens the parent Paks
+/// directory so global script objects resolve.
 pub fn unpack_asset_by_id(
     utoc: &Path,
     _usmap: &Path,
@@ -288,8 +934,8 @@ fn legacy_from_package(
     let out_rel = format!("{leaf}.uasset");
 
     let log = Log::no_log();
-    // No verse script cells store: G1R textures are plain UTexture2D, and script
-    // cells are only needed to resolve Verse cell imports (none here).
+    // No Verse script-cell store: the ordinary cooked assets handled here do not
+    // carry Verse cell imports; script objects still resolve through global.utoc.
     let context = FZenPackageContext::create(store, None, &log, None);
     let writer = FSFileWriter::new(out_dir);
 
@@ -333,6 +979,16 @@ fn legacy_from_package(
 /// global script-object table -- which lives in the game's `global.utoc`, not in
 /// the cooked input. Passing `None` for `script_objects` produces a container the
 /// game rejects (unresolved script imports). Verified: script objects ARE needed.
+///
+/// Security contract: `cooked_dir` and `out_dir` must be caller-owned directories
+/// without concurrent writers. Both roots and cooked-tree entries reject
+/// symlinks/reparse points; a missing output root is created one plain directory
+/// component at a time. All component reads are bounded/no-follow. `name` is
+/// restricted to a safe filename atom, and every triplet destination must be
+/// absent; this function never intentionally replaces an existing output.
+/// Multi-file publication is not atomic here, so untrusted/public CLI callers
+/// should wrap it in a fresh private staging directory and atomically promote that
+/// directory after verification.
 pub fn repack_to_zen(
     cooked_dir: &Path,
     name: &str,
@@ -340,6 +996,26 @@ pub fn repack_to_zen(
     game_dir: &Path,
     compress: bool,
 ) -> Result<[PathBuf; 3]> {
+    Ok(repack_to_zen_verified(cooked_dir, name, out_dir, game_dir, compress)?.triplet)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRepackedTriplet {
+    pub triplet: [PathBuf; 3],
+    pub source_chunks: Vec<VerifiedChunkReceipt>,
+    pub metadata_utocs: Vec<PathBuf>,
+}
+
+/// Source-snapshot-reporting form of [`repack_to_zen`]. Script-object chunks
+/// are TOC-hash verified before conversion and returned with every source TOC
+/// whose parsed metadata participated in composite-store resolution.
+pub fn repack_to_zen_verified(
+    cooked_dir: &Path,
+    name: &str,
+    out_dir: &Path,
+    game_dir: &Path,
+    compress: bool,
+) -> Result<VerifiedRepackedTriplet> {
     use retoc::iostore_writer::IoStoreWriter;
     use retoc::legacy_asset::FSerializedAssetBundle;
     use retoc::version::EngineVersion;
@@ -352,6 +1028,27 @@ pub fn repack_to_zen(
     let pkg_file_version = ver.package_file_version();
     let mount_point = UEPath::new("../../../");
 
+    validate_repack_name(name)?;
+    validate_plain_directory_root(cooked_dir, "cooked input")?;
+    let planned = [
+        out_dir.join(format!("{name}.utoc")),
+        out_dir.join(format!("{name}.ucas")),
+        out_dir.join(format!("{name}.pak")),
+    ];
+    for path in &planned {
+        match std::fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err(anyhow::anyhow!(
+                    "triplet output already exists; refusing to replace {}",
+                    path.display()
+                )
+                .into())
+            }
+        }
+    }
+
     // 1. Open the game's Paks directory as a composite source store so the global
     //    script objects (in `global.utoc`) are available -- same rationale as
     //    `unpack_asset`. `build_zen_asset` resolves each package's script imports
@@ -359,7 +1056,9 @@ pub fn repack_to_zen(
     //    game refuses to load it.
     let paks_dir = game_dir.join("G1R/Content/Paks");
     let store = iostore::open(&paks_dir, Arc::new(Config::default()))?;
-    let script_objects = Some(Arc::new(store.load_script_objects()?));
+    let source_snapshot = VerifiedSnapshotStore::new(store.as_ref());
+    source_snapshot.prime_container_metadata()?;
+    let script_objects = Some(Arc::new(source_snapshot.load_script_objects()?));
 
     // No Verse cells in plain cooked textures; an empty store mirrors the CLI's
     // `Some(script_cell_store)` arg (the CLI always passes a constructed store).
@@ -369,7 +1068,7 @@ pub fn repack_to_zen(
     //    path relative to `cooked_dir` (becomes the cooked/pak path inside the
     //    mount, e.g. `G1R/Content/UI/Textures/Common/T_HardwareCursor.uasset`).
     let mut asset_rels: Vec<PathBuf> = Vec::new();
-    collect_uassets(cooked_dir, cooked_dir, &mut asset_rels)?;
+    collect_uassets(cooked_dir, cooked_dir, 0, &mut asset_rels)?;
     if asset_rels.is_empty() {
         return Err(TexError::AssetNotFound(format!(
             "no .uasset (with sibling .uexp) found under {}",
@@ -378,8 +1077,8 @@ pub fn repack_to_zen(
     }
 
     // 3-4. Open the writer and convert+write each asset.
-    std::fs::create_dir_all(out_dir)?;
-    let utoc_path = out_dir.join(format!("{name}.utoc"));
+    ensure_plain_directory_tree(out_dir, "triplet output")?;
+    let utoc_path = planned[0].clone();
     let writer = IoStoreWriter::new(
         &utoc_path,
         toc_version,
@@ -400,14 +1099,7 @@ pub fn repack_to_zen(
         let rel_ue = path_to_ue(rel);
         let asset_ue_path = mount_point.join(&rel_ue);
 
-        let bundle = FSerializedAssetBundle {
-            asset_file_buffer: std::fs::read(&abs)?,
-            exports_file_buffer: std::fs::read(abs.with_extension("uexp"))?,
-            bulk_data_buffer: read_opt(&abs.with_extension("ubulk"))?,
-            optional_bulk_data_buffer: read_opt(&abs.with_extension("uptnl"))?,
-            // `.m.ubulk` -> the leaf gains a `.m` before `.ubulk`.
-            memory_mapped_bulk_data_buffer: read_opt(&with_double_ext(&abs, "m.ubulk"))?,
-        };
+        let bundle: FSerializedAssetBundle = read_legacy_bundle_bounded(&abs)?;
 
         let mut converted = build_zen_asset(
             bundle,
@@ -430,7 +1122,7 @@ pub fn repack_to_zen(
 
     // The game needs an (even empty) `.pak` sidecar to detect and mount the
     // IoStore container -- mirrors retoc's `action_to_zen`.
-    let pak_path = out_dir.join(format!("{name}.pak"));
+    let pak_path = planned[2].clone();
     {
         use std::io::BufWriter;
         let mut pak_file = BufWriter::new(std::fs::File::create(&pak_path)?);
@@ -445,8 +1137,106 @@ pub fn repack_to_zen(
             .map_err(|e| anyhow::anyhow!("failed to write empty .pak index: {e}"))?;
     }
 
-    let ucas_path = utoc_path.with_extension("ucas");
-    Ok([utoc_path, ucas_path, pak_path])
+    Ok(VerifiedRepackedTriplet {
+        triplet: [utoc_path, planned[1].clone(), pak_path],
+        source_chunks: source_snapshot.receipts()?,
+        metadata_utocs: source_snapshot.metadata_utocs(),
+    })
+}
+
+fn validate_repack_name(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.len() > 96
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        || is_windows_reserved_name(name)
+    {
+        return Err(anyhow::anyhow!(
+            "container name must be a non-reserved 1..=96 ASCII filename atom using letters, digits, '_' or '-'"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn is_windows_reserved_name(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+}
+
+fn validate_plain_directory_root(path: &Path, label: &str) -> Result<()> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        anyhow::anyhow!(
+            "{label} directory {} is unavailable: {error}",
+            path.display()
+        )
+    })?;
+    if metadata_is_reparse(&metadata) || !metadata.is_dir() {
+        return Err(anyhow::anyhow!(
+            "{label} root must be a plain directory, not a symlink/reparse point: {}",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Create a directory tree without `create_dir_all` following an existing
+/// symlink/junction component. Concurrent mutation is outside the public API's
+/// caller-owned-directory contract; every component is nevertheless rechecked
+/// immediately after creation or discovery.
+fn ensure_plain_directory_tree(path: &Path, label: &str) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        use std::path::Component;
+        match component {
+            // A Windows drive/UNC prefix is not a complete filesystem path until
+            // its following RootDir component has been appended (probing `C:`
+            // itself can fail with ERROR_INVALID_FUNCTION).
+            Component::Prefix(_) => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::RootDir | Component::Normal(_) => {
+                current.push(component.as_os_str());
+            }
+            Component::CurDir => continue,
+            Component::ParentDir => {
+                return Err(anyhow::anyhow!(
+                    "{label} directory may not contain '..': {}",
+                    path.display()
+                )
+                .into());
+            }
+        }
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata_is_reparse(&metadata) || !metadata.is_dir() {
+                    return Err(anyhow::anyhow!(
+                        "{label} path component must be a plain directory: {}",
+                        current.display()
+                    )
+                    .into());
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current)?;
+                validate_plain_directory_root(&current, label)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    validate_plain_directory_root(&absolute, label)
 }
 
 /// The game's IoStore override folder: containers dropped here are mounted on top
@@ -604,29 +1394,199 @@ pub fn undeploy(game_dir: &Path, name: &str) -> Result<()> {
 
 /// Recursively collect `.uasset` files (that have a sibling `.uexp`) under `dir`,
 /// pushing each as a path relative to `root`.
-fn collect_uassets(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_uassets(root: &Path, dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<()> {
+    if depth > MAX_REPACK_TREE_DEPTH {
+        return Err(
+            anyhow::anyhow!("cooked tree exceeds depth limit {MAX_REPACK_TREE_DEPTH}").into(),
+        );
+    }
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_uassets(root, &path, out)?;
-        } else if path.extension().is_some_and(|e| e == "uasset")
-            && path.with_extension("uexp").exists()
-        {
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata_is_reparse(&metadata) {
+            return Err(anyhow::anyhow!(
+                "symbolic-link or reparse entry refused in cooked tree: {}",
+                path.display()
+            )
+            .into());
+        }
+        if metadata.is_dir() {
+            collect_uassets(root, &path, depth + 1, out)?;
+        } else if path.extension().is_some_and(|e| e == "uasset") {
+            let uexp = path.with_extension("uexp");
+            let uexp_metadata = std::fs::symlink_metadata(&uexp).map_err(|error| {
+                anyhow::anyhow!(
+                    "required sibling {} is unavailable: {error}",
+                    uexp.display()
+                )
+            })?;
+            if metadata_is_reparse(&uexp_metadata) || !uexp_metadata.is_file() {
+                return Err(anyhow::anyhow!(
+                    "required sibling is not a plain file: {}",
+                    uexp.display()
+                )
+                .into());
+            }
             if let Ok(rel) = path.strip_prefix(root) {
                 out.push(rel.to_path_buf());
+                if out.len() > MAX_REPACK_ASSETS {
+                    return Err(anyhow::anyhow!(
+                        "cooked tree exceeds asset count limit {MAX_REPACK_ASSETS}"
+                    )
+                    .into());
+                }
             }
+        } else if !metadata.is_file() {
+            return Err(anyhow::anyhow!(
+                "non-regular cooked tree entry refused: {}",
+                path.display()
+            )
+            .into());
         }
     }
     Ok(())
 }
 
-/// `std::fs::read` but `Ok(None)` when the file is absent.
-fn read_opt(path: &Path) -> Result<Option<Vec<u8>>> {
-    match std::fs::read(path) {
-        Ok(b) => Ok(Some(b)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
+fn read_legacy_bundle_bounded(
+    uasset: &Path,
+) -> Result<retoc::legacy_asset::FSerializedAssetBundle> {
+    use retoc::legacy_asset::FSerializedAssetBundle;
+
+    let paths = [
+        uasset.to_path_buf(),
+        uasset.with_extension("uexp"),
+        uasset.with_extension("ubulk"),
+        uasset.with_extension("uptnl"),
+        with_double_ext(uasset, "m.ubulk"),
+    ];
+    let required = [true, true, false, false, false];
+    let mut lengths = [None; 5];
+    let mut total = 0u64;
+    for (index, path) in paths.iter().enumerate() {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                if metadata_is_reparse(&metadata) || !metadata.is_file() {
+                    return Err(anyhow::anyhow!(
+                        "legacy component is not a plain file: {}",
+                        path.display()
+                    )
+                    .into());
+                }
+                let length = metadata.len();
+                if length > MAX_REPACK_COMPONENT_BYTES {
+                    return Err(anyhow::anyhow!(
+                        "legacy component {} is {length} bytes; limit is {MAX_REPACK_COMPONENT_BYTES}",
+                        path.display()
+                    )
+                    .into());
+                }
+                total = total
+                    .checked_add(length)
+                    .ok_or_else(|| anyhow::anyhow!("legacy bundle size overflowed"))?;
+                if total > MAX_REPACK_BUNDLE_BYTES {
+                    return Err(anyhow::anyhow!(
+                        "legacy bundle is {total} bytes; limit is {MAX_REPACK_BUNDLE_BYTES}"
+                    )
+                    .into());
+                }
+                lengths[index] = Some(length);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && !required[index] => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(FSerializedAssetBundle {
+        asset_file_buffer: read_component_exact(&paths[0], lengths[0].unwrap())?,
+        exports_file_buffer: read_component_exact(&paths[1], lengths[1].unwrap())?,
+        bulk_data_buffer: lengths[2]
+            .map(|length| read_component_exact(&paths[2], length))
+            .transpose()?,
+        optional_bulk_data_buffer: lengths[3]
+            .map(|length| read_component_exact(&paths[3], length))
+            .transpose()?,
+        memory_mapped_bulk_data_buffer: lengths[4]
+            .map(|length| read_component_exact(&paths[4], length))
+            .transpose()?,
+    })
+}
+
+fn read_component_exact(path: &Path, expected_length: u64) -> Result<Vec<u8>> {
+    let allocation = usize::try_from(expected_length)
+        .map_err(|_| anyhow::anyhow!("component length does not fit memory"))?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(allocation)
+        .map_err(|error| anyhow::anyhow!("reserving component buffer failed: {error}"))?;
+    let mut file = open_regular_no_follow(path)?;
+    let opened_metadata = file.metadata()?;
+    if metadata_is_reparse(&opened_metadata)
+        || !opened_metadata.is_file()
+        || opened_metadata.len() != expected_length
+    {
+        return Err(
+            anyhow::anyhow!("legacy component changed before open: {}", path.display()).into(),
+        );
+    }
+    (&mut file)
+        .take(expected_length.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len())
+        .map_err(|_| anyhow::anyhow!("component length does not fit u64"))?
+        != expected_length
+    {
+        return Err(anyhow::anyhow!(
+            "legacy component changed length while reading: {}",
+            path.display()
+        )
+        .into());
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata_is_reparse(&metadata) || !metadata.is_file() || metadata.len() != expected_length {
+        return Err(
+            anyhow::anyhow!("legacy component changed while reading: {}", path.display()).into(),
+        );
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn open_regular_no_follow(path: &Path) -> Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    Ok(std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?)
+}
+
+#[cfg(unix)]
+fn open_regular_no_follow(path: &Path) -> Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    Ok(std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?)
+}
+
+#[cfg(not(any(windows, unix)))]
+fn open_regular_no_follow(path: &Path) -> Result<std::fs::File> {
+    Ok(std::fs::File::open(path)?)
+}
+
+fn metadata_is_reparse(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 
@@ -664,6 +1624,352 @@ impl Ord for TextureEntry {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn minimal_raw_toc() -> Vec<u8> {
+        let mut bytes = vec![0u8; 0x90];
+        bytes[..16].copy_from_slice(b"-==--==--==--==-");
+        bytes[16] = 6;
+        bytes[20..24].copy_from_slice(&0x90u32.to_le_bytes());
+        bytes[44..48].copy_from_slice(&0x1_0000u32.to_le_bytes());
+        bytes[52..56].copy_from_slice(&1u32.to_le_bytes());
+        bytes[88..96].copy_from_slice(&u64::MAX.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn malicious_utoc_counts_fail_without_panic_or_large_allocation() {
+        let base = unique_tmp("malicious-utoc-count");
+        let mut huge_entries = minimal_raw_toc();
+        huge_entries[24..28].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut bad_fixed_header = minimal_raw_toc();
+        bad_fixed_header[20..24].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut huge_directory_count = minimal_raw_toc();
+        huge_directory_count[48..52].copy_from_slice(&8u32.to_le_bytes());
+        huge_directory_count.extend_from_slice(&0i32.to_le_bytes());
+        huge_directory_count.extend_from_slice(&u32::MAX.to_le_bytes());
+        let mut invalid_chunk_type = minimal_raw_toc();
+        invalid_chunk_type[24..28].copy_from_slice(&1u32.to_le_bytes());
+        let mut chunk_id = [0u8; 12];
+        chunk_id[11] = 0xff;
+        invalid_chunk_type.extend_from_slice(&chunk_id);
+        invalid_chunk_type.extend_from_slice(&[0u8; 10]);
+        invalid_chunk_type.extend_from_slice(&[0u8; 33]);
+
+        for (index, bytes) in [
+            huge_entries,
+            bad_fixed_header,
+            huge_directory_count,
+            invalid_chunk_type,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let utoc = base.join(format!("bad-{index}.utoc"));
+            std::fs::write(&utoc, bytes).unwrap();
+            std::fs::write(utoc.with_extension("ucas"), []).unwrap();
+            let result =
+                std::panic::catch_unwind(|| iostore::open(&utoc, Arc::new(Config::default())));
+            assert!(result.is_ok(), "bounded IoStore open must not panic");
+            assert!(result.unwrap().is_err());
+        }
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn malicious_container_header_count_fails_before_deserialization() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("malicious-container-header");
+        let utoc = base.join("header.utoc");
+        let version = EngineVersion::UE5_4;
+        IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap()
+        .finalize()
+        .unwrap();
+        let ucas = utoc.with_extension("ucas");
+        let mut bytes = std::fs::read(&ucas).unwrap();
+        assert!(bytes.len() >= 20);
+        bytes[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&ucas, bytes).unwrap();
+
+        let result = std::panic::catch_unwind(|| iostore::open(&utoc, Arc::new(Config::default())));
+        assert!(
+            result.is_ok(),
+            "bounded ContainerHeader open must not panic"
+        );
+        assert!(result.unwrap().is_err());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn malicious_container_header_indirect_array_fails_before_allocation() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("malicious-container-indirect");
+        let utoc = base.join("header.utoc");
+        let version = EngineVersion::UE5_4;
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        let package = FPackageId(0x1234);
+        writer
+            .write_package_chunk(
+                FIoChunkId::from_package_id(package, 0, EIoChunkType::ExportBundleData),
+                None,
+                &[0],
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        writer.finalize().unwrap();
+
+        let ucas = utoc.with_extension("ucas");
+        let mut bytes = std::fs::read(&ucas).unwrap();
+        let magic = 0x496f_436eu32.to_le_bytes();
+        let header_start = bytes
+            .windows(magic.len())
+            .position(|window| window == magic)
+            .expect("writer emitted a ContainerHeader signature");
+        let imported_count = header_start + 40;
+        bytes[imported_count..imported_count + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(&ucas, bytes).unwrap();
+
+        let result = std::panic::catch_unwind(|| iostore::open(&utoc, Arc::new(Config::default())));
+        assert!(result.is_ok(), "bounded indirect-array scan must not panic");
+        assert!(result.unwrap().is_err());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn duplicate_sibling_container_header_ids_fail_closed() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("duplicate-container-header");
+        let first = base.join("first.utoc");
+        let version = EngineVersion::UE5_4;
+        IoStoreWriter::new(
+            &first,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap()
+        .finalize()
+        .unwrap();
+        let second = base.join("second.utoc");
+        std::fs::copy(&first, &second).unwrap();
+        std::fs::copy(first.with_extension("ucas"), second.with_extension("ucas")).unwrap();
+        let error = match iostore::open(&base, Arc::new(Config::default())) {
+            Ok(_) => panic!("duplicate sibling headers were unexpectedly accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("duplicate ContainerHeader"),
+            "unexpected error: {error:#}"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn legal_zero_length_iostore_chunk_reads_empty_without_panic() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("zero-length-chunk");
+        let utoc = base.join("empty.utoc");
+        let version = EngineVersion::UE5_4;
+        let package = FPackageId(0x1234_5678_9abc_def0);
+        let chunk_id = FIoChunkId::from_package_id(package, 0, EIoChunkType::BulkData);
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        writer.write_chunk(chunk_id, None, &[]).unwrap();
+        writer.finalize().unwrap();
+
+        let store = iostore::open(&utoc, Arc::new(Config::default())).unwrap();
+        let info = store
+            .chunks()
+            .find(|chunk| chunk.id().get_chunk_type() == EIoChunkType::BulkData)
+            .expect("writer emitted the empty bulk chunk");
+        assert_eq!(info.size(), 0);
+        let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| info.read()));
+        assert!(read.is_ok(), "zero-length Toc::read must not panic");
+        assert!(read.unwrap().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn method_zero_block_size_mismatch_fails_before_reader_consumption() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("method-zero-size-mismatch");
+        let utoc = base.join("mismatch.utoc");
+        let version = EngineVersion::UE5_4;
+        let mut writer = IoStoreWriter::new(
+            &utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        writer
+            .write_chunk(
+                FIoChunkId::from_package_id(
+                    FPackageId(0x1020_3040_5060_7080),
+                    0,
+                    EIoChunkType::BulkData,
+                ),
+                None,
+                &[1, 2, 3, 4],
+            )
+            .unwrap();
+        writer.finalize().unwrap();
+
+        let mut toc = std::fs::read(&utoc).unwrap();
+        let entry_count = u32::from_le_bytes(toc[24..28].try_into().unwrap()) as usize;
+        let perfect_hash_count = u32::from_le_bytes(toc[84..88].try_into().unwrap()) as usize;
+        let overflow_count = u32::from_le_bytes(toc[96..100].try_into().unwrap()) as usize;
+        let first_block =
+            0x90 + entry_count * (12 + 10) + (perfect_hash_count + overflow_count) * 4;
+        assert_eq!(&toc[first_block + 5..first_block + 8], &[4, 0, 0]);
+        assert_eq!(&toc[first_block + 8..first_block + 11], &[4, 0, 0]);
+        toc[first_block + 5..first_block + 8].copy_from_slice(&[3, 0, 0]);
+        std::fs::write(&utoc, toc).unwrap();
+
+        let error = match iostore::open(&utoc, Arc::new(Config::default())) {
+            Ok(_) => panic!("method-0 size mismatch was unexpectedly accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{error:#}").contains("method-0"),
+            "unexpected error: {error:#}"
+        );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn repack_name_rejects_traversal_and_windows_devices() {
+        for invalid in ["", "../escape", "has.dot", "CON", "com1", "LPT9"] {
+            assert!(
+                validate_repack_name(invalid).is_err(),
+                "unexpectedly accepted {invalid:?}"
+            );
+        }
+        validate_repack_name("zzz_GoreWolfProof_P-2").unwrap();
+    }
+
+    #[test]
+    fn output_directory_tree_is_created_plain_and_rejects_files() {
+        let base = unique_tmp("plain-output-tree");
+        let nested = base.join("one").join("two");
+        ensure_plain_directory_tree(&nested, "test output").unwrap();
+        validate_plain_directory_root(&nested, "test output").unwrap();
+
+        let file = base.join("not-a-directory");
+        std::fs::write(&file, b"sentinel").unwrap();
+        assert!(ensure_plain_directory_tree(&file, "test output").is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), b"sentinel");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn oversized_legacy_component_fails_before_allocation() {
+        let base = unique_tmp("oversized-component");
+        let uasset = base.join("TooLarge.uasset");
+        std::fs::File::create(&uasset)
+            .unwrap()
+            .set_len(MAX_REPACK_COMPONENT_BYTES + 1)
+            .unwrap();
+        let error = match read_legacy_bundle_bounded(&uasset) {
+            Ok(_) => panic!("oversized component was unexpectedly accepted"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("limit"), "unexpected error: {error}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cooked_root_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let base = unique_tmp("root-symlink");
+        let target = base.join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = base.join("link");
+        symlink(&target, &link).unwrap();
+        assert!(validate_plain_directory_root(&link, "cooked input").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn cooked_root_reparse_point_is_rejected_when_symlinks_are_available() {
+        use std::os::windows::fs::symlink_dir;
+
+        let base = unique_tmp("root-symlink");
+        let target = base.join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = base.join("link");
+        if symlink_dir(&target, &link).is_err() {
+            let _ = std::fs::remove_dir_all(&base);
+            return;
+        }
+        assert!(validate_plain_directory_root(&link, "cooked input").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn package_path_hash_matches_known_wolf_iostore_id() {
+        let id = package_id_from_asset_path(
+            "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps",
+        );
+        assert_eq!(id.0, 0xc974_a39e_a173_e101);
+        assert_eq!(
+            package_id_from_asset_path(
+                "/game/blueprints/trackingsystem/footstepspresets/da_wolffootsteps"
+            ),
+            id
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a local Gothic 1 Remake installation"]
+    fn real_wolf_generation_probe_passes_bounded_preflight() {
+        let game = std::env::var_os("GORE_REAL_GAME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake"));
+        let utoc = crate::paths::main_container(&game).unwrap();
+        let generation = probe_asset_generation_verified(
+            &utoc,
+            "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps",
+        )
+        .unwrap();
+        assert!(generation
+            .consumed_chunks
+            .iter()
+            .any(|chunk| chunk.chunk_type == "ExportBundleData"));
+        assert!(generation
+            .consumed_chunks
+            .iter()
+            .any(|chunk| chunk.chunk_type == "ContainerHeader"));
+    }
 
     fn game_dir() -> Option<PathBuf> {
         let p = PathBuf::from(r"D:\SteamLibrary\steamapps\common\Gothic 1 Remake");

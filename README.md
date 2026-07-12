@@ -259,28 +259,50 @@ containers are what currently load reliably in-game.)
 
 ### Cooked DataAsset foundation
 
-`gore-asset` is the conservative backend for cooked-DataAsset inspection and
-fixed-leaf editing. It can resolve and flatten class schemas from a `.usmap`,
-decode and re-encode Unreal unversioned-property headers, and edit proven
-fixed-width leaves without changing unrelated bytes. Its package carrier loads
-a split `.uasset`/`.uexp` pair, permits only bounds-checked same-length
-replacement, and writes a verified new pair without overwriting the input or an
-existing output.
+`gore-asset` is the conservative backend for cooked-DataAsset extraction,
+inspection, fixed-width editing, and offline repacking. It can resolve and
+flatten class schemas from a `.usmap`, decode and re-encode Unreal
+unversioned-property headers, and edit proven fixed-width leaves without
+changing unrelated bytes. Its package carrier loads a split
+`.uasset`/`.uexp` pair, permits only bounds-checked same-length replacement,
+and writes a verified new pair without overwriting the input or an existing
+output.
 
-The public CLI deliberately exposes only an offset-free inspection path and one
-snapshot-bound raw-wire edit:
+The public CLI starts from one installed-game package, applies an offset-free,
+snapshot-bound raw-wire edit, and emits an undeployed Zen triplet:
 
 ```text
+gore asset extract     --game GAME --asset /Game/... --out EXTRACTED --json
 gore asset inspect     --uasset INPUT.uasset --usmap MAPPINGS.usmap --json
 gore asset patch-fixed --uasset INPUT.uasset --usmap MAPPINGS.usmap \
+  --extract-receipt EXTRACTED/gore-asset-extract.json \
   --selector SELECTOR.json --expected-hex HEX --replacement-hex HEX \
   --out OUTPUT.uasset --json
+gore asset pack        --game GAME --uasset OUTPUT.uasset --asset /Game/... \
+  --patch-receipt OUTPUT.gore-asset-patch.json \
+  --name zzz_MyDataAsset_P --out PACKED --json
 ```
 
 See [Cooked DataAsset fixed-leaf workflow](docs/dataasset-authoring.md) for the
-selector extraction, compare-and-swap, re-inspection, safety limits, and raw
-little-endian wire-value requirements. `editable=true` is structural proof, not
-gameplay/domain validation; this is not a generic DataAsset serializer.
+extract → inspect → compare-and-swap patch → re-inspect → pack sequence,
+receipts and source seals, strict no-clobber/no-deploy behavior, aggregate
+limits, concurrency/power-loss boundaries, and raw little-endian wire-value
+requirements. `editable=true` is structural proof, not gameplay/domain
+validation; this is not a generic DataAsset serializer.
+
+The receipt chain is mandatory: extract copies and seals the exact USMAP and
+optional sidecar set; `patch-fixed` v2 copies and binds every sidecar role plus
+the complete extract manifest to its output pair; and `pack` deserializes and
+cross-checks the hash-bound extract receipt before it re-probes current target
+chunks, concrete winning UTOCs, USMAP, and global anchors. Missing, replaced, or
+extra sidecars and hotfix/cross-generation inputs fail before output staging;
+there is no override. Extract-v2 and patch-v2 are closed, exact schemas: unknown
+fields and contradictory duplicated proofs are rejected. Extract/pack also
+refuse mountable `.utoc/.ucas/.pak` files below `Paks` (including `~mods`) and
+noncanonical direct aliases such as `.UTOC`, then require the exact direct-root
+mount inventory to remain unchanged through the final generation re-probe. Raw
+UTOC and ContainerHeader counts/ranges and method-0 block sizes are bounded and
+cross-checked before `retoc` deserialization.
 
 There is intentionally no guessed property-stream offset. Against the current
 hotfix, three native `UPrimaryDataAsset` packages reproduce byte-identically and
@@ -490,6 +512,7 @@ Every subcommand of the `gore` binary:
 | `audio` | `list` · `extract` · `replace` · `restore` · `export-patch` · `apply-patch` | Read/replace FMOD `.bank` audio (PCM injection, `*.gore-bak`). |
 | `voice` | `list` (`index`) · `extract` · `add` · `replace` · `apply-manifest` (`apply`) | Index/extract/copy-on-write edit localized voice-over ZIP archives. |
 | `texture` | `list` · `extract` · `replace` · `pack` · `deploy` · `index` · `undeploy` | Extract/replace IoStore textures → Zen triplet in `~mods`. |
+| `asset` | `extract` · `inspect` · `patch-fixed` · `pack` | Extract, inspect, copy-on-write patch, and offline-pack one cooked DataAsset; strict no-clobber and no deployment. |
 | `as` | `compile` · `compile-module` · `diagnostics-check` · `info` · `decode-header` · `walk` · `decompile` · `disasm` · `emit` · `emit-all` · `replace` · `splice` · `extract` · `extract-remap` | AngelScript precompiled-cache tooling: recompile `.as` via the game, capture compiler diagnostics when safely available, decode/emit/decompile/splice modules (experimental). |
 | `catalog` | `--kind item\|npc\|knowledge` | Generate a catalog JSON from a UE4SS object dump. |
 | `dump` | — | Parse a UE4SS SDK header dump into a reflection model JSON. |

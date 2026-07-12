@@ -874,6 +874,7 @@ dependencies = [
  "gore-tex",
  "gore-vo",
  "image",
+ "libc",
  "predicates 2.1.5",
  "retoc",
  "serde",
@@ -883,6 +884,7 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "usmap",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
@@ -1034,6 +1036,7 @@ dependencies = [
  "gore-oodle",
  "half",
  "intel_tex_2",
+ "libc",
  "repak",
  "retoc",
  "serde",

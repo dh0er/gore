@@ -234,7 +234,12 @@ impl Readable for FIoStoreTocHeader {
         if res.toc_magic != Self::MAGIC {
             bail!("unrecognized TOC magic, this is a .utoc file?")
         }
-        assert_eq!(res.toc_header_size, 0x90);
+        if res.toc_header_size != 0x90 {
+            bail!(
+                "invalid TOC header size {:#x}; expected 0x90",
+                res.toc_header_size
+            );
+        }
         Ok(res)
     }
 }
@@ -608,6 +613,25 @@ impl Toc {
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
 
+        if size == 0 {
+            return FIoStoreTocChunkInfo {
+                id: self.chunks[toc_entry_index],
+                file_name: file_name.to_string(),
+                hash,
+                offset,
+                offset_on_disk: 0,
+                size: 0,
+                compressed_size: 0,
+                num_compressed_blocks: 0,
+                partition_index: -1,
+                chunk_type: self.chunks[toc_entry_index].get_chunk_type(),
+                has_valid_file_name: false,
+                force_uncompressed: !meta.flags.contains(FIoStoreTocEntryMetaFlags::Compressed),
+                is_memory_mapped: meta.flags.contains(FIoStoreTocEntryMetaFlags::MemoryMapped),
+                is_compressed: meta.flags.contains(FIoStoreTocEntryMetaFlags::Compressed),
+            };
+        }
+
         let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;
         let last_block_index = ((align_u64(offset + size, compression_block_size as u64) - 1) / compression_block_size as u64) as usize;
@@ -652,6 +676,12 @@ impl Toc {
         let offset_and_length = &self.chunk_offset_lengths[toc_entry_index as usize];
         let offset = offset_and_length.get_offset();
         let size = offset_and_length.get_length();
+
+        // Empty chunks are legal and own no compression blocks. Returning before
+        // alignment avoids the `align(0) - 1` underflow and a bogus block slice.
+        if size == 0 {
+            return Ok(Vec::new());
+        }
 
         let compression_block_size = self.compression_block_size;
         let first_block_index = (offset / compression_block_size as u64) as usize;

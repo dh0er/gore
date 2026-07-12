@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
@@ -51,7 +51,9 @@ pub fn read_name_batch<S: Read>(s: &mut S) -> Result<Vec<String>> {
     }
     let _num_string_bytes: u32 = s.de()?;
     let hash_version: u64 = s.de()?;
-    assert_eq!(hash_version, FNAME_HASH_ALGORITHM_ID);
+    if hash_version != FNAME_HASH_ALGORITHM_ID {
+        bail!("unsupported FName hash algorithm {hash_version:#x}");
+    }
 
     let _hash_bytes: Vec<u8> = s.de_ctx(num as usize * 8)?;
     let lengths = read_array(num as usize, s, |s| Ok(i16::from_be_bytes(s.de()?)))?;

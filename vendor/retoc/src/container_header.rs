@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Seek;
@@ -57,7 +57,13 @@ impl FIoContainerHeader {
             container_id = FIoContainerId(u64::from_le_bytes(id));
         } else {
             version = s.de()?;
-            version_override.inspect(|v| assert_eq!(*v, version));
+            if version_override.is_some_and(|requested| requested != version) {
+                bail!(
+                    "ContainerHeader version override {:?} disagrees with serialized version {:?}",
+                    version_override,
+                    version
+                );
+            }
             container_id = s.de()?;
         }
 
@@ -270,6 +276,506 @@ impl FIoContainerHeader {
     }
     pub fn package_ids(&self) -> std::iter::Copied<std::collections::btree_map::Keys<'_, FPackageId, StoreEntry>> {
         self.packages.0.keys().copied()
+    }
+}
+
+const MAX_PREFLIGHT_HEADER_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PREFLIGHT_PACKAGES: usize = 500_000;
+const MAX_PREFLIGHT_VECTOR_ELEMENTS: usize = 2_000_000;
+const MAX_PREFLIGHT_NAMES: usize = 500_000;
+const MAX_PREFLIGHT_NAME_BYTES: usize = 64 * 1024 * 1024;
+const FNAME_HASH_ALGORITHM_ID_PREFLIGHT: u64 = 0xC164_0000;
+
+/// Validate every allocation-driving field and every indirect range in a raw
+/// ContainerHeader before the normal deserializer is allowed to run.
+///
+/// The regular reader supports several historical layouts and necessarily
+/// follows counts and relative array offsets from the file. This scanner is
+/// deliberately allocation-light: only the bounded package-id set is retained,
+/// while all buffers and array views are checked against the already bounded
+/// chunk bytes.
+pub fn preflight_container_header(
+    data: &[u8],
+    version_override: Option<EIoContainerHeaderVersion>,
+) -> Result<()> {
+    if data.len() > MAX_PREFLIGHT_HEADER_BYTES {
+        bail!(
+            "ContainerHeader is {} bytes; limit is {MAX_PREFLIGHT_HEADER_BYTES}",
+            data.len()
+        );
+    }
+    let mut cursor = HeaderPreflightCursor::new(data);
+    let signature = cursor.u32("signature")?;
+    let version;
+    if version_override.is_some_and(|value| value <= EIoContainerHeaderVersion::Initial)
+        || signature != FIoContainerHeader::MAGIC
+    {
+        version = version_override.unwrap_or(EIoContainerHeaderVersion::Initial);
+        cursor.take(4, "legacy container id")?;
+    } else {
+        let raw_version = cursor.i32("version")?;
+        version = EIoContainerHeaderVersion::from_repr(raw_version)
+            .with_context(|| format!("invalid ContainerHeader version {raw_version}"))?;
+        if version_override.is_some_and(|requested| requested != version) {
+            bail!(
+                "ContainerHeader version override {:?} disagrees with serialized version {:?}",
+                version_override,
+                version
+            );
+        }
+        cursor.take(8, "container id")?;
+    }
+
+    let advertised_package_count = if version < EIoContainerHeaderVersion::OptionalSegmentPackages {
+        let advertised = cursor.u32("legacy package count")? as usize;
+        if advertised > MAX_PREFLIGHT_PACKAGES {
+            bail!("legacy package count {advertised} exceeds limit {MAX_PREFLIGHT_PACKAGES}");
+        }
+        Some(advertised)
+    } else {
+        None
+    };
+
+    if version <= EIoContainerHeaderVersion::Initial {
+        let names = cursor.length_prefixed_bytes(MAX_PREFLIGHT_NAME_BYTES, "legacy names")?;
+        preflight_name_parts(names)?;
+        cursor.length_prefixed_bytes(MAX_PREFLIGHT_NAME_BYTES, "legacy name hashes")?;
+    }
+
+    let package_count = preflight_store_entries(&mut cursor, version)?;
+    if advertised_package_count.is_some_and(|advertised| advertised != package_count) {
+        bail!("legacy package count disagrees with package-id array");
+    }
+
+    if version > EIoContainerHeaderVersion::Initial {
+        if version >= EIoContainerHeaderVersion::OptionalSegmentPackages {
+            cursor.vector_bytes(8, MAX_PREFLIGHT_PACKAGES, "optional package ids")?;
+            cursor.length_prefixed_bytes(
+                MAX_PREFLIGHT_HEADER_BYTES,
+                "optional package store entries",
+            )?;
+        }
+
+        preflight_name_batch(&mut cursor)?;
+        cursor.vector_bytes(16, MAX_PREFLIGHT_VECTOR_ELEMENTS, "localized packages")?;
+        cursor.vector_bytes(24, MAX_PREFLIGHT_VECTOR_ELEMENTS, "package redirects")?;
+    } else {
+        let cultures = cursor.count(MAX_PREFLIGHT_VECTOR_ELEMENTS, "culture map")?;
+        for _ in 0..cultures {
+            cursor.fstring("culture name")?;
+            cursor.vector_bytes(16, MAX_PREFLIGHT_VECTOR_ELEMENTS, "culture packages")?;
+        }
+        cursor.vector_bytes(16, MAX_PREFLIGHT_VECTOR_ELEMENTS, "legacy redirects")?;
+    }
+
+    if version >= EIoContainerHeaderVersion::SoftPackageReferences {
+        let serial_range = if version >= EIoContainerHeaderVersion::SoftPackageReferencesOffset {
+            let offset = cursor.i64("soft references offset")?;
+            let size = cursor.i64("soft references size")?;
+            if offset < 0 || size < 0 {
+                bail!("negative soft-package-reference offset or size");
+            }
+            let offset = usize::try_from(offset)?;
+            let size = usize::try_from(size)?;
+            if offset != cursor.position() {
+                bail!(
+                    "soft-package-reference offset {offset} does not match inline position {}",
+                    cursor.position()
+                );
+            }
+            let end = offset
+                .checked_add(size)
+                .context("soft-package-reference range overflow")?;
+            if end > data.len() {
+                bail!("soft-package-reference range ends outside ContainerHeader");
+            }
+            Some((offset, end))
+        } else {
+            None
+        };
+
+        if serial_range.is_none_or(|(start, end)| end > start) {
+            let has_references = cursor.bool_u32("soft references present")?;
+            if has_references {
+                cursor.vector_bytes(8, MAX_PREFLIGHT_VECTOR_ELEMENTS, "soft package ids")?;
+                cursor.length_prefixed_bytes(
+                    MAX_PREFLIGHT_HEADER_BYTES,
+                    "soft package indices",
+                )?;
+            }
+        }
+        if let Some((_, expected_end)) = serial_range {
+            if cursor.position() != expected_end {
+                bail!(
+                    "soft-package-reference payload ended at {}, expected {expected_end}",
+                    cursor.position()
+                );
+            }
+        }
+    }
+
+    let trailing = &data[cursor.position()..];
+    if trailing.len() > 15 || trailing.iter().any(|byte| *byte != 0) {
+        bail!(
+            "ContainerHeader has {} non-padding trailing bytes",
+            trailing.len()
+        );
+    }
+    Ok(())
+}
+
+fn preflight_store_entries(
+    cursor: &mut HeaderPreflightCursor<'_>,
+    version: EIoContainerHeaderVersion,
+) -> Result<usize> {
+    let package_count = cursor.count(MAX_PREFLIGHT_PACKAGES, "package ids")?;
+    let package_ids = cursor.take(
+        package_count
+            .checked_mul(8)
+            .context("package-id byte count overflow")?,
+        "package ids",
+    )?;
+    let mut unique = HashSet::new();
+    unique
+        .try_reserve(package_count)
+        .context("reserving bounded package-id set")?;
+    for bytes in package_ids.chunks_exact(8) {
+        let id = u64::from_le_bytes(bytes.try_into().expect("chunks_exact yields eight bytes"));
+        if !unique.insert(id) {
+            bail!("duplicate package id {id:#x} in ContainerHeader");
+        }
+    }
+
+    let store = cursor.length_prefixed_bytes(
+        MAX_PREFLIGHT_HEADER_BYTES,
+        "package store entry buffer",
+    )?;
+    let (member_offset, entry_size, imported_view, shader_view) = match version {
+        EIoContainerHeaderVersion::PreInitial => (8usize, 16usize, 8usize, None),
+        EIoContainerHeaderVersion::Initial => (24, 32, 24, None),
+        EIoContainerHeaderVersion::LocalizedPackages
+        | EIoContainerHeaderVersion::OptionalSegmentPackages => (8, 24, 8, Some(16)),
+        EIoContainerHeaderVersion::NoExportInfo
+        | EIoContainerHeaderVersion::SoftPackageReferences
+        | EIoContainerHeaderVersion::SoftPackageReferencesOffset => (0, 16, 0, Some(8)),
+    };
+    let entries_bytes = package_count
+        .checked_mul(entry_size)
+        .context("package store entry table overflow")?;
+    if entries_bytes > store.len() {
+        bail!(
+            "package store entry table needs {entries_bytes} bytes, buffer has {}",
+            store.len()
+        );
+    }
+
+    let mut aggregate_refs = 0usize;
+    for index in 0..package_count {
+        let base = index
+            .checked_mul(entry_size)
+            .context("package store entry offset overflow")?;
+        if version < EIoContainerHeaderVersion::NoExportInfo {
+            let count_offset = if version == EIoContainerHeaderVersion::Initial {
+                base + 8
+            } else {
+                base
+            };
+            for (offset, label) in [
+                (count_offset, "export count"),
+                (count_offset + 4, "export bundle count"),
+            ] {
+                let count = read_i32_at(store, offset, label)?;
+                if !(0..=2_000_000).contains(&count) {
+                    bail!("{label} {count} is outside bounded nonnegative range");
+                }
+            }
+        }
+        validate_store_array_view(
+            store,
+            base,
+            member_offset,
+            imported_view,
+            8,
+            &mut aggregate_refs,
+            "imported packages",
+        )?;
+        if let Some(shader_view) = shader_view {
+            validate_store_array_view(
+                store,
+                base,
+                member_offset + 8,
+                shader_view,
+                20,
+                &mut aggregate_refs,
+                "shader map hashes",
+            )?;
+        }
+    }
+    Ok(package_count)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_store_array_view(
+    store: &[u8],
+    entry_base: usize,
+    relative_base: usize,
+    view_offset: usize,
+    element_size: usize,
+    aggregate: &mut usize,
+    label: &'static str,
+) -> Result<()> {
+    let view = entry_base
+        .checked_add(view_offset)
+        .context("store array view offset overflow")?;
+    let count = read_u32_at(store, view, label)? as usize;
+    let relative = read_u32_at(store, view + 4, label)? as usize;
+    if count > MAX_PREFLIGHT_VECTOR_ELEMENTS {
+        bail!("{label} count {count} exceeds limit {MAX_PREFLIGHT_VECTOR_ELEMENTS}");
+    }
+    *aggregate = aggregate
+        .checked_add(count)
+        .context("aggregate ContainerHeader reference count overflow")?;
+    if *aggregate > MAX_PREFLIGHT_VECTOR_ELEMENTS {
+        bail!(
+            "aggregate ContainerHeader reference count {} exceeds limit {MAX_PREFLIGHT_VECTOR_ELEMENTS}",
+            *aggregate
+        );
+    }
+    if count == 0 {
+        return Ok(());
+    }
+    let start = entry_base
+        .checked_add(relative_base)
+        .and_then(|value| value.checked_add(relative))
+        .context("store array data offset overflow")?;
+    let bytes = count
+        .checked_mul(element_size)
+        .context("store array byte count overflow")?;
+    let end = start
+        .checked_add(bytes)
+        .context("store array end overflow")?;
+    if end > store.len() {
+        bail!("{label} range {start}..{end} exceeds store buffer {}", store.len());
+    }
+    Ok(())
+}
+
+fn read_u32_at(bytes: &[u8], offset: usize, label: &'static str) -> Result<u32> {
+    let end = offset.checked_add(4).context("u32 range overflow")?;
+    let raw = bytes
+        .get(offset..end)
+        .with_context(|| format!("truncated {label} view"))?;
+    Ok(u32::from_le_bytes(
+        raw.try_into().expect("range was checked to four bytes"),
+    ))
+}
+
+fn read_i32_at(bytes: &[u8], offset: usize, label: &'static str) -> Result<i32> {
+    let end = offset.checked_add(4).context("i32 range overflow")?;
+    let raw = bytes
+        .get(offset..end)
+        .with_context(|| format!("truncated {label}"))?;
+    Ok(i32::from_le_bytes(
+        raw.try_into().expect("range was checked to four bytes"),
+    ))
+}
+
+fn preflight_name_parts(bytes: &[u8]) -> Result<()> {
+    let mut cursor = HeaderPreflightCursor::new(bytes);
+    let mut count = 0usize;
+    while cursor.position() < bytes.len() {
+        count = count.checked_add(1).context("name count overflow")?;
+        if count > MAX_PREFLIGHT_NAMES {
+            bail!("legacy name count exceeds limit {MAX_PREFLIGHT_NAMES}");
+        }
+        let raw = i16::from_be_bytes(
+            cursor
+                .take(2, "legacy name length")?
+                .try_into()
+                .expect("two bytes were requested"),
+        );
+        let decoded = if raw < 0 { i16::MIN - raw } else { raw };
+        let units = usize::from(decoded.unsigned_abs());
+        if decoded < 0 && cursor.position() & 1 != 0 {
+            cursor.take(1, "legacy UTF-16 alignment")?;
+        }
+        cursor.take(
+            units
+                .checked_mul(if decoded < 0 { 2 } else { 1 })
+                .context("legacy name byte count overflow")?,
+            "legacy name bytes",
+        )?;
+    }
+    Ok(())
+}
+
+fn preflight_name_batch(cursor: &mut HeaderPreflightCursor<'_>) -> Result<()> {
+    let count = cursor.count(MAX_PREFLIGHT_NAMES, "name batch")?;
+    if count == 0 {
+        return Ok(());
+    }
+    let advertised_string_bytes = cursor.u32("name batch string bytes")? as usize;
+    if advertised_string_bytes > MAX_PREFLIGHT_NAME_BYTES {
+        bail!(
+            "name batch string bytes {advertised_string_bytes} exceed limit {MAX_PREFLIGHT_NAME_BYTES}"
+        );
+    }
+    let hash_algorithm = cursor.u64("name batch hash algorithm")?;
+    if hash_algorithm != FNAME_HASH_ALGORITHM_ID_PREFLIGHT {
+        bail!("unsupported FName hash algorithm {hash_algorithm:#x}");
+    }
+    cursor.take(
+        count.checked_mul(8).context("name hash bytes overflow")?,
+        "name hashes",
+    )?;
+    let lengths = cursor.take(
+        count
+            .checked_mul(2)
+            .context("name length table overflow")?,
+        "name lengths",
+    )?;
+    let names_start = cursor.position();
+    for raw in lengths.chunks_exact(2) {
+        let raw = i16::from_be_bytes(raw.try_into().expect("two-byte name length"));
+        let decoded = if raw < 0 { i16::MIN - raw } else { raw };
+        let units = usize::from(decoded.unsigned_abs());
+        cursor.take(
+            units
+                .checked_mul(if decoded < 0 { 2 } else { 1 })
+                .context("name bytes overflow")?,
+            "name bytes",
+        )?;
+    }
+    let actual = cursor.position() - names_start;
+    if actual != advertised_string_bytes {
+        bail!(
+            "name batch advertised {advertised_string_bytes} string bytes, parsed {actual}"
+        );
+    }
+    Ok(())
+}
+
+struct HeaderPreflightCursor<'a> {
+    bytes: &'a [u8],
+    position: usize,
+}
+
+impl<'a> HeaderPreflightCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, position: 0 }
+    }
+
+    fn position(&self) -> usize {
+        self.position
+    }
+
+    fn take(&mut self, length: usize, label: &'static str) -> Result<&'a [u8]> {
+        let end = self
+            .position
+            .checked_add(length)
+            .with_context(|| format!("{label} range overflow"))?;
+        let value = self
+            .bytes
+            .get(self.position..end)
+            .with_context(|| format!("truncated {label}"))?;
+        self.position = end;
+        Ok(value)
+    }
+
+    fn u32(&mut self, label: &'static str) -> Result<u32> {
+        Ok(u32::from_le_bytes(
+            self.take(4, label)?
+                .try_into()
+                .expect("four bytes were requested"),
+        ))
+    }
+
+    fn i32(&mut self, label: &'static str) -> Result<i32> {
+        Ok(i32::from_le_bytes(
+            self.take(4, label)?
+                .try_into()
+                .expect("four bytes were requested"),
+        ))
+    }
+
+    fn u64(&mut self, label: &'static str) -> Result<u64> {
+        Ok(u64::from_le_bytes(
+            self.take(8, label)?
+                .try_into()
+                .expect("eight bytes were requested"),
+        ))
+    }
+
+    fn i64(&mut self, label: &'static str) -> Result<i64> {
+        Ok(i64::from_le_bytes(
+            self.take(8, label)?
+                .try_into()
+                .expect("eight bytes were requested"),
+        ))
+    }
+
+    fn count(&mut self, limit: usize, label: &'static str) -> Result<usize> {
+        let count = self.u32(label)? as usize;
+        if count > limit {
+            bail!("{label} count {count} exceeds limit {limit}");
+        }
+        Ok(count)
+    }
+
+    fn vector_bytes(
+        &mut self,
+        element_size: usize,
+        limit: usize,
+        label: &'static str,
+    ) -> Result<&'a [u8]> {
+        let count = self.count(limit, label)?;
+        self.take(
+            count
+                .checked_mul(element_size)
+                .with_context(|| format!("{label} byte count overflow"))?,
+            label,
+        )
+    }
+
+    fn length_prefixed_bytes(
+        &mut self,
+        limit: usize,
+        label: &'static str,
+    ) -> Result<&'a [u8]> {
+        let length = self.u32(label)? as usize;
+        if length > limit {
+            bail!("{label} length {length} exceeds limit {limit}");
+        }
+        self.take(length, label)
+    }
+
+    fn bool_u32(&mut self, label: &'static str) -> Result<bool> {
+        match self.u32(label)? {
+            0 => Ok(false),
+            1 => Ok(true),
+            value => bail!("{label} has non-boolean value {value}"),
+        }
+    }
+
+    fn fstring(&mut self, label: &'static str) -> Result<()> {
+        let length = self.i32(label)?;
+        let units = if length < 0 {
+            length
+                .checked_abs()
+                .with_context(|| format!("{label} length is i32::MIN"))? as usize
+        } else {
+            length as usize
+        };
+        if units > MAX_PREFLIGHT_NAME_BYTES {
+            bail!("{label} length {units} exceeds limit {MAX_PREFLIGHT_NAME_BYTES}");
+        }
+        self.take(
+            units
+                .checked_mul(if length < 0 { 2 } else { 1 })
+                .with_context(|| format!("{label} byte count overflow"))?,
+            label,
+        )?;
+        Ok(())
     }
 }
 
