@@ -14,6 +14,10 @@ const _maxAuthoringStoryMutationJsonBytes = 20 * 1024 * 1024;
 const _maxAuthoringStoryCatalogJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringStoryCatalogNpcs = 2;
 const _maxAuthoringStoryCatalogQuestParents = 1;
+const _maxAuthoringStoryInventoryJsonBytes = 24 * 1024 * 1024;
+const _maxAuthoringStoryInventoryEntries = 100000;
+const _maxAuthoringStoryInventoryEntryBytes = 512;
+const _maxAuthoringStoryInventoryTotalBytes = 16 * 1024 * 1024;
 // This one FFI command deliberately stays within signed 64-bit JSON integers. A base at this
 // maximum can advance once to `_maxAuthoringStoryAppliedRevision` without becoming a double.
 const _maxAuthoringStoryBaseRevision = 0x7ffffffffffffffe;
@@ -242,6 +246,35 @@ class ModFfi {
       bindsCache: bindsCache,
     );
     return authoringStoryCatalogV1Read(catalogJson: built.catalogJson);
+  }
+
+  /// Build a sealed base-game-only collision inventory without writing or launching the game.
+  Future<AuthoringStoryInventoryBuildResult> authoringStoryInventoryV1Build({
+    required String executable,
+    required String shippingCache,
+    required String bindsCache,
+  }) async {
+    _authoringStoryCatalogPath(executable, 'executable');
+    _authoringStoryCatalogPath(shippingCache, 'shippingCache');
+    _authoringStoryCatalogPath(bindsCache, 'bindsCache');
+    const command = 'authoring_story_inventory_v1_build';
+    _authoringStoryCatalogBuildEnvelopePreflight(
+      command,
+      executable,
+      shippingCache,
+      bindsCache,
+    );
+    final response = await _call(command, {
+      'executable': executable,
+      'shipping_cache': shippingCache,
+      'binds_cache': bindsCache,
+    });
+    return AuthoringStoryInventoryBuildResult._fromJson(
+      response,
+      executable: executable,
+      shippingCache: shippingCache,
+      bindsCache: bindsCache,
+    );
   }
 
   /// Validate and preview one bounded logical-NPC clone entirely in memory.
@@ -2261,12 +2294,22 @@ enum AuthoringStoryCatalogQuestParentQualification { curatedDefaultsVerified }
 
 enum AuthoringStoryCatalogCollisionStatus { inventoryUnavailable }
 
+enum AuthoringStoryInventoryCoverage { baseGameOnly }
+
+enum AuthoringStoryInventoryRuntimeQualification { runtimeUnqualified }
+
+enum AuthoringStoryInventoryPublicationStatus { notSupported }
+
 final _authoringStoryCatalogIdPattern = RegExp(r'^[a-z0-9][a-z0-9._:-]*$');
 final _authoringStoryCatalogAliasPattern = RegExp(r'^Catalog_[0-9a-f]{64}$');
 const _authoringStoryCatalogSelectorDomain =
     'gore-story-catalog.authoring-selector-v1\u0000';
 const _authoringStoryCatalogBuildBindingDomain =
     'gore-story-catalog.authoring-build-v1.request-binding\u0000';
+const _authoringStoryInventoryBuildBindingDomain =
+    'gore-story-inventory.authoring-build-v1.request-binding\u0000';
+const _authoringStoryInventoryCatalogLayer =
+    'base-game.g1r.scripts.inventory.v1';
 
 final class AuthoringStoryCatalogBuildResult {
   const AuthoringStoryCatalogBuildResult._({
@@ -2383,6 +2426,284 @@ final class AuthoringStoryCatalogBuildResult {
       catalogJson: catalogJson,
       generation: generation,
       catalogSeal: catalogSeal,
+    );
+  }
+}
+
+/// Closed projection of one native, sealed base-game collision-inventory artifact.
+///
+/// This remains runtime-unqualified and is not a resolved-loadout capability. In particular,
+/// merely obtaining this DTO does not enable Quest creation.
+final class AuthoringStoryInventoryBuildResult {
+  const AuthoringStoryInventoryBuildResult._({
+    required this.requestBindingSha256,
+    required this.inventoryJson,
+    required this.generation,
+    required this.storyCatalogSeal,
+    required this.sourcePairSeal,
+    required this.payloadSeal,
+    required this.catalogLayer,
+    required this.coverage,
+    required this.runtimeQualification,
+    required this.publicationStatus,
+    required this.modules,
+    required this.relativePaths,
+    required this.symbols,
+  });
+
+  final String requestBindingSha256;
+  final String inventoryJson;
+  final AuthoringStoryCatalogGeneration generation;
+  final AuthoringDraftContentSeal storyCatalogSeal;
+  final AuthoringDraftContentSeal sourcePairSeal;
+  final AuthoringDraftContentSeal payloadSeal;
+  final String catalogLayer;
+  final AuthoringStoryInventoryCoverage coverage;
+  final AuthoringStoryInventoryRuntimeQualification runtimeQualification;
+  final AuthoringStoryInventoryPublicationStatus publicationStatus;
+  final List<String> modules;
+  final List<String> relativePaths;
+  final List<String> symbols;
+
+  factory AuthoringStoryInventoryBuildResult._fromJson(
+    Map<String, Object?> json, {
+    required String executable,
+    required String shippingCache,
+    required String bindsCache,
+  }) {
+    _authoringExactFields(json, const {
+      'ok',
+      'request_binding_sha256',
+      'inventory_json',
+      'generation',
+      'story_catalog_seal',
+      'source_pair_seal',
+      'payload_seal',
+      'catalog_layer',
+      'coverage',
+      'runtime_qualification',
+      'publication_status',
+    }, 'Story inventory build response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring Story inventory build response is not ok',
+      );
+    }
+    final requestBindingSha256 = _authoringRequiredString(
+      json,
+      'request_binding_sha256',
+      maxBytes: 64,
+    );
+    final expectedBinding = _authoringStoryInventoryBuildBindingSha256(
+      executable,
+      shippingCache,
+      bindsCache,
+    );
+    if (!_authoringSha256Pattern.hasMatch(requestBindingSha256) ||
+        requestBindingSha256 != expectedBinding) {
+      throw const FormatException(
+        'authoring Story inventory build response is not bound to its exact paths',
+      );
+    }
+
+    final inventoryJson = _authoringRequiredString(
+      json,
+      'inventory_json',
+      maxBytes: _maxAuthoringStoryInventoryJsonBytes,
+    );
+    final rawArtifact = _authoringDecodeDuplicateSafeObject(
+      inventoryJson,
+      'Story inventory build result',
+    );
+    _authoringExactFields(rawArtifact, const {
+      'format',
+      'schema_revision',
+      'inventory',
+      'payload_seal',
+    }, 'Story inventory build result');
+    if (rawArtifact['format'] != 'story_script_collision_inventory') {
+      throw const FormatException(
+        'authoring Story inventory build result has an unsupported format',
+      );
+    }
+    _authoringRequiredInt(rawArtifact, 'schema_revision', min: 1, max: 1);
+    final rawPayload = _authoringRequiredObject(
+      rawArtifact['inventory'],
+      'Story inventory payload',
+    );
+    _authoringExactFields(rawPayload, const {
+      'generation',
+      'story_catalog_seal',
+      'catalog_layer',
+      'coverage',
+      'runtime_qualification',
+      'publication_status',
+      'source',
+      'modules',
+      'relative_paths',
+      'symbols',
+    }, 'Story inventory payload');
+
+    // Bound every attacker-controlled collision entry before re-encoding or hashing the complete
+    // payload. This keeps a near-limit outer JSON from causing a second unbounded materialization
+    // before the stricter inventory count/per-entry/aggregate limits have been enforced.
+    final entryLimits = _AuthoringStoryInventoryEntryLimits();
+    final modules = entryLimits.decode(rawPayload['modules'], 'modules');
+    final relativePaths = entryLimits.decode(
+      rawPayload['relative_paths'],
+      'relative_paths',
+    );
+    final symbols = entryLimits.decode(rawPayload['symbols'], 'symbols');
+
+    if (jsonEncode(rawArtifact) != inventoryJson) {
+      throw const FormatException(
+        'authoring Story inventory build result is not canonical JSON',
+      );
+    }
+
+    final generation = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        json['generation'],
+        'Story inventory build generation',
+      ),
+    );
+    final rawGeneration = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        rawPayload['generation'],
+        'Story inventory raw generation',
+      ),
+    );
+    if (!_authoringStoryCatalogSameGeneration(generation, rawGeneration)) {
+      throw const FormatException(
+        'authoring Story inventory generation disagrees with its artifact',
+      );
+    }
+
+    final storyCatalogSeal = _authoringStoryCatalogSeal(
+      json['story_catalog_seal'],
+      'inventory story_catalog_seal',
+    );
+    final rawStoryCatalogSeal = _authoringStoryCatalogSeal(
+      rawPayload['story_catalog_seal'],
+      'raw inventory story_catalog_seal',
+    );
+    final sourcePairSeal = _authoringStoryCatalogSeal(
+      json['source_pair_seal'],
+      'inventory source_pair_seal',
+    );
+    final payloadSeal = _authoringStoryCatalogSeal(
+      json['payload_seal'],
+      'inventory payload_seal',
+    );
+    final rawPayloadSeal = _authoringStoryCatalogSeal(
+      rawArtifact['payload_seal'],
+      'raw inventory payload_seal',
+    );
+    if (!_authoringStoryCatalogSameSeal(
+          storyCatalogSeal,
+          rawStoryCatalogSeal,
+        ) ||
+        !_authoringStoryCatalogSameSeal(payloadSeal, rawPayloadSeal)) {
+      throw const FormatException(
+        'authoring Story inventory response seals disagree with its artifact',
+      );
+    }
+
+    final source = _authoringRequiredObject(
+      rawPayload['source'],
+      'Story inventory source',
+    );
+    _authoringExactFields(source, const {
+      'shipping_cache',
+      'binds_cache',
+      'source_pair_seal',
+    }, 'Story inventory source');
+    final sourceShipping = _authoringStoryCatalogSeal(
+      source['shipping_cache'],
+      'inventory source.shipping_cache',
+    );
+    final sourceBinds = _authoringStoryCatalogSeal(
+      source['binds_cache'],
+      'inventory source.binds_cache',
+    );
+    final rawSourcePair = _authoringStoryCatalogSeal(
+      source['source_pair_seal'],
+      'raw inventory source_pair_seal',
+    );
+    if (!_authoringStoryCatalogSameSeal(
+          sourceShipping,
+          generation.shippingCache,
+        ) ||
+        !_authoringStoryCatalogSameSeal(sourceBinds, generation.bindsCache) ||
+        !_authoringStoryCatalogSameSeal(sourcePairSeal, rawSourcePair) ||
+        sourcePairSeal.byteLength !=
+            generation.shippingCache.byteLength +
+                generation.bindsCache.byteLength) {
+      throw const FormatException(
+        'authoring Story inventory source provenance is inconsistent',
+      );
+    }
+
+    final payloadBytes = utf8.encode(jsonEncode(rawPayload));
+    if (payloadSeal.byteLength != payloadBytes.length ||
+        payloadSeal.sha256 != crypto.sha256.convert(payloadBytes).toString()) {
+      throw const FormatException(
+        'authoring Story inventory payload seal is invalid',
+      );
+    }
+
+    final catalogLayer = _authoringRequiredString(
+      rawPayload,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    if (catalogLayer != _authoringStoryInventoryCatalogLayer ||
+        json['catalog_layer'] != catalogLayer) {
+      throw const FormatException(
+        'authoring Story inventory layer is not the base-game inventory layer',
+      );
+    }
+    final coverage = switch (rawPayload['coverage']) {
+      'base_game_only' => AuthoringStoryInventoryCoverage.baseGameOnly,
+      _ => throw const FormatException(
+        'authoring Story inventory coverage is unsupported',
+      ),
+    };
+    final runtimeQualification = switch (rawPayload['runtime_qualification']) {
+      'runtime_unqualified' =>
+        AuthoringStoryInventoryRuntimeQualification.runtimeUnqualified,
+      _ => throw const FormatException(
+        'authoring Story inventory runtime qualification is unsupported',
+      ),
+    };
+    final publicationStatus = switch (rawPayload['publication_status']) {
+      'not_supported' => AuthoringStoryInventoryPublicationStatus.notSupported,
+      _ => throw const FormatException(
+        'authoring Story inventory publication status is unsupported',
+      ),
+    };
+    if (json['coverage'] != 'base_game_only' ||
+        json['runtime_qualification'] != 'runtime_unqualified' ||
+        json['publication_status'] != 'not_supported') {
+      throw const FormatException(
+        'authoring Story inventory response overstates artifact capabilities',
+      );
+    }
+
+    return AuthoringStoryInventoryBuildResult._(
+      requestBindingSha256: requestBindingSha256,
+      inventoryJson: inventoryJson,
+      generation: generation,
+      storyCatalogSeal: storyCatalogSeal,
+      sourcePairSeal: sourcePairSeal,
+      payloadSeal: payloadSeal,
+      catalogLayer: catalogLayer,
+      coverage: coverage,
+      runtimeQualification: runtimeQualification,
+      publicationStatus: publicationStatus,
+      modules: modules,
+      relativePaths: relativePaths,
+      symbols: symbols,
     );
   }
 }
@@ -3067,6 +3388,50 @@ void _authoringStoryCatalogRequireSortedIds(
   }
 }
 
+final class _AuthoringStoryInventoryEntryLimits {
+  int _count = 0;
+  int _bytes = 0;
+
+  List<String> decode(Object? raw, String context) {
+    if (raw is! List ||
+        raw.length > _maxAuthoringStoryInventoryEntries - _count) {
+      throw FormatException(
+        'authoring Story inventory $context exceeds its entry limit',
+      );
+    }
+    final entries = <String>[];
+    String? previous;
+    for (var index = 0; index < raw.length; index++) {
+      final value = raw[index];
+      if (value is! String ||
+          value.isEmpty ||
+          value.length > _maxAuthoringStoryInventoryEntryBytes ||
+          value.codeUnits.any(
+            (unit) =>
+                unit > 0x7f ||
+                unit <= 0x1f ||
+                unit == 0x7f ||
+                (unit >= 0x41 && unit <= 0x5a),
+          ) ||
+          (previous != null && previous.compareTo(value) >= 0)) {
+        throw FormatException(
+          'authoring Story inventory $context entry $index is invalid',
+        );
+      }
+      if (value.length > _maxAuthoringStoryInventoryTotalBytes - _bytes) {
+        throw const FormatException(
+          'authoring Story inventory entries exceed their aggregate byte limit',
+        );
+      }
+      _bytes += value.length;
+      previous = value;
+      entries.add(value);
+    }
+    _count += entries.length;
+    return List.unmodifiable(entries);
+  }
+}
+
 AuthoringDraftContentSeal _authoringStoryCatalogSeal(
   Object? raw,
   String context,
@@ -3133,6 +3498,26 @@ String _authoringStoryCatalogBuildBindingSha256(
   final output = _AuthoringDigestCollector();
   final input = crypto.sha256.startChunkedConversion(output);
   input.add(utf8.encode(_authoringStoryCatalogBuildBindingDomain));
+  for (final value in <String>[executable, shippingCache, bindsCache]) {
+    final bytes = utf8.encode(value);
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+    input
+      ..add(length)
+      ..add(bytes);
+  }
+  input.close();
+  return output.value.toString();
+}
+
+String _authoringStoryInventoryBuildBindingSha256(
+  String executable,
+  String shippingCache,
+  String bindsCache,
+) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryInventoryBuildBindingDomain));
   for (final value in <String>[executable, shippingCache, bindsCache]) {
     final bytes = utf8.encode(value);
     final length = Uint8List(8);
