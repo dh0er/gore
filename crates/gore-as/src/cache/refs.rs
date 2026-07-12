@@ -882,6 +882,36 @@ impl RefResolver {
     pub fn static_name_count(&self) -> usize {
         self.static_names.len()
     }
+
+    /// Conservative bare names carried only by the Shipping cache tail tables.
+    ///
+    /// This intentionally collapses declaration scopes for the offline Quest collision inventory.
+    /// String-literal globals are excluded because their `Name` is payload text, not a symbol.
+    pub(super) fn collision_names(&self) -> impl Iterator<Item = &str> {
+        self.type_names
+            .iter()
+            .map(String::as_str)
+            .chain(self.func_by_ptr.values().map(String::as_str))
+            .chain(
+                self.global_by_ptr
+                    .iter()
+                    .filter(|(pointer, _)| !self.global_is_string.contains(pointer))
+                    .map(|(_, name)| name.as_str()),
+            )
+            .chain(self.prop_by_key.values().map(String::as_str))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_collision_names(names: &[&str]) -> Self {
+        let mut resolver = Self::default();
+        for (index, name) in names.iter().enumerate() {
+            resolver.type_names.insert((*name).to_owned());
+            resolver
+                .type_by_ptr
+                .insert(index as i64 + 1, (*name).to_owned());
+        }
+        resolver
+    }
     /// Composed CONTAINER type of a NATIVE class's field (batch-25e,
     /// specs/batch23-nomatch.md E; precedent: KNOWN_NATIVE_ARITY). The script cache stores no
     /// value types for native-class fields, so `cast_container_args` could never derive the

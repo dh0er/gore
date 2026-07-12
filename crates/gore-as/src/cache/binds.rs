@@ -265,6 +265,94 @@ impl NativeApi {
     pub fn class_name_count(&self) -> usize {
         self.by_class.len()
     }
+
+    /// Every native callable leaf found by the high-coverage printable-signature scan.
+    ///
+    /// Kept crate-private because bare callable names deliberately collapse method, free-function,
+    /// namespace, and overload domains. The collision-inventory collector uses that conservative
+    /// union; normal decompiler callers should continue to use the scoped lookup APIs above.
+    #[cfg(test)]
+    pub(super) fn collision_callable_names(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+}
+
+pub(super) enum CollisionNameVisitError<E> {
+    InvalidBinds,
+    Visitor(E),
+}
+
+/// Visit every native type/callable collision candidate without materializing a candidate table.
+///
+/// Callers must first bind `data` to a trusted generation seal. The format's variable-width
+/// metadata slots do not admit an exact generic record walk, so the seal supplies exact byte
+/// identity while this two-pass scan supplies a structural floor and deterministic candidate
+/// order. Conflicting Unreal path aliases remain collision names rather than being discarded.
+pub(super) fn visit_collision_names<E>(
+    data: &[u8],
+    mut visitor: impl FnMut(&str) -> Result<(), E>,
+) -> Result<(), CollisionNameVisitError<E>> {
+    let declared = read_u32(data, 0).ok_or(CollisionNameVisitError::InvalidBinds)? as usize;
+    if declared == 0 || declared > 200_000 {
+        return Err(CollisionNameVisitError::InvalidBinds);
+    }
+
+    let mut strong_headers = 0usize;
+    let mut first_header = None;
+    for offset in 4..data.len().saturating_sub(8) {
+        if strong_record_type_name(data, offset).is_some() {
+            first_header.get_or_insert(offset);
+            strong_headers = strong_headers.saturating_add(1);
+        }
+    }
+    if first_header != Some(4) || strong_headers < declared {
+        return Err(CollisionNameVisitError::InvalidBinds);
+    }
+
+    for offset in 4..data.len().saturating_sub(8) {
+        if let Some(name) = strong_record_type_name(data, offset) {
+            visitor(name).map_err(CollisionNameVisitError::Visitor)?;
+        }
+    }
+
+    let mut offset = 0usize;
+    while offset < data.len() {
+        if !(0x20..0x7f).contains(&data[offset]) {
+            offset += 1;
+            continue;
+        }
+        let start = offset;
+        while offset < data.len() && (0x20..0x7f).contains(&data[offset]) {
+            offset += 1;
+        }
+        if offset - start < 4 {
+            continue;
+        }
+        let run = &data[start..offset];
+        if !run.contains(&b'(') || !run.contains(&b')') {
+            continue;
+        }
+        let signature =
+            std::str::from_utf8(run).map_err(|_| CollisionNameVisitError::InvalidBinds)?;
+        if let (Some(name), Some(_)) = (name_before_paren(signature), arity_of(signature)) {
+            visitor(name).map_err(CollisionNameVisitError::Visitor)?;
+        }
+    }
+    Ok(())
+}
+
+fn strong_record_type_name(data: &[u8], offset: usize) -> Option<&str> {
+    let type_len = read_u32(data, offset)? as usize;
+    if !(2..=256).contains(&type_len)
+        || !is_cstr(data, offset.checked_add(4)?, type_len)
+        || !is_script_path(data, offset.checked_add(4)?.checked_add(type_len)?)
+    {
+        return None;
+    }
+    let start = offset.checked_add(4)?;
+    let end = start.checked_add(type_len)?.checked_sub(1)?;
+    let name = std::str::from_utf8(data.get(start..end)?).ok()?;
+    (!name.is_empty()).then_some(name)
 }
 
 fn verified_default_field_types(data: &[u8]) -> HashMap<(String, String), String> {

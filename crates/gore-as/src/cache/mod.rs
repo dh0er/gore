@@ -3,6 +3,7 @@
 pub mod binds;
 pub mod bytediff;
 pub mod cfg;
+pub mod collision_inventory;
 pub mod decompile;
 pub mod default_ancestry;
 pub(crate) mod default_class_hierarchy;

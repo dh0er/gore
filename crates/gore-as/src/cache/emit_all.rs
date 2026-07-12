@@ -1025,6 +1025,25 @@ impl<'a> PreparedEmit<'a> {
             .rewrite_emitted_module(module_index, &source))
     }
 
+    /// Normalized module output paths validated by the exact full-tree compile layout rules.
+    pub(super) fn collision_relative_paths(&self) -> impl Iterator<Item = &str> {
+        self.layout.iter().map(|layout| layout.relative.as_str())
+    }
+
+    /// Raw collision-bound leaves plus every deterministic final declaration rename.
+    pub(super) fn collision_rename_names(&self) -> impl Iterator<Item = &str> {
+        self.rename_plan
+            .original_names
+            .iter()
+            .map(String::as_str)
+            .chain(
+                self.rename_plan
+                    .per_module
+                    .iter()
+                    .flat_map(|renames| renames.values().map(String::as_str)),
+            )
+    }
+
     /// Validate and rewrite an authored overlay against this prepared cache. Unqualified calls or
     /// handles to a collision-bound name fail closed; only explicit `receiver.Name` access is safe.
     pub fn prepare_overlay(
