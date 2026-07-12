@@ -106,8 +106,11 @@ requires reconstructing its body manually or first extending the decompiler.
    `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
    (including parsed-kind proof for script enums),
    a v4 `(module, class, field_owner, field, value_type, ancestry_profile)` identity with proven target-to-owner ancestry, raw
-   CAS, one terminal `RET`, and full-cache postconditions. Complex expressions, structs,
-   containers, and gameplay-tag maps remain unsupported; see
+   CAS, one terminal `RET`, and full-cache postconditions. Complex expressions, structs, and
+   containers remain unsupported by that scalar workflow. Separately, `gore as tag-map-sites` and
+   `patch-tag-map` can inspect and copy-on-write patch only an already-present entry in the sealed
+   native `GameplayTag`-to-`float32` map shape; they cannot add a key or map, resize bytecode, or
+   author arbitrary map defaults. See
    [`docs/angelscript-default-patching.md`](../../docs/angelscript-default-patching.md). A faithful
    source representation is still required before arbitrary class-default authoring can be
    claimed; new modules may continue to use explicit defaults through `--op add`.

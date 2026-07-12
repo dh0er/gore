@@ -94,6 +94,11 @@ pub enum AsCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Sealed native GameplayTag-map inspection and patching commands. Both require exactly
+    /// matching bounded Binds/USMAP evidence, discovered by game layout or GORE_AS_BINDS and
+    /// GORE_AS_USMAP; missing, ambiguous, or mismatched evidence fails closed.
+    #[command(flatten)]
+    TagMap(TagMapCmd),
     /// Offline-check whether the optional diagnostics hook has one safe AOB match. Does not launch
     /// the game or change the installation.
     DiagnosticsCheck {
@@ -276,10 +281,68 @@ pub enum AsCmd {
     },
 }
 
+#[derive(Subcommand)]
+pub enum TagMapCmd {
+    /// List sealed native GameplayTag-to-float32 map-entry defaults.
+    ///
+    /// Requires exact bounded Binds.Cache and USMAP evidence. Discovery uses the game layout or
+    /// GORE_AS_BINDS and GORE_AS_USMAP; missing, ambiguous, or mismatched evidence fails closed.
+    TagMapSites {
+        /// Regular cache to inspect (maximum 512 MiB). Requires exact Binds.Cache and USMAP via
+        /// game layout or GORE_AS_BINDS/GORE_AS_USMAP; missing/ambiguous/mismatched evidence fails
+        /// closed.
+        cache: PathBuf,
+        /// Exact module-name filter.
+        #[arg(long)]
+        module: Option<String>,
+        /// Exact class-name filter.
+        #[arg(long)]
+        class: Option<String>,
+        /// Exact field-name filter.
+        #[arg(long)]
+        field: Option<String>,
+        /// Exact GameplayTag global name filter.
+        #[arg(long)]
+        tag: Option<String>,
+        /// Emit one machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy-on-write patch one sealed GameplayTag-to-float32 map entry using semantic CAS.
+    ///
+    /// Requires exact bounded Binds.Cache and USMAP evidence. Discovery uses the game layout or
+    /// GORE_AS_BINDS and GORE_AS_USMAP; missing, ambiguous, or mismatched evidence fails closed.
+    PatchTagMap {
+        /// Regular cache to copy-on-write patch (maximum 512 MiB). Requires exact Binds.Cache and
+        /// USMAP via game layout or GORE_AS_BINDS/GORE_AS_USMAP; missing/ambiguous/mismatched
+        /// evidence fails closed.
+        cache: PathBuf,
+        /// Strict selector JSON extracted from `.sites[N].selector` in `tag-map-sites --json`.
+        #[arg(long, value_name = "SELECTOR.json")]
+        selector: PathBuf,
+        /// Fresh current raw IEEE-754 float32 little-endian bytes: exactly 8 lowercase hex chars.
+        #[arg(long, value_name = "HEX")]
+        expected_hex: String,
+        /// Replacement raw IEEE-754 float32 little-endian bytes: exactly 8 lowercase hex chars.
+        #[arg(long, value_name = "HEX")]
+        replacement_hex: String,
+        /// New full cache path. Existing paths are never overwritten.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Emit one machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 const DEFAULT_SELECTOR_MAX_BYTES: u64 = 64 * 1024;
 const DEFAULT_USMAP_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const DEFAULT_BINDS_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const TAG_MAP_CACHE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES: usize = 1_024;
 const DEFAULT_USMAP_MAX_CANDIDATES: usize = 16;
+const TAG_MAP_SITES_REPORT_FORMAT: &str = "gore-as-tag-map-sites-v1";
+const TAG_MAP_PATCH_REPORT_FORMAT: &str = "gore-as-tag-map-patch-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -363,6 +426,122 @@ impl DefaultSelectorJson {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct TagMapSelectorJson {
+    format: String,
+    kind: String,
+    module: String,
+    class: String,
+    field_owner: String,
+    field: String,
+    tag_module: String,
+    tag_namespace: String,
+    tag: String,
+    tag_is_string: bool,
+    value_type: String,
+    map_proof_id: String,
+    ancestry_profile: String,
+}
+
+impl TagMapSelectorJson {
+    fn from_core(selector: &gore_as::cache::native_tag_map::NativeTagMapSelector) -> Self {
+        Self {
+            format: selector.format.clone(),
+            kind: selector.kind.clone(),
+            module: selector.module.clone(),
+            class: selector.class.clone(),
+            field_owner: selector.field_owner.clone(),
+            field: selector.field.clone(),
+            tag_module: selector.tag_module.clone(),
+            tag_namespace: selector.tag_namespace.clone(),
+            tag: selector.tag.clone(),
+            tag_is_string: selector.tag_is_string,
+            value_type: selector.value_type.clone(),
+            map_proof_id: selector.map_proof_id.clone(),
+            ancestry_profile: selector.ancestry_profile.clone(),
+        }
+    }
+
+    fn into_core(self) -> Result<gore_as::cache::native_tag_map::NativeTagMapSelector> {
+        use gore_as::cache::default_ancestry::{
+            DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID, DEFAULT_NATIVE_ANCESTRY_PROFILE_ID,
+        };
+        use gore_as::cache::native_tag_map::{
+            NATIVE_TAG_MAP_SELECTOR_FORMAT, NATIVE_TAG_MAP_SELECTOR_KIND, NATIVE_TAG_MAP_VALUE_TYPE,
+        };
+        if self.format != NATIVE_TAG_MAP_SELECTOR_FORMAT {
+            bail!(
+                "AS_TAG_MAP_SELECTOR: unsupported format {:?}; expected {:?}",
+                self.format,
+                NATIVE_TAG_MAP_SELECTOR_FORMAT
+            );
+        }
+        if self.kind != NATIVE_TAG_MAP_SELECTOR_KIND {
+            bail!(
+                "AS_TAG_MAP_SELECTOR: unsupported kind {:?}; expected {:?}",
+                self.kind,
+                NATIVE_TAG_MAP_SELECTOR_KIND
+            );
+        }
+        if self.value_type != NATIVE_TAG_MAP_VALUE_TYPE {
+            bail!(
+                "AS_TAG_MAP_SELECTOR: unsupported value_type {:?}; expected {:?}",
+                self.value_type,
+                NATIVE_TAG_MAP_VALUE_TYPE
+            );
+        }
+        for (name, value) in [
+            ("module", self.module.as_str()),
+            ("class", self.class.as_str()),
+            ("field_owner", self.field_owner.as_str()),
+            ("field", self.field.as_str()),
+            ("tag_namespace", self.tag_namespace.as_str()),
+            ("tag", self.tag.as_str()),
+            ("map_proof_id", self.map_proof_id.as_str()),
+            ("ancestry_profile", self.ancestry_profile.as_str()),
+        ] {
+            if value.is_empty() || value.trim() != value {
+                bail!("AS_TAG_MAP_SELECTOR: {name} must be nonempty and have no outer whitespace");
+            }
+        }
+        if !self.tag_module.is_empty() {
+            bail!("AS_TAG_MAP_SELECTOR: tag_module must be the empty string");
+        }
+        if self.tag_namespace != "GameplayTag" {
+            bail!("AS_TAG_MAP_SELECTOR: tag_namespace must be exactly \"GameplayTag\"");
+        }
+        if self.tag_is_string {
+            bail!("AS_TAG_MAP_SELECTOR: tag_is_string must be false");
+        }
+        if self.map_proof_id != DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID {
+            bail!(
+                "AS_TAG_MAP_SELECTOR: map_proof_id does not match the sealed GameplayTag-float32 map proof"
+            );
+        }
+        if self.ancestry_profile != DEFAULT_NATIVE_ANCESTRY_PROFILE_ID {
+            bail!(
+                "AS_TAG_MAP_SELECTOR: ancestry_profile does not match the sealed native ancestry profile"
+            );
+        }
+        Ok(gore_as::cache::native_tag_map::NativeTagMapSelector {
+            format: self.format,
+            kind: self.kind,
+            module: self.module,
+            class: self.class,
+            field_owner: self.field_owner,
+            field: self.field,
+            tag_module: self.tag_module,
+            tag_namespace: self.tag_namespace,
+            tag: self.tag,
+            tag_is_string: self.tag_is_string,
+            value_type: self.value_type,
+            map_proof_id: self.map_proof_id,
+            ancestry_profile: self.ancestry_profile,
+        })
+    }
+}
+
 #[derive(Serialize)]
 struct DefaultSitesJson<'a> {
     format: &'static str,
@@ -374,6 +553,13 @@ struct DefaultSitesJson<'a> {
 
 #[derive(Serialize)]
 struct CacheProofJson {
+    path: String,
+    length: usize,
+    sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EvidenceFileProofJson {
     path: String,
     length: usize,
     sha256: String,
@@ -427,27 +613,142 @@ struct DefaultPatchJson<'a> {
     provenance: DefaultProvenanceJson<'a>,
 }
 
+#[derive(Serialize)]
+struct TagMapFingerprintJson {
+    format: &'static str,
+    sha256: String,
+    scalar_operand_count: usize,
+    tag_operand_count: usize,
+    ancestry_profile: String,
+    map_proof_id: String,
+}
+
+#[derive(Serialize)]
+struct TagMapStatsJson {
+    init_functions: usize,
+    branched_init_functions: usize,
+    raw_windows: usize,
+    reference_proven_windows: usize,
+    native_field_proven_windows: usize,
+    missing_owner_types: usize,
+    missing_properties: usize,
+    property_owner_mismatches: usize,
+    missing_tag_globals: usize,
+    non_gameplay_tag_globals: usize,
+    missing_callees: usize,
+    non_exact_tmap_add_callees: usize,
+    non_native_owner_identities: usize,
+    unsealed_native_fields: usize,
+    missing_target_classes: usize,
+    target_ancestry_mismatches: usize,
+    ambiguous_selectors: usize,
+}
+
+#[derive(Serialize)]
+struct TagMapProvenanceJson<'a> {
+    function: &'a str,
+    context_sha256: &'a str,
+    operand_offset: usize,
+    length: usize,
+    field_schema_proof_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct TagMapSiteJson<'a> {
+    selector: TagMapSelectorJson,
+    display_value: String,
+    encoding: &'static str,
+    expected_hex: String,
+    provenance: TagMapProvenanceJson<'a>,
+}
+
+#[derive(Serialize)]
+struct TagMapSitesJson<'a> {
+    format: &'static str,
+    cache: CacheProofJson,
+    cache_guid: String,
+    fingerprint: TagMapFingerprintJson,
+    binds: EvidenceFileProofJson,
+    usmap: EvidenceFileProofJson,
+    site_count: usize,
+    stats: TagMapStatsJson,
+    sites: Vec<TagMapSiteJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct TagMapPatchJson<'a> {
+    format: &'static str,
+    status: &'static str,
+    selector: TagMapSelectorJson,
+    input: CacheProofJson,
+    output: CacheProofJson,
+    cache_guid: String,
+    fingerprint: TagMapFingerprintJson,
+    binds: EvidenceFileProofJson,
+    usmap: EvidenceFileProofJson,
+    expected_hex: String,
+    replacement_hex: String,
+    provenance: TagMapProvenanceJson<'a>,
+}
+
 /// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
 /// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
 fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
-    let path = match std::env::var_os("GORE_AS_BINDS") {
-        Some(p) => PathBuf::from(p),
+    load_native_api_with_proof(cache_file).map(|(api, _)| api)
+}
+
+fn native_api_path(cache_file: &Path) -> Option<PathBuf> {
+    Some(match std::env::var_os("GORE_AS_BINDS") {
+        Some(path) => PathBuf::from(path),
         None => cache_file.parent()?.join("Binds.Cache"),
+    })
+}
+
+fn load_native_api_with_proof(
+    cache_file: &Path,
+) -> Option<(gore_as::cache::binds::NativeApi, EvidenceFileProofJson)> {
+    let path = native_api_path(cache_file)?;
+    let bytes = match read_regular_bounded(&path, DEFAULT_BINDS_MAX_BYTES, "AS_DEFAULT_BINDS") {
+        Ok(bytes) => bytes,
+        Err(error)
+            if error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return None;
+        }
+        Err(error) => {
+            eprintln!(
+                "warning: failed to read bounded {}: {error:#}",
+                path.display()
+            );
+            return None;
+        }
     };
-    if !path.exists() {
-        return None;
+    let proof = evidence_file_proof(&path, &bytes);
+    match gore_as::cache::binds::NativeApi::from_bytes(&bytes) {
+        Some(api) => {
+            eprintln!("loaded native arities from {}", path.display());
+            Some((api, proof))
+        }
+        None => {
+            eprintln!("warning: failed to parse {}", path.display());
+            None
+        }
     }
-    let api = gore_as::cache::binds::NativeApi::load(&path);
-    match &api {
-        Some(_) => eprintln!("loaded native arities from {}", path.display()),
-        None => eprintln!("warning: failed to parse {}", path.display()),
-    }
-    api
 }
 
 struct DefaultMutationEvidence {
     native: Option<gore_as::cache::binds::NativeApi>,
     ancestry: Option<gore_as::cache::default_ancestry::DefaultNativeAncestry>,
+    binds: Option<EvidenceFileProofJson>,
+    usmap: Option<EvidenceFileProofJson>,
+}
+
+#[derive(Clone, Copy)]
+enum DefaultEvidencePolicy {
+    ScalarFallback,
+    RequiredTagMap,
 }
 
 /// Resolve USMAP candidates without trusting a Steam location or versioned filename. An explicit
@@ -480,7 +781,7 @@ fn default_usmap_candidates(
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("AS_DEFAULT_USMAP: enumerating {}", directory.display()))
+                .with_context(|| format!("AS_DEFAULT_USMAP: enumerating {}", directory.display()));
         }
     };
     let mut candidates = Vec::new();
@@ -526,46 +827,69 @@ fn default_usmap_candidates(
 }
 
 fn read_default_usmap(path: &Path) -> Result<Vec<u8>> {
+    read_regular_bounded(path, DEFAULT_USMAP_MAX_BYTES, "AS_DEFAULT_USMAP")
+}
+
+fn read_tag_map_cache(path: &Path) -> Result<Vec<u8>> {
+    read_regular_bounded(path, TAG_MAP_CACHE_MAX_BYTES, "AS_TAG_MAP_INPUT")
+}
+
+fn read_regular_bounded(path: &Path, limit: u64, label: &'static str) -> Result<Vec<u8>> {
     let file = std::fs::File::open(path)
-        .with_context(|| format!("AS_DEFAULT_USMAP: opening {}", path.display()))?;
+        .with_context(|| format!("{label}: opening {}", path.display()))?;
     let metadata = file
         .metadata()
-        .with_context(|| format!("AS_DEFAULT_USMAP: reading metadata for {}", path.display()))?;
+        .with_context(|| format!("{label}: reading metadata for {}", path.display()))?;
     if !metadata.is_file() {
-        bail!("AS_DEFAULT_USMAP: {} is not a regular file", path.display());
+        bail!("{label}: {} is not a regular file", path.display());
     }
-    if metadata.len() > DEFAULT_USMAP_MAX_BYTES {
+    if metadata.len() > limit {
         bail!(
-            "AS_DEFAULT_USMAP: {} is {} bytes; limit is {}",
+            "{label}: {} is {} bytes; limit is {}",
             path.display(),
             metadata.len(),
-            DEFAULT_USMAP_MAX_BYTES
+            limit
         );
     }
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.take(DEFAULT_USMAP_MAX_BYTES + 1)
+    file.take(limit + 1)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("AS_DEFAULT_USMAP: reading {}", path.display()))?;
-    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > DEFAULT_USMAP_MAX_BYTES {
+        .with_context(|| format!("{label}: reading {}", path.display()))?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > limit {
         bail!(
-            "AS_DEFAULT_USMAP: {} changed size while being read or exceeded the limit",
+            "{label}: {} changed size while being read or exceeded the limit",
             path.display()
         );
     }
     Ok(bytes)
 }
 
+fn evidence_file_proof(path: &Path, bytes: &[u8]) -> EvidenceFileProofJson {
+    EvidenceFileProofJson {
+        path: path.display().to_string(),
+        length: bytes.len(),
+        sha256: gore_as::cache::default_patch::encode_hex(&Sha256::digest(bytes)),
+    }
+}
+
 /// Load optional native mutation evidence. Every failure deliberately preserves the existing
 /// scalar-only path: the sealed Binds data may still prove direct native field types, while no
 /// native-grandparent ancestry is supplied.
-fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMutationEvidence {
-    let native = load_native_api(cache_file);
-    let Some(native_ref) = native.as_ref() else {
+fn load_default_mutation_evidence(
+    cache_file: &Path,
+    cache: &[u8],
+    policy: DefaultEvidencePolicy,
+) -> DefaultMutationEvidence {
+    let Some((loaded_native, binds)) = load_native_api_with_proof(cache_file) else {
         return DefaultMutationEvidence {
-            native,
+            native: None,
             ancestry: None,
+            binds: None,
+            usmap: None,
         };
     };
+    let native = Some(loaded_native);
+    let native_ref = native.as_ref().expect("just populated native evidence");
     let configured = std::env::var_os("GORE_AS_USMAP").map(PathBuf::from);
     let candidates = match default_usmap_candidates(cache_file, configured) {
         Ok(candidates) => candidates,
@@ -576,49 +900,91 @@ fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMut
     };
     let mut matches = Vec::new();
     for path in candidates {
-        let result = read_default_usmap(&path)
-            .and_then(|bytes| {
-                gore_asset::SchemaDb::from_usmap(&bytes)
-                    .map_err(anyhow::Error::from)
-                    .context("AS_DEFAULT_USMAP: parsing sealed schema map")
-            })
-            .and_then(|schemas| {
-                gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
-                    native_ref, cache, &schemas,
-                )
+        let result = (|| -> Result<_> {
+            let bytes = read_default_usmap(&path)?;
+            let proof = evidence_file_proof(&path, &bytes);
+            let schemas = gore_asset::SchemaDb::from_usmap(&bytes)
                 .map_err(anyhow::Error::from)
-                .context("AS_DEFAULT_ANCESTRY: validating cache/Binds/USMAP tuple")
-            });
+                .context("AS_DEFAULT_USMAP: parsing sealed schema map")?;
+            let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+                native_ref, cache, &schemas,
+            )
+            .map_err(anyhow::Error::from)
+            .context("AS_DEFAULT_ANCESTRY: validating cache/Binds/USMAP tuple")?;
+            Ok((profile, proof))
+        })();
         match result {
-            Ok(profile) => matches.push((path, profile)),
+            Ok((profile, proof)) => matches.push((path, profile, proof)),
             Err(error) => eprintln!(
                 "warning: {} is not usable native-default evidence: {error:#}",
                 path.display()
             ),
         }
     }
-    let ancestry = match matches.len() {
+    let (ancestry, usmap) = match matches.len() {
         1 => {
-            let (path, profile) = matches.pop().expect("one match");
+            let (path, profile, proof) = matches.pop().expect("one match");
             eprintln!(
                 "loaded sealed native-default ancestry {} from {}",
                 profile.profile_id(),
                 path.display()
             );
-            Some(profile)
+            (Some(profile), Some(proof))
         }
         0 => {
-            eprintln!("native-default ancestry unavailable; using strict scalar-only fallback");
-            None
+            match policy {
+                DefaultEvidencePolicy::ScalarFallback => eprintln!(
+                    "native-default ancestry unavailable; using strict scalar-only fallback"
+                ),
+                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
+                    "warning: sealed native-default ancestry required for tag-map operation but unavailable"
+                ),
+            }
+            (None, None)
         }
         count => {
-            eprintln!(
-                "warning: {count} sealed USMAP candidates matched; refusing ambiguous native-default ancestry"
-            );
-            None
+            match policy {
+                DefaultEvidencePolicy::ScalarFallback => eprintln!(
+                    "warning: {count} sealed USMAP candidates matched; refusing ambiguous native-default ancestry"
+                ),
+                DefaultEvidencePolicy::RequiredTagMap => eprintln!(
+                    "warning: {count} sealed USMAP candidates matched; tag-map operation requires exactly one"
+                ),
+            }
+            (None, None)
         }
     };
-    DefaultMutationEvidence { native, ancestry }
+    DefaultMutationEvidence {
+        native,
+        ancestry,
+        binds: Some(binds),
+        usmap,
+    }
+}
+
+struct RequiredTagMapEvidence {
+    ancestry: gore_as::cache::default_ancestry::DefaultNativeAncestry,
+    binds: EvidenceFileProofJson,
+    usmap: EvidenceFileProofJson,
+}
+
+fn load_required_tag_map_evidence(
+    cache_file: &Path,
+    cache: &[u8],
+) -> Result<RequiredTagMapEvidence> {
+    let evidence =
+        load_default_mutation_evidence(cache_file, cache, DefaultEvidencePolicy::RequiredTagMap);
+    Ok(RequiredTagMapEvidence {
+        ancestry: evidence.ancestry.context(
+            "AS_TAG_MAP_ANCESTRY: sealed cache/Binds/USMAP evidence is required; refusing fallback",
+        )?,
+        binds: evidence.binds.context(
+            "AS_TAG_MAP_BINDS: bounded sealed Binds evidence is required; refusing fallback",
+        )?,
+        usmap: evidence.usmap.context(
+            "AS_TAG_MAP_USMAP: bounded sealed USMAP evidence is required; refusing fallback",
+        )?,
+    })
 }
 
 fn default_provenance_json(
@@ -650,6 +1016,69 @@ fn default_site_json(site: &gore_as::cache::default_patch::DefaultSite) -> Defau
     }
 }
 
+fn tag_map_fingerprint_json(
+    report: &gore_as::cache::native_tag_map::NativeTagMapReport,
+) -> TagMapFingerprintJson {
+    TagMapFingerprintJson {
+        format: report.fingerprint_format(),
+        sha256: gore_as::cache::default_patch::encode_hex(&report.fingerprint_sha256()),
+        scalar_operand_count: report.scalar_operand_count(),
+        tag_operand_count: report.tag_operand_count(),
+        ancestry_profile: report.ancestry_profile_id().to_owned(),
+        map_proof_id: report.map_proof_id().to_owned(),
+    }
+}
+
+fn tag_map_stats_json(
+    stats: &gore_as::cache::native_tag_map::NativeTagMapStats,
+) -> TagMapStatsJson {
+    TagMapStatsJson {
+        init_functions: stats.init_functions(),
+        branched_init_functions: stats.branched_init_functions(),
+        raw_windows: stats.raw_windows(),
+        reference_proven_windows: stats.reference_proven_windows(),
+        native_field_proven_windows: stats.native_field_proven_windows(),
+        missing_owner_types: stats.missing_owner_types(),
+        missing_properties: stats.missing_properties(),
+        property_owner_mismatches: stats.property_owner_mismatches(),
+        missing_tag_globals: stats.missing_tag_globals(),
+        non_gameplay_tag_globals: stats.non_gameplay_tag_globals(),
+        missing_callees: stats.missing_callees(),
+        non_exact_tmap_add_callees: stats.non_exact_tmap_add_callees(),
+        non_native_owner_identities: stats.non_native_owner_identities(),
+        unsealed_native_fields: stats.unsealed_native_fields(),
+        missing_target_classes: stats.missing_target_classes(),
+        target_ancestry_mismatches: stats.target_ancestry_mismatches(),
+        ambiguous_selectors: stats.ambiguous_selectors(),
+    }
+}
+
+fn tag_map_provenance_json(
+    site: &gore_as::cache::native_tag_map::NativeTagMapSite,
+) -> TagMapProvenanceJson<'_> {
+    let range = site.operand_range();
+    TagMapProvenanceJson {
+        function: site.function(),
+        context_sha256: site.context_sha256(),
+        operand_offset: range.start,
+        length: range.len(),
+        field_schema_proof_id: site.field_schema_proof_id(),
+    }
+}
+
+fn tag_map_site_json(
+    site: &gore_as::cache::native_tag_map::NativeTagMapSite,
+) -> TagMapSiteJson<'_> {
+    let expected = site.expected();
+    TagMapSiteJson {
+        selector: TagMapSelectorJson::from_core(site.selector()),
+        display_value: f32::from_le_bytes(expected).to_string(),
+        encoding: "le_f32",
+        expected_hex: gore_as::cache::default_patch::encode_hex(&expected),
+        provenance: tag_map_provenance_json(site),
+    }
+}
+
 fn cache_proof(path: &Path, bytes: &[u8]) -> CacheProofJson {
     CacheProofJson {
         path: path.display().to_string(),
@@ -659,23 +1088,31 @@ fn cache_proof(path: &Path, bytes: &[u8]) -> CacheProofJson {
 }
 
 fn read_default_selector(path: &Path) -> Result<DefaultSelectorJson> {
+    read_bounded_selector(path, "AS_DEFAULT_SELECTOR")
+}
+
+fn read_tag_map_selector(path: &Path) -> Result<TagMapSelectorJson> {
+    read_bounded_selector(path, "AS_TAG_MAP_SELECTOR")
+}
+
+fn read_bounded_selector<T>(path: &Path, label: &'static str) -> Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
     let file = std::fs::File::open(path)
-        .with_context(|| format!("AS_DEFAULT_SELECTOR: opening {}", path.display()))?;
-    let metadata = file.metadata().with_context(|| {
-        format!(
-            "AS_DEFAULT_SELECTOR: reading metadata for {}",
-            path.display()
-        )
-    })?;
+        .with_context(|| format!("{label}: opening {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("{label}: reading metadata for {}", path.display()))?;
     if !metadata.is_file() {
         bail!(
-            "AS_DEFAULT_SELECTOR: selector is not a regular file: {}",
+            "{label}: selector is not a regular file: {}",
             path.display()
         );
     }
     if metadata.len() > DEFAULT_SELECTOR_MAX_BYTES {
         bail!(
-            "AS_DEFAULT_SELECTOR: selector is {} bytes; limit is {}",
+            "{label}: selector is {} bytes; limit is {}",
             metadata.len(),
             DEFAULT_SELECTOR_MAX_BYTES
         );
@@ -683,19 +1120,15 @@ fn read_default_selector(path: &Path) -> Result<DefaultSelectorJson> {
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.take(DEFAULT_SELECTOR_MAX_BYTES + 1)
         .read_to_end(&mut bytes)
-        .with_context(|| format!("AS_DEFAULT_SELECTOR: reading {}", path.display()))?;
-    if bytes.len() as u64 > DEFAULT_SELECTOR_MAX_BYTES {
+        .with_context(|| format!("{label}: reading {}", path.display()))?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > DEFAULT_SELECTOR_MAX_BYTES {
         bail!(
-            "AS_DEFAULT_SELECTOR: selector exceeded the {}-byte limit while reading",
-            DEFAULT_SELECTOR_MAX_BYTES
+            "{label}: selector changed size while reading or exceeded the {}-byte limit",
+            DEFAULT_SELECTOR_MAX_BYTES,
         );
     }
-    serde_json::from_slice(&bytes).with_context(|| {
-        format!(
-            "AS_DEFAULT_SELECTOR: parsing strict JSON from {}",
-            path.display()
-        )
-    })
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("{label}: parsing strict JSON from {}", path.display()))
 }
 
 fn decode_default_hex(value: &str, label: &'static str) -> Result<Vec<u8>> {
@@ -713,6 +1146,18 @@ fn decode_default_hex(value: &str, label: &'static str) -> Result<Vec<u8>> {
         bytes.push((high << 4) | low);
     }
     Ok(bytes)
+}
+
+fn decode_tag_map_hex(value: &str, label: &'static str) -> Result<[u8; 4]> {
+    if value.len() != 8
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        bail!("{label}: expected exactly 8 lowercase hexadecimal characters without 0x");
+    }
+    let bytes = decode_default_hex(value, label)?;
+    Ok(bytes.try_into().expect("validated tag-map hex width"))
 }
 
 fn hex_nibble(byte: u8) -> Option<u8> {
@@ -751,12 +1196,13 @@ fn publish_default_cache_noclobber(path: &Path, bytes: &[u8]) -> Result<Vec<u8>>
 
     // The receipt must prove what was actually published, not merely what was held in memory
     // before the rename. Reopen by the final name and independently check all three invariants.
-    let persisted = std::fs::read(path).with_context(|| {
-        format!(
-            "AS_DEFAULT_OUTPUT: reopening published cache {} for verification",
-            path.display()
-        )
-    })?;
+    let persisted = read_regular_bounded(path, bytes.len() as u64, "AS_DEFAULT_OUTPUT")
+        .with_context(|| {
+            format!(
+                "AS_DEFAULT_OUTPUT: reopening published cache {} for verification",
+                path.display()
+            )
+        })?;
     let expected_sha256 = Sha256::digest(bytes);
     let persisted_sha256 = Sha256::digest(&persisted);
     let length_matches = persisted.len() == bytes.len();
@@ -774,6 +1220,20 @@ fn publish_default_cache_noclobber(path: &Path, bytes: &[u8]) -> Result<Vec<u8>>
         );
     }
     Ok(persisted)
+}
+
+fn tag_map_post_publish_error(path: &Path, error: anyhow::Error) -> anyhow::Error {
+    error.context(format!(
+        "AS_TAG_MAP_OUTPUT: publication of {} succeeded, but subsequent semantic verification failed; treat it as an unverified recovery artifact and inspect or remove it manually; it is never auto-deleted",
+        path.display()
+    ))
+}
+
+fn tag_map_publish_error(path: &Path, error: anyhow::Error) -> anyhow::Error {
+    error.context(format!(
+        "AS_TAG_MAP_OUTPUT: publication or durable byte verification failed; {} may already exist as an unverified recovery artifact; inspect or remove it manually if present; it is never auto-deleted",
+        path.display()
+    ))
 }
 
 #[cfg(not(windows))]
@@ -1012,7 +1472,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             let bytes = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let evidence = load_default_mutation_evidence(&cache, &bytes);
+            let evidence = load_default_mutation_evidence(
+                &cache,
+                &bytes,
+                DefaultEvidencePolicy::ScalarFallback,
+            );
             let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
                 &bytes,
                 evidence.native,
@@ -1097,9 +1561,8 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 ),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!("AS_DEFAULT_OUTPUT: checking {}", out.display())
-                    })
+                    return Err(error)
+                        .with_context(|| format!("AS_DEFAULT_OUTPUT: checking {}", out.display()));
                 }
             }
             let selector = read_default_selector(&selector)?.into_core()?;
@@ -1107,7 +1570,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let replacement = decode_default_hex(&replacement_hex, "AS_DEFAULT_REPLACEMENT")?;
             let input = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let evidence = load_default_mutation_evidence(&cache, &input);
+            let evidence = load_default_mutation_evidence(
+                &cache,
+                &input,
+                DefaultEvidencePolicy::ScalarFallback,
+            );
             let patch = gore_as::cache::default_patch::patch_default_with_native_ancestry(
                 &input,
                 evidence.native,
@@ -1145,6 +1612,178 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                     patch.after.encoding.width(),
                     out.display()
                 );
+            }
+        }
+        AsCmd::TagMap(TagMapCmd::TagMapSites {
+            cache,
+            module,
+            class,
+            field,
+            tag,
+            json,
+        }) => {
+            let bytes = read_tag_map_cache(&cache)?;
+            let evidence = load_required_tag_map_evidence(&cache, &bytes)?;
+            let report =
+                gore_as::cache::native_tag_map::inspect_native_tag_maps(&bytes, &evidence.ancestry)
+                    .context("AS_TAG_MAP_INSPECT")?;
+            let sites: Vec<_> = report
+                .sites()
+                .iter()
+                .filter(|site| {
+                    module
+                        .as_deref()
+                        .is_none_or(|value| site.target_module() == value)
+                        && class
+                            .as_deref()
+                            .is_none_or(|value| site.target_class() == value)
+                        && field.as_deref().is_none_or(|value| site.field() == value)
+                        && tag.as_deref().is_none_or(|value| site.tag_name() == value)
+                })
+                .collect();
+            if json {
+                let document = TagMapSitesJson {
+                    format: TAG_MAP_SITES_REPORT_FORMAT,
+                    cache: cache_proof(&cache, &bytes),
+                    cache_guid: hex16(&report.cache_guid()),
+                    fingerprint: tag_map_fingerprint_json(&report),
+                    binds: evidence.binds,
+                    usmap: evidence.usmap,
+                    site_count: sites.len(),
+                    stats: tag_map_stats_json(report.stats()),
+                    sites: sites.iter().map(|site| tag_map_site_json(site)).collect(),
+                };
+                println!("{}", serde_json::to_string_pretty(&document)?);
+            } else {
+                for site in &sites {
+                    let selector =
+                        serde_json::to_string(&TagMapSelectorJson::from_core(site.selector()))?;
+                    println!(
+                        "TAG_MAP_SITE\tmodule={}\tclass={}\tfield_owner={}\tfield={}\ttag={}\tvalue={}\texpected_hex={}\tcontext_sha256={}\tselector={}",
+                        site.target_module(),
+                        site.target_class(),
+                        site.owner(),
+                        site.field(),
+                        site.tag_name(),
+                        f32::from_le_bytes(site.expected()),
+                        gore_as::cache::default_patch::encode_hex(&site.expected()),
+                        site.context_sha256(),
+                        selector
+                    );
+                }
+                eprintln!(
+                    "{} proven tag-map site(s); {} raw window(s), {} reference-proven, {} native-field-proven, {} ambiguous selector group(s)",
+                    sites.len(),
+                    report.stats().raw_windows(),
+                    report.stats().reference_proven_windows(),
+                    report.stats().native_field_proven_windows(),
+                    report.stats().ambiguous_selectors()
+                );
+            }
+        }
+        AsCmd::TagMap(TagMapCmd::PatchTagMap {
+            cache,
+            selector,
+            expected_hex,
+            replacement_hex,
+            out,
+            json,
+        }) => {
+            match std::fs::symlink_metadata(&out) {
+                Ok(_) => bail!(
+                    "AS_TAG_MAP_OUTPUT: output already exists; refusing to publish without clobbering {}",
+                    out.display()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error)
+                        .with_context(|| format!("AS_TAG_MAP_OUTPUT: checking {}", out.display()));
+                }
+            }
+            let selector = read_tag_map_selector(&selector)?.into_core()?;
+            let expected = decode_tag_map_hex(&expected_hex, "AS_TAG_MAP_EXPECTED")?;
+            let replacement = decode_tag_map_hex(&replacement_hex, "AS_TAG_MAP_REPLACEMENT")?;
+            let input = read_tag_map_cache(&cache)?;
+            let evidence = load_required_tag_map_evidence(&cache, &input)?;
+            let patch = gore_as::cache::native_tag_map::patch_native_tag_map(
+                &input,
+                &evidence.ancestry,
+                &selector,
+                &expected,
+                &replacement,
+            )
+            .context("AS_TAG_MAP_PATCH")?;
+            let persisted_output = match publish_default_cache_noclobber(&out, patch.bytes()) {
+                Ok(persisted) => persisted,
+                Err(error) => return Err(tag_map_publish_error(&out, error)),
+            };
+
+            let finalized = (|| -> Result<String> {
+                let persisted_report = gore_as::cache::native_tag_map::inspect_native_tag_maps(
+                    &persisted_output,
+                    &evidence.ancestry,
+                )
+                .context("AS_TAG_MAP_OUTPUT: reinspecting persisted cache")?;
+                let matches: Vec<_> = persisted_report
+                    .sites()
+                    .iter()
+                    .filter(|site| site.selector() == &selector)
+                    .collect();
+                let verified = match matches.as_slice() {
+                    [site] => *site,
+                    other => bail!(
+                        "AS_TAG_MAP_OUTPUT: persisted selector was rediscovered {} times",
+                        other.len()
+                    ),
+                };
+                if verified.expected() != replacement
+                    || verified.operand_range() != patch.after().operand_range()
+                {
+                    bail!(
+                        "AS_TAG_MAP_OUTPUT: persisted selector does not prove the replacement at the original range"
+                    );
+                }
+                if json {
+                    let document = TagMapPatchJson {
+                        format: TAG_MAP_PATCH_REPORT_FORMAT,
+                        status: "patched",
+                        selector: TagMapSelectorJson::from_core(verified.selector()),
+                        input: cache_proof(&cache, &input),
+                        output: cache_proof(&out, &persisted_output),
+                        cache_guid: hex16(&persisted_report.cache_guid()),
+                        fingerprint: tag_map_fingerprint_json(&persisted_report),
+                        binds: evidence.binds.clone(),
+                        usmap: evidence.usmap.clone(),
+                        expected_hex: gore_as::cache::default_patch::encode_hex(
+                            &patch.before().expected(),
+                        ),
+                        replacement_hex: gore_as::cache::default_patch::encode_hex(
+                            &verified.expected(),
+                        ),
+                        provenance: tag_map_provenance_json(verified),
+                    };
+                    serde_json::to_string_pretty(&document)
+                        .context("AS_TAG_MAP_OUTPUT: serializing verified patch receipt")
+                } else {
+                    let range = verified.operand_range();
+                    Ok(format!(
+                        "PATCHED_TAG_MAP\tmodule={}\tclass={}\tfield={}\ttag={}\texpected_hex={}\treplacement_hex={}\tcontext_sha256={}\toffset={}\tlength={}\tout={}",
+                        verified.target_module(),
+                        verified.target_class(),
+                        verified.field(),
+                        verified.tag_name(),
+                        gore_as::cache::default_patch::encode_hex(&patch.before().expected()),
+                        gore_as::cache::default_patch::encode_hex(&verified.expected()),
+                        verified.context_sha256(),
+                        range.start,
+                        range.len(),
+                        out.display()
+                    ))
+                }
+            })();
+            match finalized {
+                Ok(rendered) => println!("{rendered}"),
+                Err(error) => return Err(tag_map_post_publish_error(&out, error)),
             }
         }
         AsCmd::DiagnosticsCheck { exe, game } => {
@@ -1577,6 +2216,22 @@ mod default_cli_tests {
         "ancestry_profile":null
     }"#;
 
+    const VALID_TAG_MAP: &str = r#"{
+        "format":"gore-as-native-tag-map-selector-v1",
+        "kind":"gameplay-tag-float32-map-entry",
+        "module":"Items.GenericItems.WeaponsOneHandedGeneric",
+        "class":"UItMw_1H_Sword_Old_01",
+        "field_owner":"UWeaponDefinition",
+        "field":"m_DamageBase",
+        "tag_module":"",
+        "tag_namespace":"GameplayTag",
+        "tag":"Item_Damage_Physical_Edge",
+        "tag_is_string":false,
+        "value_type":"float32",
+        "map_proof_id":"sha256:f20ce5ce571f3d121046ac1942e0705cfb30c3761a3e390cd5d77ea2c16159cc",
+        "ancestry_profile":"sha256:98da5430f213b0107bd7361fa3c78316bf5320fbd15a53a9258d50d8d3ac9ed5"
+    }"#;
+
     #[test]
     fn selector_json_is_strict_and_semantic_only() {
         let selector: DefaultSelectorJson = serde_json::from_str(VALID).unwrap();
@@ -1656,6 +2311,80 @@ mod default_cli_tests {
         );
         for invalid in ["04", "0400000", "0400000000", "0x04000000", "AB000000"] {
             assert!(decode_default_hex(invalid, "TEST").is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn tag_map_selector_json_is_complete_strict_and_constant_bound() {
+        let selector: TagMapSelectorJson = serde_json::from_str(VALID_TAG_MAP).unwrap();
+        let core = selector.clone().into_core().unwrap();
+        assert_eq!(core.field, "m_DamageBase");
+        assert_eq!(core.tag, "Item_Damage_Physical_Edge");
+        assert_eq!(core.tag_module, "");
+        assert_eq!(core.tag_namespace, "GameplayTag");
+        assert!(!core.tag_is_string);
+
+        let mut missing: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
+        missing.as_object_mut().unwrap().remove("map_proof_id");
+        assert!(serde_json::from_value::<TagMapSelectorJson>(missing).is_err());
+        let unknown = VALID_TAG_MAP.replace(
+            "\"field\":\"m_DamageBase\"",
+            "\"field\":\"m_DamageBase\",\"context_sha256\":\"forged\"",
+        );
+        assert!(serde_json::from_str::<TagMapSelectorJson>(&unknown).is_err());
+
+        for (field, invalid) in [
+            ("format", "future-v2"),
+            ("kind", "other"),
+            ("value_type", "int"),
+            ("tag_module", "Angelscript"),
+            ("tag_namespace", "Other"),
+            ("map_proof_id", "sha256:stale"),
+            ("ancestry_profile", "sha256:stale"),
+        ] {
+            let mut value: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
+            value[field] = serde_json::Value::String(invalid.into());
+            assert!(
+                serde_json::from_value::<TagMapSelectorJson>(value)
+                    .unwrap()
+                    .into_core()
+                    .is_err(),
+                "{field}"
+            );
+        }
+        let mut string_tag: serde_json::Value = serde_json::from_str(VALID_TAG_MAP).unwrap();
+        string_tag["tag_is_string"] = serde_json::Value::Bool(true);
+        assert!(serde_json::from_value::<TagMapSelectorJson>(string_tag)
+            .unwrap()
+            .into_core()
+            .is_err());
+    }
+
+    #[test]
+    fn tag_map_selector_file_and_hex_are_bounded_and_exact() {
+        let directory = tempfile::tempdir().unwrap();
+        let selector = directory.path().join("selector.json");
+        std::fs::write(&selector, VALID_TAG_MAP).unwrap();
+        assert!(read_tag_map_selector(&selector).is_ok());
+        assert!(read_tag_map_selector(directory.path()).is_err());
+
+        let oversized = directory.path().join("oversized.json");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(DEFAULT_SELECTOR_MAX_BYTES + 1).unwrap();
+        assert!(read_tag_map_selector(&oversized).is_err());
+
+        assert_eq!(
+            decode_tag_map_hex("00002041", "TEST").unwrap(),
+            10.0f32.to_le_bytes()
+        );
+        for invalid in [
+            "0000204",
+            "000020410",
+            "0000204100000000",
+            "0x002041",
+            "0000204A",
+        ] {
+            assert!(decode_tag_map_hex(invalid, "TEST").is_err(), "{invalid}");
         }
     }
 

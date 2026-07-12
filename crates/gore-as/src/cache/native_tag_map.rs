@@ -91,6 +91,7 @@ pub enum NativeTagMapPatchError {
 pub struct NativeTagMapSite {
     selector: NativeTagMapSelector,
     function: String,
+    context_sha256: String,
     operand_range: Range<usize>,
     owner: String,
     owner_module: String,
@@ -120,6 +121,13 @@ impl NativeTagMapSite {
 
     pub fn function(&self) -> &str {
         &self.function
+    }
+
+    /// SHA-256 provenance for the six-instruction raw reference window.
+    ///
+    /// This is diagnostic output only and is deliberately not part of the semantic selector.
+    pub fn context_sha256(&self) -> &str {
+        &self.context_sha256
     }
 
     pub fn operand_range(&self) -> Range<usize> {
@@ -627,6 +635,7 @@ fn promote_site(
             ancestry_profile: ancestry.profile_id().into(),
         },
         function: site.function.clone(),
+        context_sha256: site.raw.context_sha256.clone(),
         operand_range: site.operand_range.clone(),
         owner: site.field_owner.name.clone(),
         owner_module: site.field_owner.module.clone(),
@@ -751,6 +760,7 @@ mod tests {
         assert_eq!(stats.ambiguous_selectors(), 0);
         assert_eq!(sites[0].target_module(), "Items");
         assert_eq!(sites[0].target_class(), "UFixture");
+        assert_eq!(sites[0].context_sha256(), "fixture");
         assert_eq!(sites[0].owner(), "UWeaponDefinition");
         assert_eq!(sites[0].owner_module(), "");
         assert_eq!(sites[0].field(), "m_DamageBase");

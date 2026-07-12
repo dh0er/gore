@@ -146,14 +146,21 @@ impl NativeApi {
     /// "no data").
     pub fn load(path: &Path) -> Option<NativeApi> {
         let data = std::fs::read(path).ok()?;
+        Self::from_bytes(&data)
+    }
+
+    /// Parse already bounded `Binds.Cache` bytes. The caller is responsible for applying an input
+    /// size limit. CLI mutation paths use this entry point so the exact buffer they size-check and
+    /// hash is also the buffer that supplies sealed evidence.
+    pub fn from_bytes(data: &[u8]) -> Option<NativeApi> {
         if data.len() < 8 {
             return None;
         }
-        let (by_class, field_types) = parse_records(&data);
-        let verified_default_field_types = verified_default_field_types(&data);
+        let (by_class, field_types) = parse_records(data);
+        let verified_default_field_types = verified_default_field_types(data);
         let (verified_default_class_paths, verified_default_class_profile_digests) =
-            verified_default_class_paths(&data);
-        let by_name = scan_by_name(&data);
+            verified_default_class_paths(data);
+        let by_name = scan_by_name(data);
         // A partially readable cache may populate only one table; keep any useful table.
         if by_name.is_empty()
             && by_class.is_empty()
@@ -958,6 +965,15 @@ mod tests {
             return;
         }
         let api = NativeApi::load(path).expect("load Binds.Cache");
+        let bytes = std::fs::read(path).expect("read Binds.Cache for from_bytes parity");
+        let from_bytes = NativeApi::from_bytes(&bytes).expect("parse identical Binds bytes");
+        assert_eq!(api.class_name_count(), from_bytes.class_name_count());
+        assert_eq!(api.name_count(), from_bytes.name_count());
+        assert_eq!(api.field_type_count(), from_bytes.field_type_count());
+        assert_eq!(
+            api.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID),
+            from_bytes.verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
+        );
         let (source_sha256, bridge_sha256) = api
             .verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
             .expect("sealed Binds class-profile digests");

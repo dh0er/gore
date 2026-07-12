@@ -1,15 +1,21 @@
-# Offline AngelScript scalar-default patching
+# Offline AngelScript default patching
 
-`gore as default-sites` and `gore as patch-default` provide a narrow, fail-closed path for
-inspecting and changing directly serialized scalar assignments in existing generated
-`__InitDefaults` bytecode. They operate on cache files offline. Neither command launches the game,
-injects a runtime loader, installs the result, or reads or writes a save.
+GORE exposes two narrow, fail-closed cache workflows:
+
+- `gore as default-sites` and `gore as patch-default` inspect and change directly serialized
+  scalar assignments.
+- `gore as tag-map-sites` and `gore as patch-tag-map` inspect and change already-present, sealed
+  native `GameplayTag` to `float32` `TMap` entries.
+
+Both workflows operate on generated `__InitDefaults` bytecode in cache files, entirely offline and
+copy-on-write. None of these commands launches the game, injects a runtime loader, installs or
+deploys the result, or reads or writes a save.
 
 This is not a source representation for arbitrary class defaults. `emit-all` still omits generated
 `__InitDefaults`, and `compile-module --op edit` still refuses authored `default` statements. New
 modules may continue to author defaults through `compile-module --op add`.
 
-## Admitted sites
+## Admitted scalar sites
 
 The inspector reports a site only when all of these facts are proven:
 
@@ -57,8 +63,8 @@ and the inspected `PrecompiledScript_Shipping.Cache` header has the paired audit
 unknown, parser-drifted, or differently paired native profile supplies no native mutation
 evidence; its generic field information can still assist read-only decompilation.
 
-For default inspection and patching, set `GORE_AS_USMAP` to an exact mappings file when the cache
-is outside its game layout. Otherwise the CLI scans regular `.usmap` files under
+For scalar default inspection and patching, set `GORE_AS_USMAP` to an exact mappings file when the
+cache is outside its game layout. Otherwise the CLI scans regular `.usmap` files under
 `<G1R>/Binaries/Win64/ue4ss`, derived from `<G1R>/Script/<cache>`. Neither a Steam location nor a
 filename/version is trusted: bounded file contents are parsed once and must satisfy every sealed
 identity and parser-output digest. Missing, unreadable, unknown, ambiguous, oversized, or
@@ -67,11 +73,12 @@ sites remain available; a selector with a non-null native `ancestry_profile` bec
 cannot publish output.
 
 Calls, computed expressions, branched initializers, structs, object handles, strings/text, arrays,
-containers, gameplay-tag maps, and other complex defaults are not patchable. Repeated assignments
-to one field and duplicate initializer identities are also rejected instead of being selected by
-incidental byte order.
+containers, arbitrary gameplay-tag maps, and other complex defaults are not patchable by the
+scalar commands. The separate tag-map workflow below admits only its sealed native
+`GameplayTag`-to-`float32` shape. Repeated assignments to one field and duplicate initializer
+identities are also rejected instead of being selected by incidental byte order.
 
-## Inspect a cache
+## Inspect scalar sites
 
 Filters are exact semantic names, not substrings:
 
@@ -96,7 +103,7 @@ The JSON `site_count` reflects the exact CLI filters. The diagnostic `stats` des
 cache inspection performed before filtering. A zero result means the requested field was not
 uniquely proven editable; it is not permission to guess an offset.
 
-## Create the semantic selector
+## Create a scalar semantic selector
 
 `patch-default` accepts only the selector object from a reported site, saved as a small strict JSON
 file. Selector v4 requires the declaring `field_owner`, canonical `value_type`, and explicit
@@ -129,7 +136,7 @@ Direct and wholly script-proven ancestry uses JSON `null`. A native-derived site
 exact SHA-256 identity of its atomic cache/Binds/USMAP evidence tuple. Missing, stale, or altered
 profile IDs cannot match that site even when field names and raw CAS bytes happen to be identical.
 
-## Patch to a new cache
+## Patch a scalar to a new cache
 
 The following example changes the raw little-endian `int` operand from 99 to 50 in a new file:
 
@@ -159,7 +166,7 @@ Never reuse an old `expected_hex` merely because a selector name survived a hotf
 inspector against the new cache and review its cache SHA-256, type, encoding, expected bytes, and
 provenance. A produced cache is tied to the exact input build and its reference tables.
 
-## Fail-closed transaction and provenance
+## Scalar fail-closed transaction and provenance
 
 Before mutation, the patcher reparses the header, complete module region, all seven tail tables,
 and EOF; rejects duplicate tail-table keys; rebuilds module and reference semantics; requires one
@@ -185,10 +192,140 @@ three-instruction window with only the value operand zeroed. Unlike those numeri
 compare-and-swap guard direct the patch. This prevents offsets from an old build or a shadowed
 same-name field from silently redirecting a write.
 
+## Native GameplayTag-to-float32 map entries
+
+`gore as tag-map-sites` and `gore as patch-tag-map` form a separate, stricter workflow for one
+observed generated shape: an already-existing entry in a sealed native field whose value is a
+`TMap<GameplayTag, float32>`. The entry must already occur in generated, branch-free
+`__InitDefaults` bytecode and must pass the exact map-call, field-schema, target-ancestry, and
+reference proofs. This workflow changes only the existing four-byte value operand. It cannot add a
+key, create or resize a map, author bytecode, or create an NPC, dialog, quest, or any other gameplay
+object.
+
+Like the scalar workflow, tag-map inspection and patching are purely offline. The patch command
+produces a new cache file; it does not provide a loader, touch a save, deploy the cache, or make the
+game consume it.
+
+### Mandatory sealed evidence
+
+Every tag-map command requires the exact supported cache/Binds/USMAP tuple. There is no scalar or
+best-effort fallback:
+
+- `Binds.Cache` is read from `GORE_AS_BINDS` when set, otherwise from beside the input cache.
+- `GORE_AS_USMAP`, when set, is the sole mappings candidate. Otherwise the CLI derives
+  `<G1R>/Binaries/Win64/ue4ss` from an input at `<G1R>/Script/<cache>` and considers the bounded
+  regular `.usmap` files there.
+- File names and locations are only discovery hints. The bounded bytes, parsed identities, cache
+  GUID, combined cache fingerprint, native ancestry profile, map proof, and schema graph must form
+  the one sealed exact-build tuple.
+
+Inputs must be regular bounded files: the tag-map cache limit is 512 MiB, each Binds/USMAP limit is
+128 MiB, and the strict selector-file limit is 64 KiB.
+
+Missing, unreadable, oversized, ambiguous, parser-drifted, or mismatched evidence is a hard error
+for both listing and patching. It never widens the admitted set and never publishes an output. For
+an input copied outside the game layout, point both variables at the original exact-build evidence:
+
+```powershell
+$env:GORE_AS_BINDS = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Script\Binds.Cache'
+$env:GORE_AS_USMAP = `
+  'D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Binaries\Win64\ue4ss\G1R-5.4.3-168781-272ce2f8.usmap'
+```
+
+### List and select an existing entry
+
+The four optional filters are exact, case-sensitive semantic names, not substrings:
+
+```powershell
+$CACHE = 'D:\SteamLibrary\steamapps\common\Gothic 1 Remake\G1R\Script\PrecompiledScript_Shipping.Cache'
+
+gore as tag-map-sites $CACHE `
+  --module Items.GenericItems.WeaponsOneHandedGeneric `
+  --class UItMw_1H_Sword_Old_01 `
+  --field m_DamageBase `
+  --tag Item_Damage_Physical_Edge `
+  --json > .\sword-edge-sites.json
+```
+
+With `--json`, stdout is exactly one JSON document; evidence diagnostics remain on stderr. As with
+scalar listing, `site_count` reflects the filters while `stats` describes the complete inspection.
+A zero count is not permission to infer a nearby key or offset.
+
+Only `.sites[N].selector` from a fresh successful result is valid selector input. Save that object,
+not the complete site, provenance object, or report. This PowerShell example writes UTF-8 without a
+byte-order mark:
+
+```powershell
+$REPORT = Get-Content .\sword-edge-sites.json -Raw | ConvertFrom-Json
+$SELECTOR_JSON = $REPORT.sites[0].selector | ConvertTo-Json -Depth 8
+$SELECTOR_PATH = Join-Path $PWD 'sword-edge.selector.json'
+[System.IO.File]::WriteAllText(
+  $SELECTOR_PATH,
+  $SELECTOR_JSON,
+  [System.Text.UTF8Encoding]::new($false)
+)
+```
+
+The selector is strict and semantic. Missing or unknown fields, altered format/kind, empty or
+whitespace-padded names, a string tag, or a different ancestry/map proof ID are rejected. Function
+name, operand offset/range, context SHA-256, current bytes, display value, and encoding are
+output-only audit data and must not be copied into the selector. The current bytes instead form the
+separate compare-and-swap argument.
+
+### Patch with raw float32 compare-and-swap bytes
+
+Both hex arguments are exactly eight lowercase hexadecimal characters with no `0x` prefix. They
+are the complete raw IEEE-754 `float32` little-endian operand, not a decimal string. Always copy
+`expected_hex` from a fresh listing of the exact input. For example, `10.0` is `00002041` and
+`11.0` is `00003041`:
+
+```powershell
+$OUT = '.\PrecompiledScript_SwordEdge11.Cache'
+
+gore as patch-tag-map $CACHE `
+  --selector .\sword-edge.selector.json `
+  --expected-hex 00002041 `
+  --replacement-hex 00003041 `
+  --out $OUT `
+  --json > .\sword-edge-patch-receipt.json
+```
+
+The patcher requires exactly one selector match and exact current-byte equality, clones the input,
+changes only the proven four-byte range, then structurally and semantically reinspects the result.
+It publishes through a synced temporary file and a durable no-clobber operation. The output parent
+must already exist, `$OUT` must be a new path, the input is never overwritten, and a racing creator
+cannot be replaced.
+
+After publication, the CLI reopens the persisted file, verifies its length, SHA-256, and exact
+bytes, and rediscovers the same selector and replacement at the original range. Only then does it
+emit the JSON receipt. The receipt records input and persisted-output path/length/SHA-256, exact
+Binds and USMAP path/length/SHA-256, cache GUID, the mutation-stable combined scalar/tag
+fingerprint and operand counts, ancestry and map-proof identities, the strict selector and CAS
+bytes, plus output-side function, context SHA-256, operand range, and field-schema proof. If a rare
+failure occurs after publication, the CLI reports that the path may be an unverified recovery
+artifact and deliberately does not delete it behind the user's back.
+
+Re-run the listing against the produced cache before treating it as a verified input. Because an
+output such as `$OUT` is normally outside `<G1R>/Script`, use explicit exact-build evidence:
+
+```powershell
+gore as tag-map-sites $OUT `
+  --class UItMw_1H_Sword_Old_01 `
+  --field m_DamageBase `
+  --tag Item_Damage_Physical_Edge `
+  --json > .\sword-edge-11-sites.json
+```
+
+The rediscovered site must retain the same selector and audit provenance and report
+`expected_hex=00003041`. A stale `00002041` compare-and-swap against that output fails without
+creating another cache.
+
 ## Current boundary
 
-This path is suitable for reviewed, fixed-width scalar changes already present as direct
-assignments in vanilla `__InitDefaults`. It does not yet author new fields or assignments, resize
-bytecode, edit complex initializer expressions, or change gameplay-tag/map defaults. It also does
-not replace the separate transactional bundle/deployment and save-comparison workflow described in
+These paths are suitable for reviewed, fixed-width changes already present in generated vanilla
+`__InitDefaults`: direct supported scalar assignments, plus the separately sealed native
+`GameplayTag`-to-`float32` map-entry shape above. They do not author new fields, assignments, map
+keys, or maps; resize bytecode or containers; edit arbitrary complex initializer expressions; or
+create NPCs, dialogs, or quests. They also do not replace the separate transactional
+bundle/deployment and save-comparison workflow described in
 [AngelScript dialog authoring](dialog-authoring.md).

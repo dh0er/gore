@@ -252,7 +252,10 @@ therefore be tested on a disposable save with semantic before/after inspection.
   compare-and-swap guard, and changes no save or live runtime state. This does
   not make `__InitDefaults` source-editable: only a unique branch-free direct
   primitive/enum assignment in a one-terminal-`RET` initializer is admitted.
-  Calls, computed expressions, structs, object handles, containers, and
-  gameplay-tag maps remain unsupported.
+  Calls, computed expressions, structs, object handles, and containers remain
+  unsupported by that scalar workflow. The separately sealed `tag-map-sites` /
+  `patch-tag-map` workflow can patch only an already-present native
+  `GameplayTag`-to-`float32` entry; it cannot add keys or maps, resize bytecode,
+  or make generated defaults source-editable.
 - Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
   signature verified against `Binds.Cache` or a known compiling source template.

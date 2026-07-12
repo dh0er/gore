@@ -309,7 +309,27 @@ enum LocAction {
     },
 }
 
+// Clap constructs the complete nested command graph before parsing. The GORE CLI intentionally
+// exposes many large command families, and debug Windows binaries can exceed the platform's 1 MiB
+// main-thread stack while building that graph. Give parsing and dispatch explicit headroom so
+// adding an unrelated subcommand cannot make every invocation fail before argument parsing.
+const CLI_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
 fn main() {
+    let worker = std::thread::Builder::new()
+        .name("gore-cli".into())
+        .stack_size(CLI_THREAD_STACK_BYTES)
+        .spawn(run_cli)
+        .unwrap_or_else(|error| {
+            eprintln!("error: failed to start CLI worker: {error}");
+            std::process::exit(1);
+        });
+    if let Err(payload) = worker.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+fn run_cli() {
     let cli = Cli::parse();
     let result = match cli.command {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),

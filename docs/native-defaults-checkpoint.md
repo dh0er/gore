@@ -1,8 +1,9 @@
 # Native defaults checkpoint (2026-07-12)
 
-This is a deliberately incomplete, fail-closed checkpoint. It preserves the parallel-agent work
-without enabling deployment or save mutation. The scalar default patcher is complete in commit
-`e31ef08`; the work below still needs the listed gates before it is production-ready.
+This is a deliberately fail-closed checkpoint. It preserves the parallel-agent work without
+enabling deployment or save mutation. The scalar default patcher is complete in commit `e31ef08`,
+and the durable native tag-map CLI and its configured Shipping E2E are complete in the current
+tree. The full regression, Clippy, and release-build gates below are now complete as well.
 
 ## Preserved evidence
 
@@ -44,7 +45,7 @@ the input, changes no bytes outside its four-byte operand, reconstructs ancestry
 and rejects stale replay CAS. Native scalar-default inspection also retains the same sealed
 ancestry after a tag edit.
 
-## Required before enabling native mutation
+## Completed production gates
 
 Ancestry tuple binding, selector v4, exact Class edges, content-sealed CLI USMAP discovery, and the
 real Sword scalar recovery/patch/rediscovery test are complete in `40611d8` and `6658f80`.
@@ -52,8 +53,23 @@ real Sword scalar recovery/patch/rediscovery test are complete in `40611d8` and 
 The opaque cache/profile report, combined mutation-stable fingerprint, strict semantic selector,
 uniqueness gate, compare-and-swap/copy-on-write mutation, post-patch rebuild, and core Sword E2E are
 complete. The patch path rebuilds proof from its input cache and never accepts a retained inspection
-report as write authority. Remaining work is durable CLI publication/writing, a CLI-level Shipping
-E2E, the full regression matrix, and the release build.
+report as write authority.
+
+The durable `tag-map-sites` / `patch-tag-map` CLI is also complete. It requires bounded, sealed
+cache/Binds/USMAP evidence, accepts only strict selector-v1 JSON plus fresh raw CAS bytes, publishes
+to a new path with durable no-clobber semantics, reopens and hashes the persisted bytes, rediscovers
+the semantic site, and emits evidence-bound JSON reports/receipts. A post-publication failure leaves
+an explicitly reported recovery artifact rather than deleting a possibly raced path.
+
+The configured real-CLI Shipping E2E exactly filters the Sword `m_DamageBase` physical-Edge entry,
+patches float32 `10` to `11`, proves the input unchanged and all output differences confined to the
+four-byte operand, then rediscovers the same selector and provenance. It also proves stale
+profile/map selectors, mismatched USMAP evidence, stale replay CAS, and an existing output all fail
+without publishing or clobbering another cache.
+
+The full active `gore-as` / `gore` regression matrix, configured real Shipping CLI E2E, normal
+all-target Clippy run, and optimized `gore` release build all pass. The remaining warnings are
+pre-existing lint debt outside this change and the vendored `retoc` private-interface warning.
 
 Unrelated generated Flutter localization changes and the pre-existing rustfmt-only `splice.rs`
 change are intentionally excluded from this checkpoint.
