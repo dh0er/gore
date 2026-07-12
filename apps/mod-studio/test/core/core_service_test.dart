@@ -30,6 +30,31 @@ Pointer<Uint8> _publishResponse(
 }
 
 void main() {
+  group('canonical native response decoding', () {
+    test('retains one compact exact object', () {
+      expect(decodeCanonicalGoreCoreResponse('{"ok":true,"value":"x"}'), {
+        'ok': true,
+        'value': 'x',
+      });
+    });
+
+    test('rejects duplicates and normalized JSON spellings', () {
+      for (final response in [
+        '{"ok":true,"ok":false}',
+        ' {"ok":true}',
+        '{"ok" : true}',
+        '{"ok":true,"value":"\\u0078"}',
+        '[]',
+        '{',
+      ]) {
+        expect(
+          () => decodeCanonicalGoreCoreResponse(response),
+          throwsFormatException,
+        );
+      }
+    });
+  });
+
   group('GoreCoreInfo', () {
     test('strictly parses a canonical bounded response', () {
       final info = GoreCoreInfo.parseResponse(_coreInfoResponse());
@@ -70,6 +95,22 @@ void main() {
               )
               .toList(),
         );
+        final missingNpcDraft = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command != 'authoring_logical_npc_clone_draft_v1_generate',
+              )
+              .toList(),
+        );
+        final missingQuestDraft = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command != 'authoring_draft_quest_skeleton_v1_generate',
+              )
+              .toList(),
+        );
         final current = _coreInfoResponse(version: '0.2.0-current');
 
         final decisions = [
@@ -78,9 +119,11 @@ void main() {
           missingAuthoring,
           missingVoice,
           missingWorkingStore,
+          missingNpcDraft,
+          missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(5), everyElement(isNull));
+        expect(decisions.take(7), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -110,7 +153,9 @@ void main() {
           .where(
             (command) =>
                 command != 'authoring_project_check' &&
-                command != 'voice_archive_match_line',
+                command != 'voice_archive_match_line' &&
+                command != 'authoring_logical_npc_clone_draft_v1_generate' &&
+                command != 'authoring_draft_quest_skeleton_v1_generate',
           )
           .toList();
       final info = GoreCoreInfo.parseResponse(
@@ -119,6 +164,8 @@ void main() {
 
       expect(info.isStudioCompatible, isFalse);
       expect(info.missingRequiredCommands, [
+        'authoring_draft_quest_skeleton_v1_generate',
+        'authoring_logical_npc_clone_draft_v1_generate',
         'authoring_project_check',
         'voice_archive_match_line',
       ]);

@@ -15,6 +15,10 @@
 //!   untouched format-2 JSON string and `profile` is `production|experimental`; returns canonical
 //!   project JSON, deterministic structured diagnostics, and `blocks_build`. Project input is
 //!   capped at 16 MiB by `gore-authoring`; serialized success responses are capped at 64 MiB.
+//! - `authoring_logical_npc_clone_draft_v1_generate` and
+//!   `authoring_draft_quest_skeleton_v1_generate` accept one bounded raw `input_json` string and
+//!   return deterministic offline-only previews. They never write, compile, deploy, or qualify
+//!   runtime behavior.
 //! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
 //!   `authoring_store_prepare_checkpoint` open or prepare immutable format-2 working-store
 //!   checkpoints. Head/project JSON crosses the outer protocol as bounded raw strings, preserving
@@ -38,6 +42,7 @@
 //!   Filesystem-path request strings are capped at 32 KiB.
 
 mod authoring;
+mod authoring_drafts;
 mod authoring_store;
 mod transport;
 mod voice;
@@ -65,6 +70,8 @@ const CORE_PROTOCOL_ABI: u32 = 1;
 const CORE_COMMANDS: &[&str] = &[
     "audio_extract",
     "audio_list",
+    "authoring_draft_quest_skeleton_v1_generate",
+    "authoring_logical_npc_clone_draft_v1_generate",
     "authoring_project_check",
     "authoring_store_import_ogg",
     "authoring_store_open",
@@ -146,6 +153,12 @@ fn dispatch(input: &str) -> Value {
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
+        "authoring_draft_quest_skeleton_v1_generate" => {
+            authoring_drafts::draft_quest_skeleton(payload)
+        }
+        "authoring_logical_npc_clone_draft_v1_generate" => {
+            authoring_drafts::logical_npc_clone(payload)
+        }
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
         "authoring_store_open" => authoring_store::open(payload),
@@ -999,6 +1012,8 @@ mod tests {
                 "commands": [
                     "audio_extract",
                     "audio_list",
+                    "authoring_draft_quest_skeleton_v1_generate",
+                    "authoring_logical_npc_clone_draft_v1_generate",
                     "authoring_project_check",
                     "authoring_store_import_ogg",
                     "authoring_store_open",
@@ -1042,6 +1057,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_project_check"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_logical_npc_clone_draft_v1_generate"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_checkpoint"));

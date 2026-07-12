@@ -45,6 +45,8 @@ const _transportPanicResponse =
 const requiredStudioCoreCommands = <String>[
   'audio_extract',
   'audio_list',
+  'authoring_draft_quest_skeleton_v1_generate',
+  'authoring_logical_npc_clone_draft_v1_generate',
   'authoring_project_check',
   'authoring_store_import_ogg',
   'authoring_store_open',
@@ -102,14 +104,11 @@ class GoreCoreInfo {
       throw const FormatException('core_info response exceeds size limit');
     }
 
-    final Object? decoded;
+    final Map<String, Object?> decoded;
     try {
-      decoded = jsonDecode(response);
+      decoded = decodeCanonicalGoreCoreResponse(response);
     } on FormatException {
       throw const FormatException('core_info response is not valid JSON');
-    }
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('core_info response is not an object');
     }
     const fields = {'ok', 'abi', 'version', 'commands'};
     if (decoded.length != fields.length || !fields.every(decoded.containsKey)) {
@@ -256,10 +255,26 @@ class NativeGoreCoreFfiService implements GoreCoreFfiService {
     final response = await Isolate.run(
       () => _executeNativeRequest(libraryPath, request),
     );
-    final decoded = jsonDecode(response);
-    if (decoded is Map) return decoded.cast<String, Object?>();
-    throw const FormatException('gore_ffi returned a non-object response');
+    return decodeCanonicalGoreCoreResponse(response);
   }
+}
+
+/// Decode only the compact, duplicate-preserving-by-roundtrip JSON emitted by gore-ffi.
+///
+/// Dart's normal JSON decoder is last-key-wins. Re-encoding the insertion-ordered decoded map and
+/// demanding byte equality rejects duplicate keys, whitespace, and alternate string spellings
+/// before a typed command DTO can accidentally accept a normalized hostile response.
+Map<String, Object?> decodeCanonicalGoreCoreResponse(String response) {
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(response);
+  } on FormatException {
+    throw const FormatException('gore_ffi returned invalid JSON');
+  }
+  if (decoded is! Map || jsonEncode(decoded) != response) {
+    throw const FormatException('gore_ffi returned non-canonical JSON');
+  }
+  return decoded.cast<String, Object?>();
 }
 
 String _executeNativeRequest(String libPath, String request) {

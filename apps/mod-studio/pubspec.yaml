@@ -14,6 +14,7 @@ dependencies:
   intl: any
   archive: ^3.6.1
   collection: ^1.19.1
+  crypto: ^3.0.7
   ffi: ^2.1.4
   file_selector: ^1.0.3
   flutter_riverpod: ^3.2.1

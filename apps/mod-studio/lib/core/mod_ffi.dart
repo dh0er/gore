@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart' as crypto;
+
 import 'core_service.dart';
 
 const _maxNativeErrorCodeLength = 128;
@@ -7,6 +9,10 @@ const _maxNativeErrorMessageLength = 64 * 1024;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringNpcDraftInputBytes = 16 * 1024;
+const _maxAuthoringQuestDraftInputBytes = 20 * 1024 * 1024;
+const _maxAuthoringDraftSourceBytes = 1024 * 1024;
+const _maxAuthoringDraftMetadataBytes = 4 * 1024;
 const _maxAuthoringLogicalNameBytes = 1024;
 const _maxAuthoringReferencedAssetBytes = 64 * 1024 * 1024;
 const _maxAuthoringDiagnostics = 262144;
@@ -125,6 +131,34 @@ class ModFfi {
       'profile': profile.wireName,
     });
     return AuthoringProjectCheckResult.fromJson(r);
+  }
+
+  /// Validate and preview one bounded logical-NPC clone entirely in memory.
+  Future<AuthoringLogicalNpcCloneDraftResult>
+  authoringLogicalNpcCloneDraftV1Generate({required String inputJson}) async {
+    _authoringDraftRequestString(
+      inputJson,
+      'inputJson',
+      _maxAuthoringNpcDraftInputBytes,
+    );
+    const command = 'authoring_logical_npc_clone_draft_v1_generate';
+    _authoringDraftEnvelopePreflight(command, inputJson);
+    final response = await _call(command, {'input_json': inputJson});
+    return AuthoringLogicalNpcCloneDraftResult.fromJson(response);
+  }
+
+  /// Validate and preview one bounded discovery-shaped quest entirely in memory.
+  Future<AuthoringDraftQuestSkeletonResult>
+  authoringDraftQuestSkeletonV1Generate({required String inputJson}) async {
+    _authoringDraftRequestString(
+      inputJson,
+      'inputJson',
+      _maxAuthoringQuestDraftInputBytes,
+    );
+    const command = 'authoring_draft_quest_skeleton_v1_generate';
+    _authoringDraftEnvelopePreflight(command, inputJson);
+    final response = await _call(command, {'input_json': inputJson});
+    return AuthoringDraftQuestSkeletonResult.fromJson(response);
   }
 
   /// Open the fixed canonical head and reconstruct one immutable format-2 checkpoint.
@@ -398,6 +432,86 @@ void _authoringStoreRequestString(String value, String field, int maxBytes) {
   }
 }
 
+void _authoringDraftRequestString(String value, String field, int maxBytes) {
+  if (value.isEmpty) {
+    throw ArgumentError.value(value, field, 'must not be empty');
+  }
+  var bytes = 0;
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    if (unit <= 0x7f) {
+      bytes += 1;
+    } else if (unit <= 0x7ff) {
+      bytes += 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (index + 1 >= value.length) {
+        throw ArgumentError.value(
+          value.length,
+          field,
+          'contains invalid UTF-16',
+        );
+      }
+      final low = value.codeUnitAt(++index);
+      if (low < 0xdc00 || low > 0xdfff) {
+        throw ArgumentError.value(
+          value.length,
+          field,
+          'contains invalid UTF-16',
+        );
+      }
+      bytes += 4;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw ArgumentError.value(value.length, field, 'contains invalid UTF-16');
+    } else {
+      bytes += 3;
+    }
+    if (bytes > maxBytes) {
+      throw ArgumentError.value(
+        '<${value.length} characters>',
+        field,
+        'must be 1..=$maxBytes UTF-8 bytes',
+      );
+    }
+  }
+}
+
+void _authoringDraftEnvelopePreflight(String command, String inputJson) {
+  // Conservative allocation-free upper bound for jsonEncode's command envelope. Counting every
+  // control scalar as `\u00XX` may reject a short-escape-heavy input early, but can never let an
+  // oversized allocation reach the UI isolate.
+  final envelopeBytes =
+      '{"command":"","payload":{"input_json":""}}'.length + command.length;
+  var encodedBytes = envelopeBytes;
+  for (var index = 0; index < inputJson.length; index++) {
+    final unit = inputJson.codeUnitAt(index);
+    final int added;
+    if (unit <= 0x1f || unit == 0x2028 || unit == 0x2029) {
+      added = 6;
+    } else if (unit == 0x22 || unit == 0x5c) {
+      added = 2;
+    } else if (unit <= 0x7f) {
+      added = 1;
+    } else if (unit <= 0x7ff) {
+      added = 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      // The raw-input preflight already proved this is a paired surrogate.
+      index++;
+      added = 4;
+    } else {
+      added = 3;
+    }
+    if (added > goreCoreTransportMaxRequestBytes - encodedBytes) {
+      throw ArgumentError.value(
+        '<${inputJson.length} characters>',
+        'inputJson',
+        'escaped command envelope exceeds the '
+            '$goreCoreTransportMaxRequestBytes-byte transport limit',
+      );
+    }
+    encodedBytes += added;
+  }
+}
+
 void _authoringExactFields(
   Map<String, Object?> json,
   Set<String> expected,
@@ -516,6 +630,1098 @@ void _authoringRequireCanonicalProjectJson(String projectJson) {
   if (jsonEncode(decoded) != projectJson) {
     throw const FormatException(
       'authoring store project JSON is not canonical',
+    );
+  }
+}
+
+Map<String, Object?> _authoringDraftObjectField(
+  Map<String, Object?> json,
+  String field,
+) => _authoringRequiredObject(json[field], 'draft field $field');
+
+String _authoringDraftSha256(Map<String, Object?> json, String field) {
+  final value = _authoringRequiredString(json, field, maxBytes: 64);
+  if (!_authoringSha256Pattern.hasMatch(value)) {
+    throw FormatException('authoring draft field $field is not a SHA-256');
+  }
+  return value;
+}
+
+String _authoringDraftVerifiedSourceSha256(
+  Map<String, Object?> json,
+  String source,
+) {
+  final declared = _authoringDraftSha256(json, 'source_sha256');
+  final actual = crypto.sha256.convert(utf8.encode(source)).toString();
+  if (declared != actual) {
+    throw const FormatException(
+      'authoring draft source and source_sha256 disagree',
+    );
+  }
+  return declared;
+}
+
+String _authoringDraftFixedString(
+  Map<String, Object?> json,
+  String field,
+  String expected,
+) {
+  final value = _authoringRequiredString(
+    json,
+    field,
+    maxBytes: _maxAuthoringDraftMetadataBytes,
+  );
+  if (value != expected) {
+    throw FormatException('authoring draft field $field is not supported');
+  }
+  return value;
+}
+
+final _authoringDraftIdentifierPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
+final _authoringDraftTechnicalIdPattern = RegExp(
+  r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$',
+);
+final _authoringDraftCatalogLayerPattern = RegExp(
+  r'^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$',
+);
+const _authoringDraftReservedIdentifiers = <String>{
+  'abstract',
+  'access',
+  'and',
+  'and_eq',
+  'as',
+  'auto',
+  'bool',
+  'break',
+  'case',
+  'cast',
+  'catch',
+  'class',
+  'const',
+  'continue',
+  'default',
+  'delegate',
+  'do',
+  'double',
+  'else',
+  'enum',
+  'event',
+  'explicit',
+  'external',
+  'false',
+  'final',
+  'float',
+  'for',
+  'from',
+  'funcdef',
+  'get',
+  'if',
+  'import',
+  'in',
+  'inout',
+  'int',
+  'int8',
+  'int16',
+  'int32',
+  'int64',
+  'interface',
+  'is',
+  'mixin',
+  'namespace',
+  'not',
+  'not_eq',
+  'null',
+  'or',
+  'or_eq',
+  'out',
+  'override',
+  'private',
+  'property',
+  'protected',
+  'return',
+  'set',
+  'shared',
+  'super',
+  'switch',
+  'struct',
+  'this',
+  'true',
+  'try',
+  'typedef',
+  'uint',
+  'uint8',
+  'uint16',
+  'uint32',
+  'uint64',
+  'void',
+  'while',
+  'xor',
+  'xor_eq',
+  'staticclass',
+  'spawn',
+  'getorcreate',
+  'create',
+  'getg1r',
+};
+
+void _authoringDraftValidateIdentifier(
+  String value,
+  String field, {
+  int maxBytes = 96,
+}) {
+  if (utf8.encode(value).length > maxBytes ||
+      !_authoringDraftIdentifierPattern.hasMatch(value) ||
+      value.startsWith('__') ||
+      _authoringDraftReservedIdentifiers.contains(value.toLowerCase())) {
+    throw FormatException('authoring draft field $field is not an identifier');
+  }
+}
+
+bool _authoringDraftReservedPortableSegment(String value) {
+  final upper = value.toUpperCase();
+  if (const {'CON', 'PRN', 'AUX', 'NUL'}.contains(upper)) return true;
+  if (upper.length == 4 &&
+      (upper.startsWith('COM') || upper.startsWith('LPT'))) {
+    final suffix = upper.codeUnitAt(3);
+    return suffix >= 0x31 && suffix <= 0x39;
+  }
+  return false;
+}
+
+void _authoringDraftValidateModuleNamespace(String value) {
+  if (utf8.encode(value).length > 255) {
+    throw const FormatException('authoring draft module namespace is too long');
+  }
+  final segments = value.split('.');
+  if (segments.isEmpty || segments.length > 16) {
+    throw const FormatException('authoring draft module namespace is invalid');
+  }
+  for (final segment in segments) {
+    _authoringDraftValidateIdentifier(segment, 'module_namespace');
+    if (_authoringDraftReservedPortableSegment(segment)) {
+      throw const FormatException(
+        'authoring draft module namespace is not portable',
+      );
+    }
+  }
+}
+
+void _authoringDraftValidateCatalogLayer(String value, String field) {
+  if (utf8.encode(value).length > 128 ||
+      !_authoringDraftCatalogLayerPattern.hasMatch(value)) {
+    throw FormatException(
+      'authoring draft field $field is not a canonical catalog layer',
+    );
+  }
+}
+
+String _authoringDraftPascalTechnicalId(String technicalId) => technicalId
+    .split('_')
+    .map(
+      (segment) =>
+          '${segment.substring(0, 1)}${segment.substring(1).toLowerCase()}',
+    )
+    .join();
+
+List<AuthoringDraftDiagnostic> _authoringDraftDiagnostics(
+  Map<String, Object?> json, {
+  required bool valid,
+}) {
+  final raw = json['diagnostics'];
+  if (raw is! List || raw.length > 1) {
+    throw const FormatException(
+      'authoring draft diagnostics must be a bounded list',
+    );
+  }
+  final diagnostics = raw
+      .map(
+        (item) => AuthoringDraftDiagnostic.fromJson(
+          _authoringRequiredObject(item, 'draft diagnostic'),
+        ),
+      )
+      .toList(growable: false);
+  if ((valid && diagnostics.isNotEmpty) ||
+      (!valid && diagnostics.length != 1)) {
+    throw const FormatException(
+      'authoring draft validity and diagnostics disagree',
+    );
+  }
+  return List.unmodifiable(diagnostics);
+}
+
+class AuthoringDraftDiagnostic {
+  const AuthoringDraftDiagnostic._({
+    required this.code,
+    required this.field,
+    required this.message,
+  });
+
+  static const _codes = <String>{
+    'NPC_EMPTY_VALUE',
+    'NPC_VALUE_TOO_LONG',
+    'NPC_TOO_MANY_MODULE_SEGMENTS',
+    'NPC_INVALID_IDENTIFIER_START',
+    'NPC_INVALID_IDENTIFIER_CHARACTER',
+    'NPC_RESERVED_IDENTIFIER',
+    'NPC_RESERVED_MODULE_SEGMENT',
+    'NPC_UNEXPECTED_PARENT_CLASS_PREFIX',
+    'NPC_CLASS_NAME_COLLISION',
+    'QUEST_INVALID_SEAL',
+    'QUEST_GENERATION_MISMATCH',
+    'QUEST_ZERO_ENTITY_ID',
+    'QUEST_EMPTY_VALUE',
+    'QUEST_VALUE_TOO_LONG',
+    'QUEST_INVALID_CHARACTER',
+    'QUEST_RESERVED_IDENTIFIER',
+    'QUEST_NON_CANONICAL_IDENTIFIER',
+    'QUEST_TOO_MANY_MODULE_SEGMENTS',
+    'QUEST_RESERVED_MODULE_SEGMENT',
+    'QUEST_INVALID_PARENT_CLASS',
+    'QUEST_PARENT_CLASS_COLLISION',
+    'QUEST_NON_CANONICAL_TEXT',
+    'QUEST_TOO_MANY_COLLISION_ENTRIES',
+    'QUEST_COLLISION_CATALOG_TOO_LARGE',
+    'QUEST_UNSAFE_COLLISION_ENTRY',
+    'QUEST_DUPLICATE_COLLISION_ENTRY',
+    'QUEST_GENERATED_NAME_COLLISION',
+    'QUEST_GENERATED_SYMBOL_COLLISION',
+  };
+
+  final String code;
+  final String field;
+  final String message;
+
+  factory AuthoringDraftDiagnostic.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'code',
+      'field',
+      'message',
+    }, 'draft diagnostic');
+    final code = _authoringRequiredString(json, 'code', maxBytes: 128);
+    final field = _authoringRequiredString(
+      json,
+      'field',
+      maxBytes: _maxAuthoringDiagnosticPathBytes,
+    );
+    final message = _authoringRequiredString(
+      json,
+      'message',
+      maxBytes: _maxAuthoringDiagnosticMessageBytes,
+    );
+    if (!_codes.contains(code) ||
+        !_authoringDiagnosticCodePattern.hasMatch(code)) {
+      throw const FormatException('unknown authoring draft diagnostic code');
+    }
+    return AuthoringDraftDiagnostic._(
+      code: code,
+      field: field,
+      message: message,
+    );
+  }
+}
+
+class AuthoringLogicalNpcCloneDraftResult {
+  const AuthoringLogicalNpcCloneDraftResult._({
+    required this.valid,
+    required this.generated,
+    required this.diagnostics,
+  });
+
+  final bool valid;
+  final AuthoringLogicalNpcCloneGenerated? generated;
+  final List<AuthoringDraftDiagnostic> diagnostics;
+
+  factory AuthoringLogicalNpcCloneDraftResult.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'valid',
+      'generated',
+      'diagnostics',
+    }, 'NPC draft response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring NPC draft response is not ok');
+    }
+    final valid = _authoringRequiredBool(json, 'valid');
+    final generatedValue = json['generated'];
+    final generated = generatedValue == null
+        ? null
+        : AuthoringLogicalNpcCloneGenerated.fromJson(
+            _authoringRequiredObject(generatedValue, 'NPC generated preview'),
+          );
+    if (valid != (generated != null)) {
+      throw const FormatException(
+        'authoring NPC draft validity and generated preview disagree',
+      );
+    }
+    return AuthoringLogicalNpcCloneDraftResult._(
+      valid: valid,
+      generated: generated,
+      diagnostics: _authoringDraftDiagnostics(json, valid: valid),
+    );
+  }
+}
+
+class AuthoringLogicalNpcCloneGenerated {
+  const AuthoringLogicalNpcCloneGenerated._({
+    required this.generatorId,
+    required this.generatorVersion,
+    required this.moduleNamespace,
+    required this.moduleRelativePath,
+    required this.uniqueName,
+    required this.classes,
+    required this.source,
+    required this.sourceSha256,
+    required this.inputFingerprint,
+    required this.status,
+  });
+
+  final String generatorId;
+  final int generatorVersion;
+  final String moduleNamespace;
+  final String moduleRelativePath;
+  final String uniqueName;
+  final AuthoringLogicalNpcCloneClasses classes;
+  final String source;
+  final String sourceSha256;
+  final String inputFingerprint;
+  final AuthoringLogicalNpcCloneStatus status;
+
+  factory AuthoringLogicalNpcCloneGenerated.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'generator_id',
+      'generator_version',
+      'module_namespace',
+      'module_relative_path',
+      'unique_name',
+      'classes',
+      'source',
+      'source_sha256',
+      'input_fingerprint',
+      'status',
+    }, 'NPC generated preview');
+    final generatorId = _authoringDraftFixedString(
+      json,
+      'generator_id',
+      'gore-authoring.logical-npc-clone-draft',
+    );
+    final generatorVersion = _authoringRequiredInt(
+      json,
+      'generator_version',
+      min: 1,
+      max: 1,
+    );
+    final moduleNamespace = _authoringRequiredString(
+      json,
+      'module_namespace',
+      maxBytes: 255,
+    );
+    _authoringDraftValidateModuleNamespace(moduleNamespace);
+    final moduleRelativePath = _authoringRequiredString(
+      json,
+      'module_relative_path',
+      maxBytes: 258,
+    );
+    if (moduleRelativePath != '${moduleNamespace.replaceAll('.', '/')}.as') {
+      throw const FormatException('NPC generated module path is inconsistent');
+    }
+    final uniqueName = _authoringRequiredString(
+      json,
+      'unique_name',
+      maxBytes: 64,
+    );
+    _authoringDraftValidateIdentifier(uniqueName, 'unique_name', maxBytes: 64);
+    final classes = AuthoringLogicalNpcCloneClasses.fromJson(
+      _authoringDraftObjectField(json, 'classes'),
+      uniqueName: uniqueName,
+    );
+    final status = AuthoringLogicalNpcCloneStatus.fromJson(
+      _authoringDraftObjectField(json, 'status'),
+    );
+    final source = _authoringRequiredString(
+      json,
+      'source',
+      maxBytes: _maxAuthoringDraftSourceBytes,
+    );
+    return AuthoringLogicalNpcCloneGenerated._(
+      generatorId: generatorId,
+      generatorVersion: generatorVersion,
+      moduleNamespace: moduleNamespace,
+      moduleRelativePath: moduleRelativePath,
+      uniqueName: uniqueName,
+      classes: classes,
+      source: source,
+      sourceSha256: _authoringDraftVerifiedSourceSha256(json, source),
+      inputFingerprint: _authoringDraftSha256(json, 'input_fingerprint'),
+      status: status,
+    );
+  }
+}
+
+class AuthoringLogicalNpcCloneClasses {
+  const AuthoringLogicalNpcCloneClasses._({
+    required this.characterDefinition,
+    required this.aiAgentConfig,
+    required this.spawnDefinition,
+  });
+
+  final String characterDefinition;
+  final String aiAgentConfig;
+  final String spawnDefinition;
+
+  factory AuthoringLogicalNpcCloneClasses.fromJson(
+    Map<String, Object?> json, {
+    required String uniqueName,
+  }) {
+    _authoringExactFields(json, const {
+      'character_definition',
+      'ai_agent_config',
+      'spawn_definition',
+    }, 'NPC classes');
+    final characterDefinition = _authoringRequiredString(
+      json,
+      'character_definition',
+      maxBytes: 160,
+    );
+    final aiAgentConfig = _authoringRequiredString(
+      json,
+      'ai_agent_config',
+      maxBytes: 160,
+    );
+    final spawnDefinition = _authoringRequiredString(
+      json,
+      'spawn_definition',
+      maxBytes: 160,
+    );
+    if (characterDefinition != 'UCharacterDefinition_Human_$uniqueName' ||
+        aiAgentConfig != 'UAIAgentConfig_Human_$uniqueName' ||
+        spawnDefinition != 'USpawnAIAgentDefinition_$uniqueName') {
+      throw const FormatException('NPC generated classes are inconsistent');
+    }
+    return AuthoringLogicalNpcCloneClasses._(
+      characterDefinition: characterDefinition,
+      aiAgentConfig: aiAgentConfig,
+      spawnDefinition: spawnDefinition,
+    );
+  }
+}
+
+enum AuthoringDraftAuthoringStatus { offlineDraft }
+
+enum AuthoringDraftRuntimeStatus { runtimeUnqualified }
+
+enum AuthoringDraftQuestTransitionStatus { transitionsRuntimeUnqualified }
+
+class AuthoringLogicalNpcCloneStatus {
+  const AuthoringLogicalNpcCloneStatus._({
+    required this.authoring,
+    required this.runtime,
+  });
+
+  final AuthoringDraftAuthoringStatus authoring;
+  final AuthoringDraftRuntimeStatus runtime;
+
+  factory AuthoringLogicalNpcCloneStatus.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {'authoring', 'runtime'}, 'NPC status');
+    _authoringDraftFixedString(json, 'authoring', 'offline_draft');
+    _authoringDraftFixedString(json, 'runtime', 'runtime_unqualified');
+    return const AuthoringLogicalNpcCloneStatus._(
+      authoring: AuthoringDraftAuthoringStatus.offlineDraft,
+      runtime: AuthoringDraftRuntimeStatus.runtimeUnqualified,
+    );
+  }
+}
+
+class AuthoringDraftQuestSkeletonResult {
+  const AuthoringDraftQuestSkeletonResult._({
+    required this.valid,
+    required this.generated,
+    required this.diagnostics,
+  });
+
+  final bool valid;
+  final AuthoringDraftQuestGenerated? generated;
+  final List<AuthoringDraftDiagnostic> diagnostics;
+
+  factory AuthoringDraftQuestSkeletonResult.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'valid',
+      'generated',
+      'diagnostics',
+    }, 'quest draft response');
+    if (json['ok'] != true) {
+      throw const FormatException('authoring quest draft response is not ok');
+    }
+    final valid = _authoringRequiredBool(json, 'valid');
+    final generatedValue = json['generated'];
+    final generated = generatedValue == null
+        ? null
+        : AuthoringDraftQuestGenerated.fromJson(
+            _authoringRequiredObject(generatedValue, 'quest generated preview'),
+          );
+    if (valid != (generated != null)) {
+      throw const FormatException(
+        'authoring quest draft validity and generated preview disagree',
+      );
+    }
+    return AuthoringDraftQuestSkeletonResult._(
+      valid: valid,
+      generated: generated,
+      diagnostics: _authoringDraftDiagnostics(json, valid: valid),
+    );
+  }
+}
+
+class AuthoringDraftQuestGenerated {
+  const AuthoringDraftQuestGenerated._({
+    required this.target,
+    required this.questId,
+    required this.generatorId,
+    required this.generatorVersion,
+    required this.giver,
+    required this.parentQuest,
+    required this.collisionCatalog,
+    required this.technicalNames,
+    required this.fixedShape,
+    required this.source,
+    required this.sourceSha256,
+    required this.inputFingerprint,
+    required this.status,
+  });
+
+  final AuthoringDraftGameGeneration target;
+  final String questId;
+  final String generatorId;
+  final int generatorVersion;
+  final AuthoringDraftQuestGiver giver;
+  final AuthoringDraftParentQuest parentQuest;
+  final AuthoringDraftCatalogAnchor collisionCatalog;
+  final AuthoringDraftQuestTechnicalNames technicalNames;
+  final AuthoringDraftQuestFixedShape fixedShape;
+  final String source;
+  final String sourceSha256;
+  final String inputFingerprint;
+  final AuthoringDraftQuestStatus status;
+
+  factory AuthoringDraftQuestGenerated.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'target',
+      'quest_id',
+      'generator_id',
+      'generator_version',
+      'giver',
+      'parent_quest',
+      'collision_catalog',
+      'technical_names',
+      'fixed_shape',
+      'source',
+      'source_sha256',
+      'input_fingerprint',
+      'status',
+    }, 'quest generated preview');
+    final questId = _authoringRequiredString(json, 'quest_id', maxBytes: 32);
+    _authoringEntityId(questId, 'quest_id');
+    if (questId == '00000000000000000000000000000000') {
+      throw const FormatException('authoring quest ID must not be zero');
+    }
+    final status = AuthoringDraftQuestStatus.fromJson(
+      _authoringDraftObjectField(json, 'status'),
+    );
+    final target = AuthoringDraftGameGeneration.fromJson(
+      _authoringDraftObjectField(json, 'target'),
+    );
+    final giver = AuthoringDraftQuestGiver.fromJson(
+      _authoringDraftObjectField(json, 'giver'),
+    );
+    final parentQuest = AuthoringDraftParentQuest.fromJson(
+      _authoringDraftObjectField(json, 'parent_quest'),
+    );
+    final collisionCatalog = AuthoringDraftCatalogAnchor.fromJson(
+      _authoringDraftObjectField(json, 'collision_catalog'),
+    );
+    if (!target.sameGeneration(giver.generation) ||
+        !target.sameGeneration(parentQuest.generation) ||
+        !target.sameGeneration(collisionCatalog.generation)) {
+      throw const FormatException(
+        'quest generated provenance has inconsistent game generations',
+      );
+    }
+    final technicalNames = AuthoringDraftQuestTechnicalNames.fromJson(
+      _authoringDraftObjectField(json, 'technical_names'),
+    );
+    if (parentQuest.runtimeClass.toLowerCase() ==
+            technicalNames.rootClass.toLowerCase() ||
+        parentQuest.runtimeClass.toLowerCase() ==
+            technicalNames.objectiveClass.toLowerCase()) {
+      throw const FormatException(
+        'quest generated class collides with its parent class',
+      );
+    }
+    final source = _authoringRequiredString(
+      json,
+      'source',
+      maxBytes: _maxAuthoringDraftSourceBytes,
+    );
+    return AuthoringDraftQuestGenerated._(
+      target: target,
+      questId: questId,
+      generatorId: _authoringDraftFixedString(
+        json,
+        'generator_id',
+        'gore-authoring.draft-quest-skeleton',
+      ),
+      generatorVersion: _authoringRequiredInt(
+        json,
+        'generator_version',
+        min: 1,
+        max: 1,
+      ),
+      giver: giver,
+      parentQuest: parentQuest,
+      collisionCatalog: collisionCatalog,
+      technicalNames: technicalNames,
+      fixedShape: AuthoringDraftQuestFixedShape.fromJson(
+        _authoringDraftObjectField(json, 'fixed_shape'),
+      ),
+      source: source,
+      sourceSha256: _authoringDraftVerifiedSourceSha256(json, source),
+      inputFingerprint: _authoringDraftSha256(json, 'input_fingerprint'),
+      status: status,
+    );
+  }
+}
+
+class AuthoringDraftQuestStatus {
+  const AuthoringDraftQuestStatus._({
+    required this.authoring,
+    required this.discovery,
+    required this.transitions,
+  });
+
+  final AuthoringDraftAuthoringStatus authoring;
+  final AuthoringDraftRuntimeStatus discovery;
+  final AuthoringDraftQuestTransitionStatus transitions;
+
+  factory AuthoringDraftQuestStatus.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'authoring',
+      'discovery',
+      'transitions',
+    }, 'quest status');
+    _authoringDraftFixedString(json, 'authoring', 'offline_draft');
+    _authoringDraftFixedString(json, 'discovery', 'runtime_unqualified');
+    _authoringDraftFixedString(
+      json,
+      'transitions',
+      'transitions_runtime_unqualified',
+    );
+    return const AuthoringDraftQuestStatus._(
+      authoring: AuthoringDraftAuthoringStatus.offlineDraft,
+      discovery: AuthoringDraftRuntimeStatus.runtimeUnqualified,
+      transitions:
+          AuthoringDraftQuestTransitionStatus.transitionsRuntimeUnqualified,
+    );
+  }
+}
+
+class AuthoringDraftContentSeal {
+  const AuthoringDraftContentSeal._({
+    required this.byteLength,
+    required this.sha256,
+  });
+
+  final int byteLength;
+  final String sha256;
+
+  factory AuthoringDraftContentSeal.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'byte_len',
+      'sha256',
+    }, 'draft content seal');
+    return AuthoringDraftContentSeal._(
+      byteLength: _authoringRequiredInt(json, 'byte_len', min: 1),
+      sha256: _authoringDraftSha256(json, 'sha256'),
+    );
+  }
+}
+
+class AuthoringDraftGameGeneration {
+  const AuthoringDraftGameGeneration._({required this.executable});
+  final AuthoringDraftContentSeal executable;
+
+  bool sameGeneration(AuthoringDraftGameGeneration other) =>
+      executable.byteLength == other.executable.byteLength &&
+      executable.sha256 == other.executable.sha256;
+
+  factory AuthoringDraftGameGeneration.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {'executable'}, 'draft game generation');
+    return AuthoringDraftGameGeneration._(
+      executable: AuthoringDraftContentSeal.fromJson(
+        _authoringDraftObjectField(json, 'executable'),
+      ),
+    );
+  }
+}
+
+class AuthoringDraftQuestGiver {
+  const AuthoringDraftQuestGiver._({
+    required this.generation,
+    required this.sourceSeal,
+    required this.catalogLayer,
+    required this.canonicalSelector,
+    required this.runtimeUniqueName,
+  });
+  final AuthoringDraftGameGeneration generation;
+  final AuthoringDraftContentSeal sourceSeal;
+  final String catalogLayer;
+  final String canonicalSelector;
+  final String runtimeUniqueName;
+
+  factory AuthoringDraftQuestGiver.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'generation',
+      'source_seal',
+      'catalog_layer',
+      'canonical_selector',
+      'runtime_unique_name',
+    }, 'quest giver');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    final canonicalSelector = _authoringRequiredString(
+      json,
+      'canonical_selector',
+      maxBytes: 96,
+    );
+    final runtimeUniqueName = _authoringRequiredString(
+      json,
+      'runtime_unique_name',
+      maxBytes: 96,
+    );
+    _authoringDraftValidateCatalogLayer(catalogLayer, 'giver.catalog_layer');
+    _authoringDraftValidateIdentifier(
+      canonicalSelector,
+      'giver.canonical_selector',
+    );
+    _authoringDraftValidateIdentifier(
+      runtimeUniqueName,
+      'giver.runtime_unique_name',
+    );
+    return AuthoringDraftQuestGiver._(
+      generation: AuthoringDraftGameGeneration.fromJson(
+        _authoringDraftObjectField(json, 'generation'),
+      ),
+      sourceSeal: AuthoringDraftContentSeal.fromJson(
+        _authoringDraftObjectField(json, 'source_seal'),
+      ),
+      catalogLayer: catalogLayer,
+      canonicalSelector: canonicalSelector,
+      runtimeUniqueName: runtimeUniqueName,
+    );
+  }
+}
+
+class AuthoringDraftParentQuest {
+  const AuthoringDraftParentQuest._({
+    required this.generation,
+    required this.sourceSeal,
+    required this.catalogLayer,
+    required this.canonicalSelector,
+    required this.runtimeClass,
+  });
+  final AuthoringDraftGameGeneration generation;
+  final AuthoringDraftContentSeal sourceSeal;
+  final String catalogLayer;
+  final String canonicalSelector;
+  final String runtimeClass;
+
+  factory AuthoringDraftParentQuest.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'generation',
+      'source_seal',
+      'catalog_layer',
+      'canonical_selector',
+      'runtime_class',
+    }, 'parent quest');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    final canonicalSelector = _authoringRequiredString(
+      json,
+      'canonical_selector',
+      maxBytes: 96,
+    );
+    final runtimeClass = _authoringRequiredString(
+      json,
+      'runtime_class',
+      maxBytes: 96,
+    );
+    _authoringDraftValidateCatalogLayer(
+      catalogLayer,
+      'parent_quest.catalog_layer',
+    );
+    _authoringDraftValidateIdentifier(
+      canonicalSelector,
+      'parent_quest.canonical_selector',
+    );
+    _authoringDraftValidateIdentifier(
+      runtimeClass,
+      'parent_quest.runtime_class',
+    );
+    if (!runtimeClass.startsWith('UQuest_')) {
+      throw const FormatException(
+        'authoring draft parent runtime class has an invalid prefix',
+      );
+    }
+    return AuthoringDraftParentQuest._(
+      generation: AuthoringDraftGameGeneration.fromJson(
+        _authoringDraftObjectField(json, 'generation'),
+      ),
+      sourceSeal: AuthoringDraftContentSeal.fromJson(
+        _authoringDraftObjectField(json, 'source_seal'),
+      ),
+      catalogLayer: catalogLayer,
+      canonicalSelector: canonicalSelector,
+      runtimeClass: runtimeClass,
+    );
+  }
+}
+
+class AuthoringDraftCatalogAnchor {
+  const AuthoringDraftCatalogAnchor._({
+    required this.generation,
+    required this.sourceSeal,
+    required this.catalogLayer,
+  });
+  final AuthoringDraftGameGeneration generation;
+  final AuthoringDraftContentSeal sourceSeal;
+  final String catalogLayer;
+
+  factory AuthoringDraftCatalogAnchor.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'generation',
+      'source_seal',
+      'catalog_layer',
+    }, 'collision catalog anchor');
+    final catalogLayer = _authoringRequiredString(
+      json,
+      'catalog_layer',
+      maxBytes: 128,
+    );
+    _authoringDraftValidateCatalogLayer(
+      catalogLayer,
+      'collision_catalog.catalog_layer',
+    );
+    return AuthoringDraftCatalogAnchor._(
+      generation: AuthoringDraftGameGeneration.fromJson(
+        _authoringDraftObjectField(json, 'generation'),
+      ),
+      sourceSeal: AuthoringDraftContentSeal.fromJson(
+        _authoringDraftObjectField(json, 'source_seal'),
+      ),
+      catalogLayer: catalogLayer,
+    );
+  }
+}
+
+class AuthoringDraftQuestTechnicalNames {
+  const AuthoringDraftQuestTechnicalNames._({
+    required this.moduleNamespace,
+    required this.moduleRelativePath,
+    required this.rootClass,
+    required this.objectiveClass,
+    required this.textHelper,
+    required this.rootGetter,
+    required this.objectiveGetter,
+  });
+  final String moduleNamespace;
+  final String moduleRelativePath;
+  final String rootClass;
+  final String objectiveClass;
+  final String textHelper;
+  final String rootGetter;
+  final String objectiveGetter;
+
+  factory AuthoringDraftQuestTechnicalNames.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'module_namespace',
+      'module_relative_path',
+      'root_class',
+      'objective_class',
+      'text_helper',
+      'root_getter',
+      'objective_getter',
+    }, 'quest technical names');
+    final moduleNamespace = _authoringRequiredString(
+      json,
+      'module_namespace',
+      maxBytes: 255,
+    );
+    _authoringDraftValidateModuleNamespace(moduleNamespace);
+    final moduleRelativePath = _authoringRequiredString(
+      json,
+      'module_relative_path',
+      maxBytes: 258,
+    );
+    if (moduleRelativePath != '${moduleNamespace.replaceAll('.', '/')}.as') {
+      throw const FormatException(
+        'quest generated module path is inconsistent',
+      );
+    }
+    final rootClass = _authoringRequiredString(
+      json,
+      'root_class',
+      maxBytes: 96,
+    );
+    final objectiveClass = _authoringRequiredString(
+      json,
+      'objective_class',
+      maxBytes: 96,
+    );
+    final textHelper = _authoringRequiredString(
+      json,
+      'text_helper',
+      maxBytes: 96,
+    );
+    final rootGetter = _authoringRequiredString(
+      json,
+      'root_getter',
+      maxBytes: 96,
+    );
+    final objectiveGetter = _authoringRequiredString(
+      json,
+      'objective_getter',
+      maxBytes: 96,
+    );
+    for (final entry in <String, String>{
+      'root_class': rootClass,
+      'objective_class': objectiveClass,
+      'text_helper': textHelper,
+      'root_getter': rootGetter,
+      'objective_getter': objectiveGetter,
+    }.entries) {
+      _authoringDraftValidateIdentifier(entry.value, entry.key);
+    }
+    if (!rootClass.startsWith('UQuest_')) {
+      throw const FormatException('quest root class has an invalid prefix');
+    }
+    final technicalId = rootClass.substring('UQuest_'.length);
+    if (!_authoringDraftTechnicalIdPattern.hasMatch(technicalId)) {
+      throw const FormatException('quest technical ID is not canonical');
+    }
+    final pascal = _authoringDraftPascalTechnicalId(technicalId);
+    if (objectiveClass != '${rootClass}_OBJ_DONE' ||
+        rootGetter != 'Get$pascal' ||
+        objectiveGetter != 'Get${pascal}Objective') {
+      throw const FormatException('quest generated technical names disagree');
+    }
+    final foldedSymbols = <String>{
+      rootClass.toLowerCase(),
+      objectiveClass.toLowerCase(),
+      textHelper.toLowerCase(),
+      rootGetter.toLowerCase(),
+      objectiveGetter.toLowerCase(),
+    };
+    if (foldedSymbols.length != 5) {
+      throw const FormatException('quest generated symbols collide');
+    }
+    return AuthoringDraftQuestTechnicalNames._(
+      moduleNamespace: moduleNamespace,
+      moduleRelativePath: moduleRelativePath,
+      rootClass: rootClass,
+      objectiveClass: objectiveClass,
+      textHelper: textHelper,
+      rootGetter: rootGetter,
+      objectiveGetter: objectiveGetter,
+    );
+  }
+}
+
+class AuthoringDraftQuestFixedShape {
+  const AuthoringDraftQuestFixedShape._({
+    required this.questBaseClass,
+    required this.rootKind,
+    required this.objectiveKind,
+    required this.rootExternalStart,
+    required this.objectiveExternalStart,
+    required this.objectiveExternalSuccess,
+    required this.objectiveSucceedsParent,
+  });
+  final String questBaseClass;
+  final String rootKind;
+  final String objectiveKind;
+  final bool rootExternalStart;
+  final bool objectiveExternalStart;
+  final bool objectiveExternalSuccess;
+  final bool objectiveSucceedsParent;
+
+  factory AuthoringDraftQuestFixedShape.fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'quest_base_class',
+      'root_kind',
+      'objective_kind',
+      'root_external_start',
+      'objective_external_start',
+      'objective_external_success',
+      'objective_succeeds_parent',
+    }, 'quest fixed shape');
+    final questBaseClass = _authoringDraftFixedString(
+      json,
+      'quest_base_class',
+      'UG1RQuest',
+    );
+    final rootKind = _authoringDraftFixedString(
+      json,
+      'root_kind',
+      'EQuestKind::Side',
+    );
+    final objectiveKind = _authoringDraftFixedString(
+      json,
+      'objective_kind',
+      'EQuestKind::Subobjective',
+    );
+    final rootExternalStart = _authoringRequiredBool(
+      json,
+      'root_external_start',
+    );
+    final objectiveExternalStart = _authoringRequiredBool(
+      json,
+      'objective_external_start',
+    );
+    final objectiveExternalSuccess = _authoringRequiredBool(
+      json,
+      'objective_external_success',
+    );
+    final objectiveSucceedsParent = _authoringRequiredBool(
+      json,
+      'objective_succeeds_parent',
+    );
+    if (!rootExternalStart ||
+        !objectiveExternalStart ||
+        !objectiveExternalSuccess ||
+        !objectiveSucceedsParent) {
+      throw const FormatException('quest fixed shape is not supported');
+    }
+    return AuthoringDraftQuestFixedShape._(
+      questBaseClass: questBaseClass,
+      rootKind: rootKind,
+      objectiveKind: objectiveKind,
+      rootExternalStart: rootExternalStart,
+      objectiveExternalStart: objectiveExternalStart,
+      objectiveExternalSuccess: objectiveExternalSuccess,
+      objectiveSucceedsParent: objectiveSucceedsParent,
     );
   }
 }

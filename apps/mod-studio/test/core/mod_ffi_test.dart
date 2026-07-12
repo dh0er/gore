@@ -1,6 +1,138 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+
+String _draftSourceSha256(String source) =>
+    crypto.sha256.convert(utf8.encode(source)).toString();
+
+Map<String, Object?> _validNpcDraftResponse() => {
+  'ok': true,
+  'valid': true,
+  'generated': <String, Object?>{
+    'generator_id': 'gore-authoring.logical-npc-clone-draft',
+    'generator_version': 1,
+    'module_namespace': 'GoreMods.Probe.NpcLogicalCloneV1',
+    'module_relative_path': 'GoreMods/Probe/NpcLogicalCloneV1.as',
+    'unique_name': 'GORE_LOGICAL_ASGHAN_CLONE_V1',
+    'classes': <String, Object?>{
+      'character_definition':
+          'UCharacterDefinition_Human_GORE_LOGICAL_ASGHAN_CLONE_V1',
+      'ai_agent_config': 'UAIAgentConfig_Human_GORE_LOGICAL_ASGHAN_CLONE_V1',
+      'spawn_definition':
+          'USpawnAIAgentDefinition_GORE_LOGICAL_ASGHAN_CLONE_V1',
+    },
+    'source': 'class UCharacterDefinition_Human_GORE_LOGICAL_ASGHAN_CLONE_V1\n',
+    'source_sha256': _draftSourceSha256(
+      'class UCharacterDefinition_Human_GORE_LOGICAL_ASGHAN_CLONE_V1\n',
+    ),
+    'input_fingerprint': List.filled(64, 'b').join(),
+    'status': <String, Object?>{
+      'authoring': 'offline_draft',
+      'runtime': 'runtime_unqualified',
+    },
+  },
+  'diagnostics': <Object?>[],
+};
+
+Map<String, Object?> _draftGeneration(String byte) => {
+  'executable': <String, Object?>{
+    'byte_len': 1000000,
+    'sha256': List.filled(32, byte).join(),
+  },
+};
+
+Map<String, Object?> _draftSeal(String byte, int byteLength) => {
+  'byte_len': byteLength,
+  'sha256': List.filled(32, byte).join(),
+};
+
+Map<String, Object?> _validQuestDraftResponse() => {
+  'ok': true,
+  'valid': true,
+  'generated': <String, Object?>{
+    'target': _draftGeneration('11'),
+    'quest_id': '0123456789abcdef0123456789abcdef',
+    'generator_id': 'gore-authoring.draft-quest-skeleton',
+    'generator_version': 1,
+    'giver': <String, Object?>{
+      'generation': _draftGeneration('11'),
+      'source_seal': _draftSeal('22', 8192),
+      'catalog_layer': 'base-game.g1r.characters',
+      'canonical_selector': 'CatalogCharacter_00263',
+      'runtime_unique_name': 'OM_GRD_Asghan_263',
+    },
+    'parent_quest': <String, Object?>{
+      'generation': _draftGeneration('11'),
+      'source_seal': _draftSeal('44', 4096),
+      'catalog_layer': 'dependency.story-pack.quests',
+      'canonical_selector': 'CatalogQuest_00263',
+      'runtime_class': 'UQuest_SwampCamp_SCCHAPTER2',
+    },
+    'collision_catalog': <String, Object?>{
+      'generation': _draftGeneration('11'),
+      'source_seal': _draftSeal('33', 32768),
+      'catalog_layer': 'resolved-loadout.scripts.v1',
+    },
+    'technical_names': <String, Object?>{
+      'module_namespace': 'GoreMods.Probe.AsghanMiniQuest',
+      'module_relative_path': 'GoreMods/Probe/AsghanMiniQuest.as',
+      'root_class': 'UQuest_GORE_PROBE_ASGHAN_MINI',
+      'objective_class': 'UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE',
+      'text_helper': 'GoreProbeAsghanText',
+      'root_getter': 'GetGoreProbeAsghanMini',
+      'objective_getter': 'GetGoreProbeAsghanMiniObjective',
+    },
+    'fixed_shape': <String, Object?>{
+      'quest_base_class': 'UG1RQuest',
+      'root_kind': 'EQuestKind::Side',
+      'objective_kind': 'EQuestKind::Subobjective',
+      'root_external_start': true,
+      'objective_external_start': true,
+      'objective_external_success': true,
+      'objective_succeeds_parent': true,
+    },
+    'source': 'class UQuest_GORE_PROBE_ASGHAN_MINI : UG1RQuest\n',
+    'source_sha256': _draftSourceSha256(
+      'class UQuest_GORE_PROBE_ASGHAN_MINI : UG1RQuest\n',
+    ),
+    'input_fingerprint': List.filled(64, 'd').join(),
+    'status': <String, Object?>{
+      'authoring': 'offline_draft',
+      'discovery': 'runtime_unqualified',
+      'transitions': 'transitions_runtime_unqualified',
+    },
+  },
+  'diagnostics': <Object?>[],
+};
+
+Map<String, Object?> _invalidNpcDraftResponse() => {
+  'ok': true,
+  'valid': false,
+  'generated': null,
+  'diagnostics': <Object?>[_draftDiagnostic()],
+};
+
+Map<String, Object?> _draftDiagnostic() => {
+  'code': 'NPC_INVALID_IDENTIFIER_CHARACTER',
+  'field': 'unique_name',
+  'message': 'technical identity contains invalid character',
+};
+
+Map<String, Object?> _draftGenerated(Map<String, Object?> response) =>
+    (response['generated'] as Map).cast<String, Object?>();
+
+Map<String, Object?> _draftGeneratedObject(
+  Map<String, Object?> response,
+  String field,
+) => (_draftGenerated(response)[field] as Map).cast<String, Object?>();
+
+Map<String, Object?> _firstDraftDiagnostic(Map<String, Object?> response) =>
+    ((response['diagnostics'] as List<Object?>).single as Map)
+        .cast<String, Object?>();
 
 Map<String, Object?> _validVoiceMatchResponse() => {
   'ok': true,
@@ -377,6 +509,251 @@ void main() {
         () => result.diagnostics.last.relatedEntities.clear(),
         throwsA(isA<UnsupportedError>()),
       );
+    },
+  );
+
+  test(
+    'draft preview wrappers preserve raw JSON and parse typed results',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_logical_npc_clone_draft_v1_generate':
+              _validNpcDraftResponse(),
+          'authoring_draft_quest_skeleton_v1_generate':
+              _validQuestDraftResponse(),
+        },
+      );
+      const duplicateNpcInput =
+          '{"unique_name":"FIRST","unique_name":"SECOND"}';
+      const rawQuestInput = '{"technical_id":"GORE_TEST"}';
+
+      final npc = await ModFfi(
+        core,
+      ).authoringLogicalNpcCloneDraftV1Generate(inputJson: duplicateNpcInput);
+      final quest = await ModFfi(
+        core,
+      ).authoringDraftQuestSkeletonV1Generate(inputJson: rawQuestInput);
+
+      expect(npc.valid, isTrue);
+      expect(npc.generated?.generatorVersion, 1);
+      expect(
+        npc.generated?.classes.spawnDefinition,
+        'USpawnAIAgentDefinition_GORE_LOGICAL_ASGHAN_CLONE_V1',
+      );
+      expect(npc.diagnostics, isEmpty);
+      expect(
+        npc.generated?.status.runtime,
+        AuthoringDraftRuntimeStatus.runtimeUnqualified,
+      );
+      expect(() => npc.diagnostics.clear(), throwsUnsupportedError);
+      expect(quest.valid, isTrue);
+      expect(quest.generated?.questId, '0123456789abcdef0123456789abcdef');
+      expect(
+        quest.generated?.generatorId,
+        'gore-authoring.draft-quest-skeleton',
+      );
+      expect(quest.generated?.target.executable.byteLength, 1000000);
+      expect(quest.generated?.giver.runtimeUniqueName, 'OM_GRD_Asghan_263');
+      expect(
+        quest.generated?.parentQuest.runtimeClass,
+        'UQuest_SwampCamp_SCCHAPTER2',
+      );
+      expect(
+        quest.generated?.collisionCatalog.catalogLayer,
+        'resolved-loadout.scripts.v1',
+      );
+      expect(quest.generated?.fixedShape.objectiveSucceedsParent, isTrue);
+      expect(quest.generated?.fixedShape.questBaseClass, 'UG1RQuest');
+      expect(
+        quest.generated?.status.transitions,
+        AuthoringDraftQuestTransitionStatus.transitionsRuntimeUnqualified,
+      );
+      expect(core.calls[0].payload, {'input_json': duplicateNpcInput});
+      expect(core.calls[1].payload, {'input_json': rawQuestInput});
+    },
+  );
+
+  test('draft invalid result remains typed and immutable', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'authoring_logical_npc_clone_draft_v1_generate':
+            _invalidNpcDraftResponse(),
+      },
+    );
+
+    final result = await ModFfi(
+      core,
+    ).authoringLogicalNpcCloneDraftV1Generate(inputJson: '{}');
+
+    expect(result.valid, isFalse);
+    expect(result.generated, isNull);
+    expect(result.diagnostics.single.code, 'NPC_INVALID_IDENTIFIER_CHARACTER');
+    expect(result.diagnostics.single.field, 'unique_name');
+    expect(() => result.diagnostics.clear(), throwsUnsupportedError);
+  });
+
+  test(
+    'draft DTOs reject loose, qualified, oversized, and inconsistent data',
+    () {
+      final badNpc = <void Function(Map<String, Object?>)>[
+        (response) => response['extra'] = true,
+        (response) => response['valid'] = false,
+        (response) => response['diagnostics'] = <Object?>[_draftDiagnostic()],
+        (response) => _draftGenerated(response)['generator_id'] = 'other',
+        (response) => _draftGenerated(response)['generator_version'] = 2,
+        (response) =>
+            _draftGenerated(response)['module_relative_path'] = '../escape.as',
+        (response) =>
+            (_draftGenerated(response)['classes'] as Map)['spawn_definition'] =
+                'USpawnAIAgentDefinition_OTHER',
+        (response) => (_draftGenerated(response)['status'] as Map)['runtime'] =
+            'runtime_qualified',
+        (response) => _draftGenerated(response)['source_sha256'] = List.filled(
+          64,
+          'A',
+        ).join(),
+        (response) => _draftGenerated(response)['source'] =
+            '${_draftGenerated(response)['source']} ',
+        (response) => _draftGenerated(response)['source'] = List.filled(
+          1024 * 1024 + 1,
+          'x',
+        ).join(),
+      ];
+      for (final mutate in badNpc) {
+        final response = _validNpcDraftResponse();
+        mutate(response);
+        expect(
+          () => AuthoringLogicalNpcCloneDraftResult.fromJson(response),
+          throwsFormatException,
+        );
+      }
+
+      final badInvalid = <void Function(Map<String, Object?>)>[
+        (response) => response['diagnostics'] = <Object?>[],
+        (response) => _firstDraftDiagnostic(response)['code'] = 'FUTURE_CODE',
+        (response) => _firstDraftDiagnostic(response)['field'] = '',
+        (response) => _firstDraftDiagnostic(response)['message'] = List.filled(
+          4097,
+          'x',
+        ).join(),
+        (response) =>
+            response['generated'] = _validNpcDraftResponse()['generated'],
+      ];
+      for (final mutate in badInvalid) {
+        final response = _invalidNpcDraftResponse();
+        mutate(response);
+        expect(
+          () => AuthoringLogicalNpcCloneDraftResult.fromJson(response),
+          throwsFormatException,
+        );
+      }
+
+      final badQuest = <void Function(Map<String, Object?>)>[
+        (response) => response['extra'] = true,
+        (response) => _draftGenerated(response)['quest_id'] =
+            '0123456789ABCDEF0123456789ABCDEF',
+        (response) => _draftGenerated(response)['quest_id'] =
+            '00000000000000000000000000000000',
+        (response) => _draftGenerated(response)['generator_id'] = 'other',
+        (response) =>
+            (_draftGenerated(response)['target'] as Map)['unexpected'] = true,
+        (response) =>
+            _draftGeneratedObject(response, 'giver')['canonical_selector'] =
+                'class',
+        (response) =>
+            _draftGeneratedObject(response, 'giver')['canonical_selector'] =
+                '__hidden',
+        (response) =>
+            _draftGeneratedObject(response, 'giver')['catalog_layer'] =
+                'Base Game',
+        (response) =>
+            ((_draftGenerated(response)['giver'] as Map)['source_seal']
+                    as Map)['byte_len'] =
+                0,
+        (response) =>
+            (((_draftGenerated(response)['giver'] as Map)['generation']
+                    as Map)['executable']
+                as Map)['sha256'] = List.filled(
+              64,
+              '9',
+            ).join(),
+        (response) => _draftGeneratedObject(
+          response,
+          'technical_names',
+        )['module_relative_path'] = '../escape.as',
+        (response) {
+          final names = _draftGeneratedObject(response, 'technical_names');
+          names['module_namespace'] = 'GoreMods.CON.Bad';
+          names['module_relative_path'] = 'GoreMods/CON/Bad.as';
+        },
+        (response) => _draftGeneratedObject(
+          response,
+          'technical_names',
+        )['objective_class'] = 'UQuest_OTHER',
+        (response) =>
+            _draftGeneratedObject(response, 'technical_names')['root_getter'] =
+                'GetWrong',
+        (response) =>
+            _draftGeneratedObject(response, 'parent_quest')['runtime_class'] =
+                'UG1RQuest',
+        (response) =>
+            _draftGeneratedObject(response, 'parent_quest')['runtime_class'] =
+                'UQuest_GORE_PROBE_ASGHAN_MINI',
+        (response) => _draftGeneratedObject(
+          response,
+          'fixed_shape',
+        )['objective_succeeds_parent'] = false,
+        (response) => _draftGeneratedObject(response, 'status')['discovery'] =
+            'runtime_qualified',
+      ];
+      for (final mutate in badQuest) {
+        final response = _validQuestDraftResponse();
+        mutate(response);
+        expect(
+          () => AuthoringDraftQuestSkeletonResult.fromJson(response),
+          throwsFormatException,
+        );
+      }
+    },
+  );
+
+  test(
+    'draft preview wrappers enforce UTF-8 request limits before FFI',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_logical_npc_clone_draft_v1_generate':
+              _validNpcDraftResponse(),
+          'authoring_draft_quest_skeleton_v1_generate':
+              _validQuestDraftResponse(),
+        },
+      );
+      final ffi = ModFfi(core);
+
+      await expectLater(
+        ffi.authoringLogicalNpcCloneDraftV1Generate(
+          inputJson: String.fromCharCodes(
+            Uint16List(8193)..fillRange(0, 8193, 0x00e9),
+          ),
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        ffi.authoringDraftQuestSkeletonV1Generate(
+          inputJson: String.fromCharCodes(
+            Uint16List(10 * 1024 * 1024 + 1)
+              ..fillRange(0, 10 * 1024 * 1024 + 1, 0x00e9),
+          ),
+        ),
+        throwsArgumentError,
+      );
+      await expectLater(
+        ffi.authoringDraftQuestSkeletonV1Generate(
+          inputJson: String.fromCharCodes(Uint8List(11 * 1024 * 1024)),
+        ),
+        throwsArgumentError,
+      );
+      expect(core.calls, isEmpty);
     },
   );
 
