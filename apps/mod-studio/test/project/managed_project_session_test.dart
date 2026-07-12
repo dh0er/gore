@@ -1,0 +1,546 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/project/managed_project_lock.dart';
+import 'package:gore_mod/project/managed_project_session.dart';
+import 'package:gore_mod/project/project_atomic_io.dart';
+import 'package:path/path.dart' as p;
+
+void main() {
+  late Directory fixture;
+
+  setUp(() async {
+    fixture = await Directory.systemTemp.createTemp('gore_managed_session_');
+  });
+
+  tearDown(() async {
+    if (await fixture.exists()) await fixture.delete(recursive: true);
+  });
+
+  test('create, save, close, and open preserve the exact checkpoint', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final firstProject = _projectJson(revision: 0, name: 'First');
+    final secondProject = _projectJson(revision: 1, name: 'Second');
+
+    final created = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: firstProject,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final firstHead = created.head.canonicalJson;
+    expect(created.projectJson, firstProject);
+    expect(await created.headFile.readAsString(), firstHead);
+
+    await created.save(secondProject);
+    final secondHead = created.head.canonicalJson;
+    expect(secondHead, isNot(firstHead));
+    expect(created.projectJson, secondProject);
+    expect(await created.headFile.readAsString(), secondHead);
+    expect(created.requiresReopen, isFalse);
+    await created.close();
+    await created.close();
+
+    final reopened = await ManagedAuthoringProjectSession.open(
+      root: root,
+      store: store,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    expect(reopened.head.canonicalJson, secondHead);
+    expect(reopened.projectJson, secondProject);
+    await reopened.close();
+
+    expect(store.openVerifications, isNotEmpty);
+    expect(
+      store.openVerifications,
+      everyElement(AuthoringAssetVerification.full),
+    );
+    expect(store.headVerifications, isNotEmpty);
+    expect(
+      store.headVerifications,
+      everyElement(AuthoringAssetVerification.full),
+    );
+  });
+
+  test('save rejects exact head drift without overwriting it', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final original = _projectJson(revision: 0, name: 'Original');
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final sessionHead = session.head.canonicalJson;
+    final externalProject = _projectJson(revision: 8, name: 'External');
+    final externalHead = store.register(externalProject);
+    store.afterPrepare = (root, _, _) async {
+      await File(
+        p.join(root, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+    };
+
+    await expectLater(
+      session.save(_projectJson(revision: 1, name: 'Local')),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+    expect(session.head.canonicalJson, sessionHead);
+    expect(session.projectJson, original);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.save(_projectJson(revision: 2, name: 'Another local edit')),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    await session.close();
+  });
+
+  test('native prepare CAS conflicts also require a reopen', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final exactHead = session.head.canonicalJson;
+    store.nextPrepareError = const ModFfiException(
+      command: 'authoring_store_prepare_checkpoint',
+      code: 'AUTHORING_STORE_HEAD_CONFLICT',
+      message: 'injected native head conflict',
+    );
+
+    await expectLater(
+      session.save(_projectJson(revision: 1, name: 'Local')),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    expect(await session.headFile.readAsString(), exactHead);
+    await session.close();
+  });
+
+  test('noncanonical disk head poisons the session before prepare', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final prepareCallsAfterCreate = store.prepareCalls;
+    await session.headFile.writeAsString(
+      '${session.head.canonicalJson}\n',
+      flush: true,
+    );
+
+    await expectLater(
+      session.save(_projectJson(revision: 1, name: 'Rejected')),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.prepareCalls, prepareCallsAfterCreate);
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test('native corrupt-head errors poison the session', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Original'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+    store.nextPrepareError = const ModFfiException(
+      command: 'authoring_store_prepare_checkpoint',
+      code: 'AUTHORING_STORE_JSON_NONCANONICAL',
+      message: 'injected corrupt fixed head',
+    );
+
+    await expectLater(
+      session.save(_projectJson(revision: 1, name: 'Rejected')),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test(
+    'open repairs a fully verified head after an interrupted publish',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final project = _projectJson(revision: 0, name: 'Crash recovery');
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '70000000000000000000000000000001',
+        onPhase: (phase) {
+          if (phase == AtomicSwapPhase.tempPromoted) {
+            throw const _InjectedCrash();
+          }
+        },
+      );
+
+      await expectLater(
+        ManagedAuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: project,
+          profile: AuthoringValidationProfile.experimental,
+          replacement: replacement,
+        ),
+        throwsA(isA<_InjectedCrash>()),
+      );
+      final headFile = File(p.join(root.path, 'gore-project.json'));
+      final journal = File(AtomicByteReplacement.journalPathFor(headFile));
+      expect(await headFile.exists(), isTrue);
+      expect(await journal.exists(), isTrue);
+
+      final recovered = await ManagedAuthoringProjectSession.open(
+        root: root,
+        store: store,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      expect(recovered.projectJson, project);
+      expect(await journal.exists(), isFalse);
+      expect(store.headVerifications, isNotEmpty);
+      await recovered.close();
+    },
+  );
+
+  test(
+    'a failed full post-publication reopen poisons only the session',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final original = _projectJson(revision: 0, name: 'Original');
+      final saved = _projectJson(revision: 1, name: 'Saved');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      store.nextOpenProjectOverride = _projectJson(
+        revision: 99,
+        name: 'Injected mismatch',
+      );
+
+      await expectLater(
+        session.save(saved),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+
+      final reopened = await ManagedAuthoringProjectSession.open(
+        root: root,
+        store: store,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      expect(reopened.projectJson, saved);
+      await reopened.close();
+    },
+  );
+
+  test('open failure releases the session lock', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final created = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Lock release'),
+      profile: AuthoringValidationProfile.production,
+    );
+    await created.close();
+    store.failNextOpen = true;
+
+    await expectLater(
+      ManagedAuthoringProjectSession.open(
+        root: root,
+        store: store,
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsA(isA<StateError>()),
+    );
+
+    final lock = await ManagedProjectSessionLock.acquire(root);
+    await lock.release();
+  });
+
+  test('create never replaces an existing managed head', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final first = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 0, name: 'Existing'),
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final exactHead = await first.headFile.readAsString();
+    await first.close();
+
+    await expectLater(
+      ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 1, name: 'Replacement'),
+        profile: AuthoringValidationProfile.experimental,
+      ),
+      throwsA(isA<ManagedProjectAlreadyInitializedException>()),
+    );
+    expect(
+      await File(p.join(root.path, 'gore-project.json')).readAsString(),
+      exactHead,
+    );
+
+    final lock = await ManagedProjectSessionLock.acquire(root);
+    await lock.release();
+  });
+
+  test('create leaves an interrupted existing save untouched', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final original = _projectJson(revision: 0, name: 'Existing');
+    final created = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final originalHead = created.head;
+    await created.close();
+
+    final pendingProject = _projectJson(revision: 1, name: 'Pending save');
+    final pendingHead = store.register(pendingProject);
+    final replacement = AtomicByteReplacement(
+      operationIdFactory: () => '72000000000000000000000000000001',
+      onPhase: (phase) {
+        if (phase == AtomicSwapPhase.tempValidated) {
+          throw const _InjectedCrash();
+        }
+      },
+    );
+    Future<bool> validate(File candidate) async {
+      try {
+        final head = AuthoringWorkingHead.fromCanonicalJson(
+          await candidate.readAsString(),
+        );
+        await store.openHeadBytes(
+          root: root.path,
+          head: head,
+          verification: AuthoringAssetVerification.full,
+          profile: AuthoringValidationProfile.experimental,
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    await expectLater(
+      replacement.replaceIfUnchanged(
+        target: created.headFile,
+        bytes: utf8.encode(pendingHead.canonicalJson),
+        expectedBytes: utf8.encode(originalHead.canonicalJson),
+        validate: validate,
+      ),
+      throwsA(isA<_InjectedCrash>()),
+    );
+    final journal = File(
+      AtomicByteReplacement.journalPathFor(created.headFile),
+    );
+    expect(await created.headFile.readAsString(), originalHead.canonicalJson);
+    expect(await journal.exists(), isTrue);
+
+    await expectLater(
+      ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 2, name: 'Must not replace'),
+        profile: AuthoringValidationProfile.experimental,
+      ),
+      throwsA(isA<ManagedProjectAlreadyInitializedException>()),
+    );
+    expect(await created.headFile.readAsString(), originalHead.canonicalJson);
+    expect(await journal.exists(), isTrue);
+
+    final recovered = await ManagedAuthoringProjectSession.open(
+      root: root,
+      store: store,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    expect(recovered.head.canonicalJson, pendingHead.canonicalJson);
+    expect(recovered.projectJson, pendingProject);
+    await recovered.close();
+  });
+
+  test('create rejects a missing root without creating artifacts', () async {
+    final root = Directory(p.join(fixture.path, 'missing-project'));
+
+    await expectLater(
+      ManagedAuthoringProjectSession.create(
+        root: root,
+        store: _FakeManagedStore(),
+        projectJson: _projectJson(revision: 0, name: 'Missing'),
+        profile: AuthoringValidationProfile.experimental,
+      ),
+      throwsA(isA<ManagedProjectLockException>()),
+    );
+    expect(await root.exists(), isFalse);
+  });
+}
+
+typedef _AfterPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead head,
+      String projectJson,
+    );
+
+class _FakeManagedStore implements ManagedAuthoringStore {
+  final Map<String, String> _projectsByHead = <String, String>{};
+  int _sequence = 0;
+
+  _AfterPrepare? afterPrepare;
+  String? nextOpenProjectOverride;
+  bool failNextOpen = false;
+  ModFfiException? nextPrepareError;
+  int prepareCalls = 0;
+  final List<AuthoringAssetVerification> openVerifications = [];
+  final List<AuthoringAssetVerification> headVerifications = [];
+
+  AuthoringWorkingHead register(String projectJson) {
+    _sequence++;
+    final sha = _sequence.toRadixString(16).padLeft(64, '0');
+    final raw = jsonEncode({
+      'store_format': 1,
+      'snapshot': {'byte_len': utf8.encode(projectJson).length, 'sha256': sha},
+    });
+    final head = AuthoringWorkingHead.fromCanonicalJson(raw);
+    _projectsByHead[head.canonicalJson] = projectJson;
+    return head;
+  }
+
+  @override
+  Future<AuthoringStoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    openVerifications.add(verification);
+    if (failNextOpen) {
+      failNextOpen = false;
+      throw StateError('injected open failure');
+    }
+    final rawHead = await File(
+      p.join(root, 'gore-project.json'),
+    ).readAsString();
+    final head = AuthoringWorkingHead.fromCanonicalJson(rawHead);
+    final project = _projectsByHead[rawHead];
+    if (project == null) throw StateError('unknown published head');
+    final override = nextOpenProjectOverride;
+    nextOpenProjectOverride = null;
+    return _opened(head, override ?? project);
+  }
+
+  @override
+  Future<AuthoringStoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    headVerifications.add(verification);
+    final project = _projectsByHead[head.canonicalJson];
+    if (project == null) throw StateError('unknown checkpoint head');
+    return _opened(head, project);
+  }
+
+  @override
+  Future<AuthoringCheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    prepareCalls++;
+    final injectedError = nextPrepareError;
+    nextPrepareError = null;
+    if (injectedError != null) throw injectedError;
+    final headFile = File(p.join(root, 'gore-project.json'));
+    final actual = await headFile.exists()
+        ? await headFile.readAsString()
+        : null;
+    if (actual != expectedHead?.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_checkpoint',
+        code: 'AUTHORING_STORE_HEAD_CONFLICT',
+        message: 'fake native head CAS rejected',
+      );
+    }
+    final head = register(projectJson);
+    await afterPrepare?.call(root, head, projectJson);
+    afterPrepare = null;
+    return AuthoringCheckpointPreparation.fromJson({
+      'ok': true,
+      'head_json': head.canonicalJson,
+      'diagnostics': <Object?>[],
+      'blocks_build': false,
+    });
+  }
+
+  AuthoringStoreOpenedResult _opened(
+    AuthoringWorkingHead head,
+    String projectJson,
+  ) => AuthoringStoreOpenedResult.fromJson({
+    'ok': true,
+    'head_json': head.canonicalJson,
+    'project_json': projectJson,
+    'diagnostics': <Object?>[],
+    'blocks_build': false,
+  });
+}
+
+class _InjectedCrash implements Exception {
+  const _InjectedCrash();
+}
+
+String _projectJson({required int revision, required String name}) =>
+    jsonEncode(<String, Object?>{
+      'format': 2,
+      'schema_revision': 1,
+      'project_id': '00000000000000000000000000000001',
+      'revision': revision,
+      'meta': <String, Object?>{
+        'name': name,
+        'version': '1.0.0',
+        'author': 'session tests',
+      },
+      'target': <String, Object?>{
+        'executable': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List.filled(64, '4').join(),
+        },
+      },
+      'authoring_locales': <Object?>[],
+      'entities': <String, Object?>{},
+      'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+    });

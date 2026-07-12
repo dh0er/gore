@@ -120,6 +120,8 @@ void main() {
       ManagedProjectSessionLock.acquire(missing),
       throwsA(isA<ManagedProjectLockException>()),
     );
+    expect(await missing.exists(), isFalse);
+    expect(await Directory(p.join(missing.path, '.gore')).exists(), isFalse);
 
     final fileRoot = File(p.join(root.path, 'file-root'));
     await fileRoot.writeAsString('preserve');
@@ -128,5 +130,52 @@ void main() {
       throwsA(isA<ManagedProjectLockException>()),
     );
     expect(await fileRoot.readAsString(), 'preserve');
+  });
+
+  test('a linked directory prefix is rejected before lock artifacts', () async {
+    final realParent = Directory(p.join(root.path, 'real-parent'));
+    final realProject = Directory(p.join(realParent.path, 'project'));
+    await realProject.create(recursive: true);
+    final aliasPath = p.join(root.path, 'linked-prefix');
+
+    if (Platform.isWindows) {
+      final result = await Process.run('cmd.exe', [
+        '/c',
+        'mklink',
+        '/J',
+        aliasPath,
+        realParent.path,
+      ]);
+      expect(
+        result.exitCode,
+        0,
+        reason: 'could not create Windows junction: ${result.stderr}',
+      );
+    } else {
+      await Link(aliasPath).create(realParent.path);
+    }
+    addTearDown(() async {
+      final type = await FileSystemEntity.type(aliasPath, followLinks: false);
+      if (type == FileSystemEntityType.link) {
+        await Link(aliasPath).delete();
+      } else if (type == FileSystemEntityType.directory) {
+        await Directory(aliasPath).delete();
+      }
+    });
+
+    expect(
+      await FileSystemEntity.type(aliasPath, followLinks: false),
+      FileSystemEntityType.link,
+    );
+    await expectLater(
+      ManagedProjectSessionLock.acquire(
+        Directory(p.join(aliasPath, 'project')),
+      ),
+      throwsA(isA<ManagedProjectLockException>()),
+    );
+    expect(
+      await Directory(p.join(realProject.path, '.gore')).exists(),
+      isFalse,
+    );
   });
 }

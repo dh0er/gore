@@ -34,10 +34,9 @@ class ManagedProjectSessionLock {
   ManagedProjectSessionLock._({
     required this.projectRoot,
     required this.ownerToken,
-    required RandomAccessFile handle,
-    required String ownershipKey,
-  }) : _handle = handle,
-       _ownershipKey = ownershipKey;
+    required this._handle,
+    required this._ownershipKey,
+  });
 
   static final Set<String> _ownedOrPending = <String>{};
   static final Random _secureRandom = Random.secure();
@@ -56,13 +55,8 @@ class ManagedProjectSessionLock {
     DateTime? openedAtUtc,
   }) async {
     final root = p.normalize(p.absolute(projectRoot.path));
+    await _requireSafeExistingDirectoryChain(root);
     final key = Platform.isWindows ? root.toLowerCase() : root;
-    final rootType = await FileSystemEntity.type(root, followLinks: false);
-    if (rootType != FileSystemEntityType.directory) {
-      throw ManagedProjectLockException(
-        'managed project root must be an existing real directory: $root',
-      );
-    }
     if (!_ownedOrPending.add(key)) {
       throw ManagedProjectAlreadyOpenException(
         'managed project is already open in this Studio process: $root',
@@ -197,4 +191,52 @@ class ManagedProjectSessionLock {
     }
     return buffer.toString();
   }
+}
+
+/// Reject every lexical prefix before `.gore` is created or its lock record is
+/// opened. This closes ordinary link/junction traversal, but it cannot pin a
+/// directory against an attacker renaming a checked prefix before the later
+/// open. A future native handle-relative lock primitive must close that active
+/// rename TOCTOU window.
+Future<void> _requireSafeExistingDirectoryChain(String root) async {
+  final prefixes = <String>[];
+  var current = root;
+  while (true) {
+    prefixes.add(current);
+    final parent = p.dirname(current);
+    if (_sameLockPath(parent, current)) break;
+    current = parent;
+  }
+
+  for (final prefix in prefixes.reversed) {
+    final FileSystemEntityType type;
+    try {
+      type = await FileSystemEntity.type(prefix, followLinks: false);
+    } on FileSystemException catch (error) {
+      throw ManagedProjectLockException(
+        'could not inspect managed project path prefix $prefix: '
+        '${error.osError?.message ?? 'I/O error'}',
+      );
+    }
+    if (type == FileSystemEntityType.link) {
+      throw ManagedProjectLockException(
+        'managed project path prefixes must not be links or reparse points: '
+        '$prefix',
+      );
+    }
+    if (type != FileSystemEntityType.directory) {
+      throw ManagedProjectLockException(
+        'managed project root and all prefixes must be existing real '
+        'directories: $prefix',
+      );
+    }
+  }
+}
+
+bool _sameLockPath(String left, String right) {
+  final normalizedLeft = p.normalize(p.absolute(left));
+  final normalizedRight = p.normalize(p.absolute(right));
+  return Platform.isWindows
+      ? normalizedLeft.toLowerCase() == normalizedRight.toLowerCase()
+      : normalizedLeft == normalizedRight;
 }
