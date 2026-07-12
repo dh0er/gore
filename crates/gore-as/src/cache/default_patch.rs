@@ -24,7 +24,7 @@ use super::tables::parse_tail_tables;
 use super::walk_modules::FuncCodeKind;
 use super::walk_modules::{collect_function_bytecode_spans, module_region_end, FuncCodeSpan};
 
-pub const DEFAULT_SITE_SELECTOR_FORMAT: &str = "gore-as-default-site-v3";
+pub const DEFAULT_SITE_SELECTOR_FORMAT: &str = "gore-as-default-site-v4";
 pub const DEFAULT_SITES_REPORT_FORMAT: &str = "gore-as-default-sites-v1";
 pub const DEFAULT_PATCH_REPORT_FORMAT: &str = "gore-as-default-patch-v1";
 
@@ -125,6 +125,9 @@ pub struct DefaultSiteSelector {
     /// Canonical field value type. Binding this semantic meaning prevents a stale raw CAS from
     /// crossing (for example) an `int32` -> `float32` hotfix with identical operand bytes.
     pub value_type: String,
+    /// Exact sealed native-ancestry tuple used to prove an inherited native owner. Direct and
+    /// wholly script-proven sites carry `None`; native-derived sites carry the profile ID.
+    pub ancestry_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +284,12 @@ enum ValueKind {
     Float32,
     Float64,
     Enum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AncestryProof {
+    Script,
+    Native(&'static str),
 }
 
 /// Discover every uniquely editable direct-member default site in a cache.
@@ -495,7 +504,15 @@ impl InspectionContext {
         let modules = parse_modules(cache).map_err(wire_error)?;
         // Validate bare class identity and inheritance before the shared resolver flattens both
         // maps by class name. Otherwise a later duplicate could silently replace type evidence.
-        let ancestry = ancestry.filter(|profile| profile.supports_cache(&script_cache_guid));
+        let semantic_sha256 = ancestry
+            .as_ref()
+            .map(|_| default_profile_cache_sha256(cache))
+            .transpose()?;
+        let ancestry = ancestry.filter(|profile| {
+            semantic_sha256
+                .as_ref()
+                .is_some_and(|sha| profile.supports_cache(&script_cache_guid, sha))
+        });
         let hierarchy = ClassHierarchy::build(&modules, ancestry)?;
         let mut refs = RefResolver::build(cache).map_err(wire_error)?;
         let script_enum_fields = proven_script_enum_fields(&modules, &refs);
@@ -619,14 +636,14 @@ impl InspectionContext {
         else {
             return Ok(Resolved::UnresolvedField);
         };
-        if !self
+        let Some(ancestry_proof) = self
             .hierarchy
             .proves_ancestry(&identity.class, &field_owner)
-        {
+        else {
             // The operand may name a real field, but without a target->owner inheritance proof it
             // is not a field of this initializer's class and must not inherit that class's selector.
             return Ok(Resolved::UnresolvedField);
-        }
+        };
 
         let mut type_evidence = HashSet::new();
         // LoadThisR's type id is the declaring/owning type. A same-named field on the
@@ -724,6 +741,10 @@ impl InspectionContext {
                 field_owner: field_owner.clone(),
                 field,
                 value_type: value_type.clone(),
+                ancestry_profile: match ancestry_proof {
+                    AncestryProof::Script => None,
+                    AncestryProof::Native(profile) => Some(profile.to_owned()),
+                },
             },
             field_owner,
             owner_type_id: window.owner_type_id,
@@ -851,28 +872,32 @@ impl ClassHierarchy {
         Ok(())
     }
 
-    fn proves_ancestry(&self, target: &str, owner: &str) -> bool {
+    fn proves_ancestry(&self, target: &str, owner: &str) -> Option<AncestryProof> {
         if target == owner {
-            return self.supers.contains_key(target);
+            return self
+                .supers
+                .contains_key(target)
+                .then_some(AncestryProof::Script);
         }
         let mut seen = HashSet::new();
         let mut current = target;
         while let Some(Some(parent)) = self.supers.get(current) {
             if !seen.insert(current) {
-                return false;
+                return None;
             }
             if parent == owner {
-                return true;
+                return Some(AncestryProof::Script);
             }
             if !self.supers.contains_key(parent) {
                 return self
                     .native
                     .as_ref()
-                    .is_some_and(|profile| profile.proves_ancestry(parent, owner));
+                    .filter(|profile| profile.proves_ancestry(parent, owner))
+                    .map(|profile| AncestryProof::Native(profile.profile_id()));
             }
             current = parent;
         }
-        false
+        None
     }
 }
 
@@ -1432,11 +1457,53 @@ mod tests {
             module_with_class("Items.Base", "UFood", Some("UNativeItem")),
         ];
         let hierarchy = ClassHierarchy::build(&modules, None).unwrap();
-        assert!(hierarchy.proves_ancestry("UApple", "UApple"));
-        assert!(hierarchy.proves_ancestry("UApple", "UFood"));
-        assert!(hierarchy.proves_ancestry("UApple", "UNativeItem"));
-        assert!(!hierarchy.proves_ancestry("UApple", "UObject"));
-        assert!(!hierarchy.proves_ancestry("Unknown", "Unknown"));
+        assert_eq!(
+            hierarchy.proves_ancestry("UApple", "UApple"),
+            Some(AncestryProof::Script)
+        );
+        assert_eq!(
+            hierarchy.proves_ancestry("UApple", "UFood"),
+            Some(AncestryProof::Script)
+        );
+        assert_eq!(
+            hierarchy.proves_ancestry("UApple", "UNativeItem"),
+            Some(AncestryProof::Script)
+        );
+        assert_eq!(hierarchy.proves_ancestry("UApple", "UObject"), None);
+        assert_eq!(hierarchy.proves_ancestry("Unknown", "Unknown"), None);
+    }
+
+    #[test]
+    fn native_terminal_proof_binds_profile_and_stale_selector_differs() {
+        let modules = [module_with_class("Items", "UApple", Some("UNativeLeaf"))];
+        let profile = DefaultNativeAncestry::from_test_edges(&[
+            ("UNativeLeaf", Some("UNativeOwner")),
+            ("UNativeOwner", None),
+        ]);
+        let hierarchy = ClassHierarchy::build(&modules, Some(profile)).unwrap();
+        assert_eq!(
+            hierarchy.proves_ancestry("UApple", "UNativeOwner"),
+            Some(AncestryProof::Native(
+                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+            ))
+        );
+
+        let current = DefaultSiteSelector {
+            module: "Items".into(),
+            class: "UApple".into(),
+            field_owner: "UNativeOwner".into(),
+            field: "Value".into(),
+            value_type: "int".into(),
+            ancestry_profile: Some(
+                super::super::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID.into(),
+            ),
+        };
+        let mut stale = current.clone();
+        stale.ancestry_profile = Some("sha256:stale".into());
+        assert_ne!(current, stale);
+        let mut direct = current.clone();
+        direct.ancestry_profile = None;
+        assert_ne!(current, direct);
     }
 
     #[test]

@@ -273,6 +273,50 @@ impl SchemaDb {
             .transpose()
     }
 
+    /// Resolve a direct inheritance edge for mutation evidence. Unlike the general schema
+    /// resolver this is case-sensitive and accepts only canonical Class -> Class edges; Unknown
+    /// and Struct records are never compatible fallbacks.
+    pub fn exact_class_super_schema_id(
+        &self,
+        id: SchemaId,
+    ) -> Result<Option<SchemaId>, SchemaError> {
+        let schema = self.schema(id)?;
+        if schema.kind != SchemaKind::Class {
+            return Err(SchemaError::NotAClass(schema.qualified_name()));
+        }
+        let Some(super_name) = schema.super_name.as_deref() else {
+            return Ok(None);
+        };
+        let candidates: Vec<_> = self
+            .schemas
+            .iter()
+            .filter(|candidate| candidate.kind == SchemaKind::Class && candidate.name == super_name)
+            .map(|candidate| candidate.id)
+            .collect();
+        if let Some(module) = schema.module_path.as_deref() {
+            let same_module: Vec<_> = candidates
+                .iter()
+                .copied()
+                .filter(|candidate| self.schemas[*candidate].module_path.as_deref() == Some(module))
+                .collect();
+            match same_module.as_slice() {
+                [parent] => return Ok(Some(*parent)),
+                many if !many.is_empty() => {
+                    return Err(self.super_ambiguous(schema, super_name, same_module));
+                }
+                _ => {}
+            }
+        }
+        match candidates.as_slice() {
+            [] => Err(SchemaError::SuperNotFound {
+                schema: schema.qualified_name(),
+                super_name: super_name.to_string(),
+            }),
+            [parent] => Ok(Some(*parent)),
+            _ => Err(self.super_ambiguous(schema, super_name, candidates)),
+        }
+    }
+
     /// Resolve either a short name or `/Script/Module.Name`. Short names must
     /// be unique; duplicate schemas are never silently collapsed.
     pub fn resolve(&self, query: &str) -> Result<SchemaId, SchemaError> {
@@ -700,6 +744,55 @@ mod tests {
             "/Script/Game.Base"
         );
         assert_eq!(db.super_schema_id(parent).unwrap(), None);
+        assert_eq!(db.exact_class_super_schema_id(short).unwrap(), Some(parent));
+        assert_eq!(db.exact_class_super_schema_id(parent).unwrap(), None);
+    }
+
+    #[test]
+    fn exact_class_super_rejects_case_struct_unknown_and_ambiguity() {
+        let mut wrong_case = fixture();
+        wrong_case.structs[0].super_struct = Some("base".into());
+        let db = SchemaDb::from_parsed(wrong_case).unwrap();
+        let derived = db.resolve_class("/Script/Game.Derived").unwrap();
+        assert!(matches!(
+            db.exact_class_super_schema_id(derived),
+            Err(SchemaError::SuperNotFound { .. })
+        ));
+
+        for non_class_kind in [usmap::FlagsType::Struct, usmap::FlagsType::Unknown] {
+            let mut map = fixture();
+            map.eatr.as_mut().unwrap().struct_flags[1] = flags(non_class_kind);
+            let db = SchemaDb::from_parsed(map).unwrap();
+            let derived = db.resolve_class("/Script/Game.Derived").unwrap();
+            assert!(matches!(
+                db.exact_class_super_schema_id(derived),
+                Err(SchemaError::SuperNotFound { .. })
+            ));
+        }
+
+        let mut ambiguous = fixture();
+        ambiguous.ppth.as_mut().unwrap().structs = vec![
+            "/Script/Third".into(),
+            "/Script/First".into(),
+            "/Script/Second".into(),
+        ];
+        ambiguous.structs.push(usmap::Struct {
+            name: "Base".into(),
+            super_struct: None,
+            properties: Vec::new(),
+        });
+        ambiguous
+            .eatr
+            .as_mut()
+            .unwrap()
+            .struct_flags
+            .push(flags(usmap::FlagsType::Class));
+        let db = SchemaDb::from_parsed(ambiguous).unwrap();
+        let derived = db.resolve_class("/Script/Third.Derived").unwrap();
+        assert!(matches!(
+            db.exact_class_super_schema_id(derived),
+            Err(SchemaError::SuperAmbiguous { .. })
+        ));
     }
 
     #[test]

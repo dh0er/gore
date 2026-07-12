@@ -105,7 +105,7 @@ requires reconstructing its body manually or first extending the decompiler.
    inspect and copy-on-write patch only a unique, branch-free
    `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
    (including parsed-kind proof for script enums),
-   a v3 `(module, class, field_owner, field, value_type)` identity with proven target-to-owner ancestry, raw
+   a v4 `(module, class, field_owner, field, value_type, ancestry_profile)` identity with proven target-to-owner ancestry, raw
    CAS, one terminal `RET`, and full-cache postconditions. Complex expressions, structs,
    containers, and gameplay-tag maps remain unsupported; see
    [`docs/angelscript-default-patching.md`](../../docs/angelscript-default-patching.md). A faithful

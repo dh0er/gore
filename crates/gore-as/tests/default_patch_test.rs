@@ -931,7 +931,6 @@ fn configured_real_default_ancestry_profile_is_sealed() {
     };
     let path = std::path::PathBuf::from(path);
     let bytes = std::fs::read(&path).expect("read configured real cache");
-    let cache_guid = CacheHeader::parse(&bytes).expect("parse cache header").hash;
     let semantic_sha = gore_as::cache::default_patch::default_profile_cache_sha256(&bytes)
         .expect("compute default-profile cache identity");
     eprintln!(
@@ -954,10 +953,12 @@ fn configured_real_default_ancestry_profile_is_sealed() {
     let usmap_bytes = std::fs::read(&usmap).expect("read configured USMAP");
     let schemas = gore_asset::SchemaDb::from_usmap(&usmap_bytes).expect("parse configured USMAP");
     let profile = gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
-        &binds,
-        &cache_guid,
-        &schemas,
+        &binds, &bytes, &schemas,
     )
     .expect("build sealed ancestry profile");
     assert_eq!(profile.class_count(), 6_572);
+    assert_eq!(
+        profile.profile_id(),
+        gore_as::cache::default_ancestry::DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+    );
 }

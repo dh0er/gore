@@ -288,6 +288,9 @@ struct DefaultSelectorJson {
     field_owner: String,
     field: String,
     value_type: String,
+    /// Required nullable field: `null` for direct/script ancestry, exact profile ID for a native
+    /// ancestry proof. `serde_json::Value` intentionally distinguishes missing from explicit null.
+    ancestry_profile: serde_json::Value,
 }
 
 impl DefaultSelectorJson {
@@ -300,6 +303,12 @@ impl DefaultSelectorJson {
             field_owner: selector.field_owner.clone(),
             field: selector.field.clone(),
             value_type: selector.value_type.clone(),
+            ancestry_profile: selector
+                .ancestry_profile
+                .as_ref()
+                .map_or(serde_json::Value::Null, |profile| {
+                    serde_json::Value::String(profile.clone())
+                }),
         }
     }
 
@@ -328,12 +337,25 @@ impl DefaultSelectorJson {
                 bail!("AS_DEFAULT_SELECTOR: {name} must be nonempty and have no outer whitespace");
             }
         }
+        let ancestry_profile = match self.ancestry_profile {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(profile)
+                if !profile.is_empty() && profile.trim() == profile =>
+            {
+                Some(profile)
+            }
+            serde_json::Value::String(_) => bail!(
+                "AS_DEFAULT_SELECTOR: ancestry_profile must be null or a nonempty string with no outer whitespace"
+            ),
+            _ => bail!("AS_DEFAULT_SELECTOR: ancestry_profile must be null or a string"),
+        };
         Ok(gore_as::cache::default_patch::DefaultSiteSelector {
             module: self.module,
             class: self.class,
             field_owner: self.field_owner,
             field: self.field,
             value_type: self.value_type,
+            ancestry_profile,
         })
     }
 }
@@ -1360,13 +1382,14 @@ mod default_cli_tests {
     use super::*;
 
     const VALID: &str = r#"{
-        "format":"gore-as-default-site-v3",
+        "format":"gore-as-default-site-v4",
         "kind":"scalar",
         "module":"Items.Food",
         "class":"UApple",
         "field_owner":"UItemDefinition",
         "field":"m_Value",
-        "value_type":"int"
+        "value_type":"int",
+        "ancestry_profile":null
     }"#;
 
     #[test]
@@ -1378,6 +1401,7 @@ mod default_cli_tests {
         assert_eq!(core.field_owner, "UItemDefinition");
         assert_eq!(core.field, "m_Value");
         assert_eq!(core.value_type, "int");
+        assert_eq!(core.ancestry_profile, None);
         assert!(!VALID.contains("offset"));
 
         let missing_owner = VALID.replace("        \"field_owner\":\"UItemDefinition\",\n", "");
@@ -1392,7 +1416,28 @@ mod default_cli_tests {
         missing_type.as_object_mut().unwrap().remove("value_type");
         assert!(serde_json::from_value::<DefaultSelectorJson>(missing_type).is_err());
 
-        let wrong_format = VALID.replace("gore-as-default-site-v3", "future-v4");
+        let mut missing_profile: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        missing_profile
+            .as_object_mut()
+            .unwrap()
+            .remove("ancestry_profile");
+        assert!(serde_json::from_value::<DefaultSelectorJson>(missing_profile).is_err());
+
+        let native = VALID.replace(
+            "\"ancestry_profile\":null",
+            "\"ancestry_profile\":\"sha256:sealed\"",
+        );
+        assert_eq!(
+            serde_json::from_str::<DefaultSelectorJson>(&native)
+                .unwrap()
+                .into_core()
+                .unwrap()
+                .ancestry_profile
+                .as_deref(),
+            Some("sha256:sealed")
+        );
+
+        let wrong_format = VALID.replace("gore-as-default-site-v4", "future-v5");
         assert!(serde_json::from_str::<DefaultSelectorJson>(&wrong_format)
             .unwrap()
             .into_core()

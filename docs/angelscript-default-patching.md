@@ -35,7 +35,7 @@ The inspector reports a site only when all of these facts are proven:
   present in the parsed script modules. An `E...` spelling alone is not enum-kind evidence;
   native enums remain disabled until a sealed profile proves their kind.
 - Exactly one editable assignment exists for the semantic
-  `(module, class, field_owner, field, value_type)` selector.
+  `(module, class, field_owner, field, value_type, ancestry_profile)` selector.
 
 The ancestry proof is built from the complete parsed module model before any field is admitted.
 Bare class names must be globally unique across modules, every parsed inheritance chain must be
@@ -89,19 +89,21 @@ uniquely proven editable; it is not permission to guess an offset.
 ## Create the semantic selector
 
 `patch-default` accepts only the selector object from a reported site, saved as a small strict JSON
-file. Selector v3 requires the declaring `field_owner` and canonical `value_type`; older selectors
+file. Selector v4 requires the declaring `field_owner`, canonical `value_type`, and explicit
+nullable `ancestry_profile`; older selectors
 are rejected. It does not
 accept an instruction index, byte offset, opcode, context hash, or display value:
 
 ```json
 {
-  "format": "gore-as-default-site-v3",
+  "format": "gore-as-default-site-v4",
   "kind": "scalar",
   "module": "Items.GenericItems.FoodGeneric",
   "class": "UItFo_Apple",
   "field_owner": "UItemDefinition",
   "field": "m_MaxStack",
-  "value_type": "int"
+  "value_type": "int",
+  "ancestry_profile": null
 }
 ```
 
@@ -113,6 +115,9 @@ reported selector; do not infer either from the target class or field name. Bind
 that identical raw bytes cannot silently cross an `int32` to `float32` hotfix.
 For script enums, the reported canonical value also binds the serialized module, namespace, and
 enum name reached through the field's exact `type_info` reference; do not shorten it to a bare name.
+Direct and wholly script-proven ancestry uses JSON `null`. A native-derived site instead binds the
+exact SHA-256 identity of its atomic cache/Binds/USMAP evidence tuple. Missing, stale, or altered
+profile IDs cannot match that site even when field names and raw CAS bytes happen to be identical.
 
 ## Patch to a new cache
 
@@ -166,7 +171,7 @@ path, including a symlink, is refused. The input file is never overwritten.
 The reported absolute `operand_offset`, instruction positions, opcode, numeric owner ID/member
 offset, and `context_sha256` are audit provenance only. `context_sha256` hashes the exact
 three-instruction window with only the value operand zeroed. Unlike those numeric details,
-`field_owner` and `value_type` are required semantic selector input. The complete v3 selector plus raw
+`field_owner`, `value_type`, and `ancestry_profile` are required semantic selector input. The complete v4 selector plus raw
 compare-and-swap guard direct the patch. This prevents offsets from an old build or a shadowed
 same-name field from silently redirecting a write.
 

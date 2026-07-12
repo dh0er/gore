@@ -13,6 +13,20 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::binds::NativeApi;
+use super::default_patch::default_profile_cache_sha256;
+use super::header::CacheHeader;
+
+const VERIFIED_SCRIPT_CACHE_GUID: [u8; 16] = [
+    0x45, 0x0d, 0x65, 0xc0, 0x4f, 0x0c, 0x01, 0x4f, 0xbe, 0xc5, 0x68, 0x01, 0x63, 0x78, 0xe6, 0x9a,
+];
+const VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256: [u8; 32] = [
+    0xc1, 0xb3, 0x8e, 0x08, 0x3f, 0xde, 0xcc, 0x93, 0xd1, 0xc4, 0xa5, 0x39, 0x53, 0xe2, 0xfb, 0x90,
+    0x16, 0x96, 0x3c, 0x04, 0x2c, 0x3d, 0xb8, 0x6d, 0xdf, 0xda, 0x6a, 0x40, 0x82, 0x30, 0x46, 0x8b,
+];
+/// Identity of the complete immutable evidence tuple: cache GUID and semantic fingerprint,
+/// Binds bytes and canonical bridge, plus USMAP bytes, Class graph, and resolved join.
+pub const DEFAULT_NATIVE_ANCESTRY_PROFILE_ID: &str =
+    "sha256:3f53ee63723e6eb0c1ed7212c76d17976592dff30921c7fb2be729f2aef61cd1";
 
 const VERIFIED_USMAP_SHA256: [u8; 32] = [
     0x73, 0x55, 0x8c, 0x36, 0x89, 0x5c, 0xd1, 0xb0, 0xf0, 0xfd, 0x1b, 0x3c, 0xb4, 0x43, 0x05, 0xb2,
@@ -31,6 +45,10 @@ const VERIFIED_RESOLVED_CLASS_PROFILE_SHA256: [u8; 32] = [
 
 #[derive(Debug, Error)]
 pub enum DefaultAncestryError {
+    #[error("script cache is invalid: {0}")]
+    InvalidCache(String),
+    #[error("script cache identity is not the sealed default-ancestry build")]
+    UnsupportedCache,
     #[error("Binds.Cache has no sealed class-name profile for this script-cache GUID")]
     UnsupportedBinds,
     #[error("USMAP has no raw source identity")]
@@ -59,6 +77,7 @@ pub enum DefaultAncestryError {
 #[derive(Debug, Clone)]
 pub struct DefaultNativeAncestry {
     script_cache_guid: [u8; 16],
+    script_cache_semantic_sha256: [u8; 32],
     class_ids: HashMap<String, SchemaId>,
     super_ids: Vec<Option<SchemaId>>,
 }
@@ -67,11 +86,21 @@ impl DefaultNativeAncestry {
     /// Join a sealed Binds class-name map with a sealed, fully validated USMAP class graph.
     pub fn from_schema_db(
         native: &NativeApi,
-        script_cache_guid: &[u8; 16],
+        cache: &[u8],
         schemas: &SchemaDb,
     ) -> Result<Self, DefaultAncestryError> {
+        let script_cache_guid = CacheHeader::parse(cache)
+            .map_err(|error| DefaultAncestryError::InvalidCache(error.to_string()))?
+            .hash;
+        let script_cache_semantic_sha256 = default_profile_cache_sha256(cache)
+            .map_err(|error| DefaultAncestryError::InvalidCache(error.to_string()))?;
+        if script_cache_guid != VERIFIED_SCRIPT_CACHE_GUID
+            || script_cache_semantic_sha256 != VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256
+        {
+            return Err(DefaultAncestryError::UnsupportedCache);
+        }
         let class_paths = native
-            .verified_default_class_paths(script_cache_guid)
+            .verified_default_class_paths(&script_cache_guid)
             .ok_or(DefaultAncestryError::UnsupportedBinds)?;
         let source_sha256 = schemas
             .source_sha256()
@@ -87,13 +116,13 @@ impl DefaultNativeAncestry {
             .iter()
             .filter(|record| record.kind == SchemaKind::Class)
         {
-            let parent = schemas.super_schema_id(record.id).map_err(|error| {
-                DefaultAncestryError::BridgeResolution {
+            let parent = schemas
+                .exact_class_super_schema_id(record.id)
+                .map_err(|error| DefaultAncestryError::BridgeResolution {
                     script_class: "<USMAP graph>".into(),
                     path: record.qualified_name(),
                     error: error.to_string(),
-                }
-            })?;
+                })?;
             super_ids[record.id] = parent;
             let parent_name = parent
                 .map(|id| {
@@ -127,6 +156,17 @@ impl DefaultNativeAncestry {
                     });
                 }
             };
+            let canonical_path = schemas
+                .schema(id)
+                .expect("resolved schema id")
+                .qualified_name();
+            if canonical_path != *path {
+                return Err(DefaultAncestryError::BridgeResolution {
+                    script_class: script_class.clone(),
+                    path: path.clone(),
+                    error: format!("non-canonical case; exact schema path is {canonical_path}"),
+                });
+            }
             if !claimed_ids.insert(id) {
                 return Err(DefaultAncestryError::DuplicateSchemaBridge {
                     schema: schemas
@@ -155,7 +195,8 @@ impl DefaultNativeAncestry {
         }
 
         let profile = Self {
-            script_cache_guid: *script_cache_guid,
+            script_cache_guid,
+            script_cache_semantic_sha256,
             class_ids,
             super_ids,
         };
@@ -167,8 +208,17 @@ impl DefaultNativeAncestry {
         self.class_ids.len()
     }
 
-    pub(crate) fn supports_cache(&self, script_cache_guid: &[u8; 16]) -> bool {
+    pub const fn profile_id(&self) -> &'static str {
+        DEFAULT_NATIVE_ANCESTRY_PROFILE_ID
+    }
+
+    pub(crate) fn supports_cache(
+        &self,
+        script_cache_guid: &[u8; 16],
+        semantic_sha256: &[u8; 32],
+    ) -> bool {
         script_cache_guid == &self.script_cache_guid
+            && semantic_sha256 == &self.script_cache_semantic_sha256
     }
 
     pub(crate) fn proves_ancestry(&self, descendant: &str, ancestor: &str) -> bool {
@@ -206,6 +256,25 @@ impl DefaultNativeAncestry {
         }
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_edges(edges: &[(&str, Option<&str>)]) -> Self {
+        let class_ids: HashMap<_, _> = edges
+            .iter()
+            .enumerate()
+            .map(|(id, (class, _))| ((*class).to_owned(), id))
+            .collect();
+        let super_ids = edges
+            .iter()
+            .map(|(_, parent)| parent.and_then(|parent| class_ids.get(parent).copied()))
+            .collect();
+        Self {
+            script_cache_guid: VERIFIED_SCRIPT_CACHE_GUID,
+            script_cache_semantic_sha256: VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256,
+            class_ids,
+            super_ids,
+        }
+    }
 }
 
 fn rows_sha256<const N: usize>(rows: &mut Vec<[String; N]>) -> [u8; 32] {
@@ -218,4 +287,42 @@ fn rows_sha256<const N: usize>(rows: &mut Vec<[String; N]>) -> [u8; 32] {
         }
     }
     hash.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cache_tuple_and_native_chain_are_exact() {
+        let profile = DefaultNativeAncestry::from_test_edges(&[
+            ("UNativeLeaf", Some("UNativeBase")),
+            ("UNativeBase", Some("UNativeRoot")),
+            ("UNativeRoot", None),
+        ]);
+        assert!(profile.supports_cache(
+            &VERIFIED_SCRIPT_CACHE_GUID,
+            &VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256
+        ));
+        let mut wrong_guid = VERIFIED_SCRIPT_CACHE_GUID;
+        wrong_guid[0] ^= 1;
+        assert!(!profile.supports_cache(&wrong_guid, &VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256));
+        let mut wrong_semantic = VERIFIED_SCRIPT_CACHE_SEMANTIC_SHA256;
+        wrong_semantic[0] ^= 1;
+        assert!(!profile.supports_cache(&VERIFIED_SCRIPT_CACHE_GUID, &wrong_semantic));
+        assert!(profile.proves_ancestry("UNativeLeaf", "UNativeRoot"));
+        assert!(!profile.proves_ancestry("UNativeRoot", "UNativeLeaf"));
+    }
+
+    #[test]
+    fn cyclic_native_graph_fails_closed() {
+        let profile = DefaultNativeAncestry::from_test_edges(&[
+            ("UNativeA", Some("UNativeB")),
+            ("UNativeB", Some("UNativeA")),
+        ]);
+        assert!(matches!(
+            profile.validate_acyclic(),
+            Err(DefaultAncestryError::CyclicHierarchy { .. })
+        ));
+    }
 }
