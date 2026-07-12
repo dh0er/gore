@@ -362,6 +362,18 @@ section of build details. A new member target is never guessed from a basename,
 and it remains Experimental or build-blocking until new-path runtime resolution
 is qualified.
 
+The read-only 2026-07-12 probe bound that evidence to an archive of 915,670,575
+bytes with SHA-256
+`ff7aa5b219c2e0ec9840570e42597d3ea3053a7ad592cf7cfa5b61dd895ecd29`.
+It resolved Asghan uniquely to
+`german_new/OldMine/Asghan/GRD_263_ASGHAN_OPEN_INFO_06_02.ogg`
+(16,729 uncompressed bytes, CRC32 `5ab0fcfa`) and Viper uniquely to
+`german_new/OldMine/Viper/STT_302_VIPER_GREET_INFO_11_02.ogg`
+(26,191 uncompressed bytes, CRC32 `5805c926`). One cold index took 9.054 s and
+one streaming archive hash took 2.113 s on the development machine. These are
+diagnostic observations, not performance qualification; any archive-seal drift
+invalidates them and must force target re-resolution before deployment.
+
 ### 4.7 DataAsset inspector: semantic and expert layers
 
 The semantic layer is a registry of reviewed schemas and widgets for known
