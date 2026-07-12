@@ -13,6 +13,7 @@ pub mod mgr;
 pub mod modcmd;
 pub mod package;
 pub mod scaffold;
+pub mod story_catalog;
 pub mod stubs;
 pub mod sync;
 pub mod texture;

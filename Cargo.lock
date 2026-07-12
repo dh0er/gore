@@ -871,6 +871,7 @@ dependencies = [
  "gore-mod",
  "gore-modgen",
  "gore-reflect",
+ "gore-story-catalog",
  "gore-tex",
  "gore-vo",
  "image",
@@ -1037,6 +1038,19 @@ dependencies = [
  "sha1",
  "tempfile",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "gore-story-catalog"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

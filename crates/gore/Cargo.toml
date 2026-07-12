@@ -17,6 +17,7 @@ gore-as = { path = "../gore-as" }
 gore-asset = { path = "../gore-asset" }
 gore-fmod = { path = "../gore-fmod" }
 gore-mod = { path = "../gore-mod" }
+gore-story-catalog = { path = "../gore-story-catalog" }
 gore-tex = { path = "../gore-tex" }
 gore-vo = { path = "../gore-vo" }
 image = "0.25"

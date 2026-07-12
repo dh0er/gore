@@ -42,6 +42,21 @@ enum Commands {
         #[arg(short = 'o', long)]
         out: PathBuf,
     },
+    /// Build a strict, generation-sealed NPC and quest-parent catalog.
+    StoryCatalog {
+        /// Exact game executable used by this installed generation.
+        #[arg(long)]
+        exe: PathBuf,
+        /// Exact Shipping precompiled AngelScript cache.
+        #[arg(long)]
+        cache: PathBuf,
+        /// Exact Binds precompiled AngelScript cache.
+        #[arg(long)]
+        binds: PathBuf,
+        /// Output story_catalog.v1 JSON path.
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
     /// Convert a gore-cli reflection model into a gore-mod GUI shape JSON
     GuiModel {
         /// Path to model.json (output of `gore-cli dump`)
@@ -335,6 +350,12 @@ fn run_cli() {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
         Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
+        Commands::StoryCatalog {
+            exe,
+            cache,
+            binds,
+            out,
+        } => cmd::story_catalog::run(exe, cache, binds, out),
         Commands::GuiModel {
             model,
             catalog,
@@ -407,6 +428,53 @@ fn run_cli() {
     if let Err(e) = result {
         eprintln!("error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod story_catalog_cli_tests {
+    use super::*;
+
+    #[test]
+    fn story_catalog_requires_all_generation_inputs_and_new_output() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "story-catalog",
+            "--exe",
+            "G1R.exe",
+            "--cache",
+            "Shipping.Cache",
+            "--binds",
+            "Binds.Cache",
+            "--out",
+            "story_catalog.v1.json",
+        ])
+        .unwrap();
+        let Commands::StoryCatalog {
+            exe,
+            cache,
+            binds,
+            out,
+        } = cli.command
+        else {
+            panic!("expected story-catalog command");
+        };
+        assert_eq!(exe, PathBuf::from("G1R.exe"));
+        assert_eq!(cache, PathBuf::from("Shipping.Cache"));
+        assert_eq!(binds, PathBuf::from("Binds.Cache"));
+        assert_eq!(out, PathBuf::from("story_catalog.v1.json"));
+
+        assert!(Cli::try_parse_from([
+            "gore",
+            "story-catalog",
+            "--exe",
+            "G1R.exe",
+            "--cache",
+            "Shipping.Cache",
+            "--out",
+            "story_catalog.v1.json",
+        ])
+        .is_err());
     }
 }
 
