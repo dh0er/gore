@@ -227,7 +227,7 @@ fn emitted_free_functions<'a>(module: &'a Module, refs: &RefResolver) -> Vec<(&'
         .iter()
         .filter(|function| {
             !is_generated_function(function, &class_names, &class_members)
-                && !is_generated_spawn(function, refs)
+                && !super::emit::is_generated_spawn(function, refs)
         })
         .filter_map(|function| {
             let params = free_param_signature(function, refs);
@@ -248,33 +248,6 @@ fn is_generated_function(
         || class_members
             .get(function.namespace.as_str())
             .is_some_and(|members| members.contains(function.name.as_str()))
-}
-
-fn is_generated_spawn(function: &Func, refs: &RefResolver) -> bool {
-    if !function.ret.is_object_handle {
-        return false;
-    }
-    let first = function
-        .params
-        .first()
-        .map(|parameter| parameter.ty.base_name(refs));
-    if function.name == "Spawn" && function.params.len() == 5 && first.as_deref() == Some("FVector")
-    {
-        return true;
-    }
-    if matches!(function.name.as_str(), "Get" | "GetOrCreate" | "Create")
-        && function.params.len() == 2
-        && first.as_deref() == Some("AActor")
-        && function
-            .params
-            .get(1)
-            .map(|parameter| parameter.ty.base_name(refs))
-            .as_deref()
-            == Some("FName")
-    {
-        return true;
-    }
-    matches!(function.name.as_str(), "Get" | "GetG1R") && function.params.is_empty()
 }
 
 fn free_param_signature(function: &Func, refs: &RefResolver) -> String {

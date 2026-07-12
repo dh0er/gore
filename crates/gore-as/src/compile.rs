@@ -43,6 +43,237 @@ pub struct CompileOutput {
     pub module_name: String,
 }
 
+/// Return the compiler-generated class methods that the source emitter deliberately omits.
+/// Replacing an existing module without carrying these records forward would silently erase CDO
+/// defaults (NPC/quest/dialog configuration among them), so `edit` must fail closed until the
+/// records can be preserved byte-for-byte. `PreparedEmit::prepare_compile_overlay` has already
+/// proved that `module_name` identifies exactly one base module before this helper is called.
+fn omitted_generated_methods(
+    mods: &[model::Module],
+    module_name: &str,
+) -> Result<Vec<String>, CompileError> {
+    let matches = mods
+        .iter()
+        .filter(|module| module.name == module_name)
+        .collect::<Vec<_>>();
+    let [module] = matches.as_slice() else {
+        return Err(CompileError::Other(format!(
+            "cannot inventory compiler-generated methods for edit module {module_name:?}: \
+             expected exactly one base module, found {}",
+            matches.len()
+        )));
+    };
+
+    // A generated method is identified by class + method name. Refuse malformed/ambiguous class
+    // identities even though PreparedEmit normally rejects the surrounding edit first; this
+    // helper must never turn ambiguity into an empty inventory if its call order changes later.
+    let mut class_names = std::collections::HashSet::new();
+    let mut omitted = Vec::new();
+    for class in &module.classes {
+        if !class_names.insert(class.name.as_str()) {
+            return Err(CompileError::Other(format!(
+                "cannot inventory compiler-generated methods for edit module {module_name:?}: \
+                 duplicate class identity {:?}",
+                class.name
+            )));
+        }
+        let mut generated_names = std::collections::HashSet::new();
+        for method in &class.methods {
+            if !method.name.starts_with("__") {
+                continue;
+            }
+            if !generated_names.insert(method.name.as_str()) {
+                return Err(CompileError::Other(format!(
+                    "cannot inventory compiler-generated methods for edit module \
+                     {module_name:?}: duplicate generated method identity {}::{}",
+                    class.name, method.name
+                )));
+            }
+            omitted.push(format!("{}::{}", class.name, method.name));
+        }
+    }
+    Ok(omitted)
+}
+
+fn prepare_generated_defaults_edit(
+    op: &str,
+    mods: &[model::Module],
+    module_name: &str,
+    base: &[u8],
+    overlay: &str,
+    allow_new_symbols: bool,
+) -> Result<Option<crate::cache::generated_defaults::GeneratedDefaultsPlan>, CompileError> {
+    if op != "edit" {
+        return Ok(None);
+    }
+    let omitted = omitted_generated_methods(mods, module_name)?;
+    if omitted.is_empty() {
+        return Ok(None);
+    }
+    let preview = omitted
+        .iter()
+        .take(4)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let more = omitted.len().saturating_sub(4);
+    let suffix = if more == 0 {
+        String::new()
+    } else {
+        format!(", and {more} more")
+    };
+    let refusal = |reason: &str| {
+        CompileError::Other(format!(
+            "refusing to edit module {module_name:?}: it contains {} compiler-generated `__*` \
+             method(s) omitted by source emission ({preview}{suffix}); {reason}",
+            omitted.len()
+        ))
+    };
+    if allow_new_symbols {
+        return Err(refusal(
+            "generated-default carry requires strict base-keyspace remap; disable \
+             --allow-new-symbols or use `add` for a new module",
+        ));
+    }
+    if source_contains_default_token(overlay).map_err(|reason| refusal(&reason))? {
+        return Err(refusal(
+            "the authored overlay contains a `default` code token, so carrying old defaults \
+             would be stale; remove the authored defaults or use a new module",
+        ));
+    }
+    let plan =
+        crate::cache::generated_defaults::GeneratedDefaultsPlan::prepare(base, mods, module_name)
+            .map_err(|reason| {
+                refusal(&format!(
+                    "exact generated-default carry is unproven: {reason}"
+                ))
+            })?
+            .ok_or_else(|| {
+                refusal(
+                    "the raw base module did not contain the generated methods found by the model",
+                )
+            })?;
+    if plan.generated_count() != omitted.len() {
+        return Err(refusal(&format!(
+            "raw/model generated-method inventory mismatch ({}/{})",
+            plan.generated_count(),
+            omitted.len()
+        )));
+    }
+    Ok(Some(plan))
+}
+
+/// Find a real `default` token while ignoring comments and quoted literals. A malformed lexical
+/// construct is an error, not an excuse to launch the compiler without proving the overlay safe.
+fn source_contains_default_token(source: &str) -> Result<bool, String> {
+    let bytes = source.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'*' && bytes.get(index + 1) == Some(&b'/') {
+                        index += 2;
+                        closed = true;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return Err(
+                        "authored overlay has an unterminated block comment before generated-default preflight"
+                            .into(),
+                    );
+                }
+            }
+            quote @ (b'\'' | b'"') => {
+                index += 1;
+                let mut closed = false;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        closed = true;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+                if !closed {
+                    return Err(
+                        "authored overlay has an unterminated quoted literal before generated-default preflight"
+                            .into(),
+                    );
+                }
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let start = index;
+                index += 1;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                if &bytes[start..index] == b"default"
+                    && !default_token_is_switch_label(bytes, index)?
+                {
+                    return Ok(true);
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    Ok(false)
+}
+
+/// `default:` is a normal switch label and does not author a CDO default. Skip trivia after the
+/// token so `default /* comment */ :` is classified correctly; malformed comments fail closed.
+fn default_token_is_switch_label(bytes: &[u8], mut index: usize) -> Result<bool, String> {
+    loop {
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if bytes.get(index..index + 2) == Some(b"//") {
+            index += 2;
+            while index < bytes.len() && !matches!(bytes[index], b'\r' | b'\n') {
+                index += 1;
+            }
+            continue;
+        }
+        if bytes.get(index..index + 2) == Some(b"/*") {
+            index += 2;
+            let mut closed = false;
+            while index < bytes.len() {
+                if bytes.get(index..index + 2) == Some(b"*/") {
+                    index += 2;
+                    closed = true;
+                    break;
+                } else {
+                    index += 1;
+                }
+            }
+            if !closed {
+                return Err(
+                    "authored overlay has an unterminated block comment after a `default` token"
+                        .into(),
+                );
+            }
+            continue;
+        }
+        return Ok(bytes.get(index) == Some(&b':'));
+    }
+}
+
 fn io(ctx: &str) -> impl FnOnce(std::io::Error) -> CompileError {
     let ctx = ctx.to_string();
     move |e| CompileError::Io(format!("{ctx}: {e}"))
@@ -437,6 +668,15 @@ where
         .prepare_compile_overlay(&opts.op, &opts.module_name, &opts.rel_path, overlay)
         .map_err(|error| CompileError::Other(format!("preparing authored overlay: {error}")))?;
 
+    let generated_defaults = prepare_generated_defaults_edit(
+        &opts.op,
+        &mods,
+        &opts.module_name,
+        &base,
+        &overlay,
+        opts.allow_new_symbols,
+    )?;
+
     // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
     let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
     prepared
@@ -502,6 +742,14 @@ where
         .map_err(|e| CompileError::Other(format!("remap: {e}")))?
         .0
     };
+    if let Some(plan) = generated_defaults {
+        mini = plan.apply(&mini).map_err(|reason| {
+            CompileError::Other(format!(
+                "refusing generated-default carry for edit module {:?}: {reason}",
+                opts.module_name
+            ))
+        })?;
+    }
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
 
     let mini_path = opts.work_dir.join("module.cache");
@@ -2260,8 +2508,184 @@ fn restore_or_remove(written: &[(PathBuf, Option<Vec<u8>>)], root: &Path) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::model::{Class, Func, Module};
+    use crate::cache::types::DataType;
 
     static PROCESS_TIMEOUT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn test_function(name: &str) -> Func {
+        Func {
+            name: name.into(),
+            namespace: String::new(),
+            ret: DataType::default(),
+            params: Vec::new(),
+            bytecode: Vec::new(),
+            obj_locals: Vec::new(),
+            is_ufunction: false,
+            traits: 0,
+        }
+    }
+
+    #[test]
+    fn edit_preflight_identifies_only_omitted_generated_class_methods() {
+        let modules = vec![Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes: vec![Class {
+                name: "UQuestFixture".into(),
+                super_class: None,
+                fields: Vec::new(),
+                methods: vec![test_function("Tick"), test_function("__InitDefaults")],
+                ctors: Vec::new(),
+                flags: 0,
+            }],
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+
+        assert_eq!(
+            omitted_generated_methods(&modules, "QuestModule").unwrap(),
+            ["UQuestFixture::__InitDefaults"]
+        );
+        assert!(omitted_generated_methods(&modules, "Missing")
+            .unwrap_err()
+            .to_string()
+            .contains("expected exactly one base module, found 0"));
+        assert!(prepare_generated_defaults_edit(
+            "add",
+            &modules,
+            "QuestModule",
+            &[],
+            "default Foo = 1;",
+            true,
+        )
+        .unwrap()
+        .is_none());
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &modules,
+            "QuestModule",
+            &[],
+            "class UQuestFixture {}",
+            true,
+        )
+        .expect_err("edit must not mix carried defaults with new-symbol remap")
+        .to_string();
+        assert!(error.contains("UQuestFixture::__InitDefaults"), "{error}");
+        assert!(error.contains("strict base-keyspace remap"), "{error}");
+    }
+
+    #[test]
+    fn edit_preflight_never_treats_ambiguous_identities_as_an_empty_inventory() {
+        let module = |classes| Module {
+            name: "QuestModule".into(),
+            file: "QuestModule.as".into(),
+            functions: Vec::new(),
+            classes,
+            enums: Vec::new(),
+            globals: Vec::new(),
+        };
+        let class = |name: &str, methods| Class {
+            name: name.into(),
+            super_class: None,
+            fields: Vec::new(),
+            methods,
+            ctors: Vec::new(),
+            flags: 0,
+        };
+
+        let duplicate_modules = vec![module(Vec::new()), module(Vec::new())];
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &duplicate_modules,
+            "QuestModule",
+            &[],
+            "",
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("expected exactly one base module, found 2"),
+            "{error}"
+        );
+
+        let duplicate_classes = vec![module(vec![
+            class("UQuestFixture", Vec::new()),
+            class("UQuestFixture", vec![test_function("__InitDefaults")]),
+        ])];
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &duplicate_classes,
+            "QuestModule",
+            &[],
+            "",
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("duplicate class identity"), "{error}");
+
+        let duplicate_methods = vec![module(vec![class(
+            "UQuestFixture",
+            vec![
+                test_function("__InitDefaults"),
+                test_function("__InitDefaults"),
+            ],
+        )])];
+        let error = prepare_generated_defaults_edit(
+            "edit",
+            &duplicate_methods,
+            "QuestModule",
+            &[],
+            "",
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("duplicate generated method identity"),
+            "{error}"
+        );
+
+        // `add` never consults the base-module inventory, so new-module authoring remains normal.
+        assert!(prepare_generated_defaults_edit(
+            "add",
+            &duplicate_modules,
+            "QuestModule",
+            &[],
+            "default Foo = 1;",
+            true,
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn generated_default_source_gate_ignores_literals_and_comments_but_not_code() {
+        assert!(!source_contains_default_token(
+            r#"// default Foo = 1;
+               string A = "default";
+               FName B = n"default";
+               /* ordinary default comment */
+               void NodefaultValue() {}"#,
+        )
+        .unwrap());
+        assert!(source_contains_default_token("/* /* */ default Health = 100; // */").unwrap());
+        assert!(source_contains_default_token("default Health = 100;").unwrap());
+        assert!(!source_contains_default_token("switch (X) { default: break; }").unwrap());
+        assert!(
+            !source_contains_default_token("switch (X) { default /* label */ : break; }").unwrap()
+        );
+        assert!(source_contains_default_token("default /* CDO */ Health = 100;").unwrap());
+        assert!(source_contains_default_token("/* unterminated")
+            .unwrap_err()
+            .contains("unterminated block comment"));
+        assert!(source_contains_default_token("string X = \"unterminated")
+            .unwrap_err()
+            .contains("unterminated quoted literal"));
+    }
 
     #[test]
     fn g1r_dir_appends_or_keeps() {

@@ -227,6 +227,23 @@ therefore be tested on a disposable save with semantic before/after inspection.
 - The exact native ordering of knowledge rules, `IsVisible_Implementation`,
   participant checks, and UI relevance is not recovered.
 - `emit-all` does not yet emit generated `__InitDefaults` methods as editable
-  source; verify important CDO defaults directly in the compiled candidate.
+  source. `compile-module --op edit` carries an existing `__InitDefaults`
+  record only through the strict, base-keyspace remap path and only when the
+  complete class identity/layout, ordinary method signatures and UFUNCTION
+  metadata, constructors, behavior declarations, module globals/imports, and
+  source identity remain exact. The vanilla generated record, emitter-omitted
+  factory/spawn/accessor wrappers, every `Class.BehaviorFunctions` record, and
+  the full local `Class.MethodTable` are then restored byte-for-byte and
+  reparsed as a postcondition. The base header, complete module region, all
+  seven tail tables, and EOF must parse exactly; the mixed result's serialized
+  function IDs must stay unique both locally and against every untouched base
+  module. A strict self-remap first proves that every copied vanilla reference
+  resolves uniquely. `--allow-new-symbols`, an authored CDO `default`
+  statement (ordinary switch `default:` labels are allowed), another generated
+  `__*` shape, malformed/ambiguous identities, or
+  any regenerated metadata/layout drift fails closed without writing a mini;
+  base/source failures are rejected before rebuilding the source tree or
+  launching the game compiler. Newly authored modules remain supported through
+  `--op add`, including explicit `default` statements.
 - Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
   signature verified against `Binds.Cache` or a known compiling source template.

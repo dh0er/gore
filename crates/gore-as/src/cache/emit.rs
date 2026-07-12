@@ -245,7 +245,7 @@ pub fn emit_module(m: &Module, refs: &RefResolver) -> String {
 /// declaration itself collides). Skip the exact generated shapes:
 ///   - actor:     `<Actor> Spawn(const FVector&, const FRotator&, const FName&, bool, ULevel)`
 ///   - component: `<Comp> Get|GetOrCreate|Create(const AActor, const FName&)`
-fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
+pub(crate) fn is_generated_spawn(f: &Func, refs: &RefResolver) -> bool {
     if !f.ret.is_object_handle {
         return false;
     }

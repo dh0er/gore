@@ -7,6 +7,7 @@ pub mod decompile;
 pub mod disasm;
 pub mod emit;
 pub mod emit_all;
+pub(crate) mod generated_defaults;
 pub mod header;
 pub mod isa;
 pub mod model;
