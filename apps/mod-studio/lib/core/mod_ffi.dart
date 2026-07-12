@@ -1,5 +1,9 @@
 import 'core_service.dart';
 
+const _maxNativeErrorCodeLength = 128;
+const _maxNativeErrorMessageLength = 64 * 1024;
+final _nativeErrorCodePattern = RegExp(r'^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*$');
+
 /// Typed wrappers over the gore-ffi commands for audio, read-only voice inspection, stateless
 /// authoring checks, and unified mod build/deploy.
 class ModFfi {
@@ -10,13 +14,52 @@ class ModFfi {
     String cmd,
     Map<String, Object?> payload,
   ) async {
-    final r = await _core.execute(cmd, payload: payload);
-    if (r['ok'] != true) {
-      final e = r['error'];
-      final msg = e is Map ? (e['message'] ?? e.toString()) : 'unknown error';
-      throw ModFfiException('$cmd: $msg');
+    final Map<String, Object?> r;
+    try {
+      r = await _core.execute(cmd, payload: payload);
+    } on FormatException {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'response could not be decoded',
+      );
     }
-    return r;
+
+    final ok = r['ok'];
+    if (ok == true) return r;
+    if (ok != false) {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'field ok must be a bool',
+      );
+    }
+
+    final error = r['error'];
+    if (error is! Map) {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'field error must be an object',
+      );
+    }
+    final code = error['code'];
+    if (code is! String ||
+        code.isEmpty ||
+        code.length > _maxNativeErrorCodeLength ||
+        !_nativeErrorCodePattern.hasMatch(code)) {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'field error.code is invalid',
+      );
+    }
+    final message = error['message'];
+    if (message is! String ||
+        message.length > _maxNativeErrorMessageLength ||
+        message.trim().isEmpty) {
+      throw ModFfiException._malformed(
+        command: cmd,
+        reason: 'field error.message is invalid',
+      );
+    }
+    throw ModFfiException(command: cmd, code: code, message: message);
   }
 
   Future<List<AudioSampleInfo>> audioList(String bank, {String? key}) async {
@@ -149,10 +192,27 @@ class ModFfi {
 }
 
 class ModFfiException implements Exception {
-  ModFfiException(this.message);
+  const ModFfiException({
+    required this.command,
+    required this.code,
+    required this.message,
+  });
+
+  const ModFfiException._malformed({
+    required this.command,
+    required String reason,
+  }) : code = malformedNativeResponseCode,
+       message = 'malformed native response: $reason';
+
+  /// Local code used when gore_ffi does not return its documented error shape.
+  static const malformedNativeResponseCode = 'MALFORMED_NATIVE_RESPONSE';
+
+  final String command;
+  final String code;
   final String message;
+
   @override
-  String toString() => message;
+  String toString() => '$command: $message [$code]';
 }
 
 class AudioSampleInfo {

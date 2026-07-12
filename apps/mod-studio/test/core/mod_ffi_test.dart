@@ -82,7 +82,151 @@ Map<String, Object?> _authoringDiagnostic(
 ) => ((response['diagnostics'] as List<Object?>)[index] as Map)
     .cast<String, Object?>();
 
+Future<ModFfiException> _captureModFfiException(Future<Object?> call) async {
+  try {
+    await call;
+  } on ModFfiException catch (error) {
+    return error;
+  }
+  fail('expected ModFfiException');
+}
+
+class _MalformedJsonCoreService extends GoreCoreFfiService {
+  @override
+  String get description => 'malformed response fake';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) => throw const FormatException('hostile undecodable native response');
+}
+
 void main() {
+  test('normal success response is returned to the command wrapper', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'find_game': {
+          'ok': true,
+          'found': true,
+          'exe': r'C:\Game\GothicRemake.exe',
+        },
+      },
+    );
+
+    expect(await ModFfi(core).findGameExe(), r'C:\Game\GothicRemake.exe');
+    expect(core.calls.single.command, 'find_game');
+  });
+
+  test(
+    'structured native error preserves command, code, and message',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'audio_extract': {
+            'ok': false,
+            'error': {
+              'code': 'NOT_FOUND',
+              'message': 'sample not found: DIA_HERO_1',
+            },
+          },
+        },
+      );
+
+      final error = await _captureModFfiException(
+        ModFfi(core).audioExtract('speech.fsb', 'DIA_HERO_1'),
+      );
+
+      expect(error.command, 'audio_extract');
+      expect(error.code, 'NOT_FOUND');
+      expect(error.message, 'sample not found: DIA_HERO_1');
+      expect(
+        error.toString(),
+        'audio_extract: sample not found: DIA_HERO_1 [NOT_FOUND]',
+      );
+    },
+  );
+
+  test(
+    'malformed native error fields use one bounded local identity',
+    () async {
+      final oversizedCode = List.filled(129, 'A').join();
+      final oversizedMessage = List.filled(64 * 1024 + 1, 'x').join();
+      final malformedResponses = <Map<String, Object?>>[
+        const {},
+        const {'ok': 'false'},
+        const {'ok': false},
+        const {'ok': false, 'error': 'bad'},
+        const {'ok': false, 'error': <String, Object?>{}},
+        const {
+          'ok': false,
+          'error': {'code': 7, 'message': 'failure'},
+        },
+        const {
+          'ok': false,
+          'error': {'code': '', 'message': 'failure'},
+        },
+        const {
+          'ok': false,
+          'error': {'code': 'bad_code', 'message': 'failure'},
+        },
+        {
+          'ok': false,
+          'error': {'code': oversizedCode, 'message': 'failure'},
+        },
+        const {
+          'ok': false,
+          'error': {'code': 'IO'},
+        },
+        const {
+          'ok': false,
+          'error': {'code': 'IO', 'message': 7},
+        },
+        const {
+          'ok': false,
+          'error': {'code': 'IO', 'message': '  \n'},
+        },
+        {
+          'ok': false,
+          'error': {'code': 'IO', 'message': oversizedMessage},
+        },
+      ];
+
+      for (final response in malformedResponses) {
+        final core = FakeGoreCoreFfiService(responses: {'find_game': response});
+        final error = await _captureModFfiException(ModFfi(core).findGameExe());
+
+        expect(error.command, 'find_game');
+        expect(error.code, ModFfiException.malformedNativeResponseCode);
+        expect(error.message, startsWith('malformed native response:'));
+        expect(error.message.length, lessThan(128));
+        expect(error.toString(), isNot(contains(oversizedMessage)));
+        expect(error.toString(), isNot(contains(oversizedCode)));
+      }
+    },
+  );
+
+  test(
+    'undecodable response gets the stable malformed response code',
+    () async {
+      final error = await _captureModFfiException(
+        ModFfi(_MalformedJsonCoreService()).findGameExe(),
+      );
+
+      expect(error.command, 'find_game');
+      expect(error.code, ModFfiException.malformedNativeResponseCode);
+      expect(
+        error.toString(),
+        'find_game: malformed native response: response could not be decoded '
+        '[MALFORMED_NATIVE_RESPONSE]',
+      );
+      expect(error.toString(), isNot(contains('hostile undecodable')));
+    },
+  );
+
   test('scriptCompile propagates the new-symbol opt-in', () async {
     final core = FakeGoreCoreFfiService(
       responses: {
