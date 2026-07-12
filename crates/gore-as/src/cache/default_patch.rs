@@ -15,7 +15,13 @@ use thiserror::Error;
 
 use super::binds::NativeApi;
 use super::default_ancestry::DefaultNativeAncestry;
-use super::disasm::{disassemble, Instr};
+use super::default_fingerprint::{combined_default_cache_fingerprint, scalar_default_cache_sha256};
+pub use super::default_patterns::DefaultPattern;
+use super::default_patterns::{
+    direct_default_windows as direct_windows, immediate_bytes, is_branch, is_initializer_traits,
+    is_plain_void, is_reachable_linear_initializer, DirectDefaultWindow as RawWindow,
+};
+use super::disasm::disassemble;
 use super::emit_all::prepare_resolver_semantics;
 use super::header::CacheHeader;
 use super::model::{parse_modules, Module};
@@ -27,70 +33,6 @@ use super::walk_modules::{collect_function_bytecode_spans, module_region_end, Fu
 pub const DEFAULT_SITE_SELECTOR_FORMAT: &str = "gore-as-default-site-v4";
 pub const DEFAULT_SITES_REPORT_FORMAT: &str = "gore-as-default-sites-v1";
 pub const DEFAULT_PATCH_REPORT_FORMAT: &str = "gore-as-default-patch-v1";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DefaultPattern {
-    SetV1LoadThisWrtV1,
-    SetV2LoadThisWrtV2,
-    SetV4LoadThisWrtV4,
-    SetV8LoadThisWrtV8,
-}
-
-impl DefaultPattern {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::SetV1LoadThisWrtV1 => "set_v1_load_this_wrt_v1",
-            Self::SetV2LoadThisWrtV2 => "set_v2_load_this_wrt_v2",
-            Self::SetV4LoadThisWrtV4 => "set_v4_load_this_wrt_v4",
-            Self::SetV8LoadThisWrtV8 => "set_v8_load_this_wrt_v8",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "set_v1_load_this_wrt_v1" => Some(Self::SetV1LoadThisWrtV1),
-            "set_v2_load_this_wrt_v2" => Some(Self::SetV2LoadThisWrtV2),
-            "set_v4_load_this_wrt_v4" => Some(Self::SetV4LoadThisWrtV4),
-            "set_v8_load_this_wrt_v8" => Some(Self::SetV8LoadThisWrtV8),
-            _ => None,
-        }
-    }
-
-    pub const fn value_width(self) -> usize {
-        match self {
-            Self::SetV1LoadThisWrtV1 => 1,
-            Self::SetV2LoadThisWrtV2 => 2,
-            Self::SetV4LoadThisWrtV4 => 4,
-            Self::SetV8LoadThisWrtV8 => 8,
-        }
-    }
-
-    /// The complete serialized immediate width. SetV1/SetV2 still carry a full dword.
-    pub const fn operand_width(self) -> usize {
-        match self {
-            Self::SetV8LoadThisWrtV8 => 8,
-            _ => 4,
-        }
-    }
-
-    const fn set_name(self) -> &'static str {
-        match self {
-            Self::SetV1LoadThisWrtV1 => "SetV1",
-            Self::SetV2LoadThisWrtV2 => "SetV2",
-            Self::SetV4LoadThisWrtV4 => "SetV4",
-            Self::SetV8LoadThisWrtV8 => "SetV8",
-        }
-    }
-
-    const fn write_name(self) -> &'static str {
-        match self {
-            Self::SetV1LoadThisWrtV1 => "WRTV1",
-            Self::SetV2LoadThisWrtV2 => "WRTV2",
-            Self::SetV4LoadThisWrtV4 => "WRTV4",
-            Self::SetV8LoadThisWrtV8 => "WRTV8",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawEncoding {
@@ -216,6 +158,8 @@ pub enum DefaultSiteError {
     RangeOverflow { function: String },
     #[error("bytecode provenance mismatch in {function} at cache offset {offset:#x}")]
     ProvenanceMismatch { function: String, offset: usize },
+    #[error("failed to derive combined scalar/tag native-profile fingerprint: {0}")]
+    NativeProfileFingerprint(String),
 }
 
 #[derive(Debug, Error)]
@@ -265,17 +209,6 @@ struct ClassHierarchy {
     native: Option<DefaultNativeAncestry>,
 }
 
-#[derive(Debug, Clone)]
-struct RawWindow {
-    pattern: DefaultPattern,
-    instruction_index: usize,
-    instruction_offset_dw: usize,
-    operand_offset_dw: usize,
-    owner_type_id: i32,
-    member_offset: i32,
-    context_sha256: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ValueKind {
     Bool,
@@ -311,62 +244,11 @@ pub fn default_sites_with_native_ancestry(
     context.inspect(cache)
 }
 
-/// Mutation-stable fingerprint of the exact cache build used by the sealed native-ancestry
-/// profile. The full cache is hashed after zeroing only serialized immediates in the already
-/// audited direct scalar windows of canonical generated initializers. Scalar patches therefore
-/// retain the identity, while any code/layout/type/table/hotfix drift changes it.
+/// Legacy scalar-only mutation-stable fingerprint. Native profile membership uses the versioned
+/// combined scalar/tag fingerprint from the neutral cache layer instead.
 pub fn default_profile_cache_sha256(cache: &[u8]) -> Result<[u8; 32], DefaultSiteError> {
-    validate_cache(cache)?;
-    let modules = parse_modules(cache).map_err(wire_error)?;
-    let identities = class_identities(&modules)?;
-    let spans = collect_function_bytecode_spans(cache).map_err(wire_error)?;
-    let mut normalized = cache.to_vec();
-
-    for span in &spans {
-        if !identities.contains_key(&span.code.func)
-            || span.kind != FuncCodeKind::ClassMethod
-            || !span.method_table_valid
-            || !span.in_method_table
-            || !is_initializer_traits(span.function_traits)
-            || !span.code.is_method
-            || !span.code.param_types.is_empty()
-            || !is_plain_void(&span.code.ret)
-        {
-            continue;
-        }
-        let instrs =
-            disassemble(&span.code.bytecode).map_err(|error| DefaultSiteError::Disasm {
-                function: span.code.func.clone(),
-                error: error.to_string(),
-            })?;
-        if !is_reachable_linear_initializer(&instrs) {
-            continue;
-        }
-        for window in direct_windows(&span.code.bytecode, &instrs) {
-            let start = span
-                .bytecode_offset
-                .checked_add(window.operand_offset_dw.checked_mul(4).ok_or_else(|| {
-                    DefaultSiteError::RangeOverflow {
-                        function: span.code.func.clone(),
-                    }
-                })?)
-                .ok_or_else(|| DefaultSiteError::RangeOverflow {
-                    function: span.code.func.clone(),
-                })?;
-            let end = start
-                .checked_add(window.pattern.operand_width())
-                .ok_or_else(|| DefaultSiteError::RangeOverflow {
-                    function: span.code.func.clone(),
-                })?;
-            let Some(operand) = normalized.get_mut(start..end) else {
-                return Err(DefaultSiteError::RangeOverflow {
-                    function: span.code.func.clone(),
-                });
-            };
-            operand.fill(0);
-        }
-    }
-    Ok(Sha256::digest(&normalized).into())
+    scalar_default_cache_sha256(cache)
+        .map_err(|error| DefaultSiteError::NativeProfileFingerprint(error.to_string()))
 }
 
 /// Apply one semantic, compare-and-swap default patch to a cloned cache buffer.
@@ -504,14 +386,17 @@ impl InspectionContext {
         let modules = parse_modules(cache).map_err(wire_error)?;
         // Validate bare class identity and inheritance before the shared resolver flattens both
         // maps by class name. Otherwise a later duplicate could silently replace type evidence.
-        let semantic_sha256 = ancestry
+        let mutation_stable_profile = ancestry
             .as_ref()
-            .map(|_| default_profile_cache_sha256(cache))
+            .map(|_| {
+                combined_default_cache_fingerprint(cache)
+                    .map_err(|error| DefaultSiteError::NativeProfileFingerprint(error.to_string()))
+            })
             .transpose()?;
         let ancestry = ancestry.filter(|profile| {
-            semantic_sha256
+            mutation_stable_profile
                 .as_ref()
-                .is_some_and(|sha| profile.supports_cache(&script_cache_guid, sha))
+                .is_some_and(|fingerprint| profile.supports_cache(&script_cache_guid, fingerprint))
         });
         let hierarchy = ClassHierarchy::build(&modules, ancestry)?;
         let mut refs = RefResolver::build(cache).map_err(wire_error)?;
@@ -1020,129 +905,6 @@ fn class_identities(
         }
     }
     Ok(result)
-}
-
-fn is_initializer_traits(traits: i32) -> bool {
-    // Shipping contains exactly two compiler-emitted shapes: ordinary and final.
-    matches!(traits, 0 | 0x20)
-}
-
-fn is_plain_void(value: &super::types::DataType) -> bool {
-    !value.is_reference
-        && !value.is_object_const
-        && !value.is_object_handle
-        && !value.is_read_only
-        && !value.is_auto
-        && !value.if_handle_then_const
-        && value.type_info == 0
-        && value.token == 0x52
-}
-
-fn direct_windows(bytecode: &[i32], instrs: &[Instr]) -> Vec<RawWindow> {
-    let mut result = Vec::new();
-    for (instruction_index, triple) in instrs.windows(3).enumerate() {
-        let set = &triple[0];
-        let load = &triple[1];
-        let write = &triple[2];
-        let Some(pattern) = pattern_for_set(set.op.name) else {
-            continue;
-        };
-        if load.op.name != "LoadThisR" || write.op.name != pattern.write_name() {
-            continue;
-        }
-        let (Some(&set_slot), Some(&write_slot)) = (set.words.first(), write.words.first()) else {
-            continue;
-        };
-        if set_slot != write_slot {
-            continue;
-        }
-        let (Some(&member_offset), Some(&owner_type_id)) =
-            (load.words.first(), load.dwords.first())
-        else {
-            continue;
-        };
-        let operand_offset_dw = set.offset_dw + 1;
-        let Some(context_sha256) = context_hash(bytecode, triple, operand_offset_dw, pattern)
-        else {
-            continue;
-        };
-        result.push(RawWindow {
-            pattern,
-            instruction_index,
-            instruction_offset_dw: set.offset_dw,
-            operand_offset_dw,
-            owner_type_id: owner_type_id as i32,
-            member_offset: member_offset as i32,
-            context_sha256,
-        });
-    }
-    result
-}
-
-fn pattern_for_set(name: &str) -> Option<DefaultPattern> {
-    match name {
-        "SetV1" => Some(DefaultPattern::SetV1LoadThisWrtV1),
-        "SetV2" => Some(DefaultPattern::SetV2LoadThisWrtV2),
-        "SetV4" => Some(DefaultPattern::SetV4LoadThisWrtV4),
-        "SetV8" => Some(DefaultPattern::SetV8LoadThisWrtV8),
-        _ => None,
-    }
-}
-
-fn is_branch(name: &str) -> bool {
-    matches!(
-        name,
-        "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JMPP" | "JLowZ" | "JLowNZ"
-    )
-}
-
-fn is_reachable_linear_initializer(instrs: &[Instr]) -> bool {
-    if instrs
-        .iter()
-        .any(|instruction| is_branch(instruction.op.name))
-    {
-        return false;
-    }
-    let Some((last, prefix)) = instrs.split_last() else {
-        return false;
-    };
-    last.op.name == "RET"
-        && prefix
-            .iter()
-            .all(|instruction| !matches!(instruction.op.name, "RET" | "ThrowException"))
-}
-
-fn context_hash(
-    bytecode: &[i32],
-    triple: &[Instr],
-    operand_offset_dw: usize,
-    pattern: DefaultPattern,
-) -> Option<String> {
-    let start = triple.first()?.offset_dw;
-    let last = triple.last()?;
-    let end = last.offset_dw.checked_add(last.op.size_dwords as usize)?;
-    let mut bytes = bytecode_words(bytecode.get(start..end)?)?;
-    let relative = operand_offset_dw.checked_sub(start)?.checked_mul(4)?;
-    let value_end = relative.checked_add(pattern.operand_width())?;
-    bytes.get_mut(relative..value_end)?.fill(0);
-    Some(sha256_hex(&bytes))
-}
-
-fn immediate_bytes(bytecode: &[i32], offset_dw: usize, width: usize) -> Option<Vec<u8>> {
-    if !width.is_multiple_of(4) {
-        return None;
-    }
-    let words = bytecode.get(offset_dw..offset_dw.checked_add(width / 4)?)?;
-    bytecode_words(words)
-}
-
-fn bytecode_words(words: &[i32]) -> Option<Vec<u8>> {
-    let capacity = words.len().checked_mul(4)?;
-    let mut bytes = Vec::with_capacity(capacity);
-    for word in words {
-        bytes.extend_from_slice(&word.to_le_bytes());
-    }
-    Some(bytes)
 }
 
 fn normalize_type_name(value: &str) -> String {

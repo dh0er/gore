@@ -10,25 +10,31 @@ use std::collections::{HashMap, HashSet};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use super::default_ancestry::DefaultNativeAncestry;
-use super::disasm::{disassemble, DisasmError, Instr};
-use super::walk_modules::{
-    collect_function_bytecode_spans, module_region_end, FuncCodeKind, FuncCodeSpan,
+use super::default_patterns::{
+    is_branch, is_canonical_initializer_metadata as is_initializer_metadata,
+    is_reachable_linear_initializer,
 };
+use super::disasm::{disassemble, Instr};
+use super::walk_modules::{collect_function_bytecode_spans, module_region_end, FuncCodeSpan};
 use super::wire::{Cursor, WireError};
 
+#[cfg(test)]
+use super::disasm::DisasmError;
+#[cfg(test)]
+use super::walk_modules::FuncCodeKind;
+
 /// Exact encoded size of the only admitted raw window.
-pub const RAW_TAG_MAP_WINDOW_DWORDS: usize = 12;
+pub(crate) const RAW_TAG_MAP_WINDOW_DWORDS: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExactTypeIdentity {
+pub(crate) struct ExactTypeIdentity {
     pub name: String,
     pub module: String,
     pub namespace: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactDataType {
+pub(crate) struct ExactDataType {
     pub is_reference: bool,
     pub is_object_const: bool,
     pub is_object_handle: bool,
@@ -66,13 +72,13 @@ impl ExactDataType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactTypeReference {
+pub(crate) struct ExactTypeReference {
     pub identity: ExactTypeIdentity,
     pub subtypes: Vec<ExactDataType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactGlobalReference {
+pub(crate) struct ExactGlobalReference {
     pub name: String,
     pub module: String,
     pub namespace: String,
@@ -80,7 +86,7 @@ pub struct ExactGlobalReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactFunctionReference {
+pub(crate) struct ExactFunctionReference {
     pub name: String,
     pub module: String,
     pub namespace: String,
@@ -93,13 +99,13 @@ pub struct ExactFunctionReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExactPropertyReference {
+pub(crate) struct ExactPropertyReference {
     pub name: String,
     pub old_type_id: i32,
 }
 
 #[derive(Debug, Error)]
-pub enum ExactReferenceError {
+pub(crate) enum ExactReferenceError {
     #[error(transparent)]
     Wire(#[from] WireError),
     #[error("non-canonical serialized bool {field}={value}")]
@@ -122,7 +128,7 @@ pub enum ExactReferenceError {
 /// full owner TypeReference, and every raw DataType flag. It intentionally exposes no fuzzy or
 /// name-only lookup.
 #[derive(Debug, Clone)]
-pub struct ExactReferenceIndex {
+pub(crate) struct ExactReferenceIndex {
     types: HashMap<i64, ExactTypeReference>,
     type_ids: HashMap<i32, i64>,
     functions: HashMap<i64, ExactFunctionReference>,
@@ -397,7 +403,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TagMapReferenceReject {
+pub(crate) enum TagMapReferenceReject {
     MissingOwnerType,
     MissingProperty,
     PropertyOwnerMismatch,
@@ -413,38 +419,18 @@ pub enum TagMapReferenceReject {
 /// belongs to one unique parsed class, that the target derives from `field_owner`, and that the
 /// declaring field's sealed schema is exactly `TMap<FGameplayTag,float32>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReferenceProvenTagMapSite {
+pub(crate) struct ReferenceProvenTagMapSite {
     pub function: String,
     pub raw: RawTagMapWindow,
+    /// Checked absolute cache range containing exactly the four-byte `SetV4` immediate.
+    pub operand_range: std::ops::Range<usize>,
     pub field_owner: ExactTypeIdentity,
     pub field: String,
     pub tag: ExactGlobalReference,
 }
 
-/// A reference-proven native field whose exact declared USMAP shape is additionally sealed.
-/// Target-class identity and target-to-owner ancestry remain separate mandatory gates.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeFieldProvenTagMapSite {
-    pub reference: ReferenceProvenTagMapSite,
-    pub field_schema_proof_id: &'static str,
-}
-
-pub fn prove_native_tag_map_field_schema(
-    ancestry: &DefaultNativeAncestry,
-    site: &ReferenceProvenTagMapSite,
-) -> Option<NativeFieldProvenTagMapSite> {
-    if !site.field_owner.module.is_empty() || !site.field_owner.namespace.is_empty() {
-        return None;
-    }
-    let proof_id = ancestry.proves_gameplay_tag_float32_map(&site.field_owner.name, &site.field)?;
-    Some(NativeFieldProvenTagMapSite {
-        reference: site.clone(),
-        field_schema_proof_id: proof_id,
-    })
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TagMapReferenceStats {
+pub(crate) struct TagMapReferenceStats {
     pub init_functions: usize,
     pub branched_init_functions: usize,
     pub raw_windows: usize,
@@ -459,26 +445,45 @@ pub struct TagMapReferenceStats {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagMapReferenceReport {
+pub(crate) struct TagMapReferenceReport {
     pub sites: Vec<ReferenceProvenTagMapSite>,
     pub stats: TagMapReferenceStats,
 }
 
 #[derive(Debug, Error)]
-pub enum TagMapReferenceScanError {
+pub(crate) enum TagMapReferenceScanError {
     #[error(transparent)]
     ExactReferences(#[from] ExactReferenceError),
     #[error("failed to walk function bytecode spans: {0}")]
     Walk(String),
     #[error("failed to disassemble {function}: {error}")]
     Disasm { function: String, error: String },
+    #[error("tag-map operand range overflows or is outside the cache in {function}")]
+    OperandRange { function: String },
+    #[error(
+        "tag-map operand bytes at {offset:#x} in {function} are {actual:?}, expected {expected:?}"
+    )]
+    OperandMismatch {
+        function: String,
+        offset: usize,
+        expected: [u8; 4],
+        actual: [u8; 4],
+    },
+    #[error(
+        "tag-map operand ranges overlap at {offset:#x}: {first_function} and {second_function}"
+    )]
+    OperandOverlap {
+        first_function: String,
+        second_function: String,
+        offset: usize,
+    },
 }
 
 /// Prove exact initializer and reference identities across a whole cache.
 ///
 /// This deliberately stops before class ancestry and field-schema proof, so callers cannot use
 /// the result as a mutation selector by itself.
-pub fn reference_proven_tag_map_sites(
+pub(crate) fn reference_proven_tag_map_sites(
     cache: &[u8],
 ) -> Result<TagMapReferenceReport, TagMapReferenceScanError> {
     let refs = ExactReferenceIndex::build(cache)?;
@@ -511,10 +516,12 @@ pub fn reference_proven_tag_map_sites(
         for raw in windows {
             match prove_reference_window(&refs, &raw) {
                 Ok((field_owner, field, tag)) => {
+                    let operand_range = checked_absolute_operand_range(cache, span, &raw)?;
                     stats.reference_proven_windows += 1;
                     sites.push(ReferenceProvenTagMapSite {
                         function: span.code.func.clone(),
                         raw,
+                        operand_range,
                         field_owner,
                         field,
                         tag,
@@ -537,6 +544,96 @@ pub fn reference_proven_tag_map_sites(
         }
     }
     Ok(TagMapReferenceReport { sites, stats })
+}
+
+fn checked_absolute_operand_range(
+    cache: &[u8],
+    span: &FuncCodeSpan,
+    raw: &RawTagMapWindow,
+) -> Result<std::ops::Range<usize>, TagMapReferenceScanError> {
+    let function = || span.code.func.clone();
+    let relative = raw.operand_offset_dw.checked_mul(4).ok_or_else(|| {
+        TagMapReferenceScanError::OperandRange {
+            function: function(),
+        }
+    })?;
+    let start = span.bytecode_offset.checked_add(relative).ok_or_else(|| {
+        TagMapReferenceScanError::OperandRange {
+            function: function(),
+        }
+    })?;
+    let end = start.checked_add(raw.expected.len()).ok_or_else(|| {
+        TagMapReferenceScanError::OperandRange {
+            function: function(),
+        }
+    })?;
+    let actual: [u8; 4] = cache
+        .get(start..end)
+        .ok_or_else(|| TagMapReferenceScanError::OperandRange {
+            function: function(),
+        })?
+        .try_into()
+        .expect("the checked tag-map operand width is four bytes");
+    if actual != raw.expected {
+        return Err(TagMapReferenceScanError::OperandMismatch {
+            function: function(),
+            offset: start,
+            expected: raw.expected,
+            actual,
+        });
+    }
+    Ok(start..end)
+}
+
+/// Clone the cache and zero every exact, reference-proven GameplayTag-map float32 immediate.
+///
+/// The report retains the checked absolute ranges and the exact normalized count. Higher layers
+/// may combine these cache-only bytes with other normalizers, but this helper does not fingerprint
+/// a build, prove native schema, expose a selector, or authorize mutation.
+pub(crate) fn normalize_reference_proven_tag_map_operands(
+    cache: &[u8],
+) -> Result<(Vec<u8>, TagMapReferenceReport), TagMapReferenceScanError> {
+    let report = reference_proven_tag_map_sites(cache)?;
+    let mut ordered: Vec<_> = report.sites.iter().collect();
+    ordered.sort_by_key(|site| site.operand_range.start);
+
+    for pair in ordered.windows(2) {
+        let [first, second] = pair else {
+            unreachable!("windows(2) always yields two sites")
+        };
+        if first.operand_range.end > second.operand_range.start {
+            return Err(TagMapReferenceScanError::OperandOverlap {
+                first_function: first.function.clone(),
+                second_function: second.function.clone(),
+                offset: second.operand_range.start,
+            });
+        }
+    }
+
+    let mut normalized = cache.to_vec();
+    for site in &ordered {
+        let actual: [u8; 4] = normalized
+            .get(site.operand_range.clone())
+            .ok_or_else(|| TagMapReferenceScanError::OperandRange {
+                function: site.function.clone(),
+            })?
+            .try_into()
+            .expect("reference-proven tag-map ranges are exactly four bytes");
+        if actual != site.raw.expected {
+            return Err(TagMapReferenceScanError::OperandMismatch {
+                function: site.function.clone(),
+                offset: site.operand_range.start,
+                expected: site.raw.expected,
+                actual,
+            });
+        }
+        normalized
+            .get_mut(site.operand_range.clone())
+            .expect("the immutable range check above succeeded")
+            .fill(0);
+    }
+
+    Ok((normalized, report))
 }
 
 fn prove_reference_window(
@@ -647,51 +744,6 @@ fn is_const_reference_to(reference: &ExactDataType, value: &ExactDataType) -> bo
         && reference.token == value.token
 }
 
-fn is_initializer_metadata(span: &FuncCodeSpan) -> bool {
-    span.kind == FuncCodeKind::ClassMethod
-        && span.method_table_valid
-        && span.in_method_table
-        && matches!(span.function_traits, 0 | 0x20)
-        && span.code.is_method
-        && span.code.func.ends_with("::__InitDefaults")
-        && span.code.param_types.is_empty()
-        && is_plain_model_void(&span.code.ret)
-}
-
-fn is_plain_model_void(value: &super::types::DataType) -> bool {
-    !value.is_reference
-        && !value.is_object_const
-        && !value.is_object_handle
-        && !value.is_read_only
-        && !value.is_auto
-        && !value.if_handle_then_const
-        && value.type_info == 0
-        && value.token == 0x52
-}
-
-fn is_branch(name: &str) -> bool {
-    matches!(
-        name,
-        "JMP" | "JZ" | "JNZ" | "JS" | "JNS" | "JP" | "JNP" | "JMPP" | "JLowZ" | "JLowNZ"
-    )
-}
-
-fn is_reachable_linear_initializer(instrs: &[Instr]) -> bool {
-    if instrs
-        .iter()
-        .any(|instruction| is_branch(instruction.op.name))
-    {
-        return false;
-    }
-    let Some((last, prefix)) = instrs.split_last() else {
-        return false;
-    };
-    last.op.name == "RET"
-        && prefix
-            .iter()
-            .all(|instruction| !matches!(instruction.op.name, "RET" | "ThrowException"))
-}
-
 /// One exact, contiguous raw candidate:
 ///
 /// `SetV4 value, immediate; PSF value; PshGPtr tag; PshVPtr this;`
@@ -699,7 +751,7 @@ fn is_reachable_linear_initializer(instrs: &[Instr]) -> bool {
 ///
 /// Offsets, ids, and pointers are provenance only. None of them is a semantic selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RawTagMapWindow {
+pub(crate) struct RawTagMapWindow {
     pub instruction_index: usize,
     pub instruction_offset_dw: usize,
     /// Dword containing the complete four-byte `SetV4` immediate.
@@ -715,7 +767,10 @@ pub struct RawTagMapWindow {
 }
 
 /// Disassemble one function and return only exact raw GameplayTag-map candidates.
-pub fn scan_raw_tag_map_windows(bytecode: &[i32]) -> Result<Vec<RawTagMapWindow>, DisasmError> {
+#[cfg(test)]
+pub(crate) fn scan_raw_tag_map_windows(
+    bytecode: &[i32],
+) -> Result<Vec<RawTagMapWindow>, DisasmError> {
     let instrs = disassemble(bytecode)?;
     Ok(raw_tag_map_windows(bytecode, &instrs))
 }
@@ -1240,36 +1295,6 @@ mod tests {
     }
 
     #[test]
-    fn opaque_native_field_proof_binds_exact_owner_field_and_map_profile() {
-        let raw = raw_window();
-        let refs = exact_reference_index();
-        let (field_owner, field, tag) = prove_reference_window(&refs, &raw).unwrap();
-        let site = ReferenceProvenTagMapSite {
-            function: "Items.UFixture::__InitDefaults".into(),
-            raw,
-            field_owner,
-            field,
-            tag,
-        };
-        let profile = DefaultNativeAncestry::from_test_edges_and_maps(
-            &[("UWeaponDefinition", None)],
-            &[("UWeaponDefinition", "m_DamageBase")],
-        );
-        let proven = prove_native_tag_map_field_schema(&profile, &site).unwrap();
-        assert_eq!(
-            proven.field_schema_proof_id,
-            super::super::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
-        );
-
-        let mut wrong_case = site.clone();
-        wrong_case.field = "m_damageBase".into();
-        assert!(prove_native_tag_map_field_schema(&profile, &wrong_case).is_none());
-        let mut wrong_module = site;
-        wrong_module.field_owner.module = "Foreign".into();
-        assert!(prove_native_tag_map_field_schema(&profile, &wrong_module).is_none());
-    }
-
-    #[test]
     fn initializer_gate_rejects_metadata_branches_early_ret_and_throw() {
         let mut linear = exact_window();
         linear.push(op(10, 0)); // final RET
@@ -1309,9 +1334,9 @@ mod tests {
             eprintln!("skip: set GORE_AS_DEFAULT_CACHE");
             return;
         };
-        let path = std::path::PathBuf::from(path);
-        let cache = std::fs::read(&path).expect("read configured Shipping cache");
-        let report = reference_proven_tag_map_sites(&cache).expect("reference-proven tag maps");
+        let cache = std::fs::read(path).expect("read configured Shipping cache");
+        let (normalized, report) = normalize_reference_proven_tag_map_operands(&cache)
+            .expect("normalize reference-proven tag maps");
         assert_eq!(report.stats.init_functions, 29_951);
         assert_eq!(report.stats.branched_init_functions, 1);
         assert_eq!(report.stats.raw_windows, 1_432);
@@ -1336,33 +1361,72 @@ mod tests {
         assert_eq!(sword.len(), 1);
         assert_eq!(sword[0].raw.expected, 10.0f32.to_le_bytes());
 
-        let Some(usmap_path) = std::env::var_os("GORE_AS_DEFAULT_USMAP") else {
-            eprintln!("skip native field proof: set GORE_AS_DEFAULT_USMAP");
-            return;
-        };
-        let native = super::super::binds::NativeApi::load(
-            &path.parent().expect("Script directory").join("Binds.Cache"),
-        )
-        .expect("load sibling Binds");
-        let usmap = std::fs::read(usmap_path).expect("read configured USMAP");
-        let schemas = gore_asset::SchemaDb::from_usmap(&usmap).expect("parse configured USMAP");
-        let profile = DefaultNativeAncestry::from_schema_db(&native, &cache, &schemas)
-            .expect("build sealed ancestry and field profile");
-        let field_proven: Vec<_> = report
+        let mut ranges: Vec<_> = report
             .sites
             .iter()
-            .filter_map(|site| prove_native_tag_map_field_schema(&profile, site))
+            .map(|site| site.operand_range.clone())
             .collect();
-        assert_eq!(field_proven.len(), 1_432);
-        assert!(field_proven.iter().any(|site| {
-            site.reference
-                .function
-                .ends_with("UItMw_1H_Sword_Old_01::__InitDefaults")
-                && site.reference.field == "m_DamageBase"
-                && site.reference.tag.name == "Item_Damage_Physical_Edge"
-                && site.field_schema_proof_id
-                    == super::super::default_ancestry::DEFAULT_GAMEPLAY_TAG_FLOAT32_MAP_PROOF_ID
-        }));
+        ranges.sort_by_key(|range| range.start);
+        assert_eq!(ranges.len(), 1_432);
+        for site in &report.sites {
+            assert_eq!(
+                site.operand_range.end.checked_sub(site.operand_range.start),
+                Some(4)
+            );
+            assert_eq!(
+                cache.get(site.operand_range.clone()),
+                Some(site.raw.expected.as_slice())
+            );
+        }
+        assert!(ranges.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        for range in &ranges {
+            assert_eq!(normalized.get(range.clone()), Some(&[0, 0, 0, 0][..]));
+        }
+
+        let mut one_tag_changed = cache.clone();
+        for byte in one_tag_changed
+            .get_mut(report.sites[0].operand_range.clone())
+            .expect("first tag operand")
+        {
+            *byte ^= 0x5a;
+        }
+        let (one_normalized, one_report) =
+            normalize_reference_proven_tag_map_operands(&one_tag_changed)
+                .expect("one changed tag remains normalizable");
+        assert_eq!(one_normalized, normalized);
+        assert_eq!(one_report.sites.len(), report.sites.len());
+
+        let mut all_tags_changed = cache.clone();
+        for site in &report.sites {
+            for byte in all_tags_changed
+                .get_mut(site.operand_range.clone())
+                .expect("tag operand")
+            {
+                *byte ^= 0xa5;
+            }
+        }
+        let (all_normalized, all_report) =
+            normalize_reference_proven_tag_map_operands(&all_tags_changed)
+                .expect("all changed tags remain normalizable");
+        assert_eq!(all_normalized, normalized);
+        assert_eq!(all_report.sites.len(), report.sites.len());
+
+        let context_offset = report.sites[0]
+            .operand_range
+            .start
+            .checked_sub(1)
+            .expect("SetV4 word precedes its immediate");
+        assert!(report
+            .sites
+            .iter()
+            .all(|site| !site.operand_range.contains(&context_offset)));
+        let mut context_changed = cache.clone();
+        context_changed[context_offset] ^= 0x80;
+        let (context_normalized, context_report) =
+            normalize_reference_proven_tag_map_operands(&context_changed)
+                .expect("non-operand context change remains parseable");
+        assert_ne!(context_normalized, normalized);
+        assert_ne!(context_report.sites.len(), report.sites.len());
     }
 
     #[test]
