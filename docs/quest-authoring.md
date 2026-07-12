@@ -87,6 +87,37 @@ functions offline. Its discovery proof upgrades new quest **class discovery**
 from hypothesis to a supported narrow mechanism, but it does not upgrade the
 candidate's transition/effect behavior to production-ready.
 
+## Discovery-only Draft generator
+
+`gore-authoring` now exposes `DraftQuestSkeletonV1`, a bounded, offline-only
+generator for the smallest useful quest Draft. It emits exactly one
+`UG1RQuest` root and one subobjective, their generated defaults, and two
+read-only lookup helpers. The fixed shape deliberately contains no transition
+predicate or action, dialog selection, effect, reward, journal operation,
+failure path, filesystem write, compiler invocation, game launch, or save
+operation.
+
+Generation requires the target game generation plus catalog-layer, generation,
+and source-seal anchors for the giver, parent quest, and collision inventory.
+The giver keeps its catalog selector separate from its runtime unique name; only
+the latter reaches generated source. Generated modules, paths, classes, helper,
+and getter symbols are pairwise collision-checked and checked against the
+sealed catalog using portable case-insensitive identity rules.
+
+The retained golden fixture is 2,008 UTF-8/LF bytes with source SHA-256
+`eb38bf814685485977113cf67a679d4b4cb309a2dbcd229fae3a6d57f2a4ae82`.
+Its canonical input fingerprint is
+`5987a4b5147fb76f34af3cf0f926f0c7de2450d4e370c1aee3d88bcf8121de93`.
+These hashes have different jobs: the source hash binds emitted bytes, while
+the tagged, length-prefixed input fingerprint also binds provenance, collision
+inventories, fixed generator semantics, and inputs that may not appear in the
+source text.
+
+The generator always reports `OfflineDraft`, `RuntimeUnqualified`, and
+`TransitionsRuntimeUnqualified`. Caller-supplied seals cannot upgrade those
+statuses. Runtime discovery evidence belongs to the versioned capability
+registry and must match this exact generated operation independently.
+
 ## Safe qualification order
 
 1. Build the new module offline and reopen the mini-cache.
@@ -108,8 +139,16 @@ save.
 ## Mod Studio boundary
 
 Mod Studio can safely provide a typed Draft quest wizard, outline/transcript/
-graph views, localization, deterministic source generation, dependency checks,
-and offline compilation now. It may report new-class discovery as qualified for
-the exact proven game generation. Production build remains blocked for any
-transition, dialog effect, reward, journal action, or persistence behavior that
-has not passed its own qualification gate.
+graph views, localization, deterministic source generation, and dependency
+checks on top of this generator. The generator itself does not compile or
+compose anything. Offline compile/compose/reopen evidence exists through the
+sealed retained candidate workflow, but a general one-click Studio compile path
+is not qualified until that complete diagnostic and artifact chain is integrated
+for Draft projects.
+
+Studio may report new-class discovery as qualified only when the versioned
+capability registry matches the exact proven game generation and class shape;
+that does not change the generator's own runtime-unqualified result. Production
+build remains blocked for every required transition, dialog effect, reward,
+journal action, or persistence behavior that has not passed its separate
+qualification gate.
