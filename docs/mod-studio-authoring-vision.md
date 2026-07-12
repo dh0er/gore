@@ -11,6 +11,7 @@ Related evidence and operating boundaries:
 - [Bundle and deployment contract](../README.md#bundling--deploying)
 - [AngelScript dialog authoring and live proof](dialog-authoring.md)
 - [AngelScript quest authoring and discovery proof](quest-authoring.md)
+- [AngelScript logical NPC authoring](npc-authoring.md)
 - [Cooked DataAsset fixed-leaf workflow](dataasset-authoring.md)
 - [Offline AngelScript default patching](angelscript-default-patching.md)
 
@@ -179,7 +180,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Unified content browser | **Missing** | Items, dialog/localization, FMOD audio, textures, and scripts have separate tabs. There is no global entity search, reference graph, NPC/quest browser, or source-aware clone workflow. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
 | Existing NPC edits | **Partial backend, missing authoring UI** | Catalog/model generation and generic CDO overrides can describe some existing NPC-class fields, but Mod Studio has no NPC entity browser or semantic NPC editor and no end-to-end NPC authoring proof. |
-| New NPC identity | **Missing; script-only hypothesis identified** | ObjectDump/cache evidence represents Asghan's `CharacterDefinition`, `AIAgentConfig`, and `SpawnAIAgentDefinition` as linked `/Script/Angelscript` classes/CDOs. The fastest hypothesis is therefore a new `CharacterDefinition` with a new `UniqueName` plus new linked config/spawn classes while reusing qualified vanilla visuals. Spawning another body for an existing identity is proven, but it shares that identity's dialog/quest state and is not a new NPC. The logical-clone hypothesis is not yet proven end to end: class residence alone does not establish discovery, distinct dialog/quest identity, spawning, or persistence. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. |
+| New NPC identity | **Offline compile/compose proven; runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. The composed cache resolves exactly the three intended classes and their defaults. Spawning another body for an existing identity remains a different, weaker proof because it shares that identity's dialog/quest state. Runtime class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not yet proven. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
 | Existing localized dialog lines | **Proven** | The Dialogs tab groups `info_`/`dia_`/`gvl_`/`svm_` IDs, edits languages, and can add an explicit missing localization ID. Localization alone does not create a selectable topic. |
 | New dialog topic insertion/rendering | **Proven narrow runtime path** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration reached the natural choice UI and was visually confirmed. The current Studio editor exposes those technical identities manually. Automatic discovery remains unproven. See [dialog authoring](dialog-authoring.md). |
 | Dialog selection effects | **Unproven** | Topic selection, quest/knowledge changes, `ActedTopics`, and selection-side save effects are outside the render proof. The safe proof intentionally selected nothing. |
@@ -279,12 +280,14 @@ For an existing NPC, unsupported fields are read-only and preserved. An author
 may create a **Draft-only NPC** skeleton, organize it, write its localization
 and dialog, and link project references before the runtime backend exists. The
 template explains before creation that the NPC is not build-ready. Production
-build remains blocked until the exact definition/config/spawn links and runtime
-discovery, distinct identity, dialog/quest separation, and persistence chain are
-proven. The first implementation should test the bounded script-only logical
-clone that reuses qualified vanilla visuals. Cooked package/reference/collection
-support becomes an additional requirement only when the chosen template needs
-new visual/content assets or the recovered identity chain proves it necessary.
+build remains blocked until runtime discovery, distinct identity, spawning,
+dialog/quest separation, and persistence are proven. The exact three-class
+definition/config/spawn chain is already compile- and compose-qualified offline
+for a bounded logical clone whose visual/actor defaults remain inherited from
+Asghan-derived parents. Cooked
+package/reference/collection support becomes an additional requirement only
+when the chosen template needs new visual/content assets or the recovered
+identity chain proves it necessary.
 The UI must not claim that an unreferenced AngelScript class is a working new
 NPC or include it silently in a bundle.
 
@@ -755,11 +758,12 @@ An `Npc` owns or references:
 
 Owned generated records are deleted or cloned with the NPC only after an impact
 preview. Shared items, localization, voices, and quest graphs are referenced,
-not implicitly owned. The first bounded new-NPC target is a script-only logical
-clone with a new `UniqueName`, new linked definition/config/spawn classes, and
-qualified inherited vanilla visuals. It is buildable only when those links,
-distinct identity, spawn, dialog/quest separation, and persistence are supported
-for the chosen archetype. Cooked package, reference-table, or
+not implicitly owned. The first bounded new-NPC target is the offline-proven
+script-only logical clone with a new `UniqueName`, new linked
+definition/config/spawn classes, and inherited visual/actor defaults. It is
+production-buildable only when runtime class residence, distinct identity,
+spawn, dialog/quest separation, and persistence are supported for the chosen
+archetype. Cooked package, reference-table, or
 registry/collection lowerers are additionally required only when that template
 introduces new visual/content assets or the recovered chain proves they are
 necessary.
@@ -984,8 +988,8 @@ relationships. Integrate the fixed-leaf DataAsset workflow through semantic
 selectors and receipts. Existing-class and existing-asset overrides come before
 production new-identity creation. Recover the vanilla quest catalog and enough
 of its exact representation for a strict typed model. Add a **Draft-only NPC**
-skeleton/editor around the linked script-class hypothesis and **Draft-only
-Quest** templates/schema/offline source generator. The narrow new-`UQuest`
+skeleton/editor around the offline-proven linked script-class chain and
+**Draft-only Quest** templates/schema/offline source generator. The narrow new-`UQuest`
 discovery proof is recorded in the capability registry, but unqualified behavior
 keeps generated quests out of production builds. Add project-wide
 generation/rebase diagnostics, the full three-way rebase workflow, offline
@@ -1006,13 +1010,16 @@ Draft quest templates whose required mechanisms have passed those gates.
 
 ### Phase 5: new NPC vertical slice
 
-Test the fastest evidence-backed hypothesis first: generate a new `UniqueName`
-plus linked AngelScript `CharacterDefinition`, `AIAgentConfig`, and
-`SpawnAIAgentDefinition` classes/CDOs, reuse qualified vanilla visuals, and add
-one conservative spawn mechanism. The vertical slice is: Draft template -> one
-logically distinct NPC -> one localized name -> one existing-item inventory ref
--> one dialog greeting with voice -> one qualified spawn -> build -> disposable
-runtime proof of distinct identity/dialog/quest state and persistence -> clean
+Build on the offline-proven class chain: generate a new `UniqueName` plus linked
+AngelScript `CharacterDefinition`, `AIAgentConfig`, and
+`SpawnAIAgentDefinition` classes/CDOs, leave visual/actor defaults inherited
+from Asghan-derived parents, and
+qualify one conservative spawn mechanism. The vertical slice is: Draft template
+-> one candidate logical NPC/class chain -> one localized name -> one
+existing-item inventory ref -> one dialog greeting with voice -> one qualified
+spawn -> build -> disposable runtime proof of effective visuals, distinct
+identity/dialog/quest state, and
+persistence -> clean
 undeploy. If the recovered chain requires an additional registry or cooked
 asset, the slice blocks and reports that dependency rather than guessing it.
 Cooked package/reference/collection creation remains a separate prerequisite
