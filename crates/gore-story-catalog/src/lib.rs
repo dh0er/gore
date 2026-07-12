@@ -562,6 +562,19 @@ impl StoryCatalogFile {
         &self.wire.catalog_seal
     }
 
+    /// Reopen and verify every generation input captured while this catalog was built.
+    ///
+    /// Parsed catalog documents deliberately have no live input guard and fail closed. Builders
+    /// can call this immediately before exposing an in-memory result to close the gap between the
+    /// initial hash pass and serialization without performing any publication or filesystem write.
+    pub fn revalidate_generation_inputs(&self) -> Result<(), CatalogError> {
+        let guard = self
+            .input_guard
+            .as_ref()
+            .ok_or(CatalogError::MissingInputGuard)?;
+        validate_generation_input_guard(guard)
+    }
+
     /// Return only the pinned, bounded fields needed by a friendly NPC/Quest chooser.
     pub fn authoring_selections(&self) -> Result<StoryCatalogAuthoringSelections, CatalogError> {
         validate_catalog_file(self)?;
@@ -713,9 +726,13 @@ pub enum CatalogError {
     IdentityChanged(PathBuf),
     #[error("story catalog output {output:?} aliases protected generation input {input:?}")]
     OutputAliasesInput { output: PathBuf, input: PathBuf },
-    #[error("a parsed catalog has no live generation-input guard and cannot be published")]
+    #[error(
+        "a parsed catalog has no live generation-input guard and cannot be revalidated or published"
+    )]
     MissingInputGuard,
-    #[error("story catalog source changed while hashing {path:?}: expected {expected} bytes, read {actual}")]
+    #[error(
+        "story catalog source changed while hashing {path:?}: expected {expected} bytes, read {actual}"
+    )]
     SourceChanged {
         path: PathBuf,
         expected: u64,
@@ -1109,11 +1126,17 @@ fn curated_records_v1() -> VerifiedExtractionRecords {
                 "AI.AIAgent.Human.Config.OM_GRD_Asghan_263.CharacterDefinition_OM_GRD_Asghan_263",
                 "AI/AIAgent/Human/Config/OM_GRD_Asghan_263/CharacterDefinition_OM_GRD_Asghan_263.as",
                 "UCharacterDefinition_Human_OM_GRD_Asghan_263",
-                known_seal(460, "2312e01be5dd91d043b03acbd487f310d47b99107d765ce31ad87aa77eb5723e"),
+                known_seal(
+                    460,
+                    "2312e01be5dd91d043b03acbd487f310d47b99107d765ce31ad87aa77eb5723e",
+                ),
                 "AI.AIAgent.Human.Config.OM_GRD_Asghan_263.DailyRoutine_OM_GRD_Asghan_263",
                 "AI/AIAgent/Human/Config/OM_GRD_Asghan_263/DailyRoutine_OM_GRD_Asghan_263.as",
                 "UAIAgentConfig_Human_OM_GRD_Asghan_263",
-                known_seal(932, "b728be66667b1b220438c40c11d0881eab01f6a7cc9094ea935b90a1da36eae8"),
+                known_seal(
+                    932,
+                    "b728be66667b1b220438c40c11d0881eab01f6a7cc9094ea935b90a1da36eae8",
+                ),
                 "USpawnAIAgentDefinition_OM_GRD_Asghan_263",
                 NpcAuthoringQualification::OfflineQualified,
                 "npc-logical-clone-v1",
@@ -1125,11 +1148,17 @@ fn curated_records_v1() -> VerifiedExtractionRecords {
                 "AI.AIAgent.Human.Config.OM_STT_Viper_302.CharacterDefinition_OM_STT_Viper_302",
                 "AI/AIAgent/Human/Config/OM_STT_Viper_302/CharacterDefinition_OM_STT_Viper_302.as",
                 "UCharacterDefinition_Human_OM_STT_Viper_302",
-                known_seal(455, "1a4c6caad0511154f4622722f38ec5f85cc2e12f500224f90f4e0208614e7c73"),
+                known_seal(
+                    455,
+                    "1a4c6caad0511154f4622722f38ec5f85cc2e12f500224f90f4e0208614e7c73",
+                ),
                 "AI.AIAgent.Human.Config.OM_STT_Viper_302.DailyRoutine_OM_STT_Viper_302",
                 "AI/AIAgent/Human/Config/OM_STT_Viper_302/DailyRoutine_OM_STT_Viper_302.as",
                 "UAIAgentConfig_Human_OM_STT_Viper_302",
-                known_seal(932, "dde3f35f70f23a1ae77f0768d7a947fc2fbd9deaac4b3c12a5bad4f35725220b"),
+                known_seal(
+                    932,
+                    "dde3f35f70f23a1ae77f0768d7a947fc2fbd9deaac4b3c12a5bad4f35725220b",
+                ),
                 "USpawnAIAgentDefinition_OM_STT_Viper_302",
                 NpcAuthoringQualification::OfflineQualified,
                 VIPER_OFFLINE_EVIDENCE_ID,
@@ -1142,7 +1171,10 @@ fn curated_records_v1() -> VerifiedExtractionRecords {
                 "Story.G1R.Quest.Quest_SwampCamp_SCCHAPTER2",
                 "Story/G1R/Quest/Quest_SwampCamp_SCCHAPTER2.as",
                 "UQuest_SwampCamp_SCCHAPTER2",
-                known_seal(856, "5f5060a2740794853fcf0aa38306e183637e81658ab3e9f9b97eee8c5bdd74dd"),
+                known_seal(
+                    856,
+                    "5f5060a2740794853fcf0aa38306e183637e81658ab3e9f9b97eee8c5bdd74dd",
+                ),
             ),
             parent_class_name: "UQuest_SwampCamp".to_owned(),
             role: QuestParentRole::Chapter,
@@ -1973,17 +2005,7 @@ fn validate_output_ancestors(path: &Path) -> Result<(), CatalogError> {
 fn validate_publish_state(output: &Path, guard: &GenerationInputGuard) -> Result<(), CatalogError> {
     validate_output_ancestors(output)?;
 
-    let mut snapshots = Vec::with_capacity(guard.inputs.len());
-    for input in &guard.inputs {
-        let (_file, snapshot) = open_regular_no_follow(&input.path, false)?;
-        if snapshot.identity != input.identity
-            || snapshot.byte_len != input.byte_len
-            || snapshot.change_stamp != input.change_stamp
-        {
-            return Err(CatalogError::IdentityChanged(input.path.clone()));
-        }
-        snapshots.push(snapshot);
-    }
+    validate_generation_input_guard(guard)?;
 
     let output_snapshot = open_optional_regular_no_follow(output)?;
     if let Some(snapshot) = output_snapshot {
@@ -1999,7 +2021,18 @@ fn validate_publish_state(output: &Path, guard: &GenerationInputGuard) -> Result
             return Err(CatalogError::UnsafeInput(output.to_path_buf()));
         }
     }
-    for (input, snapshot) in guard.inputs.iter().zip(snapshots) {
+    Ok(())
+}
+
+fn validate_generation_input_guard(guard: &GenerationInputGuard) -> Result<(), CatalogError> {
+    for input in &guard.inputs {
+        let (_file, snapshot) = open_regular_no_follow(&input.path, false)?;
+        if snapshot.identity != input.identity
+            || snapshot.byte_len != input.byte_len
+            || snapshot.change_stamp != input.change_stamp
+        {
+            return Err(CatalogError::IdentityChanged(input.path.clone()));
+        }
         if snapshot.link_count != 1 {
             return Err(CatalogError::UnsafeInput(input.path.clone()));
         }
@@ -2813,6 +2846,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let mut catalog = trusted_catalog();
         let paths = attach_test_input_guard(&mut catalog, root.path());
+        catalog.revalidate_generation_inputs().unwrap();
         let executable_before = fs::read(&paths.executable).unwrap();
         assert!(matches!(
             publish_catalog_atomic(&paths.executable, &catalog),
@@ -2860,6 +2894,10 @@ mod tests {
         fs::remove_file(&paths.binds_cache).unwrap();
         fs::write(&paths.binds_cache, b"replacement guard").unwrap();
         let output = root.path().join("changed-input-output.json");
+        assert!(matches!(
+            catalog.revalidate_generation_inputs(),
+            Err(CatalogError::IdentityChanged(path)) if path == paths.binds_cache
+        ));
         assert!(matches!(
             publish_catalog_atomic(&output, &catalog),
             Err(CatalogError::IdentityChanged(path)) if path == paths.binds_cache

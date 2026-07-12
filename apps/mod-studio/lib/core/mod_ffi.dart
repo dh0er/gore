@@ -195,10 +195,53 @@ class ModFfi {
       catalogJson,
     );
     final response = await _call(command, {'catalog_json': catalogJson});
-    return AuthoringStoryCatalogSelections.fromJson(
+    return AuthoringStoryCatalogSelections._fromJson(
       response,
       catalogJson: catalogJson,
     );
+  }
+
+  /// Build the pinned Story catalog from one installed generation entirely in memory.
+  Future<AuthoringStoryCatalogBuildResult> authoringStoryCatalogV1Build({
+    required String executable,
+    required String shippingCache,
+    required String bindsCache,
+  }) async {
+    _authoringStoryCatalogPath(executable, 'executable');
+    _authoringStoryCatalogPath(shippingCache, 'shippingCache');
+    _authoringStoryCatalogPath(bindsCache, 'bindsCache');
+    const command = 'authoring_story_catalog_v1_build';
+    _authoringStoryCatalogBuildEnvelopePreflight(
+      command,
+      executable,
+      shippingCache,
+      bindsCache,
+    );
+    final response = await _call(command, {
+      'executable': executable,
+      'shipping_cache': shippingCache,
+      'binds_cache': bindsCache,
+    });
+    return AuthoringStoryCatalogBuildResult._fromJson(
+      response,
+      executable: executable,
+      shippingCache: shippingCache,
+      bindsCache: bindsCache,
+    );
+  }
+
+  /// Build and then pass the exact raw catalog through the existing pinned chooser reader.
+  Future<AuthoringStoryCatalogSelections> authoringStoryCatalogV1BuildAndRead({
+    required String executable,
+    required String shippingCache,
+    required String bindsCache,
+  }) async {
+    final built = await authoringStoryCatalogV1Build(
+      executable: executable,
+      shippingCache: shippingCache,
+      bindsCache: bindsCache,
+    );
+    return authoringStoryCatalogV1Read(catalogJson: built.catalogJson);
   }
 
   /// Validate and preview one bounded logical-NPC clone entirely in memory.
@@ -672,6 +715,40 @@ void _authoringSingleRawJsonEnvelopePreflight(
       command.length +
       wireField.length;
   _authoringAddEscapedJsonStringBytes(value, dartField, encodedBytes);
+}
+
+void _authoringStoryCatalogPath(String value, String field) {
+  _authoringDraftRequestString(value, field, _maxAuthoringStorePathBytes);
+  if (value.contains('\u0000')) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      field,
+      'must not contain NUL',
+    );
+  }
+}
+
+void _authoringStoryCatalogBuildEnvelopePreflight(
+  String command,
+  String executable,
+  String shippingCache,
+  String bindsCache,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"executable":"","shipping_cache":"","binds_cache":""}}'
+          .length +
+      command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    executable,
+    'executable',
+    encodedBytes,
+  );
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    shippingCache,
+    'shippingCache',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(bindsCache, 'bindsCache', encodedBytes);
 }
 
 int _authoringAddEscapedJsonStringBytes(
@@ -1739,7 +1816,7 @@ class AuthoringDraftQuestStatus {
   }
 }
 
-class AuthoringDraftContentSeal {
+final class AuthoringDraftContentSeal {
   const AuthoringDraftContentSeal._({
     required this.byteLength,
     required this.sha256,
@@ -2188,8 +2265,129 @@ final _authoringStoryCatalogIdPattern = RegExp(r'^[a-z0-9][a-z0-9._:-]*$');
 final _authoringStoryCatalogAliasPattern = RegExp(r'^Catalog_[0-9a-f]{64}$');
 const _authoringStoryCatalogSelectorDomain =
     'gore-story-catalog.authoring-selector-v1\u0000';
+const _authoringStoryCatalogBuildBindingDomain =
+    'gore-story-catalog.authoring-build-v1.request-binding\u0000';
 
-class AuthoringStoryCatalogSelections {
+final class AuthoringStoryCatalogBuildResult {
+  const AuthoringStoryCatalogBuildResult._({
+    required this.requestBindingSha256,
+    required this.catalogJson,
+    required this.generation,
+    required this.catalogSeal,
+  });
+
+  final String requestBindingSha256;
+  final String catalogJson;
+  final AuthoringStoryCatalogGeneration generation;
+  final AuthoringDraftContentSeal catalogSeal;
+
+  factory AuthoringStoryCatalogBuildResult._fromJson(
+    Map<String, Object?> json, {
+    required String executable,
+    required String shippingCache,
+    required String bindsCache,
+  }) {
+    _authoringExactFields(json, const {
+      'ok',
+      'request_binding_sha256',
+      'catalog_json',
+      'generation',
+      'catalog_seal',
+    }, 'Story catalog build response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring Story catalog build response is not ok',
+      );
+    }
+    final requestBindingSha256 = _authoringRequiredString(
+      json,
+      'request_binding_sha256',
+      maxBytes: 64,
+    );
+    final expectedBinding = _authoringStoryCatalogBuildBindingSha256(
+      executable,
+      shippingCache,
+      bindsCache,
+    );
+    if (!_authoringSha256Pattern.hasMatch(requestBindingSha256) ||
+        requestBindingSha256 != expectedBinding) {
+      throw const FormatException(
+        'authoring Story catalog build response is not bound to its exact paths',
+      );
+    }
+    final catalogJson = _authoringRequiredString(
+      json,
+      'catalog_json',
+      maxBytes: _maxAuthoringStoryCatalogJsonBytes,
+    );
+    final rawCatalog = _authoringDecodeDuplicateSafeObject(
+      catalogJson,
+      'Story catalog build result',
+    );
+    if (jsonEncode(rawCatalog) != catalogJson) {
+      throw const FormatException(
+        'authoring Story catalog build result is not canonical JSON',
+      );
+    }
+    _authoringExactFields(rawCatalog, const {
+      'format',
+      'schema_revision',
+      'catalog',
+      'catalog_seal',
+    }, 'Story catalog build result');
+    if (rawCatalog['format'] != 'story_catalog' ||
+        rawCatalog['schema_revision'] != 1) {
+      throw const FormatException(
+        'authoring Story catalog build result has an unsupported format',
+      );
+    }
+    final rawPayload = _authoringRequiredObject(
+      rawCatalog['catalog'],
+      'Story catalog build payload',
+    );
+    _authoringExactFields(rawPayload, const {
+      'generation',
+      'record_set_id',
+      'record_set_seal',
+      'npcs',
+      'quest_parents',
+    }, 'Story catalog build payload');
+    final generation = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        json['generation'],
+        'Story catalog build generation',
+      ),
+    );
+    final rawGeneration = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        rawPayload['generation'],
+        'Story catalog build raw generation',
+      ),
+    );
+    final catalogSeal = _authoringStoryCatalogSeal(
+      json['catalog_seal'],
+      'build catalog_seal',
+    );
+    final rawCatalogSeal = _authoringStoryCatalogSeal(
+      rawCatalog['catalog_seal'],
+      'build raw catalog_seal',
+    );
+    if (!_authoringStoryCatalogSameGeneration(generation, rawGeneration) ||
+        !_authoringStoryCatalogSameSeal(catalogSeal, rawCatalogSeal)) {
+      throw const FormatException(
+        'authoring Story catalog build response disagrees with its raw catalog',
+      );
+    }
+    return AuthoringStoryCatalogBuildResult._(
+      requestBindingSha256: requestBindingSha256,
+      catalogJson: catalogJson,
+      generation: generation,
+      catalogSeal: catalogSeal,
+    );
+  }
+}
+
+final class AuthoringStoryCatalogSelections {
   const AuthoringStoryCatalogSelections._({
     required this.requestCatalogSha256,
     required this.schemaRevision,
@@ -2210,7 +2408,7 @@ class AuthoringStoryCatalogSelections {
   final AuthoringStoryCatalogCollisionAvailability questCollisionCatalog;
   final bool blocksBuild;
 
-  factory AuthoringStoryCatalogSelections.fromJson(
+  factory AuthoringStoryCatalogSelections._fromJson(
     Map<String, Object?> json, {
     required String catalogJson,
   }) {
@@ -2256,7 +2454,7 @@ class AuthoringStoryCatalogSelections {
       min: 1,
       max: 1,
     );
-    final generation = AuthoringStoryCatalogGeneration.fromJson(
+    final generation = AuthoringStoryCatalogGeneration._fromJson(
       _authoringRequiredObject(
         selections['generation'],
         'Story catalog generation',
@@ -2270,13 +2468,13 @@ class AuthoringStoryCatalogSelections {
       selections['npcs'],
       expectedLength: _maxAuthoringStoryCatalogNpcs,
       context: 'NPC selections',
-      decode: AuthoringStoryCatalogNpcSelection.fromJson,
+      decode: AuthoringStoryCatalogNpcSelection._fromJson,
     );
     final questParents = _authoringStoryCatalogList(
       selections['quest_parents'],
       expectedLength: _maxAuthoringStoryCatalogQuestParents,
       context: 'Quest-parent selections',
-      decode: AuthoringStoryCatalogQuestParentSelection.fromJson,
+      decode: AuthoringStoryCatalogQuestParentSelection._fromJson,
     );
     _authoringStoryCatalogRequireSortedIds(
       npcs.map((entry) => entry.catalogId),
@@ -2287,7 +2485,7 @@ class AuthoringStoryCatalogSelections {
       'Quest-parent selections',
     );
     final questCollisionCatalog =
-        AuthoringStoryCatalogCollisionAvailability.fromJson(
+        AuthoringStoryCatalogCollisionAvailability._fromJson(
           _authoringRequiredObject(
             selections['quest_collision_catalog'],
             'Story catalog collision availability',
@@ -2346,7 +2544,7 @@ class AuthoringStoryCatalogSelections {
   }
 }
 
-class AuthoringStoryCatalogGeneration {
+final class AuthoringStoryCatalogGeneration {
   const AuthoringStoryCatalogGeneration._({
     required this.edition,
     required this.executable,
@@ -2359,7 +2557,7 @@ class AuthoringStoryCatalogGeneration {
   final AuthoringDraftContentSeal shippingCache;
   final AuthoringDraftContentSeal bindsCache;
 
-  factory AuthoringStoryCatalogGeneration.fromJson(Map<String, Object?> json) {
+  factory AuthoringStoryCatalogGeneration._fromJson(Map<String, Object?> json) {
     _authoringExactFields(json, const {
       'edition',
       'executable',
@@ -2390,7 +2588,7 @@ class AuthoringStoryCatalogGeneration {
   }
 }
 
-class AuthoringStoryCatalogClassSelection {
+final class AuthoringStoryCatalogClassSelection {
   const AuthoringStoryCatalogClassSelection._({
     required this.catalogLayer,
     required this.authoringSelector,
@@ -2405,7 +2603,7 @@ class AuthoringStoryCatalogClassSelection {
   final String runtimeClass;
   final AuthoringDraftContentSeal sourceSeal;
 
-  factory AuthoringStoryCatalogClassSelection.fromJson(
+  factory AuthoringStoryCatalogClassSelection._fromJson(
     Map<String, Object?> json, {
     required String catalogId,
     required String role,
@@ -2464,7 +2662,7 @@ class AuthoringStoryCatalogClassSelection {
   }
 }
 
-class AuthoringStoryCatalogQuestGiverSelection {
+final class AuthoringStoryCatalogQuestGiverSelection {
   const AuthoringStoryCatalogQuestGiverSelection._({
     required this.catalogLayer,
     required this.authoringSelector,
@@ -2479,7 +2677,7 @@ class AuthoringStoryCatalogQuestGiverSelection {
   final String runtimeUniqueName;
   final AuthoringDraftContentSeal sourceSeal;
 
-  factory AuthoringStoryCatalogQuestGiverSelection.fromJson(
+  factory AuthoringStoryCatalogQuestGiverSelection._fromJson(
     Map<String, Object?> json, {
     required String catalogId,
     required String expectedCatalogLayer,
@@ -2546,7 +2744,7 @@ class AuthoringStoryCatalogQuestGiverSelection {
   }
 }
 
-class AuthoringStoryCatalogNpcSelection {
+final class AuthoringStoryCatalogNpcSelection {
   const AuthoringStoryCatalogNpcSelection._({
     required this.catalogId,
     required this.displayName,
@@ -2575,7 +2773,7 @@ class AuthoringStoryCatalogNpcSelection {
   final String evidenceId;
   final bool blocksBuild;
 
-  factory AuthoringStoryCatalogNpcSelection.fromJson(
+  factory AuthoringStoryCatalogNpcSelection._fromJson(
     Map<String, Object?> json,
   ) {
     _authoringExactFields(json, const {
@@ -2599,7 +2797,7 @@ class AuthoringStoryCatalogNpcSelection {
       maxBytes: 128,
     );
     _authoringDraftValidateIdentifier(runtimeUniqueName, 'runtime_unique_name');
-    final characterDefinition = AuthoringStoryCatalogClassSelection.fromJson(
+    final characterDefinition = AuthoringStoryCatalogClassSelection._fromJson(
       _authoringRequiredObject(
         json['character_definition'],
         'Story catalog character definition',
@@ -2608,7 +2806,7 @@ class AuthoringStoryCatalogNpcSelection {
       role: 'character_definition',
       expectedCatalogLayer: 'base-game.g1r.scripts',
     );
-    final aiAgentConfig = AuthoringStoryCatalogClassSelection.fromJson(
+    final aiAgentConfig = AuthoringStoryCatalogClassSelection._fromJson(
       _authoringRequiredObject(
         json['ai_agent_config'],
         'Story catalog AI-agent config',
@@ -2617,7 +2815,7 @@ class AuthoringStoryCatalogNpcSelection {
       role: 'ai_agent_config',
       expectedCatalogLayer: 'base-game.g1r.scripts',
     );
-    final spawnDefinition = AuthoringStoryCatalogClassSelection.fromJson(
+    final spawnDefinition = AuthoringStoryCatalogClassSelection._fromJson(
       _authoringRequiredObject(
         json['spawn_definition'],
         'Story catalog spawn definition',
@@ -2633,7 +2831,7 @@ class AuthoringStoryCatalogNpcSelection {
         'authoring Story catalog NPC class roles are inconsistent',
       );
     }
-    final questGiver = AuthoringStoryCatalogQuestGiverSelection.fromJson(
+    final questGiver = AuthoringStoryCatalogQuestGiverSelection._fromJson(
       _authoringRequiredObject(
         json['quest_giver'],
         'Story catalog Quest giver',
@@ -2684,7 +2882,7 @@ class AuthoringStoryCatalogNpcSelection {
   }
 }
 
-class AuthoringStoryCatalogQuestParentSelection {
+final class AuthoringStoryCatalogQuestParentSelection {
   const AuthoringStoryCatalogQuestParentSelection._({
     required this.catalogId,
     required this.displayName,
@@ -2707,7 +2905,7 @@ class AuthoringStoryCatalogQuestParentSelection {
   final String evidenceId;
   final bool blocksBuild;
 
-  factory AuthoringStoryCatalogQuestParentSelection.fromJson(
+  factory AuthoringStoryCatalogQuestParentSelection._fromJson(
     Map<String, Object?> json,
   ) {
     _authoringExactFields(json, const {
@@ -2726,7 +2924,7 @@ class AuthoringStoryCatalogQuestParentSelection {
       'catalog_id',
       'g1r:quest-parent:',
     );
-    final questClass = AuthoringStoryCatalogClassSelection.fromJson(
+    final questClass = AuthoringStoryCatalogClassSelection._fromJson(
       _authoringRequiredObject(
         json['quest_class'],
         'Story catalog Quest class',
@@ -2775,7 +2973,7 @@ class AuthoringStoryCatalogQuestParentSelection {
   }
 }
 
-class AuthoringStoryCatalogCollisionAvailability {
+final class AuthoringStoryCatalogCollisionAvailability {
   const AuthoringStoryCatalogCollisionAvailability._({
     required this.status,
     required this.catalogLayer,
@@ -2788,7 +2986,7 @@ class AuthoringStoryCatalogCollisionAvailability {
   final AuthoringDraftContentSeal sourceSeal;
   final bool blocksDraftCreation;
 
-  factory AuthoringStoryCatalogCollisionAvailability.fromJson(
+  factory AuthoringStoryCatalogCollisionAvailability._fromJson(
     Map<String, Object?> json,
   ) {
     _authoringExactFields(json, const {
@@ -2889,6 +3087,15 @@ bool _authoringStoryCatalogSameSeal(
   AuthoringDraftContentSeal right,
 ) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
 
+bool _authoringStoryCatalogSameGeneration(
+  AuthoringStoryCatalogGeneration left,
+  AuthoringStoryCatalogGeneration right,
+) =>
+    left.edition == right.edition &&
+    _authoringStoryCatalogSameSeal(left.executable, right.executable) &&
+    _authoringStoryCatalogSameSeal(left.shippingCache, right.shippingCache) &&
+    _authoringStoryCatalogSameSeal(left.bindsCache, right.bindsCache);
+
 String _authoringStoryCatalogSelectorAlias(
   Map<String, Object?> json,
   String field,
@@ -2916,6 +3123,26 @@ String _authoringStoryCatalogExpectedSelector(String catalogId, String role) {
   }
   input.close();
   return 'Catalog_${output.value}';
+}
+
+String _authoringStoryCatalogBuildBindingSha256(
+  String executable,
+  String shippingCache,
+  String bindsCache,
+) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryCatalogBuildBindingDomain));
+  for (final value in <String>[executable, shippingCache, bindsCache]) {
+    final bytes = utf8.encode(value);
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+    input
+      ..add(length)
+      ..add(bytes);
+  }
+  input.close();
+  return output.value.toString();
 }
 
 void _authoringStoryCatalogSourceSelector(String value, String runtimeClass) {

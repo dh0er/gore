@@ -113,6 +113,11 @@ void main() {
               .where((command) => command != 'authoring_story_catalog_v1_read')
               .toList(),
         );
+        final missingStoryCatalogBuild = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where((command) => command != 'authoring_story_catalog_v1_build')
+              .toList(),
+        );
         final missingNpcDraft = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -140,11 +145,12 @@ void main() {
           missingDocumentStore,
           missingStoryTransaction,
           missingStoryCatalog,
+          missingStoryCatalogBuild,
           missingNpcDraft,
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(10), everyElement(isNull));
+        expect(decisions.take(11), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -175,6 +181,7 @@ void main() {
             (command) =>
                 command != 'authoring_project_check' &&
                 command != 'authoring_project_story_draft_insert_v1' &&
+                command != 'authoring_story_catalog_v1_build' &&
                 command != 'authoring_story_catalog_v1_read' &&
                 command != 'authoring_store_open_document' &&
                 command != 'voice_archive_match_line' &&
@@ -193,6 +200,7 @@ void main() {
         'authoring_project_check',
         'authoring_project_story_draft_insert_v1',
         'authoring_store_open_document',
+        'authoring_story_catalog_v1_build',
         'authoring_story_catalog_v1_read',
         'voice_archive_match_line',
       ]);
