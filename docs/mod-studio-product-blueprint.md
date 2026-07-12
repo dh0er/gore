@@ -95,10 +95,10 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 
 | Area | Studio integration now | Offline/backend evidence | Runtime boundary and complete experience |
 |---|---|---|---|
-| Project and content library | The Flutter app still has a legacy format-1 archive and separate provider/tab state. Its bridge now uses strict bounded ZIP validation, canonical embedded paths, a unique candidate extraction root, and crash-recoverable byte swaps, but it is not an owned managed-project session. A V2 working project, one transaction log, history, and unified library are **not integrated**. | `gore-authoring` implements a closed phase-one `ProjectV2` model for localization/dialog-line/voice concepts, strict IDs/refs, canonical JSON, validation, and an AssetStore **index**. It does not yet implement the complete working-directory store, blob lifecycle, transaction journal, migration, or Studio session. | Runtime is not applicable. End state is safe create/open/recover, global search, collections, backlinks, lineage, source layers, and deterministic export from one managed project. |
+| Project and content library | The Flutter app still has a legacy format-1 archive and separate provider/tab state. Its compatibility session now owns the current path and extracted workspace, serializes Open/Save/New, distinguishes Save from Save As, preserves edits made during I/O as dirty, and uses strict bounded ZIP validation, canonical embedded paths, and crash-recoverable byte swaps. A V2 working project, one transaction log, history, recovery, and unified library are **not integrated**. | `gore-authoring` implements a closed phase-one `ProjectV2` model for localization/dialog-line/voice concepts, strict IDs/refs, canonical JSON, validation, and an AssetStore **index**. It does not yet implement the complete working-directory store, blob lifecycle, transaction journal, migration, or Studio session. | Runtime is not applicable. End state is safe create/open/recover, global search, collections, backlinks, lineage, source layers, and deterministic export from one managed project. |
 | Existing game content | Item scalar, localization/dialog text, FMOD, texture, script, change, and build surfaces are **integrated subsets**. They are separate views/providers rather than one semantic graph. | Bounded scalar/default, localization, archive, script, texture, bundle, and fixed-leaf DataAsset paths have separate offline evidence. Evidence for one field/format does not generalize to another. | Only operations named in the normative matrix may be presented as supported. End state adds visible-name search, semantic references, compare/revert, and reviewed schemas. |
 | Dialog and narrative | Existing text editing and explicit technical topic registration are integrated; transcript/outline/graph/state views and semantic condition/effect editing are **not integrated**. | Compiler, localization, and guarded registration paths have bounded evidence. | The retained runtime proof is **render-only** on one generation: a naturally registered topic appeared in the choice UI, nothing was selected, and no condition, effect, quest state, save, or persistence behavior was proved. All selection behavior remains **Research-gated**. |
-| Localization and spoken dialog | Localization is integrated. Exact voice edits now participate in the format-1 project domain, strict portable save/reopen, dirty state, and `BuildSpec` lowering. The managed V2 line -> locale -> take workflow and line-centric Studio UI are **not integrated**. | Localization lowering, exact-path bounded Ogg add/replace, voice-target resolution primitives, bundle construction, and archive verification have bounded backend evidence. The V2 core models slots/takes but its AssetStore is currently an index contract, not complete blob I/O. | Existing-member and new-member behavior retain separate operation/version gates; a zero basename match never proves a new path. End state provides context, takes, recording/import, preview, approval, duration, and coverage at the line. |
+| Localization and spoken dialog | Localization is integrated. A bounded line-first editor can now replace an existing spoken line per locale directly beside its dialog text: it resolves installed language archives, blocks zero matches, requires an explicit choice for ambiguity, stages a sealed Ogg replacement, previews/removes it, and participates in strict portable save/reopen, dirty state, Build, and Deploy. Actor-qualified Asghan/Viper IDs are visible in the browser. The managed V2 line -> locale -> multi-take/status workflow is **not integrated**. | Localization lowering, exact-path bounded Ogg replacement, sealed target resolution, bundle construction, and archive verification have bounded backend evidence. Manifest v2 now enforces the observed pristine archive SHA/size and exact member size/CRC before mutation; legacy unsealed manifest v1 remains readable. A read-only real-data probe uniquely resolved one Asghan and one Viper line on the named German archive seal. The V2 core models slots/takes but its AssetStore is currently an index contract, not complete blob I/O. | Existing-member and new-member behavior retain separate operation/version gates; Studio keeps new members Draft-only and build-blocked, and a zero basename match never proves a new path. Offline rewrite/deploy safety does not by itself prove audible gameplay behavior. End state adds multiple takes, recording/import, approval, duration, coverage, and managed history at the line. |
 | NPCs | No semantic NPC browser/wizard or managed-project NPC entity is integrated. | A deterministic backend generator can create the bounded three-class logical-clone Draft; the retained Asghan-derived chain compiles, composes, reopens, and resolves offline. That generator is not a Studio workflow and compile/compose success is not spawning. | New-class residence, effective visuals, distinct identity, conservative spawn, AI, dialog/quest separation, streaming, save/reload, persistence, and uninstall behavior are **separate NPC research gates**. |
 | Quests | No semantic quest catalog/editor or managed-project quest entity is integrated. | A backend discovery-only Draft generator produces a fixed root plus one objective with no transitions/effects; it is not a Studio workflow. Separately, a retained probe showed two added quest subclasses instantiated as `Available` on one generation. That probe does not automatically qualify generator output. | Availability/start/success/failure transitions, dialog selection, journal, rewards, knowledge, effects, save/reload, persistence, and uninstall behavior are **separate quest research gates**. They do not become qualified when NPC spawning works. |
 | Items and economy | Existing scalar edits are an integrated subset; semantic clone/new-item/economy workflows are not. | Bounded existing-value paths exist. A general new-item identity/package pipeline is not offline-proven. | New identity, construction, visuals, equip/use behavior, trade/loot integration, and persistence are **Research-gated** independently. |
@@ -119,27 +119,20 @@ qualified for the selected game version. Unknown game-source/property
 structures remain visible and preserved but read-only; unknown required project
 schema content follows the strict block-or-migrate contract in Section 5.
 
-### 3.1 Current legacy-session blockers
+### 3.1 Remaining legacy-session limits
 
 The current format-1 Flutter session must not be treated as the durable
-foundation for new authoring domains. Strict archive validation and atomic
-publication make it a safer compatibility/import bridge, but its open session
-and managed-authoring blockers are:
+foundation for new authoring domains. Strict archive validation, atomic
+publication, current-path and workspace ownership, a serialized Open/Save/New
+lane, exact saved snapshots, metadata-aware dirty state, true **Save** versus
+**Save As**, and `Ctrl+S` make it a substantially safer compatibility/import
+bridge. Its remaining managed-authoring limits are:
 
-- there is no owned current project path, true **Save** versus **Save As**,
-  serialized open/save lane, or reliable `Ctrl+S` session contract;
-- save captures one snapshot but records the later live provider state as the
-  saved baseline, so an edit made while I/O is running can be marked clean;
-- metadata-only edits are not consistently dirty before a baseline exists;
-- each successful open creates a unique extraction root, but its lifetime is
-  not owned by a project-session lease; Open/New cannot dispose the previous
-  workspace at the exact post-apply boundary, and process-lifetime cleanup is
-  not coordinated;
 - the bounded format-1 encoder/reader is intentionally in-memory and capped; it
   is not the streaming, sharded, content-addressed storage needed by large mods;
 - provider replacement is still not one rollback-capable all-domain
-  transaction, and duplicate semantic keys outside the explicitly hardened
-  keyed domains are not one closed project-graph validation pass;
+  transaction, even though all represented keyed deployment targets now receive
+  one duplicate-validation pass before mutation or publication;
 - format-1 embedded source paths are extraction derivatives rather than
   immutable AssetStore refs, so they remain unsuitable as durable entity state;
 - autosave recovery, named checkpoints, crash-safe transaction replay, V2
