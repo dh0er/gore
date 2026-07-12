@@ -398,6 +398,30 @@ final class StoryDraftCreateRejected extends StoryDraftCreateResult {
   final List<AuthoringDiagnostic> diagnostics;
 }
 
+sealed class StoryBuildReadinessCheckResult {
+  const StoryBuildReadinessCheckResult();
+}
+
+/// Read-only inspection of one exact managed project revision.
+final class StoryBuildReadinessChecked extends StoryBuildReadinessCheckResult {
+  const StoryBuildReadinessChecked({
+    required this.projectRevision,
+    required this.moduleCount,
+    required this.diagnosticCount,
+    required this.blockingDiagnosticCount,
+  });
+
+  final int projectRevision;
+  final int moduleCount;
+  final int diagnosticCount;
+  final int blockingDiagnosticCount;
+}
+
+/// The managed head changed while the read-only inspection was suspended.
+final class StoryBuildReadinessStale extends StoryBuildReadinessCheckResult {
+  const StoryBuildReadinessStale();
+}
+
 /// Production Story transaction coordinator.
 ///
 /// Derivation, native evaluation, and publication all run inside the managed
@@ -443,6 +467,40 @@ final class StoryWorkspaceController {
       buildMutation: (context) =>
           _mutationBuilder.buildNpc(context: context, input: input),
     );
+  }
+
+  Future<StoryBuildReadinessCheckResult> checkBuildPlan() async {
+    try {
+      return await _session.deriveAndSave<StoryBuildReadinessCheckResult>((
+        latestProjectJson,
+      ) async {
+        final captured = StoryWorkspaceState.fromCanonicalProjectJson(
+          latestProjectJson,
+          blocksBuild: _session.blocksBuild,
+          diagnostics: _session.diagnostics,
+        );
+        final plan = await _ffi.authoringStoryBuildPlanV1Generate(
+          projectJson: latestProjectJson,
+          profile: _session.profile,
+        );
+        if (plan.project.projectId != captured.projectId ||
+            plan.project.projectRevision != captured.revision) {
+          throw const FormatException(
+            'Story build-plan result changed its captured project identity',
+          );
+        }
+        return ManagedProjectDerivedRejection<StoryBuildReadinessCheckResult>(
+          StoryBuildReadinessChecked(
+            projectRevision: captured.revision,
+            moduleCount: plan.moduleCount,
+            diagnosticCount: plan.diagnosticCount,
+            blockingDiagnosticCount: plan.blockingDiagnosticIndexes.length,
+          ),
+        );
+      });
+    } on ManagedProjectHeadConflictException {
+      return const StoryBuildReadinessStale();
+    }
   }
 
   Future<StoryDraftCreateResult> _create({

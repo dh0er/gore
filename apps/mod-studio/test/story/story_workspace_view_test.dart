@@ -366,6 +366,144 @@ void main() {
     },
   );
 
+  testWidgets('readiness check shows friendly blocked counts without secrets', (
+    tester,
+  ) async {
+    final state = _workspace(withDraft: true);
+    await _pumpWorkspace(
+      tester,
+      state: state,
+      catalog: catalog,
+      createNpc: (_) async => StoryDraftCreateRejected(
+        state: state,
+        diagnostics: const <AuthoringDiagnostic>[],
+      ),
+      checkBuildPlan: () async => StoryBuildReadinessChecked(
+        projectRevision: state.revision,
+        moduleCount: 1,
+        diagnosticCount: 4,
+        blockingDiagnosticCount: 3,
+      ),
+    );
+
+    expect(find.text('Check build readiness'), findsOneWidget);
+    expect(find.textContaining('does not compile'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('story-check-build-plan-button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('story-build-plan-result')), findsOneWidget);
+    expect(find.text('Not build-ready yet'), findsOneWidget);
+    expect(
+      find.textContaining('1 generated source module inspected'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('3 blocking diagnostics'), findsOneWidget);
+    expect(
+      find.textContaining('2 additional project blockers'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Runtime qualification'), findsOneWidget);
+    expect(find.textContaining(r'C:\'), findsNothing);
+    expect(find.textContaining('sha256'), findsNothing);
+  });
+
+  testWidgets('stale and failed readiness checks stay friendly and path-free', (
+    tester,
+  ) async {
+    final state = _workspace();
+    var stale = true;
+    await _pumpWorkspace(
+      tester,
+      state: state,
+      catalog: catalog,
+      createNpc: (_) async => StoryDraftCreateRejected(
+        state: state,
+        diagnostics: const <AuthoringDiagnostic>[],
+      ),
+      checkBuildPlan: () async {
+        if (stale) return const StoryBuildReadinessStale();
+        throw StateError(r'C:\private\project\head leaked');
+      },
+    );
+
+    await tester.tap(find.byKey(const Key('story-check-build-plan-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('story-build-plan-stale')), findsOneWidget);
+    expect(find.textContaining('workspace changed'), findsOneWidget);
+
+    stale = false;
+    await tester.tap(find.byKey(const Key('story-check-build-plan-button')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('story-build-plan-error')), findsOneWidget);
+    expect(find.textContaining('could not be checked safely'), findsOneWidget);
+    expect(find.textContaining('private'), findsNothing);
+    expect(find.textContaining(r'C:\'), findsNothing);
+  });
+
+  testWidgets('readiness busy guard coalesces clicks and is dispose-safe', (
+    tester,
+  ) async {
+    final state = _workspace();
+    final pending = Completer<StoryBuildReadinessCheckResult>();
+    var calls = 0;
+    await _pumpWorkspace(
+      tester,
+      state: state,
+      catalog: catalog,
+      createNpc: (_) async => StoryDraftCreateRejected(
+        state: state,
+        diagnostics: const <AuthoringDiagnostic>[],
+      ),
+      checkBuildPlan: () {
+        calls++;
+        if (calls == 1) {
+          return Future<StoryBuildReadinessCheckResult>.value(
+            StoryBuildReadinessChecked(
+              projectRevision: state.revision,
+              moduleCount: 0,
+              diagnosticCount: 1,
+              blockingDiagnosticCount: 1,
+            ),
+          );
+        }
+        return pending.future;
+      },
+    );
+
+    final check = find.byKey(const Key('story-check-build-plan-button'));
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    expect(calls, 1);
+    expect(find.byKey(const Key('story-build-plan-result')), findsOneWidget);
+
+    await tester.tap(check);
+    await tester.tap(check);
+    await tester.pump();
+    expect(calls, 2);
+    expect(find.text('Checking readiness...'), findsOneWidget);
+    expect(find.byKey(const Key('story-build-plan-result')), findsNothing);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('story-create-npc-button')),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    pending.complete(
+      StoryBuildReadinessChecked(
+        projectRevision: state.revision,
+        moduleCount: 0,
+        diagnosticCount: 1,
+        blockingDiagnosticCount: 1,
+      ),
+    );
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('Quest choices are visible but creation is clearly disabled', (
     tester,
   ) async {
@@ -402,6 +540,7 @@ Future<void> _pumpWorkspace(
   required StoryWorkspaceState state,
   required StoryCatalogAdapter catalog,
   required StoryNpcDraftCreator createNpc,
+  StoryBuildReadinessChecker? checkBuildPlan,
 }) async {
   await tester.binding.setSurfaceSize(const Size(1200, 1000));
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -413,6 +552,14 @@ Future<void> _pumpWorkspace(
           initialState: state,
           catalog: catalog,
           createNpc: createNpc,
+          checkBuildPlan:
+              checkBuildPlan ??
+              () async => StoryBuildReadinessChecked(
+                projectRevision: state.revision,
+                moduleCount: state.drafts.length,
+                diagnosticCount: 1,
+                blockingDiagnosticCount: 1,
+              ),
         ),
       ),
     ),

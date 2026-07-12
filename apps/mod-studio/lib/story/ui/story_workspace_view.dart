@@ -10,6 +10,8 @@ import '../domain/story_workspace_controller.dart';
 
 typedef StoryNpcDraftCreator =
     Future<StoryDraftCreateResult> Function(StoryNpcDraftInput input);
+typedef StoryBuildReadinessChecker =
+    Future<StoryBuildReadinessCheckResult> Function();
 
 /// Friendly, draft-only Story authoring surface.
 ///
@@ -21,12 +23,14 @@ final class StoryWorkspaceView extends StatefulWidget {
     required this.initialState,
     required this.catalog,
     required this.createNpc,
+    required this.checkBuildPlan,
     super.key,
   });
 
   final StoryWorkspaceState initialState;
   final StoryCatalogAdapter catalog;
   final StoryNpcDraftCreator createNpc;
+  final StoryBuildReadinessChecker checkBuildPlan;
 
   @override
   State<StoryWorkspaceView> createState() => _StoryWorkspaceViewState();
@@ -41,8 +45,12 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
   String? _selectedCatalogId;
   String? _selectedDraftId;
   bool _busy = false;
+  bool _checkingBuildPlan = false;
   String? _notice;
   String? _error;
+  StoryBuildReadinessChecked? _buildReadiness;
+  String? _buildReadinessNotice;
+  String? _buildReadinessError;
   bool _technicalFieldsCustomized = false;
   List<AuthoringDiagnostic> _diagnostics = const <AuthoringDiagnostic>[];
 
@@ -65,8 +73,10 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
   @override
   void didUpdateWidget(covariant StoryWorkspaceView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!_busy && !identical(oldWidget.initialState, widget.initialState)) {
+    if (!_managedActionBusy &&
+        !identical(oldWidget.initialState, widget.initialState)) {
       _adoptWorkspace(widget.initialState);
+      _clearBuildReadiness();
     }
     if (!identical(oldWidget.catalog, widget.catalog) &&
         !widget.catalog.npcChoices.any(
@@ -96,6 +106,8 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
 
   StoryDraftState? get _selectedDraft =>
       _workspace.draftById(_selectedDraftId ?? '');
+
+  bool get _managedActionBusy => _busy || _checkingBuildPlan;
 
   void _applyChoiceDefaults() {
     final choice = _selectedChoice;
@@ -159,8 +171,14 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
     }
   }
 
+  void _clearBuildReadiness() {
+    _buildReadiness = null;
+    _buildReadinessNotice = null;
+    _buildReadinessError = null;
+  }
+
   void _selectNpc(String? catalogId) {
-    if (catalogId == null || _busy) return;
+    if (catalogId == null || _managedActionBusy) return;
     setState(() {
       _selectedCatalogId = catalogId;
       _notice = null;
@@ -171,7 +189,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
   }
 
   Future<void> _createDraft() async {
-    if (_busy || !_formKey.currentState!.validate()) return;
+    if (_managedActionBusy || !_formKey.currentState!.validate()) return;
     final catalogId = _selectedCatalogId;
     if (catalogId == null) return;
     setState(() {
@@ -179,6 +197,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
       _notice = null;
       _error = null;
       _diagnostics = const <AuthoringDiagnostic>[];
+      _clearBuildReadiness();
     });
 
     try {
@@ -220,6 +239,37 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
     }
   }
 
+  Future<void> _checkBuildReadiness() async {
+    if (_managedActionBusy) return;
+    setState(() {
+      _checkingBuildPlan = true;
+      _clearBuildReadiness();
+    });
+    try {
+      final result = await widget.checkBuildPlan();
+      if (!mounted) return;
+      setState(() {
+        _checkingBuildPlan = false;
+        switch (result) {
+          case StoryBuildReadinessChecked checked:
+            _buildReadiness = checked;
+          case StoryBuildReadinessStale():
+            _buildReadiness = null;
+            _buildReadinessNotice =
+                'The workspace changed during the check. Run it again for the latest revision.';
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _checkingBuildPlan = false;
+        _buildReadiness = null;
+        _buildReadinessError =
+            'Build readiness could not be checked safely. No build or deployment was started.';
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) => SingleChildScrollView(
     padding: const EdgeInsets.all(24),
@@ -231,6 +281,8 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             _buildDraftBanner(context),
+            const SizedBox(height: 16),
+            _buildReadinessCard(context),
             const SizedBox(height: 16),
             _buildNpcCard(context),
             const SizedBox(height: 16),
@@ -276,6 +328,109 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
     ),
   );
 
+  Widget _buildReadinessCard(BuildContext context) {
+    final report = _buildReadiness;
+    final blockerCount = report?.blockingDiagnosticCount ?? 0;
+    final additionalBlockers = blockerCount > 0 ? blockerCount - 1 : 0;
+    return Card(
+      key: const Key('story-build-readiness-card'),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Text(
+              'Build readiness',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Inspect the current saved Story revision for known blockers.',
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Inspection only: this does not compile, build, deploy, publish, or runtime-qualify the mod.',
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                key: const Key('story-check-build-plan-button'),
+                onPressed: _managedActionBusy ? null : _checkBuildReadiness,
+                icon: _checkingBuildPlan
+                    ? const SizedBox.square(
+                        dimension: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.fact_check_outlined),
+                label: Text(
+                  _checkingBuildPlan
+                      ? 'Checking readiness...'
+                      : 'Check build readiness',
+                ),
+              ),
+            ),
+            if (report != null) ...<Widget>[
+              const SizedBox(height: 16),
+              Semantics(
+                key: const Key('story-build-plan-result'),
+                liveRegion: true,
+                label: 'Build readiness result',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Not build-ready yet',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      'Checked saved revision ${report.projectRevision}: '
+                      '${report.moduleCount} generated source module${report.moduleCount == 1 ? '' : 's'} inspected.',
+                    ),
+                    Text(
+                      '$blockerCount blocking diagnostic${blockerCount == 1 ? '' : 's'} '
+                      'across ${report.diagnosticCount} total diagnostic${report.diagnosticCount == 1 ? '' : 's'}.',
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '- Combined Story, voice, localization, and asset validation is not available yet.',
+                    ),
+                    if (additionalBlockers > 0)
+                      Text(
+                        '- $additionalBlockers additional project blocker${additionalBlockers == 1 ? '' : 's'} need attention.',
+                      ),
+                    const Text(
+                      '- Runtime qualification and publishing remain unavailable.',
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (_buildReadinessNotice != null) ...<Widget>[
+              const SizedBox(height: 14),
+              _StatusMessage(
+                key: const Key('story-build-plan-stale'),
+                icon: Icons.refresh_outlined,
+                color: Theme.of(context).colorScheme.primary,
+                message: _buildReadinessNotice!,
+              ),
+            ],
+            if (_buildReadinessError != null) ...<Widget>[
+              const SizedBox(height: 14),
+              _StatusMessage(
+                key: const Key('story-build-plan-error'),
+                icon: Icons.error_outline,
+                color: Theme.of(context).colorScheme.error,
+                message: _buildReadinessError!,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildNpcCard(BuildContext context) => Card(
     child: Padding(
       padding: const EdgeInsets.all(20),
@@ -309,13 +464,13 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
                     child: Text(choice.displayName),
                   ),
               ],
-              onChanged: _busy ? null : _selectNpc,
+              onChanged: _managedActionBusy ? null : _selectNpc,
             ),
             const SizedBox(height: 16),
             TextFormField(
               key: const Key('story-display-name-field'),
               controller: _displayNameController,
-              enabled: !_busy,
+              enabled: !_managedActionBusy,
               textInputAction: TextInputAction.next,
               decoration: const InputDecoration(
                 labelText: 'Display name',
@@ -342,7 +497,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
                 TextFormField(
                   key: const Key('story-module-namespace-field'),
                   controller: _moduleNamespaceController,
-                  enabled: !_busy,
+                  enabled: !_managedActionBusy,
                   textInputAction: TextInputAction.next,
                   autocorrect: false,
                   decoration: const InputDecoration(
@@ -357,7 +512,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
                 TextFormField(
                   key: const Key('story-unique-name-field'),
                   controller: _uniqueNameController,
-                  enabled: !_busy,
+                  enabled: !_managedActionBusy,
                   textInputAction: TextInputAction.done,
                   autocorrect: false,
                   onFieldSubmitted: (_) => _createDraft(),
@@ -372,7 +527,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
-                    onPressed: _busy
+                    onPressed: _managedActionBusy
                         ? null
                         : () {
                             setState(() {
@@ -393,7 +548,7 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
               alignment: Alignment.centerLeft,
               child: FilledButton.icon(
                 key: const Key('story-create-npc-button'),
-                onPressed: _busy ? null : _createDraft,
+                onPressed: _managedActionBusy ? null : _createDraft,
                 icon: _busy
                     ? const SizedBox.square(
                         dimension: 18,

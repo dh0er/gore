@@ -68,6 +68,10 @@ void main() {
     expect(find.byType(StoryWorkspaceView), findsOneWidget);
     expect(find.text('Story workspace (drafts)'), findsOneWidget);
     expect(find.text('Build / Deploy'), findsNothing);
+    await tester.tap(find.byKey(const Key('story-check-build-plan-button')));
+    await tester.pumpAndSettle();
+    expect(session.checkBuildPlanCalls, 1);
+    expect(find.byKey(const Key('story-build-plan-result')), findsOneWidget);
   });
 
   testWidgets('open flow skips metadata and awaits close before Back pops', (
@@ -472,6 +476,18 @@ final class _FakeSession implements StoryWorkspaceFlowSession {
   final Future<void>? closeResult;
   final Object? closeError;
   int closeCalls = 0;
+  int checkBuildPlanCalls = 0;
+
+  @override
+  Future<StoryBuildReadinessCheckResult> checkBuildPlan() async {
+    checkBuildPlanCalls++;
+    return StoryBuildReadinessChecked(
+      projectRevision: state.revision,
+      moduleCount: state.drafts.length,
+      diagnosticCount: 1,
+      blockingDiagnosticCount: 1,
+    );
+  }
 
   @override
   Future<void> close() {

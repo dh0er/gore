@@ -23,6 +23,7 @@ abstract interface class StoryWorkspaceFlowSession {
   StoryWorkspaceState get state;
   StoryCatalogAdapter get catalog;
   Future<StoryDraftCreateResult> createNpc(StoryNpcDraftInput input);
+  Future<StoryBuildReadinessCheckResult> checkBuildPlan();
   Future<void> close();
 }
 
@@ -87,6 +88,10 @@ final class _ManagedStoryWorkspaceFlowSession
   @override
   Future<StoryDraftCreateResult> createNpc(StoryNpcDraftInput input) =>
       launch.workspace.controller.createNpc(input);
+
+  @override
+  Future<StoryBuildReadinessCheckResult> checkBuildPlan() =>
+      launch.workspace.controller.checkBuildPlan();
 
   @override
   Future<void> close() => launch.close();
@@ -501,6 +506,7 @@ final class _StoryWorkspaceFlowPageState extends State<StoryWorkspaceFlowPage> {
       initialState: session.state,
       catalog: session.catalog,
       createNpc: session.createNpc,
+      checkBuildPlan: session.checkBuildPlan,
     );
   }
 }

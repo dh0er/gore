@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
@@ -163,6 +164,82 @@ void main() {
       expect(store.prepareCalls, preparesBefore);
       expect(await session.headFile.readAsBytes(), headBefore);
       expect(session.projectJson, base);
+      await session.close();
+    },
+  );
+
+  test('readiness check is exact, read-only, and profile-bound', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final projectJson = _projectJson(revision: 7);
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: projectJson,
+      profile: AuthoringValidationProfile.experimental,
+    );
+    final core = _BuildPlanCore();
+    final controller = StoryWorkspaceController(
+      session: session,
+      ffi: ModFfi(core),
+    );
+    final preparesBefore = store.prepareCalls;
+    final headBefore = await session.headFile.readAsBytes();
+
+    final result = await controller.checkBuildPlan();
+
+    expect(result, isA<StoryBuildReadinessChecked>());
+    final checked = result as StoryBuildReadinessChecked;
+    expect(checked.projectRevision, 7);
+    expect(checked.moduleCount, 0);
+    expect(checked.diagnosticCount, 1);
+    expect(checked.blockingDiagnosticCount, 1);
+    expect(core.calls, hasLength(1));
+    expect(core.calls.single.command, 'authoring_story_build_plan_v1_generate');
+    expect(core.calls.single.payload, <String, Object?>{
+      'project_json': projectJson,
+      'profile': 'experimental',
+    });
+    expect(store.prepareCalls, preparesBefore);
+    expect(session.projectJson, projectJson);
+    expect(await session.headFile.readAsBytes(), headBefore);
+    await session.close();
+  });
+
+  test(
+    'readiness result is marked stale when the managed head drifts',
+    () async {
+      final root = Directory(p.join(fixture.path, 'project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final projectJson = _projectJson(revision: 7);
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+        profile: AuthoringValidationProfile.production,
+      );
+      final entered = Completer<void>();
+      final release = Completer<void>();
+      final core = _BuildPlanCore(entered: entered, release: release);
+      final controller = StoryWorkspaceController(
+        session: session,
+        ffi: ModFfi(core),
+      );
+
+      final pending = controller.checkBuildPlan();
+      await entered.future;
+      final externalHead = store.register(_projectJson(revision: 8));
+      await session.headFile.writeAsString(
+        externalHead.canonicalJson,
+        flush: true,
+      );
+      release.complete();
+
+      expect(await pending, isA<StoryBuildReadinessStale>());
+      expect(session.requiresReopen, isTrue);
+      expect(core.calls, hasLength(1));
       await session.close();
     },
   );
@@ -579,6 +656,107 @@ List<AuthoringDiagnostic> _combinedAuthoringDiagnostics() =>
 
 typedef _StoryResponder =
     Map<String, Object?> Function(Map<String, Object?> payload);
+
+final class _BuildPlanCore implements GoreCoreFfiService {
+  _BuildPlanCore({this.entered, this.release});
+
+  final Completer<void>? entered;
+  final Completer<void>? release;
+  final List<({String command, Map<String, Object?> payload})> calls = [];
+
+  @override
+  String get description => 'build-plan-test-core';
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const <String, Object?>{},
+  }) async {
+    calls.add((command: command, payload: payload));
+    if (command != 'authoring_story_build_plan_v1_generate') {
+      throw StateError('unexpected command $command');
+    }
+    if (entered != null && !entered!.isCompleted) entered!.complete();
+    if (release != null) await release!.future;
+    return _buildPlanResponse(payload);
+  }
+}
+
+Map<String, Object?> _buildPlanResponse(Map<String, Object?> payload) {
+  final projectJson = payload['project_json']! as String;
+  final profile = payload['profile']! as String;
+  final rawProject = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final target = (rawProject['target'] as Map).cast<String, Object?>();
+  final project = <String, Object?>{
+    'project_id': rawProject['project_id'],
+    'project_revision': rawProject['revision'],
+    'canonical_document': _storyBuildSeal(projectJson),
+    'target_executable': target['executable'],
+  };
+  final plan = <String, Object?>{
+    'format': 'story_build_plan',
+    'schema_revision': 1,
+    'validation_profile': profile,
+    'project': project,
+    'publication_status': 'not_supported',
+    'modules': <Object?>[],
+    'diagnostics': <Object?>[_buildCombinedDiagnostic()],
+    'blocks_build': true,
+  };
+  final planJson = jsonEncode(plan);
+  return <String, Object?>{
+    'ok': true,
+    'request_binding_sha256': _buildPlanBinding(projectJson, profile),
+    'plan_json': planJson,
+    'plan_seal': _storyBuildSeal(planJson),
+    'validation_profile': profile,
+    'project': (jsonDecode(jsonEncode(project)) as Map).cast<String, Object?>(),
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+    'module_count': 0,
+    'diagnostic_count': 1,
+    'blocking_diagnostic_indexes': <Object?>[0],
+    'blocks_build': true,
+  };
+}
+
+Map<String, Object?> _buildCombinedDiagnostic() => <String, Object?>{
+  'code': 'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+  'severity': 'error',
+  'property_path': 'schema_revision',
+  'message':
+      'schema revision 2 is not build-ready until combined story, voice, localization, and asset validation is implemented',
+  'blocks_build': true,
+};
+
+Map<String, Object?> _storyBuildSeal(String value) {
+  final bytes = utf8.encode(value);
+  return <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+}
+
+String _buildPlanBinding(String projectJson, String profile) {
+  final bytes = BytesBuilder(copy: false)
+    ..add(
+      utf8.encode('gore-story-build.authoring-plan-v1.request-binding\u0000'),
+    );
+  for (final part in <List<int>>[
+    utf8.encode(projectJson),
+    utf8.encode(profile),
+  ]) {
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, part.length, Endian.little);
+    bytes
+      ..add(length)
+      ..add(part);
+  }
+  return crypto.sha256.convert(bytes.takeBytes()).toString();
+}
 
 final class _StoryCore implements GoreCoreFfiService {
   _StoryCore(this._responder);
