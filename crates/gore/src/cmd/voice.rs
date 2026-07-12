@@ -7,12 +7,22 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
-use gore_vo::{ArchiveEdit, ArchiveIndex, EditAction, Limits, OggCodec, OggInfo, WriteReport};
-use serde::Deserialize;
+use gore_vo::{
+    validate_archive_entry_path, ArchiveEdit, ArchiveEntry, ArchiveIndex, EditAction, Limits,
+    OggCodec, OggInfo, WriteReport,
+};
+use serde::{Deserialize, Serialize};
 
 const VOICE_MANIFEST_FORMAT: u32 = 1;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_MANIFEST_OGG_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_MATCH_ARCHIVE_ENTRIES: usize = 50_000;
+const MAX_MATCH_CENTRAL_DIRECTORY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_MATCH_ENTRY_PATH_BYTES: usize = 1024;
+const MAX_MATCH_ENTRY_OUTPUT_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_MATCH_TOTAL_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const MAX_MATCH_JSON_BYTES: usize = 1024 * 1024;
+const MAX_LOC_ID_BYTES: usize = 512;
 
 #[derive(Debug, Subcommand)]
 pub enum VoiceAction {
@@ -23,6 +33,18 @@ pub enum VoiceAction {
         #[arg(long)]
         archive: PathBuf,
         /// Emit one JSON document instead of the human-readable table
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve an exact `${loc_id}.ogg` basename without extracting it
+    MatchLine {
+        /// Input voice ZIP
+        #[arg(long)]
+        archive: PathBuf,
+        /// Trimmed ASCII localization ID (without the `.ogg` suffix)
+        #[arg(long, value_name = "ASCII_ID")]
+        loc_id: String,
+        /// Emit one JSON document instead of human-readable output
         #[arg(long)]
         json: bool,
     },
@@ -114,6 +136,11 @@ impl VoiceSelector {
 pub fn run(action: VoiceAction) -> Result<()> {
     match action {
         VoiceAction::List { archive, json } => list(&archive, json),
+        VoiceAction::MatchLine {
+            archive,
+            loc_id,
+            json,
+        } => match_line(&archive, &loc_id, json),
         VoiceAction::Extract {
             archive,
             selector,
@@ -137,6 +164,44 @@ pub fn run(action: VoiceAction) -> Result<()> {
             out,
         } => apply_manifest(&archive, &manifest, &out),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum VoiceLineResolution {
+    Unresolved,
+    Unique,
+    Ambiguous,
+}
+
+impl VoiceLineResolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Unresolved => "unresolved",
+            Self::Unique => "unique",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct VoiceLineMember {
+    path: String,
+    compressed_size: u64,
+    uncompressed_size: u64,
+    crc32: u32,
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct VoiceLineMatch {
+    archive: String,
+    archive_size: u64,
+    archive_sha256: String,
+    loc_id: String,
+    expected_basename: String,
+    resolution: VoiceLineResolution,
+    match_count: usize,
+    matches: Vec<VoiceLineMember>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +306,189 @@ fn list(path: &Path, json: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn match_line(path: &Path, loc_id: &str, json: bool) -> Result<()> {
+    let result = resolve_voice_line(path, loc_id)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
+
+    println!("Voice line: {}", result.loc_id);
+    println!(
+        "Archive: {} ({} bytes, SHA-256 {})",
+        result.archive, result.archive_size, result.archive_sha256
+    );
+    println!("Expected basename: {}", result.expected_basename);
+    println!(
+        "Resolution: {} ({} match(es))",
+        result.resolution.as_str(),
+        result.match_count
+    );
+    for member in &result.matches {
+        println!(
+            "  {} ({} bytes, {} packed, CRC32 {:08x})",
+            member.path, member.uncompressed_size, member.compressed_size, member.crc32
+        );
+    }
+    Ok(())
+}
+
+/// Resolve one localization ID against safe voice members without reading or extracting a member
+/// payload. This deliberately mirrors the bounded FFI matcher: exact ASCII case-insensitive
+/// basename equality, and no implicit selection when more than one path matches.
+fn resolve_voice_line(path: &Path, loc_id: &str) -> Result<VoiceLineMatch> {
+    let expected_basename = expected_voice_basename(loc_id)?;
+    let limits = voice_match_limits();
+    let archive = ArchiveIndex::open(path, limits)
+        .with_context(|| format!("indexing voice archive '{}'", path.display()))?;
+    let mut matches = Vec::new();
+    let mut serialized_matches = 2usize; // JSON array brackets.
+    for entry in archive.list() {
+        if !ascii_case_equal(&entry.basename, &expected_basename) {
+            continue;
+        }
+        // Do not hide an ineligible exact collision: filtering it out could falsely turn an
+        // ambiguous archive into a unique result. The FFI matcher fails closed the same way.
+        validate_matching_voice_entry(entry, &limits)?;
+        let member = VoiceLineMember {
+            path: entry.path.clone(),
+            compressed_size: entry.compressed_size,
+            uncompressed_size: entry.uncompressed_size,
+            crc32: entry.crc32,
+        };
+        let member_bytes = serde_json::to_vec(&member)
+            .context("serializing a matching voice archive member")?
+            .len();
+        serialized_matches = serialized_matches
+            .checked_add(member_bytes)
+            .and_then(|size| size.checked_add(usize::from(!matches.is_empty())))
+            .ok_or_else(|| anyhow::anyhow!("voice match result size overflowed"))?;
+        if serialized_matches > MAX_MATCH_JSON_BYTES {
+            bail!(
+                "voice match result exceeds JSON limit: {serialized_matches} > {MAX_MATCH_JSON_BYTES} bytes"
+            );
+        }
+        matches.push(member);
+    }
+
+    let resolution = match matches.len() {
+        0 => VoiceLineResolution::Unresolved,
+        1 => VoiceLineResolution::Unique,
+        _ => VoiceLineResolution::Ambiguous,
+    };
+    let result = VoiceLineMatch {
+        archive: archive.path().display().to_string(),
+        archive_size: archive.archive_bytes(),
+        archive_sha256: lowercase_sha256(archive.archive_sha256()),
+        loc_id: loc_id.to_owned(),
+        expected_basename,
+        resolution,
+        match_count: matches.len(),
+        matches,
+    };
+    let serialized_result = serde_json::to_vec(&result)
+        .context("serializing the voice line match result")?
+        .len();
+    if serialized_result > MAX_MATCH_JSON_BYTES {
+        bail!(
+            "voice match result exceeds JSON limit: {serialized_result} > {MAX_MATCH_JSON_BYTES} bytes"
+        );
+    }
+    Ok(result)
+}
+
+fn expected_voice_basename(loc_id: &str) -> Result<String> {
+    if loc_id.is_empty() {
+        bail!("localization ID must not be empty");
+    }
+    if loc_id.len() > MAX_LOC_ID_BYTES {
+        bail!(
+            "localization ID exceeds the limit: {} > {MAX_LOC_ID_BYTES} bytes",
+            loc_id.len()
+        );
+    }
+    if !loc_id.is_ascii()
+        || loc_id.trim() != loc_id
+        || loc_id == "."
+        || loc_id == ".."
+        || loc_id.contains('/')
+        || loc_id.contains('\\')
+        || loc_id.chars().any(char::is_control)
+    {
+        bail!(
+            "localization ID must be one trimmed ASCII, non-control basename stem without path separators"
+        );
+    }
+    let basename_bytes = loc_id
+        .len()
+        .checked_add(".ogg".len())
+        .ok_or_else(|| anyhow::anyhow!("localization ID overflows the archive entry path limit"))?;
+    if basename_bytes > MAX_MATCH_ENTRY_PATH_BYTES {
+        bail!(
+            "localization ID plus '.ogg' exceeds the archive entry path limit: {basename_bytes} > {MAX_MATCH_ENTRY_PATH_BYTES} bytes"
+        );
+    }
+    Ok(format!("{loc_id}.ogg"))
+}
+
+fn ascii_case_equal(left: &str, right: &str) -> bool {
+    left.is_ascii() && right.is_ascii() && left.eq_ignore_ascii_case(right)
+}
+
+fn validate_matching_voice_entry(entry: &ArchiveEntry, limits: &Limits) -> Result<()> {
+    validate_archive_entry_path(&entry.path, limits)
+        .with_context(|| format!("exact voice match has an unsafe path: {:?}", entry.path))?;
+    if entry.is_directory {
+        bail!("exact voice match is a directory: {:?}", entry.path);
+    }
+    if entry.is_symlink {
+        bail!("exact voice match is a symbolic link: {:?}", entry.path);
+    }
+    if entry.encrypted {
+        bail!("exact voice match is encrypted: {:?}", entry.path);
+    }
+    if let Some(mode) = entry.unix_mode {
+        let file_type = mode & 0o170000;
+        if file_type != 0 && file_type != 0o100000 {
+            bail!("exact voice match is not a regular file: {:?}", entry.path);
+        }
+    }
+    if !entry.basename.to_ascii_lowercase().ends_with(".ogg") {
+        bail!("exact voice match is not an Ogg member: {:?}", entry.path);
+    }
+
+    #[allow(deprecated)]
+    let compression_code = entry.compression.to_u16();
+    if !matches!(compression_code, 0 | 8) {
+        bail!(
+            "exact voice match uses unsupported compression method {compression_code}: {:?}",
+            entry.path
+        );
+    }
+    Ok(())
+}
+
+fn voice_match_limits() -> Limits {
+    Limits {
+        max_entries: MAX_MATCH_ARCHIVE_ENTRIES,
+        max_central_directory_bytes: MAX_MATCH_CENTRAL_DIRECTORY_BYTES,
+        max_path_bytes: MAX_MATCH_ENTRY_PATH_BYTES,
+        max_entry_uncompressed_bytes: MAX_MATCH_ENTRY_OUTPUT_BYTES,
+        max_total_uncompressed_bytes: MAX_MATCH_TOTAL_UNCOMPRESSED_BYTES,
+        ..Limits::default()
+    }
+}
+
+fn lowercase_sha256(digest: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut value = String::with_capacity(64);
+    for byte in digest {
+        value.push(char::from(HEX[usize::from(byte >> 4)]));
+        value.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    value
 }
 
 fn extract(archive_path: &Path, selector: &VoiceSelector, output_root: &Path) -> Result<()> {
@@ -604,7 +852,27 @@ fn describe_ogg(info: &OggInfo) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+
     use super::*;
+    use zip::write::SimpleFileOptions;
+    use zip::{CompressionMethod, ZipWriter};
+
+    fn write_match_archive(path: &Path, entries: &[(&str, CompressionMethod, &[u8])]) {
+        let file = File::create(path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        for (name, method, payload) in entries {
+            writer
+                .start_file(
+                    *name,
+                    SimpleFileOptions::default().compression_method(*method),
+                )
+                .unwrap();
+            writer.write_all(payload).unwrap();
+        }
+        writer.finish().unwrap();
+    }
 
     fn test_ogg(sample_rate: u32) -> Vec<u8> {
         let mut packet = Vec::new();
@@ -642,6 +910,158 @@ mod tests {
         }
         page[22..26].copy_from_slice(&crc.to_le_bytes());
         page
+    }
+
+    #[test]
+    fn match_line_resolves_one_exact_ascii_casefolded_basename_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("unique.zip");
+        write_match_archive(
+            &archive,
+            &[
+                (
+                    "Voices/Hero/LINE_ONE.OGG",
+                    CompressionMethod::Deflated,
+                    b"unique voice",
+                ),
+                (
+                    "Voices/Hero/OTHER.ogg",
+                    CompressionMethod::Stored,
+                    b"other voice",
+                ),
+            ],
+        );
+        let before = fs::read(&archive).unwrap();
+
+        let result = resolve_voice_line(&archive, "line_one").unwrap();
+
+        assert_eq!(result.archive_size, before.len() as u64);
+        assert_eq!(result.archive_sha256.len(), 64);
+        assert!(result
+            .archive_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+        assert_eq!(result.expected_basename, "line_one.ogg");
+        assert_eq!(result.resolution, VoiceLineResolution::Unique);
+        assert_eq!(result.match_count, 1);
+        assert_eq!(result.matches.len(), result.match_count);
+        assert_eq!(result.matches[0].path, "Voices/Hero/LINE_ONE.OGG");
+        assert_eq!(result.matches[0].uncompressed_size, 12);
+        assert_ne!(result.matches[0].crc32, 0);
+        assert_eq!(fs::read(&archive).unwrap(), before);
+    }
+
+    #[test]
+    fn match_line_reports_every_exact_path_as_ambiguous_without_selecting() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("ambiguous.zip");
+        write_match_archive(
+            &archive,
+            &[
+                ("Voices/A/LINE.ogg", CompressionMethod::Stored, b"one"),
+                ("Voices/B/line.OGG", CompressionMethod::Deflated, b"two"),
+                ("Voices/C/LiNe.Ogg", CompressionMethod::Stored, b"three"),
+                (
+                    "Voices/D/NOT_LINE.ogg",
+                    CompressionMethod::Stored,
+                    b"not a match",
+                ),
+            ],
+        );
+
+        let result = resolve_voice_line(&archive, "lInE").unwrap();
+
+        assert_eq!(result.resolution, VoiceLineResolution::Ambiguous);
+        assert_eq!(result.match_count, 3);
+        assert_eq!(
+            result
+                .matches
+                .iter()
+                .map(|member| member.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "Voices/A/LINE.ogg",
+                "Voices/B/line.OGG",
+                "Voices/C/LiNe.Ogg",
+            ]
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        assert_eq!(json["resolution"], "ambiguous");
+        assert_eq!(json["match_count"], 3);
+        assert_eq!(json["matches"][0]["path"], "Voices/A/LINE.ogg");
+        assert!(json.get("selected").is_none());
+        assert!(json.get("entry_path").is_none());
+    }
+
+    #[test]
+    fn match_line_is_unresolved_for_substrings_directory_text_and_suffixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("unresolved.zip");
+        write_match_archive(
+            &archive,
+            &[
+                (
+                    "Voices/Hero/PREFIX_LINE_SUFFIX.ogg",
+                    CompressionMethod::Stored,
+                    b"prefix",
+                ),
+                (
+                    "Voices/LINE/OTHER.ogg",
+                    CompressionMethod::Stored,
+                    b"directory",
+                ),
+                (
+                    "Voices/Hero/LINE.ogg.backup",
+                    CompressionMethod::Stored,
+                    b"suffix",
+                ),
+            ],
+        );
+
+        let result = resolve_voice_line(&archive, "LINE").unwrap();
+
+        assert_eq!(result.resolution, VoiceLineResolution::Unresolved);
+        assert_eq!(result.match_count, 0);
+        assert!(result.matches.is_empty());
+    }
+
+    #[test]
+    fn match_line_fails_closed_on_an_ineligible_exact_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("symlink.zip");
+        let file = File::create(&archive).unwrap();
+        let mut writer = ZipWriter::new(file);
+        writer
+            .add_symlink(
+                "Voices/LINE.ogg",
+                "target.ogg",
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.finish().unwrap();
+        let before = fs::read(&archive).unwrap();
+
+        let error = resolve_voice_line(&archive, "line").unwrap_err();
+
+        assert!(error.to_string().contains("symbolic link"), "{error:#}");
+        assert_eq!(fs::read(&archive).unwrap(), before);
+    }
+
+    #[test]
+    fn match_line_rejects_invalid_or_oversized_localization_ids() {
+        for loc_id in [
+            "", "../LINE", "..\\LINE", " LINE", "LINE ", "LINE\n", "LINE\0", ".", "..", "LÍNE",
+        ] {
+            assert!(
+                expected_voice_basename(loc_id).is_err(),
+                "unexpectedly accepted {loc_id:?}"
+            );
+        }
+        assert!(expected_voice_basename(&"x".repeat(MAX_LOC_ID_BYTES + 1)).is_err());
+        assert_eq!(
+            expected_voice_basename(&"x".repeat(MAX_LOC_ID_BYTES)).unwrap(),
+            format!("{}.ogg", "x".repeat(MAX_LOC_ID_BYTES))
+        );
     }
 
     #[test]
