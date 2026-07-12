@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::model_revision2::{
     Entity, EntityKind, EntityPayload, NpcDraft, NpcDraftInput, NpcParentClassInput, OriginRef,
@@ -10,8 +11,8 @@ use crate::working_store::validate_revision2_persistability;
 use crate::{
     Diagnostic, DiagnosticCode, DraftQuestCollisionKind, DraftQuestField, DraftQuestSkeletonError,
     EntityId, LogicalNpcCloneDraftError, LogicalNpcCloneField, ProjectDocument, ProjectId,
-    ProjectJsonError, ValidationProfile, WorkingStoreLimits, DRAFT_QUEST_GENERATOR_ID,
-    DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    ProjectJsonError, Sha256Digest, ValidationProfile, WorkingStoreLimits,
+    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
     LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_PROJECT_JSON_BYTES,
 };
 
@@ -19,6 +20,30 @@ use crate::{
 /// enough for that closed input while still rejecting before a recursive duplicate-key walk.
 pub const MAX_STORY_DRAFT_INSERT_JSON_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_STORY_DRAFT_DISPLAY_NAME_BYTES: usize = 256;
+const STORY_DRAFT_INSERT_REQUEST_BINDING_DOMAIN: &[u8] =
+    b"gore-authoring.story-draft-insert-v1.request-binding\0";
+
+/// Bind an FFI result to the three exact raw inputs accepted by Story Draft insertion.
+///
+/// Each component is prefixed by its unsigned 64-bit little-endian byte length. Callers must pass
+/// the profile's canonical wire spelling so alternate JSON spellings cannot share a binding.
+pub fn story_draft_insert_request_binding_sha256(
+    project_json: &str,
+    mutation_json: &str,
+    profile: ValidationProfile,
+) -> Sha256Digest {
+    let profile = match profile {
+        ValidationProfile::Production => b"production".as_slice(),
+        ValidationProfile::Experimental => b"experimental".as_slice(),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(STORY_DRAFT_INSERT_REQUEST_BINDING_DOMAIN);
+    for bytes in [project_json.as_bytes(), mutation_json.as_bytes(), profile] {
+        hasher.update((bytes.len() as u64).to_le_bytes());
+        hasher.update(bytes);
+    }
+    Sha256Digest::from_bytes(hasher.finalize().into())
+}
 
 /// One exact project-CAS-bound request to add a Draft and its generated owned module.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
@@ -9,6 +10,11 @@ const _maxNativeErrorMessageLength = 64 * 1024;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringStoryMutationJsonBytes = 20 * 1024 * 1024;
+// This one FFI command deliberately stays within signed 64-bit JSON integers. A base at this
+// maximum can advance once to `_maxAuthoringStoryAppliedRevision` without becoming a double.
+const _maxAuthoringStoryBaseRevision = 0x7ffffffffffffffe;
+const _maxAuthoringStoryAppliedRevision = 0x7fffffffffffffff;
 const _maxAuthoringNpcDraftInputBytes = 16 * 1024;
 const _maxAuthoringQuestDraftInputBytes = 20 * 1024 * 1024;
 const _maxAuthoringDraftSourceBytes = 1024 * 1024;
@@ -131,6 +137,42 @@ class ModFfi {
       'profile': profile.wireName,
     });
     return AuthoringProjectCheckResult.fromJson(r);
+  }
+
+  /// Atomically evaluate one Story Draft insert against exact canonical revision-2 project bytes.
+  Future<AuthoringStoryDraftInsertResult> authoringProjectStoryDraftInsertV1({
+    required String projectJson,
+    required String mutationJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringDraftRequestString(
+      projectJson,
+      'projectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringDraftRequestString(
+      mutationJson,
+      'mutationJson',
+      _maxAuthoringStoryMutationJsonBytes,
+    );
+    const command = 'authoring_project_story_draft_insert_v1';
+    _authoringStoryMutationEnvelopePreflight(
+      command,
+      projectJson,
+      mutationJson,
+      profile.wireName,
+    );
+    final response = await _call(command, {
+      'project_json': projectJson,
+      'mutation_json': mutationJson,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoryDraftInsertResult.fromJson(
+      response,
+      projectJson: projectJson,
+      mutationJson: mutationJson,
+      profile: profile,
+    );
   }
 
   /// Validate and preview one bounded logical-NPC clone entirely in memory.
@@ -570,6 +612,245 @@ void _authoringDraftEnvelopePreflight(String command, String inputJson) {
   }
 }
 
+void _authoringStoryMutationEnvelopePreflight(
+  String command,
+  String projectJson,
+  String mutationJson,
+  String profile,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"project_json":"","mutation_json":"","profile":""}}'
+          .length +
+      command.length +
+      profile.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    projectJson,
+    'projectJson',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(
+    mutationJson,
+    'mutationJson',
+    encodedBytes,
+  );
+}
+
+int _authoringAddEscapedJsonStringBytes(
+  String value,
+  String field,
+  int encodedBytes,
+) {
+  if (encodedBytes > goreCoreTransportMaxRequestBytes) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      field,
+      'escaped command envelope exceeds the '
+          '$goreCoreTransportMaxRequestBytes-byte transport limit',
+    );
+  }
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    final int added;
+    if (unit <= 0x1f || unit == 0x2028 || unit == 0x2029) {
+      added = 6;
+    } else if (unit == 0x22 || unit == 0x5c) {
+      added = 2;
+    } else if (unit <= 0x7f) {
+      added = 1;
+    } else if (unit <= 0x7ff) {
+      added = 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      // The raw-input preflight already proved this is a paired surrogate.
+      index++;
+      added = 4;
+    } else {
+      added = 3;
+    }
+    if (added > goreCoreTransportMaxRequestBytes - encodedBytes) {
+      throw ArgumentError.value(
+        '<${value.length} characters>',
+        field,
+        'escaped command envelope exceeds the '
+            '$goreCoreTransportMaxRequestBytes-byte transport limit',
+      );
+    }
+    encodedBytes += added;
+  }
+  return encodedBytes;
+}
+
+const _authoringStoryRequestBindingDomain =
+    'gore-authoring.story-draft-insert-v1.request-binding\u0000';
+
+String _authoringStoryRequestBindingSha256(
+  String projectJson,
+  String mutationJson,
+  AuthoringValidationProfile profile,
+) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryRequestBindingDomain));
+  for (final bytes in <List<int>>[
+    utf8.encode(projectJson),
+    utf8.encode(mutationJson),
+    utf8.encode(profile.wireName),
+  ]) {
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+    input
+      ..add(length)
+      ..add(bytes);
+  }
+  input.close();
+  return output.value.toString();
+}
+
+final class _AuthoringDigestCollector implements Sink<crypto.Digest> {
+  crypto.Digest? _value;
+
+  crypto.Digest get value =>
+      _value ??
+      (throw const FormatException('authoring SHA-256 digest was not emitted'));
+
+  @override
+  void add(crypto.Digest data) {
+    if (_value != null) {
+      throw const FormatException('authoring SHA-256 emitted more than once');
+    }
+    _value = data;
+  }
+
+  @override
+  void close() {}
+}
+
+Map<String, Object?> _authoringDecodeDuplicateSafeObject(
+  String raw,
+  String context,
+) {
+  try {
+    _AuthoringDuplicateKeyJsonScanner(raw).validate();
+    return _authoringRequiredObject(jsonDecode(raw), context);
+  } on FormatException {
+    throw FormatException(
+      'authoring $context JSON is invalid or has duplicate keys',
+    );
+  }
+}
+
+final class _AuthoringDuplicateKeyJsonScanner {
+  _AuthoringDuplicateKeyJsonScanner(this.source);
+
+  static const _maxDepth = 128;
+  final String source;
+  int _index = 0;
+
+  void validate() {
+    _value(0);
+    _whitespace();
+    if (_index != source.length) throw const FormatException('trailing JSON');
+  }
+
+  void _value(int depth) {
+    if (depth > _maxDepth) throw const FormatException('JSON too deep');
+    _whitespace();
+    if (_index >= source.length) throw const FormatException('missing JSON');
+    switch (source.codeUnitAt(_index)) {
+      case 0x7b:
+        _object(depth + 1);
+      case 0x5b:
+        _array(depth + 1);
+      case 0x22:
+        _string();
+      default:
+        final start = _index;
+        while (_index < source.length &&
+            !_isValueDelimiter(source.codeUnitAt(_index))) {
+          _index++;
+        }
+        if (_index == start) throw const FormatException('invalid JSON value');
+    }
+  }
+
+  void _object(int depth) {
+    _index++;
+    _whitespace();
+    if (_take(0x7d)) return;
+    final keys = <String>{};
+    while (true) {
+      _whitespace();
+      if (_index >= source.length || source.codeUnitAt(_index) != 0x22) {
+        throw const FormatException('object key required');
+      }
+      final rawKey = _string();
+      final key = jsonDecode(rawKey);
+      if (key is! String || !keys.add(key)) {
+        throw const FormatException('duplicate object key');
+      }
+      _whitespace();
+      if (!_take(0x3a)) throw const FormatException('colon required');
+      _value(depth);
+      _whitespace();
+      if (_take(0x7d)) return;
+      if (!_take(0x2c)) throw const FormatException('comma required');
+    }
+  }
+
+  void _array(int depth) {
+    _index++;
+    _whitespace();
+    if (_take(0x5d)) return;
+    while (true) {
+      _value(depth);
+      _whitespace();
+      if (_take(0x5d)) return;
+      if (!_take(0x2c)) throw const FormatException('comma required');
+    }
+  }
+
+  String _string() {
+    final start = _index++;
+    while (_index < source.length) {
+      final unit = source.codeUnitAt(_index++);
+      if (unit == 0x22) return source.substring(start, _index);
+      if (unit == 0x5c) {
+        if (_index >= source.length) {
+          throw const FormatException('unterminated escape');
+        }
+        _index++;
+      } else if (unit <= 0x1f) {
+        throw const FormatException('control character in string');
+      }
+    }
+    throw const FormatException('unterminated string');
+  }
+
+  void _whitespace() {
+    while (_index < source.length) {
+      final unit = source.codeUnitAt(_index);
+      if (unit != 0x20 && unit != 0x09 && unit != 0x0a && unit != 0x0d) return;
+      _index++;
+    }
+  }
+
+  bool _take(int unit) {
+    if (_index < source.length && source.codeUnitAt(_index) == unit) {
+      _index++;
+      return true;
+    }
+    return false;
+  }
+
+  static bool _isValueDelimiter(int unit) =>
+      unit == 0x20 ||
+      unit == 0x09 ||
+      unit == 0x0a ||
+      unit == 0x0d ||
+      unit == 0x2c ||
+      unit == 0x5d ||
+      unit == 0x7d;
+}
+
 void _authoringExactFields(
   Map<String, Object?> json,
   Set<String> expected,
@@ -664,7 +945,13 @@ String _authoringEntityId(String value, String field) {
   return value;
 }
 
-int _authoringRequireCanonicalProjectJson(String projectJson) {
+({
+  Map<String, Object?> project,
+  String projectId,
+  int schemaRevision,
+  int revision,
+})
+_authoringRequireCanonicalProjectJson(String projectJson) {
   final Object? decoded;
   try {
     decoded = jsonDecode(projectJson);
@@ -696,12 +983,25 @@ int _authoringRequireCanonicalProjectJson(String projectJson) {
       'authoring store project JSON has an unsupported schema revision',
     );
   }
+  final projectId = _authoringEntityId(
+    _authoringRequiredString(project, 'project_id', maxBytes: 32),
+    'project_id',
+  );
+  if (projectId == '00000000000000000000000000000000') {
+    throw const FormatException('authoring store project ID must not be zero');
+  }
+  final revision = _authoringRequiredInt(project, 'revision');
   if (jsonEncode(decoded) != projectJson) {
     throw const FormatException(
       'authoring store project JSON is not canonical',
     );
   }
-  return schemaRevision;
+  return (
+    project: project,
+    projectId: projectId,
+    schemaRevision: schemaRevision,
+    revision: revision,
+  );
 }
 
 Map<String, Object?> _authoringDraftObjectField(
@@ -1833,6 +2133,718 @@ class AuthoringProjectCheckResult {
   }
 }
 
+enum AuthoringStoryDraftKind {
+  npcDraft('npc_draft'),
+  questDraft('quest_draft');
+
+  const AuthoringStoryDraftKind(this.wireName);
+  final String wireName;
+}
+
+sealed class AuthoringStoryDraftInsertResult {
+  const AuthoringStoryDraftInsertResult();
+
+  String get requestBindingSha256;
+
+  factory AuthoringStoryDraftInsertResult.fromJson(
+    Map<String, Object?> json, {
+    required String projectJson,
+    required String mutationJson,
+    required AuthoringValidationProfile profile,
+  }) {
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring Story Draft insert response is not ok',
+      );
+    }
+    final expectedBinding = _authoringStoryRequestBindingSha256(
+      projectJson,
+      mutationJson,
+      profile,
+    );
+    final actualBinding = _authoringRequiredString(
+      json,
+      'request_binding_sha256',
+      maxBytes: 64,
+    );
+    if (!_authoringSha256Pattern.hasMatch(actualBinding) ||
+        actualBinding != expectedBinding) {
+      throw const FormatException(
+        'authoring Story Draft response is not bound to its exact request',
+      );
+    }
+    return switch (json['outcome']) {
+      'applied' => AuthoringStoryDraftInsertApplied._fromJson(
+        json,
+        _authoringStoryRequestContext(projectJson, mutationJson),
+        actualBinding,
+      ),
+      'rejected' => AuthoringStoryDraftInsertRejected._fromJson(
+        json,
+        actualBinding,
+      ),
+      _ => throw const FormatException(
+        'authoring Story Draft insert outcome is not supported',
+      ),
+    };
+  }
+}
+
+final class AuthoringStoryDraftInsertApplied
+    extends AuthoringStoryDraftInsertResult {
+  const AuthoringStoryDraftInsertApplied._({
+    required this.requestBindingSha256,
+    required this.projectJson,
+    required this.revision,
+    required this.draftId,
+    required this.draftKind,
+    required this.scriptModuleId,
+    required this.diagnostics,
+    required this.blocksBuild,
+  });
+
+  @override
+  final String requestBindingSha256;
+  final String projectJson;
+  final int revision;
+  final String draftId;
+  final AuthoringStoryDraftKind draftKind;
+  final String scriptModuleId;
+  final List<AuthoringDiagnostic> diagnostics;
+  final bool blocksBuild;
+
+  factory AuthoringStoryDraftInsertApplied._fromJson(
+    Map<String, Object?> json,
+    _AuthoringStoryRequestContext context,
+    String requestBindingSha256,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'outcome',
+      'request_binding_sha256',
+      'project_json',
+      'revision',
+      'draft_id',
+      'draft_kind',
+      'script_module_id',
+      'diagnostics',
+      'blocks_build',
+    }, 'Story Draft applied response');
+    if (json['ok'] != true || json['outcome'] != 'applied') {
+      throw const FormatException(
+        'authoring Story Draft applied response has an invalid discriminator',
+      );
+    }
+    final projectJson = _authoringRequiredString(
+      json,
+      'project_json',
+      maxBytes: _maxAuthoringProjectJsonBytes,
+    );
+    final project = _authoringRequireCanonicalProjectJson(projectJson);
+    if (project.schemaRevision != 2) {
+      throw const FormatException(
+        'authoring Story Draft candidate is not schema revision 2',
+      );
+    }
+    final revision = _authoringRequiredInt(
+      json,
+      'revision',
+      min: 1,
+      max: _maxAuthoringStoryAppliedRevision,
+    );
+    if (revision != context.baseRevision + 1 ||
+        revision != project.revision ||
+        project.projectId != context.projectId) {
+      throw const FormatException(
+        'authoring Story Draft candidate identity or revision disagrees with its base',
+      );
+    }
+    final draftId = _authoringEntityId(
+      _authoringRequiredString(json, 'draft_id', maxBytes: 32),
+      'draft_id',
+    );
+    final scriptModuleId = _authoringEntityId(
+      _authoringRequiredString(json, 'script_module_id', maxBytes: 32),
+      'script_module_id',
+    );
+    if (draftId != context.draftId ||
+        scriptModuleId != context.scriptModuleId) {
+      throw const FormatException(
+        'authoring Story Draft response entity IDs disagree with its request',
+      );
+    }
+    final draftKind = switch (json['draft_kind']) {
+      'npc_draft' => AuthoringStoryDraftKind.npcDraft,
+      'quest_draft' => AuthoringStoryDraftKind.questDraft,
+      _ => throw const FormatException(
+        'authoring Story Draft response kind is not supported',
+      ),
+    };
+    if (draftKind != context.draftKind) {
+      throw const FormatException(
+        'authoring Story Draft response kind disagrees with its request',
+      );
+    }
+    _authoringRequireStoryCandidateOwnership(project.project, context);
+    final diagnostics = _authoringDiagnostics(json);
+    final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
+    _authoringRequireRevision2CombinedGate(
+      blocksBuild,
+      diagnostics,
+      'Story Draft applied response',
+    );
+    _authoringValidateBlocksBuild(blocksBuild, diagnostics);
+    return AuthoringStoryDraftInsertApplied._(
+      requestBindingSha256: requestBindingSha256,
+      projectJson: projectJson,
+      revision: revision,
+      draftId: draftId,
+      draftKind: draftKind,
+      scriptModuleId: scriptModuleId,
+      diagnostics: diagnostics,
+      blocksBuild: blocksBuild,
+    );
+  }
+}
+
+final class AuthoringStoryDraftInsertRejected
+    extends AuthoringStoryDraftInsertResult {
+  const AuthoringStoryDraftInsertRejected._({
+    required this.requestBindingSha256,
+    required this.diagnostics,
+  });
+
+  @override
+  final String requestBindingSha256;
+  final List<AuthoringDiagnostic> diagnostics;
+
+  factory AuthoringStoryDraftInsertRejected._fromJson(
+    Map<String, Object?> json,
+    String requestBindingSha256,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'outcome',
+      'request_binding_sha256',
+      'diagnostics',
+    }, 'Story Draft rejected response');
+    if (json['ok'] != true || json['outcome'] != 'rejected') {
+      throw const FormatException(
+        'authoring Story Draft rejected response has an invalid discriminator',
+      );
+    }
+    final diagnostics = _authoringDiagnostics(json);
+    if (!diagnostics.any(
+      (diagnostic) =>
+          diagnostic.severity == AuthoringDiagnosticSeverity.error &&
+          diagnostic.blocksBuild,
+    )) {
+      throw const FormatException(
+        'authoring Story Draft rejection has no blocking error diagnostic',
+      );
+    }
+    return AuthoringStoryDraftInsertRejected._(
+      requestBindingSha256: requestBindingSha256,
+      diagnostics: diagnostics,
+    );
+  }
+}
+
+final class _AuthoringStoryRequestContext {
+  const _AuthoringStoryRequestContext({
+    required this.baseProject,
+    required this.projectId,
+    required this.baseRevision,
+    required this.draftId,
+    required this.scriptModuleId,
+    required this.displayName,
+    required this.draftKind,
+    required this.input,
+    required this.moduleNamespace,
+    required this.runtimeId,
+    required this.generatorId,
+    required this.generatorVersion,
+  });
+
+  final Map<String, Object?> baseProject;
+  final String projectId;
+  final int baseRevision;
+  final String draftId;
+  final String scriptModuleId;
+  final String displayName;
+  final AuthoringStoryDraftKind draftKind;
+  final Map<String, Object?> input;
+  final String moduleNamespace;
+  final String runtimeId;
+  final String generatorId;
+  final int generatorVersion;
+}
+
+_AuthoringStoryRequestContext _authoringStoryRequestContext(
+  String projectJson,
+  String mutationJson,
+) {
+  final project = _authoringRequireCanonicalProjectJson(projectJson);
+  if (project.schemaRevision != 2) {
+    throw const FormatException(
+      'authoring Story Draft base is not canonical schema revision 2',
+    );
+  }
+  if (project.revision > _maxAuthoringStoryBaseRevision) {
+    throw const FormatException(
+      'authoring Story Draft base revision exceeds the signed wire contract',
+    );
+  }
+  final mutation = _authoringDecodeDuplicateSafeObject(
+    mutationJson,
+    'Story Draft mutation',
+  );
+  _authoringExactFields(mutation, const {
+    'expected_project_id',
+    'expected_revision',
+    'draft_id',
+    'script_module_id',
+    'display_name',
+    'draft',
+  }, 'Story Draft mutation');
+  final expectedProjectId = _authoringEntityId(
+    _authoringRequiredString(mutation, 'expected_project_id', maxBytes: 32),
+    'expected_project_id',
+  );
+  final expectedRevision = _authoringRequiredInt(
+    mutation,
+    'expected_revision',
+    max: _maxAuthoringStoryBaseRevision,
+  );
+  if (expectedProjectId != project.projectId ||
+      expectedRevision != project.revision) {
+    throw const FormatException(
+      'authoring Story Draft mutation does not name its exact base project',
+    );
+  }
+  final draftId = _authoringEntityId(
+    _authoringRequiredString(mutation, 'draft_id', maxBytes: 32),
+    'draft_id',
+  );
+  final scriptModuleId = _authoringEntityId(
+    _authoringRequiredString(mutation, 'script_module_id', maxBytes: 32),
+    'script_module_id',
+  );
+  if (draftId == '00000000000000000000000000000000' ||
+      scriptModuleId == '00000000000000000000000000000000' ||
+      draftId == scriptModuleId) {
+    throw const FormatException(
+      'authoring Story Draft mutation IDs must be distinct and non-zero',
+    );
+  }
+  final displayName = _authoringRequiredString(
+    mutation,
+    'display_name',
+    maxBytes: 256,
+  );
+  final draft = _authoringRequiredObject(
+    mutation['draft'],
+    'Story Draft mutation draft',
+  );
+  _authoringExactFields(draft, const {
+    'kind',
+    'input',
+  }, 'Story Draft mutation draft');
+  final input = _authoringRequiredObject(
+    draft['input'],
+    'Story Draft mutation input',
+  );
+  final (
+    draftKind,
+    moduleNamespace,
+    runtimeId,
+    generatorId,
+    generatorVersion,
+  ) = switch (draft['kind']) {
+    'npc' => () {
+      _authoringExactFields(input, const {
+        'module_namespace',
+        'unique_name',
+        'parent_character_definition',
+        'parent_ai_agent_config',
+        'parent_spawn_definition',
+      }, 'NPC Story Draft mutation input');
+      final moduleNamespace = _authoringRequiredString(
+        input,
+        'module_namespace',
+        maxBytes: 255,
+      );
+      _authoringDraftValidateModuleNamespace(moduleNamespace);
+      return (
+        AuthoringStoryDraftKind.npcDraft,
+        moduleNamespace,
+        _authoringRequiredString(input, 'unique_name', maxBytes: 128),
+        'gore-authoring.logical-npc-clone-draft',
+        1,
+      );
+    }(),
+    'quest' => () {
+      _authoringExactFields(input, const {
+        'module_namespace',
+        'technical_id',
+        'text_helper',
+        'parent_quest',
+        'giver',
+        'title',
+        'description',
+        'objective_title',
+        'collision_catalog',
+      }, 'Quest Story Draft mutation input');
+      final moduleNamespace = _authoringRequiredString(
+        input,
+        'module_namespace',
+        maxBytes: 255,
+      );
+      _authoringDraftValidateModuleNamespace(moduleNamespace);
+      return (
+        AuthoringStoryDraftKind.questDraft,
+        moduleNamespace,
+        _authoringRequiredString(input, 'technical_id', maxBytes: 128),
+        'gore-authoring.draft-quest-skeleton',
+        1,
+      );
+    }(),
+    _ => throw const FormatException(
+      'authoring Story Draft mutation kind is not supported',
+    ),
+  };
+  return _AuthoringStoryRequestContext(
+    baseProject: project.project,
+    projectId: project.projectId,
+    baseRevision: project.revision,
+    draftId: draftId,
+    scriptModuleId: scriptModuleId,
+    displayName: displayName,
+    draftKind: draftKind,
+    input: input,
+    moduleNamespace: moduleNamespace,
+    runtimeId: runtimeId,
+    generatorId: generatorId,
+    generatorVersion: generatorVersion,
+  );
+}
+
+void _authoringRequireStoryCandidateOwnership(
+  Map<String, Object?> project,
+  _AuthoringStoryRequestContext context,
+) {
+  _authoringRequireStoryCandidatePreservesBase(project, context);
+  final entities = project['entities'] as Map<dynamic, dynamic>;
+  final draftEntity = _authoringStoryCandidateEntity(
+    entities,
+    context.draftId,
+    context.draftKind.wireName,
+    'Draft',
+  );
+  if (draftEntity['display_name'] != context.displayName ||
+      draftEntity['revision'] != 0) {
+    throw const FormatException(
+      'authoring Story Draft candidate Draft metadata disagrees with the request',
+    );
+  }
+  final draftOrigin = _authoringRequiredObject(
+    draftEntity['origin'],
+    'Story Draft candidate Draft origin',
+  );
+  _authoringExactFields(draftOrigin, const {
+    'type',
+    'authored_runtime_id',
+  }, 'Story Draft candidate Draft origin');
+  if (draftOrigin['type'] != 'new' ||
+      draftOrigin['authored_runtime_id'] != context.runtimeId) {
+    throw const FormatException(
+      'authoring Story Draft candidate Draft origin disagrees with the request',
+    );
+  }
+  final draftPayload = _authoringRequiredObject(
+    draftEntity['payload'],
+    'Story Draft candidate Draft payload',
+  );
+  final draftData = _authoringRequiredObject(
+    draftPayload['data'],
+    'Story Draft candidate Draft data',
+  );
+  _authoringExactFields(draftData, const {
+    'generator_id',
+    'generator_version',
+    'input',
+    'script_module',
+  }, 'Story Draft candidate Draft data');
+  if (draftData['generator_id'] != context.generatorId ||
+      draftData['generator_version'] != context.generatorVersion) {
+    throw const FormatException(
+      'authoring Story Draft candidate Draft generator disagrees with the request',
+    );
+  }
+  final expectedInput = <String, Object?>{
+    'target': context.baseProject['target'],
+    if (context.draftKind == AuthoringStoryDraftKind.questDraft)
+      'quest_id': context.draftId,
+    ...context.input,
+  };
+  if (!_authoringJsonDeepEquals(draftData['input'], expectedInput)) {
+    throw const FormatException(
+      'authoring Story Draft candidate Draft input disagrees with the request',
+    );
+  }
+  _authoringRequireTypedStoryRef(
+    draftData['script_module'],
+    projectId: context.projectId,
+    id: context.scriptModuleId,
+    kind: 'script_module',
+    context: 'Draft ScriptModule reference',
+  );
+
+  final moduleEntity = _authoringStoryCandidateEntity(
+    entities,
+    context.scriptModuleId,
+    'script_module',
+    'ScriptModule',
+  );
+  if (moduleEntity['display_name'] != context.moduleNamespace ||
+      moduleEntity['revision'] != 0) {
+    throw const FormatException(
+      'authoring Story Draft candidate ScriptModule metadata is invalid',
+    );
+  }
+  final moduleOrigin = _authoringRequiredObject(
+    moduleEntity['origin'],
+    'Story Draft candidate ScriptModule origin',
+  );
+  _authoringExactFields(moduleOrigin, const {
+    'type',
+    'generator_id',
+    'generator_version',
+    'owner',
+  }, 'Story Draft candidate ScriptModule origin');
+  if (moduleOrigin['type'] != 'generated' ||
+      moduleOrigin['generator_id'] != context.generatorId ||
+      moduleOrigin['generator_version'] != context.generatorVersion) {
+    throw const FormatException(
+      'authoring Story Draft candidate ScriptModule origin generator is invalid',
+    );
+  }
+  _authoringRequireTypedStoryRef(
+    moduleOrigin['owner'],
+    projectId: context.projectId,
+    id: context.draftId,
+    kind: context.draftKind.wireName,
+    context: 'ScriptModule origin owner',
+  );
+  final modulePayload = _authoringRequiredObject(
+    moduleEntity['payload'],
+    'Story Draft candidate ScriptModule payload',
+  );
+  final moduleData = _authoringRequiredObject(
+    modulePayload['data'],
+    'Story Draft candidate ScriptModule data',
+  );
+  _authoringExactFields(moduleData, const {
+    'generator_id',
+    'generator_version',
+    'owner',
+    'module_namespace',
+    'module_relative_path',
+    'source',
+    'source_sha256',
+    'input_fingerprint',
+    'status',
+  }, 'Story Draft candidate ScriptModule data');
+  if (moduleData['generator_id'] != context.generatorId ||
+      moduleData['generator_version'] != context.generatorVersion) {
+    throw const FormatException(
+      'authoring Story Draft candidate ScriptModule payload generator is invalid',
+    );
+  }
+  if (moduleData['module_namespace'] != context.moduleNamespace ||
+      moduleData['module_relative_path'] !=
+          '${context.moduleNamespace.replaceAll('.', '/')}.as') {
+    throw const FormatException(
+      'authoring Story Draft candidate ScriptModule path is inconsistent',
+    );
+  }
+  final source = _authoringRequiredString(
+    moduleData,
+    'source',
+    maxBytes: _maxAuthoringDraftSourceBytes,
+  );
+  _authoringDraftVerifiedSourceSha256(moduleData, source);
+  _authoringDraftSha256(moduleData, 'input_fingerprint');
+  final status = _authoringRequiredObject(
+    moduleData['status'],
+    'Story Draft candidate ScriptModule status',
+  );
+  _authoringExactFields(status, const {
+    'authoring',
+    'runtime',
+  }, 'Story Draft candidate ScriptModule status');
+  if (status['authoring'] != 'offline_draft' ||
+      status['runtime'] != 'runtime_unqualified') {
+    throw const FormatException(
+      'authoring Story Draft candidate ScriptModule status is invalid',
+    );
+  }
+  _authoringRequireTypedStoryRef(
+    moduleData['owner'],
+    projectId: context.projectId,
+    id: context.draftId,
+    kind: context.draftKind.wireName,
+    context: 'ScriptModule payload owner',
+  );
+}
+
+void _authoringRequireStoryCandidatePreservesBase(
+  Map<String, Object?> candidate,
+  _AuthoringStoryRequestContext context,
+) {
+  for (final field in const <String>[
+    'meta',
+    'target',
+    'authoring_locales',
+    'asset_store',
+  ]) {
+    if (!_authoringJsonDeepEquals(
+      candidate[field],
+      context.baseProject[field],
+    )) {
+      throw FormatException(
+        'authoring Story Draft candidate changed base field $field',
+      );
+    }
+  }
+
+  final baseEntities = context.baseProject['entities'];
+  final candidateEntities = candidate['entities'];
+  if (baseEntities is! Map || candidateEntities is! Map) {
+    throw const FormatException(
+      'authoring Story Draft base or candidate entities are not an object',
+    );
+  }
+  if (baseEntities.containsKey(context.draftId) ||
+      baseEntities.containsKey(context.scriptModuleId) ||
+      candidateEntities.length != baseEntities.length + 2) {
+    throw const FormatException(
+      'authoring Story Draft candidate entity delta is not exactly two additions',
+    );
+  }
+  for (final entry in baseEntities.entries) {
+    if (entry.key is! String ||
+        !candidateEntities.containsKey(entry.key) ||
+        !_authoringJsonDeepEquals(candidateEntities[entry.key], entry.value)) {
+      throw const FormatException(
+        'authoring Story Draft candidate changed a preexisting entity',
+      );
+    }
+  }
+  for (final key in candidateEntities.keys) {
+    if (key is! String ||
+        (!baseEntities.containsKey(key) &&
+            key != context.draftId &&
+            key != context.scriptModuleId)) {
+      throw const FormatException(
+        'authoring Story Draft candidate added an unexpected entity',
+      );
+    }
+  }
+}
+
+bool _authoringJsonDeepEquals(Object? left, Object? right, [int depth = 0]) {
+  if (depth > 128) {
+    throw const FormatException(
+      'authoring Story Draft JSON exceeds the maximum nesting depth',
+    );
+  }
+  if (left is Map && right is Map) {
+    if (left.length != right.length) return false;
+    for (final entry in left.entries) {
+      if (entry.key is! String ||
+          !right.containsKey(entry.key) ||
+          !_authoringJsonDeepEquals(entry.value, right[entry.key], depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (left is List && right is List) {
+    if (left.length != right.length) return false;
+    for (var index = 0; index < left.length; index++) {
+      if (!_authoringJsonDeepEquals(left[index], right[index], depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (left is num || right is num) {
+    return left.runtimeType == right.runtimeType && left == right;
+  }
+  return left == right;
+}
+
+Map<String, Object?> _authoringStoryCandidateEntity(
+  Map<dynamic, dynamic> entities,
+  String id,
+  String expectedKind,
+  String context,
+) {
+  final entity = _authoringRequiredObject(
+    entities[id],
+    'Story Draft candidate $context entity',
+  );
+  _authoringExactFields(entity, const {
+    'id',
+    'display_name',
+    'origin',
+    'revision',
+    'payload',
+  }, 'Story Draft candidate $context entity');
+  if (entity['id'] != id) {
+    throw FormatException(
+      'authoring Story Draft candidate $context key and ID disagree',
+    );
+  }
+  final payload = _authoringRequiredObject(
+    entity['payload'],
+    'Story Draft candidate $context payload',
+  );
+  _authoringExactFields(payload, const {
+    'kind',
+    'data',
+  }, 'Story Draft candidate $context payload');
+  if (payload['kind'] != expectedKind) {
+    throw FormatException(
+      'authoring Story Draft candidate $context kind disagrees with the response',
+    );
+  }
+  return entity;
+}
+
+void _authoringRequireTypedStoryRef(
+  Object? value, {
+  required String projectId,
+  required String id,
+  required String kind,
+  required String context,
+}) {
+  final ref = _authoringRequiredObject(value, 'Story Draft candidate $context');
+  _authoringExactFields(ref, const {
+    'project_id',
+    'id',
+    'expected_kind',
+  }, 'Story Draft candidate $context');
+  if (ref['project_id'] != projectId ||
+      ref['id'] != id ||
+      ref['expected_kind'] != kind) {
+    throw FormatException(
+      'authoring Story Draft candidate $context is not exact',
+    );
+  }
+}
+
 class AuthoringDiagnostic {
   const AuthoringDiagnostic._({
     required this.code,
@@ -1959,6 +2971,26 @@ void _authoringValidateBlocksBuild(
   }
 }
 
+void _authoringRequireRevision2CombinedGate(
+  bool blocksBuild,
+  List<AuthoringDiagnostic> diagnostics,
+  String context,
+) {
+  if (!blocksBuild ||
+      !diagnostics.any(
+        (diagnostic) =>
+            diagnostic.code == 'REVISION2_COMBINED_VALIDATION_UNAVAILABLE' &&
+            diagnostic.severity == AuthoringDiagnosticSeverity.error &&
+            diagnostic.entity == null &&
+            diagnostic.propertyPath == 'schema_revision' &&
+            diagnostic.blocksBuild,
+      )) {
+    throw FormatException(
+      'authoring $context is missing its blocking combined-validation gate',
+    );
+  }
+}
+
 class AuthoringWorkingHead {
   const AuthoringWorkingHead._({
     required this.canonicalJson,
@@ -2056,19 +3088,14 @@ class AuthoringStoreOpenedResult {
       'project_json',
       maxBytes: _maxAuthoringProjectJsonBytes,
     );
-    final schemaRevision = _authoringRequireCanonicalProjectJson(projectJson);
+    final project = _authoringRequireCanonicalProjectJson(projectJson);
     final diagnostics = _authoringDiagnostics(json);
     final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
-    if (schemaRevision == 2 &&
-        (!blocksBuild ||
-            !diagnostics.any(
-              (diagnostic) =>
-                  diagnostic.code ==
-                      'REVISION2_COMBINED_VALIDATION_UNAVAILABLE' &&
-                  diagnostic.blocksBuild,
-            ))) {
-      throw const FormatException(
-        'authoring revision-2 store response is missing its blocking combined-validation gate',
+    if (project.schemaRevision == 2) {
+      _authoringRequireRevision2CombinedGate(
+        blocksBuild,
+        diagnostics,
+        'revision-2 store response',
       );
     }
     _authoringValidateBlocksBuild(blocksBuild, diagnostics);

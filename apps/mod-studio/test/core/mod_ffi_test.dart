@@ -268,6 +268,311 @@ Map<String, Object?> _validRevision2CheckpointPreparationResponse() => {
   'blocks_build': true,
 };
 
+const _storyDraftId = '10101010101010101010101010101010';
+const _storyScriptModuleId = '11111111111111111111111111111111';
+const _storyProjectId = '01010101010101010101010101010101';
+
+Map<String, Object?> _storyGeneration() => <String, Object?>{
+  'executable': <String, Object?>{
+    'byte_len': 1000000,
+    'sha256': List.filled(64, '1').join(),
+  },
+};
+
+Map<String, Object?> _storySeal(String byte, int byteLength) =>
+    <String, Object?>{
+      'byte_len': byteLength,
+      'sha256': List.filled(32, byte).join(),
+    };
+
+String _validStoryBaseProjectJson({int revision = 7}) =>
+    jsonEncode(<String, Object?>{
+      'format': 2,
+      'schema_revision': 2,
+      'project_id': _storyProjectId,
+      'revision': revision,
+      'meta': <String, Object?>{
+        'name': 'Story transaction',
+        'version': '0.1',
+        'author': 'tests',
+      },
+      'target': _storyGeneration(),
+      'authoring_locales': <Object?>[],
+      'entities': <String, Object?>{},
+      'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+    });
+
+Map<String, Object?> _storyNpcParent(
+  String sealByte,
+  String selector,
+  String runtimeClass,
+) => <String, Object?>{
+  'generation': _storyGeneration(),
+  'source_seal': _storySeal(sealByte, 20000),
+  'catalog_layer': 'base-game.g1r.characters',
+  'canonical_selector': selector,
+  'runtime_class': runtimeClass,
+};
+
+Map<String, Object?> _storyNpcMutationInput() => <String, Object?>{
+  'module_namespace': 'GoreMods.Npcs.GateGuard',
+  'unique_name': 'GoreGateGuard',
+  'parent_character_definition': _storyNpcParent(
+    '02',
+    'CatalogCharacterDefinition_Asghan',
+    'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+  ),
+  'parent_ai_agent_config': _storyNpcParent(
+    '03',
+    'CatalogAiAgentConfig_Asghan',
+    'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+  ),
+  'parent_spawn_definition': _storyNpcParent(
+    '04',
+    'CatalogSpawnDefinition_Asghan',
+    'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+  ),
+};
+
+String _validStoryMutationJson({bool quest = false, int revision = 7}) =>
+    jsonEncode(<String, Object?>{
+      'expected_project_id': _storyProjectId,
+      'expected_revision': revision,
+      'draft_id': _storyDraftId,
+      'script_module_id': _storyScriptModuleId,
+      'display_name': quest ? 'Quest GORE_GATE_TRIAL' : 'NPC GoreGateGuard',
+      'draft': <String, Object?>{
+        'kind': quest ? 'quest' : 'npc',
+        'input': quest
+            ? <String, Object?>{
+                'module_namespace': 'GoreMods.Quests.GateTrial',
+                'technical_id': 'GORE_GATE_TRIAL',
+                'text_helper': 'GoreGateTrialText',
+                'parent_quest': <String, Object?>{
+                  'generation': _storyGeneration(),
+                  'source_seal': _storySeal('05', 30000),
+                  'catalog_layer': 'base-game.g1r.quests',
+                  'canonical_selector': 'CatalogQuest_AsghanParent',
+                  'runtime_class': 'UQuest_SwampCamp_SCCHAPTER2',
+                },
+                'giver': <String, Object?>{
+                  'generation': _storyGeneration(),
+                  'source_seal': _storySeal('06', 40000),
+                  'catalog_layer': 'base-game.g1r.characters',
+                  'canonical_selector': 'CatalogCharacter_Asghan',
+                  'runtime_unique_name': 'OM_GRD_Asghan_263',
+                },
+                'title': "Asghan's Trial",
+                'description': 'Prove that the gate is secure.',
+                'objective_title': 'Report to Asghan',
+                'collision_catalog': <String, Object?>{
+                  'generation': _storyGeneration(),
+                  'source_seal': _storySeal('07', 50000),
+                  'catalog_layer': 'resolved-loadout.scripts.v1',
+                  'modules': <Object?>[],
+                  'relative_paths': <Object?>[],
+                  'symbols': <Object?>[],
+                },
+              }
+            : _storyNpcMutationInput(),
+      },
+    });
+
+Map<String, Object?> _storyTypedRef(String id, String kind) =>
+    <String, Object?>{
+      'project_id': _storyProjectId,
+      'id': id,
+      'expected_kind': kind,
+    };
+
+String _validStoryCandidateProjectJson({bool quest = false, int revision = 8}) {
+  final moduleNamespace = quest
+      ? 'GoreMods.Quests.GateTrial'
+      : 'GoreMods.Npcs.GateGuard';
+  final source = '// generated ${quest ? 'quest' : 'npc'}\n';
+  final draftInput = <String, Object?>{
+    'target': _storyGeneration(),
+    if (quest) 'quest_id': _storyDraftId,
+    ...(quest
+        ? ((jsonDecode(_validStoryMutationJson(quest: true)) as Map)['draft']
+                  as Map)['input']
+              as Map<String, Object?>
+        : _storyNpcMutationInput()),
+  };
+  return jsonEncode(<String, Object?>{
+    'format': 2,
+    'schema_revision': 2,
+    'project_id': _storyProjectId,
+    'revision': revision,
+    'meta': <String, Object?>{
+      'name': 'Story transaction',
+      'version': '0.1',
+      'author': 'tests',
+    },
+    'target': _storyGeneration(),
+    'authoring_locales': <Object?>[],
+    'entities': <String, Object?>{
+      _storyDraftId: <String, Object?>{
+        'id': _storyDraftId,
+        'display_name': quest ? 'Quest GORE_GATE_TRIAL' : 'NPC GoreGateGuard',
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': quest ? 'GORE_GATE_TRIAL' : 'GoreGateGuard',
+        },
+        'revision': 0,
+        'payload': <String, Object?>{
+          'kind': quest ? 'quest_draft' : 'npc_draft',
+          'data': <String, Object?>{
+            'generator_id': quest
+                ? 'gore-authoring.draft-quest-skeleton'
+                : 'gore-authoring.logical-npc-clone-draft',
+            'generator_version': 1,
+            'input': draftInput,
+            'script_module': _storyTypedRef(
+              _storyScriptModuleId,
+              'script_module',
+            ),
+          },
+        },
+      },
+      _storyScriptModuleId: <String, Object?>{
+        'id': _storyScriptModuleId,
+        'display_name': moduleNamespace,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': quest
+              ? 'gore-authoring.draft-quest-skeleton'
+              : 'gore-authoring.logical-npc-clone-draft',
+          'generator_version': 1,
+          'owner': _storyTypedRef(
+            _storyDraftId,
+            quest ? 'quest_draft' : 'npc_draft',
+          ),
+        },
+        'revision': 0,
+        'payload': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': quest
+                ? 'gore-authoring.draft-quest-skeleton'
+                : 'gore-authoring.logical-npc-clone-draft',
+            'generator_version': 1,
+            'owner': _storyTypedRef(
+              _storyDraftId,
+              quest ? 'quest_draft' : 'npc_draft',
+            ),
+            'module_namespace': moduleNamespace,
+            'module_relative_path':
+                '${moduleNamespace.replaceAll('.', '/')}.as',
+            'source': source,
+            'source_sha256': crypto.sha256
+                .convert(utf8.encode(source))
+                .toString(),
+            'input_fingerprint': List.filled(64, 'a').join(),
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+      },
+    },
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  });
+}
+
+String _storyRequestBinding(
+  String projectJson,
+  String mutationJson,
+  String profile,
+) {
+  final bytes = BytesBuilder(copy: false)
+    ..add(
+      utf8.encode('gore-authoring.story-draft-insert-v1.request-binding\u0000'),
+    );
+  for (final part in <List<int>>[
+    utf8.encode(projectJson),
+    utf8.encode(mutationJson),
+    utf8.encode(profile),
+  ]) {
+    final length = Uint8List(8);
+    ByteData.sublistView(length).setUint64(0, part.length, Endian.little);
+    bytes
+      ..add(length)
+      ..add(part);
+  }
+  return crypto.sha256.convert(bytes.takeBytes()).toString();
+}
+
+Map<String, Object?> _validStoryAppliedResponse({
+  bool quest = false,
+  String? base,
+  String? mutation,
+  String profile = 'experimental',
+}) {
+  base ??= _validStoryBaseProjectJson();
+  mutation ??= _validStoryMutationJson(quest: quest);
+  final baseRevision = (jsonDecode(base) as Map<String, Object?>)['revision'];
+  if (baseRevision is! int) {
+    throw StateError('test Story base revision is not an int');
+  }
+  final candidateRevision = baseRevision + 1;
+  return <String, Object?>{
+    'ok': true,
+    'outcome': 'applied',
+    'request_binding_sha256': _storyRequestBinding(base, mutation, profile),
+    'project_json': _validStoryCandidateProjectJson(
+      quest: quest,
+      revision: candidateRevision,
+    ),
+    'revision': candidateRevision,
+    'draft_id': _storyDraftId,
+    'draft_kind': quest ? 'quest_draft' : 'npc_draft',
+    'script_module_id': _storyScriptModuleId,
+    'diagnostics': <Object?>[_revision2CombinedValidationDiagnostic()],
+    'blocks_build': true,
+  };
+}
+
+Map<String, Object?> _validStoryRejectedResponse({
+  String? base,
+  String? mutation,
+  String profile = 'production',
+}) {
+  base ??= _validStoryBaseProjectJson();
+  mutation ??= _validStoryMutationJson(revision: 6);
+  return <String, Object?>{
+    'ok': true,
+    'outcome': 'rejected',
+    'request_binding_sha256': _storyRequestBinding(base, mutation, profile),
+    'diagnostics': <Object?>[
+      <String, Object?>{
+        'code': 'PROJECT_REVISION_CONFLICT',
+        'severity': 'error',
+        'entity': null,
+        'property_path': 'expected_revision',
+        'message':
+            'story transaction expected project revision 6, but candidate is 7',
+        'related_entities': <Object?>[],
+        'blocks_build': true,
+      },
+    ],
+  };
+}
+
+AuthoringStoryDraftInsertResult _decodeStoryResponse(
+  Map<String, Object?> response, {
+  bool quest = false,
+  String? base,
+  String? mutation,
+  AuthoringValidationProfile profile = AuthoringValidationProfile.experimental,
+}) => AuthoringStoryDraftInsertResult.fromJson(
+  response,
+  projectJson: base ?? _validStoryBaseProjectJson(),
+  mutationJson: mutation ?? _validStoryMutationJson(quest: quest),
+  profile: profile,
+);
+
 Map<String, Object?> _validImportedOggResponse() => {
   'ok': true,
   'asset': <String, Object?>{
@@ -545,6 +850,372 @@ void main() {
       );
     },
   );
+
+  test(
+    'Story Draft insert preserves both raw strings and parses applied',
+    () async {
+      final rawProject = _validStoryBaseProjectJson();
+      final rawMutation = _validStoryMutationJson();
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_project_story_draft_insert_v1':
+              _validStoryAppliedResponse(),
+        },
+      );
+
+      final result = await ModFfi(core).authoringProjectStoryDraftInsertV1(
+        projectJson: rawProject,
+        mutationJson: rawMutation,
+        profile: AuthoringValidationProfile.experimental,
+      );
+
+      expect(result, isA<AuthoringStoryDraftInsertApplied>());
+      final applied = result as AuthoringStoryDraftInsertApplied;
+      expect(applied.projectJson, _validStoryCandidateProjectJson());
+      expect(applied.revision, 8);
+      expect(applied.draftId, _storyDraftId);
+      expect(applied.draftKind, AuthoringStoryDraftKind.npcDraft);
+      expect(applied.scriptModuleId, _storyScriptModuleId);
+      expect(
+        applied.requestBindingSha256,
+        _storyRequestBinding(rawProject, rawMutation, 'experimental'),
+      );
+      expect(applied.blocksBuild, isTrue);
+      expect(
+        applied.diagnostics.single.code,
+        'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+      );
+      expect(
+        () => applied.diagnostics.add(applied.diagnostics.single),
+        throwsUnsupportedError,
+      );
+      expect(
+        core.calls.single.command,
+        'authoring_project_story_draft_insert_v1',
+      );
+      expect(core.calls.single.payload['project_json'], rawProject);
+      expect(core.calls.single.payload['mutation_json'], rawMutation);
+      expect(core.calls.single.payload['profile'], 'experimental');
+    },
+  );
+
+  test('Story Draft rejection is typed and cannot carry a candidate', () async {
+    final rawProject = _validStoryBaseProjectJson();
+    final rawMutation = _validStoryMutationJson(revision: 6);
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'authoring_project_story_draft_insert_v1':
+            _validStoryRejectedResponse(),
+      },
+    );
+    final result = await ModFfi(core).authoringProjectStoryDraftInsertV1(
+      projectJson: rawProject,
+      mutationJson: rawMutation,
+      profile: AuthoringValidationProfile.production,
+    );
+
+    expect(result, isA<AuthoringStoryDraftInsertRejected>());
+    final rejected = result as AuthoringStoryDraftInsertRejected;
+    expect(rejected.diagnostics.single.code, 'PROJECT_REVISION_CONFLICT');
+    expect(
+      rejected.requestBindingSha256,
+      _storyRequestBinding(rawProject, rawMutation, 'production'),
+    );
+
+    final leaked = _validStoryRejectedResponse()
+      ..['project_json'] = _validStoryCandidateProjectJson();
+    expect(
+      () => _decodeStoryResponse(
+        leaked,
+        mutation: rawMutation,
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test(
+    'Story Draft invalid generator input remains a typed rejection',
+    () async {
+      final rawProject = _validStoryBaseProjectJson();
+      final rawMutation = _validStoryMutationJson().replaceFirst(
+        'GoreMods.Npcs.GateGuard',
+        'module namespace with spaces',
+      );
+      final response = _validStoryRejectedResponse(
+        base: rawProject,
+        mutation: rawMutation,
+        profile: 'experimental',
+      );
+      final diagnostic = _authoringDiagnostic(response, 0)
+        ..['code'] = 'INVALID_STORY_MUTATION'
+        ..['property_path'] = 'draft.input.module_namespace'
+        ..['message'] = 'module namespace is invalid';
+      expect(diagnostic['blocks_build'], isTrue);
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_project_story_draft_insert_v1': response,
+        },
+      );
+
+      final result = await ModFfi(core).authoringProjectStoryDraftInsertV1(
+        projectJson: rawProject,
+        mutationJson: rawMutation,
+        profile: AuthoringValidationProfile.experimental,
+      );
+
+      expect(result, isA<AuthoringStoryDraftInsertRejected>());
+      final rejected = result as AuthoringStoryDraftInsertRejected;
+      expect(rejected.diagnostics.single.code, 'INVALID_STORY_MUTATION');
+      expect(
+        rejected.requestBindingSha256,
+        _storyRequestBinding(rawProject, rawMutation, 'experimental'),
+      );
+    },
+  );
+
+  test(
+    'Story Draft applied DTO binds candidate, IDs, kind, revision, and gate',
+    () {
+      expect(
+        () => _decodeStoryResponse(_validStoryAppliedResponse()),
+        returnsNormally,
+      );
+      final quest =
+          _decodeStoryResponse(
+                _validStoryAppliedResponse(quest: true),
+                quest: true,
+              )
+              as AuthoringStoryDraftInsertApplied;
+      expect(quest.draftKind, AuthoringStoryDraftKind.questDraft);
+
+      final maximumBase = _validStoryBaseProjectJson(
+        revision: 0x7ffffffffffffffe,
+      );
+      final maximumMutation = _validStoryMutationJson(
+        revision: 0x7ffffffffffffffe,
+      );
+      final maximumApplied =
+          _decodeStoryResponse(
+                _validStoryAppliedResponse(
+                  base: maximumBase,
+                  mutation: maximumMutation,
+                ),
+                base: maximumBase,
+                mutation: maximumMutation,
+              )
+              as AuthoringStoryDraftInsertApplied;
+      expect(maximumApplied.revision, 0x7fffffffffffffff);
+
+      for (final invalidMutation in <String>[
+        _validStoryMutationJson().replaceFirst(
+          '"expected_revision":7',
+          '"expected_revision":7.0',
+        ),
+        _validStoryMutationJson().replaceFirst(
+          '"expected_revision":7',
+          '"expected_revision":9223372036854775807',
+        ),
+      ]) {
+        expect(
+          () => _decodeStoryResponse(
+            _validStoryAppliedResponse(mutation: invalidMutation),
+            mutation: invalidMutation,
+          ),
+          throwsFormatException,
+        );
+      }
+      final fractionalBase = _validStoryBaseProjectJson().replaceFirst(
+        '"revision":7',
+        '"revision":7.0',
+      );
+      final fractionalBaseResponse = _validStoryAppliedResponse();
+      fractionalBaseResponse['request_binding_sha256'] = _storyRequestBinding(
+        fractionalBase,
+        _validStoryMutationJson(),
+        'experimental',
+      );
+      expect(
+        () =>
+            _decodeStoryResponse(fractionalBaseResponse, base: fractionalBase),
+        throwsFormatException,
+      );
+      final malformed = <void Function(Map<String, Object?>)>[
+        (response) => response['extra'] = true,
+        (response) =>
+            response['request_binding_sha256'] = List.filled(64, 'f').join(),
+        (response) => response['revision'] = 9,
+        (response) => response['draft_id'] = _storyScriptModuleId,
+        (response) => response['draft_kind'] = 'dialog_line',
+        (response) => response['blocks_build'] = false,
+        (response) => response['diagnostics'] = <Object?>[],
+        (response) =>
+            (_authoringDiagnostic(response, 0)['severity'] = 'warning'),
+        (response) =>
+            (_authoringDiagnostic(response, 0)['entity'] = _storyDraftId),
+        (response) =>
+            (_authoringDiagnostic(response, 0)['property_path'] = 'revision'),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"schema_revision":2', '"schema_revision":1'),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"revision":8', '"revision":9'),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"kind":"npc_draft"', '"kind":"quest_draft"'),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"authored_runtime_id":"GoreGateGuard"',
+              '"authored_runtime_id":"Other"',
+            ),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"display_name":"NPC GoreGateGuard"',
+              '"display_name":"Other"',
+            ),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"revision":0', '"revision":1'),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"unique_name":"GoreGateGuard"',
+              '"unique_name":"Other"',
+            ),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"display_name":"GoreMods.Npcs.GateGuard"',
+              '"display_name":"Other.Module"',
+            ),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"module_namespace":"GoreMods.Npcs.GateGuard"',
+              '"module_namespace":"Other.Module"',
+            ),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"module_relative_path":"GoreMods/Npcs/GateGuard.as"',
+              '"module_relative_path":"Other.as"',
+            ),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('// generated npc\\n', '// corrupted\\n'),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              List.filled(64, 'a').join(),
+              List.filled(64, 'g').join(),
+            ),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"authoring":"offline_draft"',
+              '"authoring":"qualified"',
+            ),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"name":"Story transaction"', '"name":"Other"'),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"byte_len":1000000', '"byte_len":1000000.0'),
+        (response) =>
+            response['project_json'] = _validStoryCandidateProjectJson()
+                .replaceFirst('"byte_len":20000', '"byte_len":20000.0'),
+        (response) => response['project_json'] =
+            _validStoryCandidateProjectJson().replaceFirst(
+              '"expected_kind":"npc_draft"',
+              '"expected_kind":"quest_draft"',
+            ),
+        (response) =>
+            response['project_json'] = ' ${_validStoryCandidateProjectJson()}',
+        (response) {
+          final candidate =
+              (jsonDecode(response['project_json']! as String) as Map)
+                  .cast<String, Object?>();
+          (candidate['entities']
+                  as Map<String, Object?>)['22222222222222222222222222222222'] =
+              <String, Object?>{'unexpected': true};
+          response['project_json'] = jsonEncode(candidate);
+        },
+      ];
+      for (final mutate in malformed) {
+        final response = _validStoryAppliedResponse();
+        mutate(response);
+        expect(() => _decodeStoryResponse(response), throwsFormatException);
+      }
+
+      final emptyRejection = _validStoryRejectedResponse()
+        ..['diagnostics'] = <Object?>[];
+      expect(
+        () => _decodeStoryResponse(
+          emptyRejection,
+          mutation: _validStoryMutationJson(revision: 6),
+          profile: AuthoringValidationProfile.production,
+        ),
+        throwsFormatException,
+      );
+
+      final warningRejection = _validStoryRejectedResponse();
+      _authoringDiagnostic(warningRejection, 0)['severity'] = 'warning';
+      expect(
+        () => _decodeStoryResponse(
+          warningRejection,
+          mutation: _validStoryMutationJson(revision: 6),
+          profile: AuthoringValidationProfile.production,
+        ),
+        throwsFormatException,
+      );
+
+      final baseMap = (jsonDecode(_validStoryBaseProjectJson()) as Map)
+          .cast<String, Object?>();
+      (baseMap['entities']
+              as Map<String, Object?>)['22222222222222222222222222222222'] =
+          <String, Object?>{'preserved': true};
+      final baseWithEntity = jsonEncode(baseMap);
+      expect(
+        () => _decodeStoryResponse(
+          _validStoryAppliedResponse(base: baseWithEntity),
+          base: baseWithEntity,
+        ),
+        throwsFormatException,
+      );
+    },
+  );
+
+  test('Story Draft wrapper bounds raw and escaped inputs before FFI', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'authoring_project_story_draft_insert_v1': _validStoryAppliedResponse(),
+      },
+    );
+    final ffi = ModFfi(core);
+
+    await expectLater(
+      ffi.authoringProjectStoryDraftInsertV1(
+        projectJson: String.fromCharCodes(Uint8List(16 * 1024 * 1024 + 1)),
+        mutationJson: '{}',
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsArgumentError,
+    );
+    await expectLater(
+      ffi.authoringProjectStoryDraftInsertV1(
+        projectJson: '{}',
+        mutationJson: String.fromCharCodes(Uint8List(20 * 1024 * 1024 + 1)),
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsArgumentError,
+    );
+    await expectLater(
+      ffi.authoringProjectStoryDraftInsertV1(
+        // Eleven MiB of NUL is within the raw project limit but JSON escaping would exceed the
+        // bounded 64 MiB native transport envelope.
+        projectJson: String.fromCharCodes(Uint8List(11 * 1024 * 1024)),
+        mutationJson: '{}',
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsArgumentError,
+    );
+    expect(core.calls, isEmpty);
+  });
 
   test(
     'draft preview wrappers preserve raw JSON and parse typed results',

@@ -19,6 +19,9 @@
 //!   `authoring_draft_quest_skeleton_v1_generate` accept one bounded raw `input_json` string and
 //!   return deterministic offline-only previews. They never write, compile, deploy, or qualify
 //!   runtime behavior.
+//! - `authoring_project_story_draft_insert_v1` atomically evaluates one raw, duplicate-safe Story
+//!   Draft mutation against one exact canonical schema-revision-2 project. Rejections never carry
+//!   candidate project JSON.
 //! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
 //!   `authoring_store_prepare_checkpoint` retain the frozen schema-revision-1 working-store wire.
 //!   Their additive `*_document` counterparts dispatch between closed schema revisions 1 and 2.
@@ -45,6 +48,7 @@
 mod authoring;
 mod authoring_drafts;
 mod authoring_store;
+mod authoring_story;
 mod transport;
 mod voice;
 
@@ -74,6 +78,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_draft_quest_skeleton_v1_generate",
     "authoring_logical_npc_clone_draft_v1_generate",
     "authoring_project_check",
+    "authoring_project_story_draft_insert_v1",
     "authoring_store_import_ogg",
     "authoring_store_open",
     "authoring_store_open_document",
@@ -164,6 +169,9 @@ fn dispatch(input: &str) -> Value {
             authoring_drafts::logical_npc_clone(payload)
         }
         "authoring_project_check" => authoring::project_check(payload),
+        "authoring_project_story_draft_insert_v1" => {
+            authoring_story::insert_story_draft_v1(payload)
+        }
         "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
         "authoring_store_open" => authoring_store::open(payload),
         "authoring_store_open_document" => authoring_store::open_document(payload),
@@ -1026,6 +1034,7 @@ mod tests {
                     "authoring_draft_quest_skeleton_v1_generate",
                     "authoring_logical_npc_clone_draft_v1_generate",
                     "authoring_project_check",
+                    "authoring_project_story_draft_insert_v1",
                     "authoring_store_import_ogg",
                     "authoring_store_open",
                     "authoring_store_open_document",
@@ -1071,6 +1080,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_project_check"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_project_story_draft_insert_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_logical_npc_clone_draft_v1_generate"));

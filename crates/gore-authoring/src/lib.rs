@@ -66,10 +66,10 @@ pub use quest::{
     MAX_DRAFT_QUEST_TITLE_BYTES,
 };
 pub use story_transaction::{
-    NpcDraftCreateInput, QuestDraftCreateInput, StoryDraftCreate, StoryDraftInsertError,
-    StoryDraftInsertEvaluation, StoryDraftInsertJsonError, StoryDraftInsertOutcome,
-    StoryDraftInsertRejection, StoryDraftInsertRequest, MAX_STORY_DRAFT_DISPLAY_NAME_BYTES,
-    MAX_STORY_DRAFT_INSERT_JSON_BYTES,
+    story_draft_insert_request_binding_sha256, NpcDraftCreateInput, QuestDraftCreateInput,
+    StoryDraftCreate, StoryDraftInsertError, StoryDraftInsertEvaluation, StoryDraftInsertJsonError,
+    StoryDraftInsertOutcome, StoryDraftInsertRejection, StoryDraftInsertRequest,
+    MAX_STORY_DRAFT_DISPLAY_NAME_BYTES, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use gore_authoring::{
-    AssetMeta, AssetStoreIndex, ContentSeal, DiagnosticCode, EntityId, FormatV2,
-    GameGenerationAnchor, NpcDraftCreateInput, ProjectDocument, ProjectId, ProjectMeta,
-    ProjectRevision2, ProjectV2, QuestCollisionCatalogInput, QuestDraftCreateInput,
-    Revision2Entity as Entity, Revision2EntityKind as EntityKind,
+    story_draft_insert_request_binding_sha256, AssetMeta, AssetStoreIndex, ContentSeal,
+    DiagnosticCode, EntityId, FormatV2, GameGenerationAnchor, NpcDraftCreateInput, ProjectDocument,
+    ProjectId, ProjectMeta, ProjectRevision2, ProjectV2, QuestCollisionCatalogInput,
+    QuestDraftCreateInput, Revision2Entity as Entity, Revision2EntityKind as EntityKind,
     Revision2EntityPayload as EntityPayload, Revision2LocalizationEntry as LocalizationEntry,
     Revision2NpcParentClassInput as NpcParentClassInput, Revision2OriginRef as OriginRef,
     Revision2QuestGiverInput as QuestGiverInput, Revision2QuestParentInput as QuestParentInput,
@@ -12,6 +12,35 @@ use gore_authoring::{
     StoryDraftInsertOutcome, StoryDraftInsertRequest, ValidationProfile, WorkingStoreLimits,
     MAX_STORY_DRAFT_INSERT_JSON_BYTES,
 };
+
+#[test]
+fn request_binding_has_one_exact_domain_separated_little_endian_spelling() {
+    let production = story_draft_insert_request_binding_sha256(
+        "project",
+        "mutation",
+        ValidationProfile::Production,
+    );
+    assert_eq!(
+        production.to_string(),
+        "7141d4e86bcf237fda2adbfd5506b585500d9cf36a0bd0bec42377721ca8a95d"
+    );
+    assert_eq!(
+        production,
+        story_draft_insert_request_binding_sha256(
+            "project",
+            "mutation",
+            ValidationProfile::Production,
+        )
+    );
+    assert_ne!(
+        production,
+        story_draft_insert_request_binding_sha256(
+            "project",
+            "mutation",
+            ValidationProfile::Experimental,
+        )
+    );
+}
 
 fn project_id(value: u8) -> ProjectId {
     ProjectId::from_bytes([value; 16])

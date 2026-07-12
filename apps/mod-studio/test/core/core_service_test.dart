@@ -100,6 +100,14 @@ void main() {
               .where((command) => command != 'authoring_store_open_document')
               .toList(),
         );
+        final missingStoryTransaction = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command != 'authoring_project_story_draft_insert_v1',
+              )
+              .toList(),
+        );
         final missingNpcDraft = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -125,11 +133,12 @@ void main() {
           missingVoice,
           missingWorkingStore,
           missingDocumentStore,
+          missingStoryTransaction,
           missingNpcDraft,
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(8), everyElement(isNull));
+        expect(decisions.take(9), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -159,6 +168,7 @@ void main() {
           .where(
             (command) =>
                 command != 'authoring_project_check' &&
+                command != 'authoring_project_story_draft_insert_v1' &&
                 command != 'authoring_store_open_document' &&
                 command != 'voice_archive_match_line' &&
                 command != 'authoring_logical_npc_clone_draft_v1_generate' &&
@@ -174,6 +184,7 @@ void main() {
         'authoring_draft_quest_skeleton_v1_generate',
         'authoring_logical_npc_clone_draft_v1_generate',
         'authoring_project_check',
+        'authoring_project_story_draft_insert_v1',
         'authoring_store_open_document',
         'voice_archive_match_line',
       ]);

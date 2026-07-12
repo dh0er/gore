@@ -48,6 +48,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_draft_quest_skeleton_v1_generate',
   'authoring_logical_npc_clone_draft_v1_generate',
   'authoring_project_check',
+  'authoring_project_story_draft_insert_v1',
   'authoring_store_import_ogg',
   'authoring_store_open',
   'authoring_store_open_document',
