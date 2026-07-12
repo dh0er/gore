@@ -445,14 +445,6 @@ final class StoryWorkspaceController {
     );
   }
 
-  Future<StoryDraftCreateResult> createQuest(StoryQuestDraftInput input) {
-    return _create(
-      expectedKind: AuthoringStoryDraftKind.questDraft,
-      buildMutation: (context) =>
-          _mutationBuilder.buildQuest(context: context, input: input),
-    );
-  }
-
   Future<StoryDraftCreateResult> _create({
     required AuthoringStoryDraftKind expectedKind,
     required String Function(StoryDraftMutationContext context) buildMutation,

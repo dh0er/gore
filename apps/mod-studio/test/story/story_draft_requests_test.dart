@@ -61,48 +61,6 @@ void main() {
     });
   });
 
-  test('quest factory keeps friendly fields and injected anchors exact', () {
-    final json = buildQuestStoryDraftMutationJson(
-      context: _context(3),
-      input: StoryQuestDraftInput(
-        displayName: 'Secure the gate',
-        moduleNamespace: 'GoreMods.Quests.GateTrial',
-        technicalId: 'GORE_GATE_TRIAL',
-        textHelper: 'GoreGateTrialText',
-        parentQuest: _trusted(<String, Object?>{'selector': 'ParentQuest'}),
-        giver: _trusted(<String, Object?>{'selector': 'QuestGiver'}),
-        title: "Asghan's Trial",
-        description: 'Prove that the gate is secure.',
-        objectiveTitle: 'Report to Asghan',
-        collisionCatalog: _trusted(<String, Object?>{
-          'modules': <Object?>[],
-          'relative_paths': <Object?>[],
-          'symbols': <Object?>[],
-        }),
-      ),
-    );
-    final decoded = (jsonDecode(json) as Map).cast<String, Object?>();
-    final draft = (decoded['draft'] as Map).cast<String, Object?>();
-    final input = (draft['input'] as Map).cast<String, Object?>();
-
-    expect(draft['kind'], 'quest');
-    expect(input.keys, <String>[
-      'module_namespace',
-      'technical_id',
-      'text_helper',
-      'parent_quest',
-      'giver',
-      'title',
-      'description',
-      'objective_title',
-      'collision_catalog',
-    ]);
-    expect(input['parent_quest'], <String, Object?>{'selector': 'ParentQuest'});
-    expect(input['giver'], <String, Object?>{'selector': 'QuestGiver'});
-    expect(input['title'], "Asghan's Trial");
-    expect(input['objective_title'], 'Report to Asghan');
-  });
-
   test('trusted fragments must be canonical bounded JSON objects', () {
     expect(
       () => CanonicalUnverifiedStoryJsonObject.fromCanonicalJson('{ "x": 1 }'),

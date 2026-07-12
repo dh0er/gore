@@ -3,15 +3,14 @@
 use std::collections::BTreeSet;
 
 use gore_authoring::{
-    story_draft_insert_request_binding_sha256, Diagnostic, DiagnosticCode, DiagnosticSeverity,
-    EntityId, ProjectDocument, ProjectDocumentError, ProjectId, Revision2EntityKind,
-    Revision2EntityPayload, Revision2OriginRef, StoryDraftCreate, StoryDraftInsertError,
-    StoryDraftInsertEvaluation, StoryDraftInsertJsonError, StoryDraftInsertOutcome,
-    StoryDraftInsertRequest, ValidationProfile, DRAFT_QUEST_GENERATOR_ID,
-    DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    Diagnostic, DiagnosticCode, DiagnosticSeverity, EntityId, LOGICAL_NPC_CLONE_GENERATOR_ID,
     LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_PROJECT_JSON_BYTES, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
+    ProjectDocument, ProjectDocumentError, ProjectId, Revision2EntityKind, Revision2EntityPayload,
+    Revision2OriginRef, StoryDraftCreate, StoryDraftInsertError, StoryDraftInsertEvaluation,
+    StoryDraftInsertJsonError, StoryDraftInsertOutcome, StoryDraftInsertRequest, ValidationProfile,
+    story_draft_insert_request_binding_sha256,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::err;
 
@@ -131,13 +130,12 @@ fn insert_story_draft_v1_inner(
                 LOGICAL_NPC_CLONE_GENERATOR_ID,
                 LOGICAL_NPC_CLONE_GENERATOR_VERSION,
             ),
-            StoryDraftCreate::Quest(input) => (
-                Revision2EntityKind::QuestDraft,
-                input.module_namespace.clone(),
-                input.technical_id.clone(),
-                DRAFT_QUEST_GENERATOR_ID,
-                DRAFT_QUEST_GENERATOR_VERSION,
-            ),
+            StoryDraftCreate::Quest(_) => {
+                return Err(StoryFailure::new(
+                    "AUTHORING_STORY_QUEST_INVENTORY_REQUIRED",
+                    "Studio Quest insertion requires an exact trusted collision inventory",
+                ));
+            }
         };
     let expected = ExpectedAppliedOutcome {
         project_id: base_project_id,
@@ -741,14 +739,10 @@ mod tests {
             "11111111111111111111111111111111"
         );
         assert_eq!(response["blocks_build"], true);
-        assert!(response["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(
-                |diagnostic| diagnostic["code"] == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
-                    && diagnostic["blocks_build"] == true
-            ));
+        assert!(response["diagnostics"].as_array().unwrap().iter().any(
+            |diagnostic| diagnostic["code"] == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
+                && diagnostic["blocks_build"] == true
+        ));
         let candidate = response["project_json"].as_str().unwrap();
         assert_eq!(
             ProjectDocument::from_json(candidate)
@@ -803,35 +797,32 @@ mod tests {
             )
             .to_string()
         );
-        assert!(response["diagnostics"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|diagnostic| diagnostic["severity"] == "error"
-                && diagnostic["blocks_build"] == true));
+        assert!(
+            response["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["severity"] == "error"
+                    && diagnostic["blocks_build"] == true)
+        );
         assert!(response.get("project_json").is_none());
     }
 
     #[test]
-    fn quest_apply_and_exact_raw_response_are_deterministic() {
+    fn quest_insert_requires_trusted_collision_inventory_before_transaction() {
         let project = project_json(2);
         let mutation = quest_mutation_json(7);
         let first = call_raw(project.clone(), mutation.clone(), "experimental");
         let second = call_raw(project.clone(), mutation.clone(), "experimental");
         assert_eq!(first, second);
         let response: Value = serde_json::from_str(&first).unwrap();
-        assert_eq!(response["ok"], true);
-        assert_eq!(response["outcome"], "applied");
-        assert_eq!(response["draft_kind"], "quest_draft");
         assert_eq!(
-            response["request_binding_sha256"],
-            story_draft_insert_request_binding_sha256(
-                &project,
-                &mutation,
-                ValidationProfile::Experimental,
-            )
-            .to_string()
+            response["error"]["code"],
+            "AUTHORING_STORY_QUEST_INVENTORY_REQUIRED"
         );
+        assert!(response.get("outcome").is_none());
+        assert!(response.get("project_json").is_none());
+        assert!(response.get("revision").is_none());
     }
 
     #[test]

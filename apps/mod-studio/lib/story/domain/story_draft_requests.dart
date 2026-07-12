@@ -7,10 +7,6 @@ const int _maxStoryMutationBaseRevision = 0x7ffffffffffffffe;
 const int _maxStoryDisplayNameBytes = 256;
 const int _maxModuleNamespaceBytes = 255;
 const int _maxNpcUniqueNameBytes = 64;
-const int _maxQuestIdentifierBytes = 96;
-const int _maxQuestTitleBytes = 128;
-const int _maxQuestDescriptionBytes = 512;
-const int _maxQuestObjectiveTitleBytes = 128;
 const int _maxJsonDepth = 128;
 const int _maxSecureIdAttempts = 32;
 
@@ -19,10 +15,10 @@ final RegExp _entityIdPattern = RegExp(r'^[0-9a-f]{32}$');
 /// One bounded canonical JSON object whose game provenance is not verified.
 ///
 /// Canonical syntax is the only guarantee. In particular, this type does not
-/// claim that a parent, giver, or collision inventory came from a qualified
-/// catalog. A later catalog adapter must establish that qualification before
-/// constructing one. The canonical bytes are embedded directly in a request,
-/// so a large fragment is never decoded or encoded again during assembly.
+/// claim that a parent came from a qualified catalog. The catalog adapter must
+/// establish that qualification before constructing one. The canonical bytes
+/// are embedded directly in a request, so a large fragment is never decoded or
+/// encoded again during assembly.
 final class CanonicalUnverifiedStoryJsonObject {
   CanonicalUnverifiedStoryJsonObject._(this.canonicalJson, this.utf8Length);
 
@@ -167,44 +163,12 @@ final class StoryNpcDraftInput {
   final CanonicalUnverifiedStoryJsonObject parentSpawnDefinition;
 }
 
-/// Friendly quest fields plus canonical, not-yet-qualified catalog objects.
-final class StoryQuestDraftInput {
-  const StoryQuestDraftInput({
-    required this.displayName,
-    required this.moduleNamespace,
-    required this.technicalId,
-    required this.textHelper,
-    required this.parentQuest,
-    required this.giver,
-    required this.title,
-    required this.description,
-    required this.objectiveTitle,
-    required this.collisionCatalog,
-  });
-
-  final String displayName;
-  final String moduleNamespace;
-  final String technicalId;
-  final String textHelper;
-  final CanonicalUnverifiedStoryJsonObject parentQuest;
-  final CanonicalUnverifiedStoryJsonObject giver;
-  final String title;
-  final String description;
-  final String objectiveTitle;
-  final CanonicalUnverifiedStoryJsonObject collisionCatalog;
-}
-
 /// Injectable pure mutation seam used inside the managed session's serialized
 /// derive lane.
 abstract interface class StoryDraftMutationJsonBuilder {
   String buildNpc({
     required StoryDraftMutationContext context,
     required StoryNpcDraftInput input,
-  });
-
-  String buildQuest({
-    required StoryDraftMutationContext context,
-    required StoryQuestDraftInput input,
   });
 }
 
@@ -217,12 +181,6 @@ final class ClosedStoryDraftMutationJsonBuilder
     required StoryDraftMutationContext context,
     required StoryNpcDraftInput input,
   }) => buildNpcStoryDraftMutationJson(context: context, input: input);
-
-  @override
-  String buildQuest({
-    required StoryDraftMutationContext context,
-    required StoryQuestDraftInput input,
-  }) => buildQuestStoryDraftMutationJson(context: context, input: input);
 }
 
 /// Build the exact closed ABI-1 NPC request without selecting or qualifying a
@@ -260,70 +218,6 @@ String buildNpcStoryDraftMutationJson({
     _fragment(input.parentAiAgentConfig),
     _literal(',"parent_spawn_definition":'),
     _fragment(input.parentSpawnDefinition),
-    _literal('}}}'),
-  ];
-  return _assembleBoundedMutation(segments);
-}
-
-/// Build the exact closed ABI-1 quest request without selecting or qualifying
-/// a giver, parent quest, or collision inventory.
-String buildQuestStoryDraftMutationJson({
-  required StoryDraftMutationContext context,
-  required StoryQuestDraftInput input,
-}) {
-  final segments = <_StoryJsonSegment>[
-    _literal('{"expected_project_id":'),
-    _encodedJsonString(context.projectId, 32, 'projectId'),
-    _literal(',"expected_revision":'),
-    _literal(context.revision.toString()),
-    _literal(',"draft_id":'),
-    _encodedJsonString(context.ids.draftId, 32, 'draftId'),
-    _literal(',"script_module_id":'),
-    _encodedJsonString(context.ids.scriptModuleId, 32, 'scriptModuleId'),
-    _literal(',"display_name":'),
-    _encodedJsonString(
-      input.displayName,
-      _maxStoryDisplayNameBytes,
-      'displayName',
-    ),
-    _literal(',"draft":{"kind":"quest","input":{"module_namespace":'),
-    _encodedJsonString(
-      input.moduleNamespace,
-      _maxModuleNamespaceBytes,
-      'moduleNamespace',
-    ),
-    _literal(',"technical_id":'),
-    _encodedJsonString(
-      input.technicalId,
-      _maxQuestIdentifierBytes,
-      'technicalId',
-    ),
-    _literal(',"text_helper":'),
-    _encodedJsonString(
-      input.textHelper,
-      _maxQuestIdentifierBytes,
-      'textHelper',
-    ),
-    _literal(',"parent_quest":'),
-    _fragment(input.parentQuest),
-    _literal(',"giver":'),
-    _fragment(input.giver),
-    _literal(',"title":'),
-    _encodedJsonString(input.title, _maxQuestTitleBytes, 'title'),
-    _literal(',"description":'),
-    _encodedJsonString(
-      input.description,
-      _maxQuestDescriptionBytes,
-      'description',
-    ),
-    _literal(',"objective_title":'),
-    _encodedJsonString(
-      input.objectiveTitle,
-      _maxQuestObjectiveTitleBytes,
-      'objectiveTitle',
-    ),
-    _literal(',"collision_catalog":'),
-    _fragment(input.collisionCatalog),
     _literal('}}}'),
   ];
   return _assembleBoundedMutation(segments);

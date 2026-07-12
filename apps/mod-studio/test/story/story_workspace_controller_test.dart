@@ -637,15 +637,6 @@ final class _RecordingMutationBuilder implements StoryDraftMutationJsonBuilder {
     revisions.add(context.revision);
     return _delegate.buildNpc(context: context, input: input);
   }
-
-  @override
-  String buildQuest({
-    required StoryDraftMutationContext context,
-    required StoryQuestDraftInput input,
-  }) {
-    revisions.add(context.revision);
-    return _delegate.buildQuest(context: context, input: input);
-  }
 }
 
 final class _FakeManagedStore implements ManagedAuthoringStore {
