@@ -7,6 +7,7 @@ description = "Canonical, sealed base-game script collision inventories for GORE
 
 [dependencies]
 gore-as = { path = "../gore-as" }
+gore-authoring = { path = "../gore-authoring" }
 gore-story-catalog = { path = "../gore-story-catalog" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

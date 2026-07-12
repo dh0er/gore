@@ -24,6 +24,14 @@ use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest as _, Sha256};
 
+mod quest_capability;
+
+pub use quest_capability::{
+    QuestCollisionBuildStatus, QuestCollisionCapabilityError, QuestCollisionCoverage,
+    QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
+    VerifiedQuestCollisionCapability, BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
+};
+
 /// Exact identity of the only layer represented by revision 1.
 pub const BASE_GAME_SCRIPT_INVENTORY_LAYER: &str = "base-game.g1r.scripts.inventory.v1";
 /// Maximum accepted canonical artifact envelope.
@@ -243,6 +251,16 @@ impl BaseGameCollisionInventory {
 
     pub fn symbols(&self) -> &[String] {
         &self.wire.inventory.symbols
+    }
+
+    /// Move the verified collision domains into another closed in-crate capability without
+    /// cloning their string allocations.
+    pub(crate) fn into_collision_domains(self) -> (Vec<String>, Vec<String>, Vec<String>) {
+        (
+            self.wire.inventory.modules,
+            self.wire.inventory.relative_paths,
+            self.wire.inventory.symbols,
+        )
     }
 }
 
@@ -749,6 +767,18 @@ pub enum StoryInventoryError {
 mod tests {
     use super::*;
     use gore_as::cache::header::CACHE_MAGIC;
+    use gore_authoring::model_revision2::{
+        Entity as AuthoringEntity, EntityKind as AuthoringEntityKind,
+        EntityPayload as AuthoringEntityPayload, NpcDraft as AuthoringNpcDraft,
+        NpcDraftInput as AuthoringNpcDraftInput, NpcParentClassInput, OriginRef, ProjectRevision2,
+        SchemaRevisionV2, TypedRef,
+    };
+    use gore_authoring::{
+        AssetStoreIndex, ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId,
+        FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
+        Sha256Digest as AuthoringSha256Digest, LOGICAL_NPC_CLONE_GENERATOR_ID,
+        LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+    };
     use std::collections::BTreeSet;
 
     fn seal(bytes: &[u8]) -> ContentSeal {
@@ -789,6 +819,144 @@ mod tests {
             collected(),
         )
         .unwrap()
+    }
+
+    fn authoring_seal(seal: &ContentSeal) -> AuthoringContentSeal {
+        AuthoringContentSeal {
+            byte_len: seal.byte_len,
+            sha256: AuthoringSha256Digest::from_bytes(*seal.sha256.as_bytes()),
+        }
+    }
+
+    fn authoring_target() -> GameGenerationAnchor {
+        GameGenerationAnchor {
+            executable: authoring_seal(&trusted_catalog().generation().executable),
+        }
+    }
+
+    fn authoring_project_id(value: u8) -> ProjectId {
+        ProjectId::from_bytes([value; 16])
+    }
+
+    fn authoring_entity_id(value: u8) -> AuthoringEntityId {
+        AuthoringEntityId::from_bytes([value; 16])
+    }
+
+    fn empty_authoring_project() -> ProjectRevision2 {
+        ProjectRevision2 {
+            format: FormatV2,
+            schema_revision: SchemaRevisionV2,
+            project_id: authoring_project_id(1),
+            revision: 4,
+            meta: ProjectMeta {
+                name: "verified collision capability".into(),
+                version: "0.1.0".into(),
+                author: "test".into(),
+            },
+            target: authoring_target(),
+            authoring_locales: BTreeSet::new(),
+            entities: Default::default(),
+            asset_store: AssetStoreIndex::default(),
+        }
+    }
+
+    fn npc_parent(
+        target: &GameGenerationAnchor,
+        seal_value: u8,
+        runtime_class: &str,
+    ) -> NpcParentClassInput {
+        NpcParentClassInput {
+            generation: target.clone(),
+            source_seal: AuthoringContentSeal {
+                byte_len: 100,
+                sha256: AuthoringSha256Digest::from_bytes([seal_value; 32]),
+            },
+            catalog_layer: "base-game.test.characters".into(),
+            canonical_selector: format!("Catalog{runtime_class}"),
+            runtime_class: runtime_class.into(),
+        }
+    }
+
+    fn add_authoring_npc(
+        project: &mut ProjectRevision2,
+        module_namespace: &str,
+        unique_name: &str,
+    ) {
+        let owner_id = authoring_entity_id(10);
+        let module_id = authoring_entity_id(11);
+        let owner = TypedRef::new(project.project_id, owner_id, AuthoringEntityKind::NpcDraft);
+        let draft = AuthoringNpcDraft {
+            generator_id: LOGICAL_NPC_CLONE_GENERATOR_ID.into(),
+            generator_version: LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+            input: AuthoringNpcDraftInput {
+                target: project.target.clone(),
+                module_namespace: module_namespace.into(),
+                unique_name: unique_name.into(),
+                parent_character_definition: npc_parent(
+                    &project.target,
+                    10,
+                    "UCharacterDefinition_Human_Base",
+                ),
+                parent_ai_agent_config: npc_parent(
+                    &project.target,
+                    11,
+                    "UAIAgentConfig_Human_Base",
+                ),
+                parent_spawn_definition: npc_parent(
+                    &project.target,
+                    12,
+                    "USpawnAIAgentDefinition_Base",
+                ),
+            },
+            script_module: TypedRef::new(
+                project.project_id,
+                module_id,
+                AuthoringEntityKind::ScriptModule,
+            ),
+        };
+        let script = draft.regenerate_script_module(owner.clone()).unwrap();
+        project.entities.insert(
+            owner_id,
+            AuthoringEntity {
+                id: owner_id,
+                display_name: unique_name.into(),
+                origin: OriginRef::New {
+                    authored_runtime_id: unique_name.into(),
+                },
+                revision: 0,
+                payload: AuthoringEntityPayload::NpcDraft(draft),
+            },
+        );
+        project.entities.insert(
+            module_id,
+            AuthoringEntity {
+                id: module_id,
+                display_name: format!("{unique_name} script"),
+                origin: OriginRef::Generated {
+                    generator_id: script.generator_id.clone(),
+                    generator_version: script.generator_version,
+                    owner,
+                },
+                revision: 0,
+                payload: AuthoringEntityPayload::ScriptModule(script),
+            },
+        );
+    }
+
+    fn artifact_with_extra_collision(kind: &str, value: &str) -> BaseGameCollisionInventory {
+        let mut base = artifact();
+        let domain = match kind {
+            "module" => &mut base.wire.inventory.modules,
+            "relative path" => &mut base.wire.inventory.relative_paths,
+            "symbol" => &mut base.wire.inventory.symbols,
+            _ => panic!("unsupported collision domain"),
+        };
+        domain.push(value.into());
+        domain.sort();
+        let payload = canonical_json(&base.wire.inventory, "test payload").unwrap();
+        base.wire.payload_seal = seal_bytes(&payload);
+        validate_wire(&base.wire).unwrap();
+        base
     }
 
     fn push_sia(output: &mut Vec<u8>, value: &str) {
@@ -1100,5 +1268,184 @@ mod tests {
         ))
         .unwrap_err();
         assert!(error.to_string().contains("invalid length"));
+    }
+
+    #[test]
+    fn capability_is_deterministic_closed_and_honest_about_unsupported_layers() {
+        let catalog = trusted_catalog();
+        let project = empty_authoring_project();
+        let first = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
+        let second =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.project_id(), project.project_id);
+        assert_eq!(first.project_revision(), project.revision);
+        assert_eq!(first.project_target(), &project.target);
+        assert_eq!(first.canonical_project(), second.canonical_project());
+        assert_eq!(first.combined_source_seal(), second.combined_source_seal());
+        assert_eq!(
+            first.coverage(),
+            QuestCollisionCoverage::BaseGameAndExactProjectOnly
+        );
+        assert_eq!(
+            first.runtime_qualification(),
+            QuestCollisionRuntimeQualification::RuntimeUnqualified
+        );
+        assert_eq!(first.build_status(), QuestCollisionBuildStatus::Blocked);
+        assert_eq!(
+            first.publication_status(),
+            QuestCollisionPublicationStatus::NotSupported
+        );
+        assert_eq!(
+            first.catalog_layer(),
+            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
+        );
+        assert!(!first.catalog_layer().contains("resolved-loadout"));
+        assert!(first.contains_module("GORE.ALPHA"));
+        assert!(first.contains_relative_path("Gore/Alpha.as"));
+        assert!(first.contains_symbol("UAlpha"));
+
+        let input = first.into_quest_collision_input(&project).unwrap();
+        assert_eq!(
+            input.catalog_layer,
+            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
+        );
+        assert_eq!(input.generation, project.target);
+        assert!(input.modules.contains("gore.alpha"));
+        assert!(input.relative_paths.contains("gore/alpha.as"));
+        assert!(input.symbols.contains("ualpha"));
+    }
+
+    #[test]
+    fn capability_unions_exact_project_regeneration_and_seals_revision() {
+        let catalog = trusted_catalog();
+        let empty = empty_authoring_project();
+        let empty_capability =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &empty).unwrap();
+        let mut project = empty.clone();
+        add_authoring_npc(&mut project, "Project.Npcs.NewOne", "ProjectNpc");
+        let capability =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
+
+        assert!(capability.contains_module("PROJECT.NPCS.NEWONE"));
+        assert!(capability.contains_relative_path("Project/Npcs/NewOne.as"));
+        assert!(capability.contains_symbol("UCharacterDefinition_Human_ProjectNpc"));
+        assert!(capability.contains_symbol("UAIAgentConfig_Human_ProjectNpc"));
+        assert!(capability.contains_symbol("USpawnAIAgentDefinition_ProjectNpc"));
+        assert_ne!(
+            capability.combined_source_seal(),
+            empty_capability.combined_source_seal()
+        );
+
+        let mut next_revision = empty;
+        next_revision.revision += 1;
+        let next =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &next_revision).unwrap();
+        assert_ne!(
+            empty_capability.combined_source_seal(),
+            next.combined_source_seal()
+        );
+    }
+
+    #[test]
+    fn parent_and_giver_resolution_comes_only_from_the_exact_catalog() {
+        let catalog = trusted_catalog();
+        let selections = catalog.authoring_selections().unwrap();
+        let expected_parent = selections.quest_parents.first().unwrap();
+        let expected_giver = selections.npcs.first().unwrap();
+        let capability = VerifiedQuestCollisionCapability::bind(
+            artifact(),
+            &catalog,
+            &empty_authoring_project(),
+        )
+        .unwrap();
+
+        let parent = capability
+            .resolve_parent(&expected_parent.catalog_id)
+            .unwrap();
+        assert_eq!(
+            parent.canonical_selector,
+            expected_parent.quest_class.authoring_selector
+        );
+        assert_eq!(
+            parent.runtime_class,
+            expected_parent.quest_class.runtime_class
+        );
+        let giver = capability
+            .resolve_giver(&expected_giver.catalog_id)
+            .unwrap();
+        assert_eq!(
+            giver.canonical_selector,
+            expected_giver.quest_giver.authoring_selector
+        );
+        assert_eq!(
+            giver.runtime_unique_name,
+            expected_giver.quest_giver.runtime_unique_name
+        );
+        assert!(matches!(
+            capability.resolve_parent("not-in-catalog"),
+            Err(QuestCollisionCapabilityError::UnknownParent(_))
+        ));
+        assert!(matches!(
+            capability.resolve_giver("not-in-catalog"),
+            Err(QuestCollisionCapabilityError::UnknownGiver(_))
+        ));
+    }
+
+    #[test]
+    fn base_project_collisions_fail_closed_in_every_domain() {
+        let catalog = trusted_catalog();
+        let mut project = empty_authoring_project();
+        add_authoring_npc(&mut project, "Project.Npcs.Collision", "CollisionNpc");
+        let cases = [
+            ("module", "project.npcs.collision"),
+            ("relative path", "project/npcs/collision.as"),
+            ("symbol", "ucharacterdefinition_human_collisionnpc"),
+        ];
+
+        for (kind, value) in cases {
+            let base = artifact_with_extra_collision(kind, value);
+            assert!(matches!(
+                VerifiedQuestCollisionCapability::bind(base, &catalog, &project),
+                Err(QuestCollisionCapabilityError::BaseProjectCollision {
+                    kind: actual_kind,
+                    value: actual_value,
+                    ..
+                }) if actual_kind == kind && actual_value == value
+            ));
+        }
+    }
+
+    #[test]
+    fn catalog_target_and_project_drift_are_rejected() {
+        let catalog = trusted_catalog();
+        let project = empty_authoring_project();
+
+        let mut wrong_catalog_binding = artifact();
+        wrong_catalog_binding.wire.inventory.story_catalog_seal = seal(b"other catalog");
+        let payload =
+            canonical_json(&wrong_catalog_binding.wire.inventory, "test payload").unwrap();
+        wrong_catalog_binding.wire.payload_seal = seal_bytes(&payload);
+        assert!(matches!(
+            VerifiedQuestCollisionCapability::bind(wrong_catalog_binding, &catalog, &project),
+            Err(QuestCollisionCapabilityError::CatalogBindingMismatch)
+        ));
+
+        let mut wrong_target = project.clone();
+        wrong_target.target.executable.sha256 = AuthoringSha256Digest::from_bytes([0x99; 32]);
+        assert!(matches!(
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &wrong_target),
+            Err(QuestCollisionCapabilityError::TargetMismatch)
+        ));
+
+        let capability =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project).unwrap();
+        let mut changed_head = project;
+        changed_head.revision += 1;
+        assert!(matches!(
+            capability.into_quest_collision_input(&changed_head),
+            Err(QuestCollisionCapabilityError::ProjectDrift)
+        ));
     }
 }

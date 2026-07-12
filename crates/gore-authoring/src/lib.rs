@@ -12,6 +12,7 @@ mod model;
 pub mod model_revision2;
 mod npc;
 mod quest;
+mod story_collision;
 mod story_transaction;
 mod strict_json;
 mod validate;
@@ -64,6 +65,10 @@ pub use quest::{
     DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
     MAX_DRAFT_QUEST_TITLE_BYTES,
+};
+pub use story_collision::{
+    collect_project_story_collision_identities, ProjectStoryCollisionIdentities,
+    StoryCollisionCollectionError,
 };
 pub use story_transaction::{
     story_draft_insert_request_binding_sha256, NpcDraftCreateInput, QuestDraftCreateInput,

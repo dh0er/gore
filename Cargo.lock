@@ -1074,6 +1074,7 @@ name = "gore-story-inventory"
 version = "0.0.0"
 dependencies = [
  "gore-as",
+ "gore-authoring",
  "gore-story-catalog",
  "serde",
  "serde_json",
