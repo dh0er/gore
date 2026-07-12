@@ -1,27 +1,20 @@
 import 'dart:io';
 
-import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 
 import '../../core/mod_ffi.dart';
 import 'story_workspace_bootstrap.dart';
 
 const _executableName = 'G1R-Win64-Shipping.exe';
-const _shippingCacheName = 'PrecompiledScript_Shipping.Cache';
-const _bindsCacheName = 'Binds.Cache';
 
 enum StoryWorkspaceLaunchError {
   invalidConfiguredGame,
   ambiguousGameRoot,
   missingExecutable,
-  missingShippingCache,
-  missingBindsCache,
   unsafeFileType,
-  ambiguousPristineCache,
   invalidWorkspace,
   pathInspectionFailed,
   catalogBuildFailed,
-  generationChanged,
   workspaceBootstrapFailed,
 }
 
@@ -37,21 +30,18 @@ final class StoryWorkspaceLaunchException implements Exception {
   String toString() => 'StoryWorkspaceLaunchException: $message';
 }
 
-/// Exact installed-generation paths passed to the trusted native catalog
-/// builder. The Shipping path remains the live cache unless a future native
-/// boundary can prove backup provenance with gore-mod's complete semantics.
+/// Safe configured install root and exact Shipping executable layout.
+///
+/// Shipping/Binds paths and pristine-backup provenance deliberately never cross this Dart DTO;
+/// native gore-mod owns those decisions from the root onward.
 final class StoryWorkspaceGameInputs {
   const StoryWorkspaceGameInputs._({
     required this.gameRoot,
     required this.executable,
-    required this.shippingCache,
-    required this.bindsCache,
   });
 
   final String gameRoot;
   final String executable;
-  final String shippingCache;
-  final String bindsCache;
 }
 
 final class StoryWorkspaceLaunch {
@@ -65,10 +55,9 @@ final class StoryWorkspaceLaunch {
   Future<void> close() => workspace.close();
 }
 
-/// Resolves and independently seals one installed generation, invokes the
-/// trusted native catalog builder, then re-resolves and re-seals every input
-/// immediately before creating/opening a production managed Story workspace.
-/// It performs no deployment, game launch, or runtime qualification.
+/// Resolves only a safe configured root/executable layout, then delegates pristine-cache
+/// selection and generation sealing to native gore-mod before creating/opening a production
+/// managed Story workspace. It performs no deployment, game launch, or runtime qualification.
 final class StoryWorkspaceLauncher {
   const StoryWorkspaceLauncher(this._ffi);
 
@@ -166,28 +155,11 @@ final class StoryWorkspaceLauncher {
       error: StoryWorkspaceLaunchError.invalidConfiguredGame,
     );
     final executable = p.join(g1r, 'Binaries', 'Win64', _executableName);
-    final scriptDirectory = p.join(g1r, 'Script');
-    final liveCache = p.join(scriptDirectory, _shippingCacheName);
-    final bindsCache = p.join(scriptDirectory, _bindsCacheName);
     await _requireRegularFile(
       executable,
       missing: StoryWorkspaceLaunchError.missingExecutable,
     );
-    await _requireRegularFile(
-      liveCache,
-      missing: StoryWorkspaceLaunchError.missingShippingCache,
-    );
-    await _requireRegularFile(
-      bindsCache,
-      missing: StoryWorkspaceLaunchError.missingBindsCache,
-    );
-    final shippingCache = await _selectShippingCache(liveCache);
-    return StoryWorkspaceGameInputs._(
-      gameRoot: root,
-      executable: executable,
-      shippingCache: shippingCache,
-      bindsCache: bindsCache,
-    );
+    return StoryWorkspaceGameInputs._(gameRoot: root, executable: executable);
   }
 
   Future<StoryWorkspaceLaunch> _launch({
@@ -217,13 +189,10 @@ final class StoryWorkspaceLauncher {
     }
 
     final inputs = await resolveGameInputs(configuredGamePath);
-    final before = await _measureGenerationSafely(inputs);
     final AuthoringStoryCatalogSelections catalog;
     try {
-      catalog = await _ffi.authoringStoryCatalogV1BuildAndRead(
-        executable: inputs.executable,
-        shippingCache: inputs.shippingCache,
-        bindsCache: inputs.bindsCache,
+      catalog = await _ffi.authoringStoryCatalogV1BuildAndReadForGameRoot(
+        gameRoot: inputs.gameRoot,
       );
     } catch (_) {
       throw const StoryWorkspaceLaunchException(
@@ -231,30 +200,11 @@ final class StoryWorkspaceLauncher {
         'The trusted Story catalog could not be built for this game generation.',
       );
     }
-    _requireCatalogGeneration(catalog.generation, before);
-
-    // Re-run path/backup choice and content sealing after native catalog
-    // construction. No game file is read after this point.
-    final revalidated = await resolveGameInputs(configuredGamePath);
-    if (!_sameInputs(inputs, revalidated)) {
-      throw const StoryWorkspaceLaunchException(
-        StoryWorkspaceLaunchError.generationChanged,
-        'The installed game generation changed while the Story workspace was opening.',
-      );
-    }
-    final after = await _measureGenerationSafely(revalidated);
-    if (before != after) {
-      throw const StoryWorkspaceLaunchException(
-        StoryWorkspaceLaunchError.generationChanged,
-        'The installed game generation changed while the Story workspace was opening.',
-      );
-    }
-    _requireCatalogGeneration(catalog.generation, after);
 
     StoryWorkspaceHandle? handle;
     try {
       handle = await bootstrap(catalog);
-      return StoryWorkspaceLaunch._(inputs: revalidated, workspace: handle);
+      return StoryWorkspaceLaunch._(inputs: inputs, workspace: handle);
     } catch (error, stackTrace) {
       if (handle != null) {
         try {
@@ -267,21 +217,6 @@ final class StoryWorkspaceLauncher {
           'The managed Story workspace could not be created or opened.',
         ),
         stackTrace,
-      );
-    }
-  }
-
-  Future<_MeasuredGeneration> _measureGenerationSafely(
-    StoryWorkspaceGameInputs inputs,
-  ) async {
-    try {
-      return await _measureGeneration(inputs);
-    } on StoryWorkspaceLaunchException {
-      rethrow;
-    } catch (_) {
-      throw const StoryWorkspaceLaunchException(
-        StoryWorkspaceLaunchError.pathInspectionFailed,
-        'The game-generation files could not be verified safely.',
       );
     }
   }
@@ -336,33 +271,6 @@ final class StoryWorkspaceLauncher {
     }
     return root;
   }
-
-  Future<String> _selectShippingCache(String live) async {
-    final backup = '$live.gore-bak';
-    final backupType = await FileSystemEntity.type(backup, followLinks: false);
-    if (backupType == FileSystemEntityType.notFound) return live;
-    if (backupType != FileSystemEntityType.file) {
-      throw const StoryWorkspaceLaunchException(
-        StoryWorkspaceLaunchError.unsafeFileType,
-        'The Shipping cache backup is not a safe regular file.',
-      );
-    }
-    await _requireRegularFile(
-      backup,
-      missing: StoryWorkspaceLaunchError.ambiguousPristineCache,
-    );
-    final liveSeal = await _measureFile(live);
-    final backupSeal = await _measureFile(backup);
-    if (liveSeal == backupSeal) return live;
-
-    // A JSON subset cannot reproduce gore-mod's complete authenticated record,
-    // ownership, drift, recovery, and path validation. Until a narrow native
-    // boundary exists, never guess between divergent live and backup bytes.
-    throw const StoryWorkspaceLaunchException(
-      StoryWorkspaceLaunchError.ambiguousPristineCache,
-      'The live and backup Shipping caches differ, so pristine provenance cannot be proven.',
-    );
-  }
 }
 
 Future<void> _requireRegularFile(
@@ -375,10 +283,6 @@ Future<void> _requireRegularFile(
     throw StoryWorkspaceLaunchException(missing, switch (missing) {
       StoryWorkspaceLaunchError.missingExecutable =>
         'The exact G1R Shipping executable is missing.',
-      StoryWorkspaceLaunchError.missingShippingCache =>
-        'The Shipping script cache is missing.',
-      StoryWorkspaceLaunchError.missingBindsCache =>
-        'The Binds cache is missing.',
       _ => 'A required regular file is missing.',
     });
   }
@@ -420,105 +324,6 @@ Future<void> _requireDirectoryAncestors(String path) async {
     if (p.equals(parent, current)) return;
     current = parent;
   }
-}
-
-Future<_MeasuredGeneration> _measureGeneration(
-  StoryWorkspaceGameInputs inputs,
-) async => _MeasuredGeneration(
-  executable: await _measureFile(inputs.executable),
-  shippingCache: await _measureFile(inputs.shippingCache),
-  bindsCache: await _measureFile(inputs.bindsCache),
-);
-
-Future<_MeasuredSeal> _measureFile(String path) async {
-  await _requireRegularFile(
-    path,
-    missing: StoryWorkspaceLaunchError.generationChanged,
-  );
-  final file = File(path);
-  final before = await file.stat();
-  final digest = (await crypto.sha256.bind(file.openRead()).single).toString();
-  final after = await file.stat();
-  await _requireRegularFile(
-    path,
-    missing: StoryWorkspaceLaunchError.generationChanged,
-  );
-  if (before.type != FileSystemEntityType.file ||
-      after.type != FileSystemEntityType.file ||
-      before.size <= 0 ||
-      after.size != before.size ||
-      after.modified != before.modified) {
-    throw const StoryWorkspaceLaunchException(
-      StoryWorkspaceLaunchError.generationChanged,
-      'A game-generation file changed while it was being verified.',
-    );
-  }
-  return _MeasuredSeal(byteLength: before.size, sha256: digest);
-}
-
-void _requireCatalogGeneration(
-  AuthoringStoryCatalogGeneration catalog,
-  _MeasuredGeneration measured,
-) {
-  if (!_sameSeal(catalog.executable, measured.executable) ||
-      !_sameSeal(catalog.shippingCache, measured.shippingCache) ||
-      !_sameSeal(catalog.bindsCache, measured.bindsCache)) {
-    throw const StoryWorkspaceLaunchException(
-      StoryWorkspaceLaunchError.generationChanged,
-      'The trusted Story catalog does not match the verified game generation.',
-    );
-  }
-}
-
-bool _sameSeal(AuthoringDraftContentSeal catalog, _MeasuredSeal measured) =>
-    catalog.byteLength == measured.byteLength &&
-    catalog.sha256 == measured.sha256;
-
-bool _sameInputs(
-  StoryWorkspaceGameInputs left,
-  StoryWorkspaceGameInputs right,
-) =>
-    p.equals(left.gameRoot, right.gameRoot) &&
-    p.equals(left.executable, right.executable) &&
-    p.equals(left.shippingCache, right.shippingCache) &&
-    p.equals(left.bindsCache, right.bindsCache);
-
-final class _MeasuredGeneration {
-  const _MeasuredGeneration({
-    required this.executable,
-    required this.shippingCache,
-    required this.bindsCache,
-  });
-
-  final _MeasuredSeal executable;
-  final _MeasuredSeal shippingCache;
-  final _MeasuredSeal bindsCache;
-
-  @override
-  bool operator ==(Object other) =>
-      other is _MeasuredGeneration &&
-      executable == other.executable &&
-      shippingCache == other.shippingCache &&
-      bindsCache == other.bindsCache;
-
-  @override
-  int get hashCode => Object.hash(executable, shippingCache, bindsCache);
-}
-
-final class _MeasuredSeal {
-  const _MeasuredSeal({required this.byteLength, required this.sha256});
-
-  final int byteLength;
-  final String sha256;
-
-  @override
-  bool operator ==(Object other) =>
-      other is _MeasuredSeal &&
-      byteLength == other.byteLength &&
-      sha256 == other.sha256;
-
-  @override
-  int get hashCode => Object.hash(byteLength, sha256);
 }
 
 String _absolute(String value, {required StoryWorkspaceLaunchError error}) {

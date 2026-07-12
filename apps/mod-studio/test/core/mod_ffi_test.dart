@@ -117,6 +117,7 @@ Map<String, Object?> _invalidNpcDraftResponse() => {
 };
 
 const _storyCatalogRequest = '{"format":"story_catalog"}';
+const _storyCatalogGameRoot = 'C:/Games/Gothic';
 const _storyCatalogExecutable = r'C:\Game\Gothic1Remake.exe';
 const _storyCatalogShippingCache =
     r'C:\Game\Alkimia\Content\Paks\Shipping-G1-Game.cache';
@@ -298,6 +299,29 @@ Map<String, Object?> _validStoryCatalogBuildResponse({String? catalogJson}) =>
       'generation': _storyCatalogGeneration(),
       'catalog_seal': _catalogContentSeal('4', 5611),
     };
+
+String _storyCatalogGameRootBinding({String gameRoot = _storyCatalogGameRoot}) {
+  final encoded = utf8.encode(gameRoot);
+  final length = Uint8List(8);
+  ByteData.sublistView(length).setUint64(0, encoded.length, Endian.little);
+  return crypto.sha256.convert(<int>[
+    ...utf8.encode(
+      'gore-story-catalog.authoring-build-for-game-root-v1.request-binding\u0000',
+    ),
+    ...length,
+    ...encoded,
+  ]).toString();
+}
+
+Map<String, Object?> _validStoryCatalogGameRootBuildResponse({
+  String? catalogJson,
+}) => <String, Object?>{
+  'ok': true,
+  'request_binding_sha256': _storyCatalogGameRootBinding(),
+  'catalog_json': catalogJson ?? _storyCatalogBuildRaw(),
+  'generation': _storyCatalogGeneration(),
+  'catalog_seal': _catalogContentSeal('4', 5611),
+};
 
 Map<String, Object?> _draftDiagnostic() => {
   'code': 'NPC_INVALID_IDENTIFIER_CHARACTER',
@@ -1212,6 +1236,81 @@ void main() {
     }
     expect(core.calls, isEmpty);
   });
+
+  test(
+    'Story catalog game-root build is root-bound and feeds the strict reader',
+    () async {
+      expect(
+        _storyCatalogGameRootBinding(),
+        '208d76c5754bc4457ea54b30605d1081b21894d3d8ea925c5e925257da370f7b',
+      );
+      final rawCatalog = _storyCatalogBuildRaw();
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_story_catalog_v1_build_for_game_root':
+              _validStoryCatalogGameRootBuildResponse(catalogJson: rawCatalog),
+          'authoring_story_catalog_v1_read': _validStoryCatalogResponse(
+            catalogJson: rawCatalog,
+          ),
+        },
+      );
+      final result = await ModFfi(core)
+          .authoringStoryCatalogV1BuildAndReadForGameRoot(
+            gameRoot: _storyCatalogGameRoot,
+          );
+
+      expect(result.npcs, hasLength(2));
+      expect(core.calls.map((call) => call.command), <String>[
+        'authoring_story_catalog_v1_build_for_game_root',
+        'authoring_story_catalog_v1_read',
+      ]);
+      expect(core.calls.first.payload, <String, Object?>{
+        'game_root': _storyCatalogGameRoot,
+      });
+      expect(core.calls.last.payload, <String, Object?>{
+        'catalog_json': rawCatalog,
+      });
+    },
+  );
+
+  test(
+    'Story catalog game-root build rejects wrong binding and bad roots',
+    () async {
+      final confused = _validStoryCatalogGameRootBuildResponse()
+        ..['request_binding_sha256'] = _storyCatalogBuildBinding();
+      await expectLater(
+        ModFfi(
+          FakeGoreCoreFfiService(
+            responses: {
+              'authoring_story_catalog_v1_build_for_game_root': confused,
+            },
+          ),
+        ).authoringStoryCatalogV1BuildForGameRoot(
+          gameRoot: _storyCatalogGameRoot,
+        ),
+        throwsFormatException,
+      );
+
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_story_catalog_v1_build_for_game_root':
+              _validStoryCatalogGameRootBuildResponse(),
+        },
+      );
+      for (final root in <String>[
+        '',
+        'bad\u0000root',
+        List.filled(32 * 1024 + 1, 'x').join(),
+        String.fromCharCode(0xd800),
+      ]) {
+        await expectLater(
+          ModFfi(core).authoringStoryCatalogV1BuildForGameRoot(gameRoot: root),
+          throwsArgumentError,
+        );
+      }
+      expect(core.calls, isEmpty);
+    },
+  );
 
   test(
     'Story catalog DTO rejects unbound, loose, and inconsistent data',

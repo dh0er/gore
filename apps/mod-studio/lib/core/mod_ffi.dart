@@ -234,6 +234,24 @@ class ModFfi {
     );
   }
 
+  /// Build the pinned Story catalog while native gore-mod selects the pristine cache.
+  Future<AuthoringStoryCatalogBuildResult>
+  authoringStoryCatalogV1BuildForGameRoot({required String gameRoot}) async {
+    _authoringStoryCatalogPath(gameRoot, 'gameRoot');
+    const command = 'authoring_story_catalog_v1_build_for_game_root';
+    _authoringSingleRawJsonEnvelopePreflight(
+      command,
+      'game_root',
+      'gameRoot',
+      gameRoot,
+    );
+    final response = await _call(command, {'game_root': gameRoot});
+    return AuthoringStoryCatalogBuildResult._fromGameRootJson(
+      response,
+      gameRoot: gameRoot,
+    );
+  }
+
   /// Build and then pass the exact raw catalog through the existing pinned chooser reader.
   Future<AuthoringStoryCatalogSelections> authoringStoryCatalogV1BuildAndRead({
     required String executable,
@@ -244,6 +262,17 @@ class ModFfi {
       executable: executable,
       shippingCache: shippingCache,
       bindsCache: bindsCache,
+    );
+    return authoringStoryCatalogV1Read(catalogJson: built.catalogJson);
+  }
+
+  /// Build from a root-owned pristine snapshot, then project its exact canonical catalog.
+  Future<AuthoringStoryCatalogSelections>
+  authoringStoryCatalogV1BuildAndReadForGameRoot({
+    required String gameRoot,
+  }) async {
+    final built = await authoringStoryCatalogV1BuildForGameRoot(
+      gameRoot: gameRoot,
     );
     return authoringStoryCatalogV1Read(catalogJson: built.catalogJson);
   }
@@ -2306,6 +2335,8 @@ const _authoringStoryCatalogSelectorDomain =
     'gore-story-catalog.authoring-selector-v1\u0000';
 const _authoringStoryCatalogBuildBindingDomain =
     'gore-story-catalog.authoring-build-v1.request-binding\u0000';
+const _authoringStoryCatalogGameRootBindingDomain =
+    'gore-story-catalog.authoring-build-for-game-root-v1.request-binding\u0000';
 const _authoringStoryInventoryBuildBindingDomain =
     'gore-story-inventory.authoring-build-v1.request-binding\u0000';
 const _authoringStoryInventoryCatalogLayer =
@@ -2329,6 +2360,26 @@ final class AuthoringStoryCatalogBuildResult {
     required String executable,
     required String shippingCache,
     required String bindsCache,
+  }) => AuthoringStoryCatalogBuildResult._fromBoundJson(
+    json,
+    expectedBinding: _authoringStoryCatalogBuildBindingSha256(
+      executable,
+      shippingCache,
+      bindsCache,
+    ),
+  );
+
+  factory AuthoringStoryCatalogBuildResult._fromGameRootJson(
+    Map<String, Object?> json, {
+    required String gameRoot,
+  }) => AuthoringStoryCatalogBuildResult._fromBoundJson(
+    json,
+    expectedBinding: _authoringStoryCatalogGameRootBindingSha256(gameRoot),
+  );
+
+  factory AuthoringStoryCatalogBuildResult._fromBoundJson(
+    Map<String, Object?> json, {
+    required String expectedBinding,
   }) {
     _authoringExactFields(json, const {
       'ok',
@@ -2346,11 +2397,6 @@ final class AuthoringStoryCatalogBuildResult {
       json,
       'request_binding_sha256',
       maxBytes: 64,
-    );
-    final expectedBinding = _authoringStoryCatalogBuildBindingSha256(
-      executable,
-      shippingCache,
-      bindsCache,
     );
     if (!_authoringSha256Pattern.hasMatch(requestBindingSha256) ||
         requestBindingSha256 != expectedBinding) {
@@ -2378,12 +2424,12 @@ final class AuthoringStoryCatalogBuildResult {
       'catalog',
       'catalog_seal',
     }, 'Story catalog build result');
-    if (rawCatalog['format'] != 'story_catalog' ||
-        rawCatalog['schema_revision'] != 1) {
+    if (rawCatalog['format'] != 'story_catalog') {
       throw const FormatException(
         'authoring Story catalog build result has an unsupported format',
       );
     }
+    _authoringRequiredInt(rawCatalog, 'schema_revision', min: 1, max: 1);
     final rawPayload = _authoringRequiredObject(
       rawCatalog['catalog'],
       'Story catalog build payload',
@@ -3507,6 +3553,20 @@ String _authoringStoryCatalogBuildBindingSha256(
       ..add(bytes);
   }
   input.close();
+  return output.value.toString();
+}
+
+String _authoringStoryCatalogGameRootBindingSha256(String gameRoot) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringStoryCatalogGameRootBindingDomain));
+  final bytes = utf8.encode(gameRoot);
+  final length = Uint8List(8);
+  ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+  input
+    ..add(length)
+    ..add(bytes)
+    ..close();
   return output.value.toString();
 }
 

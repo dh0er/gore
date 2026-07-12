@@ -43,8 +43,6 @@ void main() {
       final inputs = await launcher.resolveGameInputs(configured);
       expect(inputs.gameRoot, p.normalize(p.absolute(game.root.path)));
       expect(inputs.executable, game.executable.path);
-      expect(inputs.shippingCache, game.live.path);
-      expect(inputs.bindsCache, game.binds.path);
     }
   });
 
@@ -53,11 +51,11 @@ void main() {
     () async {
       final game = await _createGame(fixture);
       final launcher = StoryWorkspaceLauncher(ModFfi(_LauncherCore()));
-      await game.binds.delete();
+      await game.executable.delete();
       final missing = await _launchFailure(
         launcher.resolveGameInputs(game.root.path),
       );
-      expect(missing.code, StoryWorkspaceLaunchError.missingBindsCache);
+      expect(missing.code, StoryWorkspaceLaunchError.missingExecutable);
       expect(missing.message, isNot(contains(fixture.path)));
 
       final ambiguous = Directory(p.join(fixture.path, 'ambiguous', 'G1R'));
@@ -75,100 +73,75 @@ void main() {
   );
 
   test(
-    'divergent backup fails closed even with a valid deployed record',
+    'divergent deployed backup is delegated only to the native root command',
     () async {
       final game = await _createGame(fixture);
+      final workspace = await _workspace(fixture);
       final backup = File('${game.live.path}.gore-bak');
       await backup.writeAsBytes(const <int>[1, 2, 3]);
       await game.live.writeAsBytes(const <int>[9, 8, 7]);
       await _writeValidDeployRecord(game: game, backup: backup);
+      final core = _LauncherCore(useBackupShipping: true);
 
-      final failure = await _launchFailure(
-        StoryWorkspaceLauncher(
-          ModFfi(_LauncherCore()),
-        ).resolveGameInputs(game.root.path),
+      final launched = await StoryWorkspaceLauncher(ModFfi(core)).create(
+        configuredGamePath: game.root.path,
+        workspaceRoot: workspace,
+        metadata: _metadata('Native pristine selection'),
+        projectIdSource: const _FixedProjectIdSource(_projectId),
       );
-      expect(failure.code, StoryWorkspaceLaunchError.ambiguousPristineCache);
-      expect(failure.message, isNot(contains(game.live.path)));
+      expect(core.catalogBuildPayloads.single, <String, Object?>{
+        'game_root': game.root.path,
+      });
+      expect(core.selectedShippingPath, backup.path);
+      await launched.close();
     },
   );
 
-  test('identical untrusted backup leaves the selected cache live', () async {
+  test('layout resolution never inspects Shipping, Binds, or backup', () async {
     final game = await _createGame(fixture);
-    await File(
-      '${game.live.path}.gore-bak',
-    ).writeAsBytes(await game.live.readAsBytes());
+    await game.live.delete();
+    await game.binds.delete();
+    await File('${game.live.path}.gore-bak').writeAsBytes(const <int>[9]);
 
     final inputs = await StoryWorkspaceLauncher(
       ModFfi(_LauncherCore()),
     ).resolveGameInputs(game.root.path);
-    expect(inputs.shippingCache, game.live.path);
+    expect(inputs.gameRoot, game.root.path);
   });
 
   test(
-    'replayed catalog generation is rejected before lock acquisition',
+    'native hotfix/pristine failure stays path-free and acquires no lock',
     () async {
       final game = await _createGame(fixture);
+      await game.live.writeAsBytes(const <int>[7, 7]);
       final workspace = await _workspace(fixture);
-      final core = _LauncherCore(replayGeneration: true);
-      final launcher = StoryWorkspaceLauncher(ModFfi(core));
+      final launcher = StoryWorkspaceLauncher(
+        ModFfi(_LauncherCore(failCatalog: true)),
+      );
 
       final failure = await _launchFailure(
         launcher.create(
           configuredGamePath: game.root.path,
           workspaceRoot: workspace,
-          metadata: _metadata('Replayed generation'),
+          metadata: _metadata('Catalog failure'),
           projectIdSource: const _FixedProjectIdSource(_projectId),
         ),
       );
-      expect(failure.code, StoryWorkspaceLaunchError.generationChanged);
-      expect(await _lockType(workspace), FileSystemEntityType.notFound);
+      expect(failure.code, StoryWorkspaceLaunchError.catalogBuildFailed);
+      expect(failure.message, isNot(contains(game.root.path)));
+      expect(failure.message, isNot(contains('secret native parser detail')));
+      expect(
+        await FileSystemEntity.type(
+          p.join(workspace.path, '.gore', 'session.lock'),
+          followLinks: false,
+        ),
+        FileSystemEntityType.notFound,
+      );
     },
   );
 
   test(
-    'post-catalog file change is rejected by immediate revalidation',
-    () async {
-      final game = await _createGame(fixture);
-      final workspace = await _workspace(fixture);
-      final core = _LauncherCore(mutateAfterCatalogRead: game.binds);
-      final launcher = StoryWorkspaceLauncher(ModFfi(core));
-
-      final failure = await _launchFailure(
-        launcher.create(
-          configuredGamePath: game.root.path,
-          workspaceRoot: workspace,
-          metadata: _metadata('Raced generation'),
-          projectIdSource: const _FixedProjectIdSource(_projectId),
-        ),
-      );
-      expect(failure.code, StoryWorkspaceLaunchError.generationChanged);
-      expect(await _lockType(workspace), FileSystemEntityType.notFound);
-    },
-  );
-
-  test('native build failure is mapped to a stable path-free error', () async {
-    final game = await _createGame(fixture);
-    final workspace = await _workspace(fixture);
-    final launcher = StoryWorkspaceLauncher(
-      ModFfi(_LauncherCore(failCatalog: true)),
-    );
-
-    final failure = await _launchFailure(
-      launcher.create(
-        configuredGamePath: game.root.path,
-        workspaceRoot: workspace,
-        metadata: _metadata('Catalog failure'),
-        projectIdSource: const _FixedProjectIdSource(_projectId),
-      ),
-    );
-    expect(failure.code, StoryWorkspaceLaunchError.catalogBuildFailed);
-    expect(failure.message, isNot(contains(game.root.path)));
-    expect(failure.message, isNot(contains('secret native parser detail')));
-  });
-
-  test(
-    'create and open use exact native paths and production sessions',
+    'create and open use only native game roots and production sessions',
     () async {
       final game = await _createGame(fixture);
       final workspace = await _workspace(fixture);
@@ -187,9 +160,7 @@ void main() {
       );
       expect(created.inputs.executable, game.executable.path);
       expect(core.catalogBuildPayloads.single, <String, Object?>{
-        'executable': game.executable.path,
-        'shipping_cache': game.live.path,
-        'binds_cache': game.binds.path,
+        'game_root': game.root.path,
       });
       final expectedExecutableSeal = await _contentSeal(game.executable.path);
       expect(
@@ -294,12 +265,6 @@ StoryProjectMetadata _metadata(String name) => StoryProjectMetadata(
 Future<Directory> _workspace(Directory fixture) async =>
     Directory(p.join(fixture.path, 'workspace'))..createSync();
 
-Future<FileSystemEntityType> _lockType(Directory workspace) =>
-    FileSystemEntity.type(
-      p.join(workspace.path, '.gore', 'session.lock'),
-      followLinks: false,
-    );
-
 Future<_GameFixture> _createGame(Directory fixture) async {
   final root = Directory(p.join(fixture.path, 'game'));
   final g1r = Directory(p.join(root.path, 'G1R'));
@@ -325,8 +290,8 @@ Future<_GameFixture> _createGame(Directory fixture) async {
 }
 
 /// This is a complete current-format gore-mod record for the one in-place
-/// script-cache write, including authenticated backup and deployed identities.
-/// The launcher still refuses it because only gore-mod may validate/adopt it.
+/// script-cache write, including authenticated backup and deployed identities. Dart never parses
+/// it; `_LauncherCore` represents the native gore-mod trust boundary selecting the backup.
 Future<void> _writeValidDeployRecord({
   required _GameFixture game,
   required File backup,
@@ -371,15 +336,13 @@ final class _LauncherCore implements GoreCoreFfiService {
   _LauncherCore({
     this.failOpen = false,
     this.failCatalog = false,
-    this.replayGeneration = false,
-    this.mutateAfterCatalogRead,
+    this.useBackupShipping = false,
   });
 
   bool failOpen;
   final bool failCatalog;
-  final bool replayGeneration;
-  final File? mutateAfterCatalogRead;
-  bool _mutated = false;
+  final bool useBackupShipping;
+  String? selectedShippingPath;
   final Map<String, String> _projectsByHead = <String, String>{};
   final List<({String command, Map<String, Object?> payload})> calls = [];
   final List<Map<String, Object?>> catalogBuildPayloads = [];
@@ -399,7 +362,7 @@ final class _LauncherCore implements GoreCoreFfiService {
   }) async {
     calls.add((command: command, payload: payload));
     switch (command) {
-      case 'authoring_story_catalog_v1_build':
+      case 'authoring_story_catalog_v1_build_for_game_root':
         if (failCatalog) return _failure('secret native parser detail');
         return _buildCatalog(payload);
       case 'authoring_story_catalog_v1_read':
@@ -425,31 +388,30 @@ final class _LauncherCore implements GoreCoreFfiService {
     Map<String, Object?> payload,
   ) async {
     catalogBuildPayloads.add(Map<String, Object?>.from(payload));
-    final executable = payload['executable']! as String;
-    final shipping = payload['shipping_cache']! as String;
-    final binds = payload['binds_cache']! as String;
+    final root = payload['game_root']! as String;
+    final g1r = p.join(root, 'G1R');
+    final executable = p.join(
+      g1r,
+      'Binaries',
+      'Win64',
+      'G1R-Win64-Shipping.exe',
+    );
+    final live = p.join(g1r, 'Script', 'PrecompiledScript_Shipping.Cache');
+    final shipping = useBackupShipping ? '$live.gore-bak' : live;
+    selectedShippingPath = shipping;
+    final binds = p.join(g1r, 'Script', 'Binds.Cache');
     final generation = <String, Object?>{
       'edition': 'g1r-steam',
       'executable': await _contentSeal(executable),
       'shipping_cache': await _contentSeal(shipping),
       'binds_cache': await _contentSeal(binds),
     };
-    if (replayGeneration) {
-      generation['executable'] = <String, Object?>{
-        'byte_len': (generation['executable']! as Map)['byte_len'],
-        'sha256': List<String>.filled(64, '0').join(),
-      };
-    }
     final catalogJson = _buildCatalogJson(generation);
     _generation = generation;
     _catalogJson = catalogJson;
     return <String, Object?>{
       'ok': true,
-      'request_binding_sha256': _catalogBuildBinding(
-        executable,
-        shipping,
-        binds,
-      ),
+      'request_binding_sha256': _catalogGameRootBinding(root),
       'catalog_json': catalogJson,
       'generation': generation,
       'catalog_seal': _fixedSeal('4', 5611),
@@ -463,13 +425,7 @@ final class _LauncherCore implements GoreCoreFfiService {
     if (payload['catalog_json'] != catalogJson) {
       return _failure('catalog replay mismatch');
     }
-    final response = _catalogResponse(catalogJson, _generation!);
-    final mutation = mutateAfterCatalogRead;
-    if (mutation != null && !_mutated) {
-      _mutated = true;
-      await mutation.writeAsBytes(const <int>[3, 4]);
-    }
-    return response;
+    return _catalogResponse(catalogJson, _generation!);
   }
 
   Future<Map<String, Object?>> _prepare(Map<String, Object?> payload) async {
@@ -533,21 +489,17 @@ String _buildCatalogJson(Map<String, Object?> generation) =>
       'catalog_seal': _fixedSeal('4', 5611),
     });
 
-String _catalogBuildBinding(String executable, String shipping, String binds) {
-  final bytes = <int>[
+String _catalogGameRootBinding(String root) {
+  final encoded = utf8.encode(root);
+  final length = Uint8List(8);
+  ByteData.sublistView(length).setUint64(0, encoded.length, Endian.little);
+  return crypto.sha256.convert(<int>[
     ...utf8.encode(
-      'gore-story-catalog.authoring-build-v1.request-binding\u0000',
+      'gore-story-catalog.authoring-build-for-game-root-v1.request-binding\u0000',
     ),
-  ];
-  for (final value in <String>[executable, shipping, binds]) {
-    final encoded = utf8.encode(value);
-    final length = Uint8List(8);
-    ByteData.sublistView(length).setUint64(0, encoded.length, Endian.little);
-    bytes
-      ..addAll(length)
-      ..addAll(encoded);
-  }
-  return crypto.sha256.convert(bytes).toString();
+    ...length,
+    ...encoded,
+  ]).toString();
 }
 
 Map<String, Object?> _catalogResponse(
