@@ -245,5 +245,14 @@ therefore be tested on a disposable save with semantic before/after inspection.
   base/source failures are rejected before rebuilding the source tree or
   launching the game compiler. Newly authored modules remain supported through
   `--op add`, including explicit `default` statements.
+- Existing vanilla defaults now also have a separate offline, copy-on-write
+  [`default-sites` / `patch-default` scalar path](angelscript-default-patching.md).
+  It re-resolves exact module/class/declaring-owner/field selectors, proves the
+  target-to-owner ancestry, requires the complete current operand as a raw
+  compare-and-swap guard, and changes no save or live runtime state. This does
+  not make `__InitDefaults` source-editable: only a unique branch-free direct
+  primitive/enum assignment in a one-terminal-`RET` initializer is admitted.
+  Calls, computed expressions, structs, object handles, containers, and
+  gameplay-tag maps remain unsupported.
 - Decompiled `Say` calls can omit the prepared `FText` argument. Use only a
   signature verified against `Binds.Cache` or a known compiling source template.

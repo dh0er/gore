@@ -695,4 +695,94 @@ mod as_cli_tests {
         assert_eq!(exe, Some(PathBuf::from("D:/Custom/G1R.exe")));
         assert!(game.is_none());
     }
+
+    #[test]
+    fn as_default_sites_exposes_exact_filters_and_json() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "default-sites",
+            "base.cache",
+            "--module",
+            "Items.Food",
+            "--class",
+            "UApple",
+            "--field",
+            "m_Value",
+            "--json",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::DefaultSites {
+                    cache,
+                    module,
+                    class,
+                    field,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected as default-sites command");
+        };
+        assert_eq!(cache, PathBuf::from("base.cache"));
+        assert_eq!(module.as_deref(), Some("Items.Food"));
+        assert_eq!(class.as_deref(), Some("UApple"));
+        assert_eq!(field.as_deref(), Some("m_Value"));
+        assert!(json);
+    }
+
+    #[test]
+    fn as_patch_default_requires_selector_cas_and_new_output() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "as",
+            "patch-default",
+            "base.cache",
+            "--selector",
+            "site.json",
+            "--expected-hex",
+            "04000000",
+            "--replacement-hex",
+            "05000000",
+            "--out",
+            "patched.cache",
+            "--json",
+        ])
+        .unwrap();
+        let Commands::As {
+            cmd:
+                cmd::as_cache::AsCmd::PatchDefault {
+                    cache,
+                    selector,
+                    expected_hex,
+                    replacement_hex,
+                    out,
+                    json,
+                },
+        } = cli.command
+        else {
+            panic!("expected as patch-default command");
+        };
+        assert_eq!(cache, PathBuf::from("base.cache"));
+        assert_eq!(selector, PathBuf::from("site.json"));
+        assert_eq!(expected_hex, "04000000");
+        assert_eq!(replacement_hex, "05000000");
+        assert_eq!(out, PathBuf::from("patched.cache"));
+        assert!(json);
+
+        assert!(Cli::try_parse_from([
+            "gore",
+            "as",
+            "patch-default",
+            "base.cache",
+            "--selector",
+            "site.json",
+            "--expected-hex",
+            "04000000",
+            "--replacement-hex",
+            "05000000",
+        ])
+        .is_err());
+    }
 }

@@ -14,6 +14,17 @@ use super::wire::{Cursor, WireError};
 /// `FAngelscriptPrecompiledDataType` = 6×bool(24) + int64 TypeInfo.Old(8) + int32 Token(4).
 const DATA_TYPE_SIZE: usize = 36;
 
+// Minimum serialized widths used to prove count-backed walks fit in the remaining input before
+// looping or growing output vectors. Variable-width strings/arrays contribute their 4-byte
+// length/count prefix at minimum.
+const MIN_MODULE_ENTRY_SIZE: usize = 60;
+const MIN_FUNCTION_SIZE: usize = 120;
+const MIN_CLASS_SIZE: usize = 64;
+const MIN_PROPERTY_SIZE: usize = 52;
+const MIN_ENUM_SIZE: usize = 16;
+const MIN_GLOBAL_SIZE: usize = 48;
+const MIN_FUNCTION_IMPORT_SIZE: usize = 60;
+
 /// Parse the cache header + all `Modules`, returning `TAIL_OFF` (offset of the first
 /// global tail table = end of the last module).
 pub fn module_region_end(bytes: &[u8]) -> Result<usize, WireError> {
@@ -92,11 +103,62 @@ pub struct FuncCode {
     pub bytecode: Vec<i32>,
 }
 
+/// Serialized container that owns a function record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuncCodeKind {
+    FreeFunction,
+    ClassMethod,
+    Constructor,
+    Behavior,
+    GlobalInitializer,
+}
+
+/// A captured function plus the absolute cache offset of its bytecode payload.
+///
+/// `bytecode_offset` points immediately after the serialized `TArray<int32>` count,
+/// i.e. at the first byte of `ByteCode[0]`. For an empty bytecode array it points at
+/// the (empty) payload boundary immediately after that count.
+#[derive(Debug, Clone)]
+pub struct FuncCodeSpan {
+    /// The same metadata returned by [`collect_function_bytecodes`].
+    pub code: FuncCode,
+    /// Exact owning array in the serialized module/class model.
+    pub kind: FuncCodeKind,
+    /// Raw AngelScript function-traits bitfield.
+    pub function_traits: i32,
+    /// True only for class methods whose owning MethodTable contains no malformed or duplicate
+    /// local-method references. `-1` is the serialized empty-slot sentinel and may repeat.
+    pub method_table_valid: bool,
+    /// True only for a class method whose zero-based method index is present in MethodTable.
+    pub in_method_table: bool,
+    /// Absolute byte offset of `ByteCode[0]` in the cache buffer.
+    pub bytecode_offset: usize,
+}
+
 /// Walk all modules and collect every function's bytecode (free functions, class
 /// methods/constructors/behaviors, and global-var init functions).
 pub fn collect_function_bytecodes(bytes: &[u8]) -> Result<Vec<FuncCode>, WireError> {
+    Ok(collect_function_bytecode_spans(bytes)?
+        .into_iter()
+        .map(|span| span.code)
+        .collect())
+}
+
+/// Walk all modules and collect every function together with the absolute offset of
+/// its serialized bytecode payload.
+///
+/// Function ordering and metadata are identical to [`collect_function_bytecodes`].
+pub fn collect_function_bytecode_spans(bytes: &[u8]) -> Result<Vec<FuncCodeSpan>, WireError> {
+    if bytes.len() < CacheHeader::SIZE {
+        return Err(WireError::Eof {
+            pos: 0,
+            need: CacheHeader::SIZE,
+            have: bytes.len(),
+        });
+    }
     let mut c = Cursor::at(bytes, CacheHeader::SIZE);
     let count = module_count(bytes) as usize;
+    c.ensure_minimum_remaining(count, MIN_MODULE_ENTRY_SIZE, "Modules")?;
     let mut out = Vec::new();
     for _ in 0..count {
         c.read_fstring()?; // key
@@ -105,25 +167,62 @@ pub fn collect_function_bytecodes(bytes: &[u8]) -> Result<Vec<FuncCode>, WireErr
     Ok(out)
 }
 
+fn read_count_with_minimum(
+    c: &mut Cursor,
+    field: &'static str,
+    minimum_element_bytes: usize,
+) -> Result<usize, WireError> {
+    let count = c.read_count(field)?;
+    c.ensure_minimum_remaining(count, minimum_element_bytes, field)?;
+    Ok(count)
+}
+
+fn read_tarray_i32_checked(c: &mut Cursor, field: &'static str) -> Result<Vec<i32>, WireError> {
+    let count = read_count_with_minimum(c, field, std::mem::size_of::<i32>())?;
+    let mut values = Vec::new();
+    for _ in 0..count {
+        values.push(c.read_i32()?);
+    }
+    Ok(values)
+}
+
+fn read_tarray_sia_checked(c: &mut Cursor, field: &'static str) -> Result<Vec<String>, WireError> {
+    let count = read_count_with_minimum(c, field, 4)?;
+    let mut values = Vec::new();
+    for _ in 0..count {
+        values.push(c.read_sia()?);
+    }
+    Ok(values)
+}
+
+fn skip_tarray_sia_checked(c: &mut Cursor, field: &'static str) -> Result<(), WireError> {
+    let count = read_count_with_minimum(c, field, 4)?;
+    for _ in 0..count {
+        c.read_sia()?;
+    }
+    Ok(())
+}
+
 fn read_function_c(
     c: &mut Cursor,
     scope: &str,
-    is_method: bool,
-    out: &mut Vec<FuncCode>,
+    kind: FuncCodeKind,
+    out: &mut Vec<FuncCodeSpan>,
 ) -> Result<(), WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
     let ret = DataType::read(c)?; // ReturnType
-    let nptypes = c.read_count("ParameterTypes")?;
-    let mut param_types = Vec::with_capacity(nptypes);
+    let nptypes = read_count_with_minimum(c, "ParameterTypes", DATA_TYPE_SIZE)?;
+    let mut param_types = Vec::new();
     for _ in 0..nptypes {
         param_types.push(DataType::read(c)?);
     }
-    let param_names = c.read_tarray_sia("ParameterNames")?;
+    let param_names = read_tarray_sia_checked(c, "ParameterNames")?;
     c.skip_tarray_fixed(4, "ParameterFlags")?;
-    c.skip_tarray_sia("ParameterDefaultArgs")?;
-    c.skip(4)?; // FunctionTraits
-    let bytecode = c.read_tarray_i32("ByteCode")?;
+    skip_tarray_sia_checked(c, "ParameterDefaultArgs")?;
+    let function_traits = c.read_i32()?;
+    let bytecode = read_tarray_i32_checked(c, "ByteCode")?;
+    let bytecode_offset = c.pos() - bytecode.len() * std::mem::size_of::<i32>();
     c.skip_tarray_fixed(4, "ByteCodeReferences")?;
     c.skip(4)?; // VariableSpace
     c.skip_tarray_fixed(8, "ObjVariableTypes")?;
@@ -138,46 +237,81 @@ fn read_function_c(
     c.skip_tarray_fixed(4, "LineNumbers")?;
     if c.read_bool4()? {
         c.read_sia()?; // UnrealFunctionName
-        c.skip_tarray_sia("UF.MetaSpec")?;
-        c.skip_tarray_sia("UF.MetaValues")?;
+        skip_tarray_sia_checked(c, "UF.MetaSpec")?;
+        skip_tarray_sia_checked(c, "UF.MetaValues")?;
         c.skip(18 * 4)?;
     }
-    out.push(FuncCode {
-        func: format!("{scope}::{name}"),
-        is_method,
-        param_names,
-        param_types,
-        ret,
-        bytecode,
+    out.push(FuncCodeSpan {
+        code: FuncCode {
+            func: format!("{scope}::{name}"),
+            is_method: matches!(
+                kind,
+                FuncCodeKind::ClassMethod | FuncCodeKind::Constructor | FuncCodeKind::Behavior
+            ),
+            param_names,
+            param_types,
+            ret,
+            bytecode,
+        },
+        kind,
+        function_traits,
+        method_table_valid: false,
+        in_method_table: false,
+        bytecode_offset,
     });
     Ok(())
 }
 
-fn read_class_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+fn read_class_c(
+    c: &mut Cursor,
+    module: &str,
+    out: &mut Vec<FuncCodeSpan>,
+) -> Result<(), WireError> {
     let class_name = c.read_sia()?;
     c.read_sia()?; // Namespace
     c.skip(4)?; // Flags
     let scope = format!("{module}.{class_name}");
-    let nprops = c.read_count("Class.Properties")?;
+    let nprops = read_count_with_minimum(c, "Class.Properties", MIN_PROPERTY_SIZE)?;
     for _ in 0..nprops {
         read_property(c)?;
     }
-    let nmethods = c.read_count("Class.Methods")?;
+    let nmethods = read_count_with_minimum(c, "Class.Methods", MIN_FUNCTION_SIZE)?;
+    let method_start = out.len();
     for _ in 0..nmethods {
-        read_function_c(c, &scope, true, out)?;
+        read_function_c(c, &scope, FuncCodeKind::ClassMethod, out)?;
     }
-    c.skip_tarray_fixed(4, "Class.MethodTable")?;
+    let method_table = read_tarray_i32_checked(c, "Class.MethodTable")?;
+    let mut seen = vec![false; nmethods];
+    let mut method_table_valid = true;
+    for &method_index in &method_table {
+        if method_index == -1 {
+            continue;
+        }
+        let Ok(method_index) = usize::try_from(method_index) else {
+            method_table_valid = false;
+            continue;
+        };
+        if method_index >= nmethods || seen[method_index] {
+            method_table_valid = false;
+            continue;
+        }
+        seen[method_index] = true;
+        out[method_start + method_index].in_method_table = true;
+    }
+    for method in &mut out[method_start..method_start + nmethods] {
+        method.method_table_valid = method_table_valid;
+    }
     c.skip(8)?; // DerivedFrom
     c.skip(8)?; // ShadowType
-    let nctors = c.read_count("Class.Constructors")?;
+    let nctors = read_count_with_minimum(c, "Class.Constructors", MIN_FUNCTION_SIZE)?;
     for _ in 0..nctors {
-        read_function_c(c, &scope, true, out)?;
+        read_function_c(c, &scope, FuncCodeKind::Constructor, out)?;
     }
     c.skip_tarray_fixed(8, "Class.FactoryRefs")?;
     c.skip_tarray_fixed(8, "Class.BehaviorRefs")?;
-    let nbehav = c.read_count("Class.BehaviorFunctions")?;
+    let nbehav = read_count_with_minimum(c, "Class.BehaviorFunctions", MIN_FUNCTION_SIZE)?;
     for _ in 0..nbehav {
-        read_function_c(c, &scope, true, out)?;
+        read_function_c(c, &scope, FuncCodeKind::Behavior, out)?;
     }
     c.skip_tarray_fixed(4, "Class.BehaviorFunctionTypes")?;
     if c.read_bool4()? {
@@ -186,14 +320,18 @@ fn read_class_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result
         c.skip(8 * 4)?;
         c.read_sia()?; // StaticClassGVName
         c.skip(4)?; // bPlaceable
-        c.skip_tarray_sia("Class.MetaSpec")?;
-        c.skip_tarray_sia("Class.MetaValues")?;
+        skip_tarray_sia_checked(c, "Class.MetaSpec")?;
+        skip_tarray_sia_checked(c, "Class.MetaValues")?;
         c.read_sia()?; // ComposeOntoClassName
     }
     Ok(())
 }
 
-fn read_global_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+fn read_global_c(
+    c: &mut Cursor,
+    module: &str,
+    out: &mut Vec<FuncCodeSpan>,
+) -> Result<(), WireError> {
     let name = c.read_sia()?;
     c.read_sia()?; // Namespace
     read_data_type(c)?; // Type
@@ -203,41 +341,46 @@ fn read_global_c(c: &mut Cursor, module: &str, out: &mut Vec<FuncCode>) -> Resul
             c.skip(8)?; // PureConstantValue
         } else if c.read_bool4()? {
             // bHasInitFunction
-            read_function_c(c, &format!("{module}.<glob:{name}>"), false, out)?;
+            read_function_c(
+                c,
+                &format!("{module}.<glob:{name}>"),
+                FuncCodeKind::GlobalInitializer,
+                out,
+            )?;
         }
     }
     Ok(())
 }
 
-fn read_module_c(c: &mut Cursor, out: &mut Vec<FuncCode>) -> Result<(), WireError> {
+fn read_module_c(c: &mut Cursor, out: &mut Vec<FuncCodeSpan>) -> Result<(), WireError> {
     let module = c.read_sia()?;
-    let nfns = c.read_count("Module.Functions")?;
+    let nfns = read_count_with_minimum(c, "Module.Functions", MIN_FUNCTION_SIZE)?;
     for _ in 0..nfns {
-        read_function_c(c, &module, false, out)?;
+        read_function_c(c, &module, FuncCodeKind::FreeFunction, out)?;
     }
-    let nclasses = c.read_count("Module.Classes")?;
+    let nclasses = read_count_with_minimum(c, "Module.Classes", MIN_CLASS_SIZE)?;
     for _ in 0..nclasses {
         read_class_c(c, &module, out)?;
     }
-    let nenums = c.read_count("Module.Enums")?;
+    let nenums = read_count_with_minimum(c, "Module.Enums", MIN_ENUM_SIZE)?;
     for _ in 0..nenums {
         read_enum(c)?;
     }
-    let nglobals = c.read_count("Module.GlobalVariables")?;
+    let nglobals = read_count_with_minimum(c, "Module.GlobalVariables", MIN_GLOBAL_SIZE)?;
     for _ in 0..nglobals {
         read_global_c(c, &module, out)?;
     }
-    let nimports = c.read_count("Module.FunctionImports")?;
+    let nimports = read_count_with_minimum(c, "Module.FunctionImports", MIN_FUNCTION_IMPORT_SIZE)?;
     for _ in 0..nimports {
         read_function_import(c)?;
     }
     c.skip(8)?; // CodeHash
-    c.skip_tarray_sia("Module.ImportedModules")?;
+    skip_tarray_sia_checked(c, "Module.ImportedModules")?;
     c.read_sia()?; // StaticsClassName
-    c.skip_tarray_sia("Module.DeclaredEvents")?;
-    c.skip_tarray_sia("Module.DeclaredDelegates")?;
+    skip_tarray_sia_checked(c, "Module.DeclaredEvents")?;
+    skip_tarray_sia_checked(c, "Module.DeclaredDelegates")?;
     c.read_sia()?; // ScriptRelativeFilename
-    c.skip_tarray_sia("Module.PostInitFunctions")?;
+    skip_tarray_sia_checked(c, "Module.PostInitFunctions")?;
     Ok(())
 }
 
@@ -286,8 +429,8 @@ fn read_property(c: &mut Cursor) -> Result<(), WireError> {
     let is_unreal = c.read_bool4()?;
     if is_unreal {
         // HYPOTHESIS (§9.4): UPROPERTY tail, not present in the richtest sample.
-        c.skip_tarray_sia("UP.MetaSpec")?;
-        c.skip_tarray_sia("UP.MetaValues")?;
+        skip_tarray_sia_checked(c, "UP.MetaSpec")?;
+        skip_tarray_sia_checked(c, "UP.MetaValues")?;
         c.skip(9 * 4)?; // 9 bools (bBlueprintReadable..bTransient)
         let replicated = c.read_bool4()?;
         c.skip(4)?; // bSkipReplication
@@ -347,7 +490,7 @@ fn read_class(c: &mut Cursor) -> Result<(), WireError> {
 fn read_enum(c: &mut Cursor) -> Result<(), WireError> {
     c.read_sia()?; // Name
     c.read_sia()?; // Namespace
-    c.skip_tarray_sia("Enum.Names")?;
+    skip_tarray_sia_checked(c, "Enum.Names")?;
     c.skip_tarray_fixed(4, "Enum.Values")?;
     Ok(())
 }
@@ -378,7 +521,7 @@ fn read_function_import(c: &mut Cursor) -> Result<(), WireError> {
     c.read_sia()?; // Namespace
     c.skip_tarray_fixed(DATA_TYPE_SIZE, "Import.ParameterTypes")?;
     c.skip_tarray_fixed(4, "Import.ParameterFlags")?;
-    c.skip_tarray_sia("Import.ParameterDefaultArgs")?;
+    skip_tarray_sia_checked(c, "Import.ParameterDefaultArgs")?;
     read_data_type(c)?; // ReturnType
     Ok(())
 }

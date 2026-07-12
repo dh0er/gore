@@ -170,6 +170,7 @@ pub struct Class {
 #[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
+    pub namespace: String,
     pub entries: Vec<(String, i32)>,
 }
 
@@ -407,7 +408,7 @@ fn read_class(c: &mut Cursor) -> Result<Class, WireError> {
 
 fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
     let name = c.read_sia()?;
-    c.read_sia()?; // Namespace
+    let namespace = c.read_sia()?;
     let names = read_tarray_sia_checked(c, "Enum.Names")?;
     let nvals = bounded_count(c, "Enum.Values", 4)?;
     let mut vals = Vec::with_capacity(nvals);
@@ -415,7 +416,11 @@ fn read_enum(c: &mut Cursor) -> Result<EnumDef, WireError> {
         vals.push(c.read_i32()?);
     }
     let entries = names.into_iter().zip(vals).collect();
-    Ok(EnumDef { name, entries })
+    Ok(EnumDef {
+        name,
+        namespace,
+        entries,
+    })
 }
 
 fn read_global(c: &mut Cursor) -> Result<Global, WireError> {

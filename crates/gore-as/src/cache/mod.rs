@@ -4,6 +4,7 @@ pub mod binds;
 pub mod bytediff;
 pub mod cfg;
 pub mod decompile;
+pub mod default_patch;
 pub mod disasm;
 pub mod emit;
 pub mod emit_all;

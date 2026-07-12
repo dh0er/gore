@@ -16,10 +16,19 @@ use super::types::DataType;
 use super::walk_modules::module_region_end;
 use super::wire::{Cursor, WireError};
 
+/// Complete serialized identity of one `TypeReferences` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TypeIdentity {
+    pub name: String,
+    pub module: String,
+    pub namespace: String,
+}
+
 /// Resolved-name lookup built from a cache's tail tables.
 #[derive(Debug, Default)]
 pub struct RefResolver {
     type_by_ptr: HashMap<i64, String>,
+    type_identity_by_ptr: HashMap<i64, TypeIdentity>,
     func_by_ptr: HashMap<i64, String>,
     global_by_ptr: HashMap<i64, String>,
     prop_by_key: HashMap<i64, String>,
@@ -92,8 +101,8 @@ impl RefResolver {
         for _ in 0..type_reference_count {
             let key = c.read_i64()?;
             let name = c.read_sia()?;
-            c.read_sia()?; // Module
-            c.read_sia()?; // Namespace
+            let module = c.read_sia()?;
+            let namespace = c.read_sia()?;
             let nsub = c.read_count("TypeRef.SubTypes")?;
             c.ensure_minimum_remaining(nsub, 36, "TypeRef.SubTypes")?;
             if nsub > 0 {
@@ -104,7 +113,15 @@ impl RefResolver {
                 r.type_subtypes.insert(key, subs);
             }
             r.type_names.insert(name.clone());
-            r.type_by_ptr.insert(key, name);
+            r.type_by_ptr.insert(key, name.clone());
+            r.type_identity_by_ptr.insert(
+                key,
+                TypeIdentity {
+                    name,
+                    module,
+                    namespace,
+                },
+            );
         }
         // T2 TypeIdReferenceToPointer: int32 id -> int64 ptr
         let type_id_count = c.read_count("TypeIdRef")?;
@@ -243,6 +260,10 @@ impl RefResolver {
     pub fn type_by_ptr(&self, ptr: i64) -> Option<&str> {
         self.type_by_ptr.get(&ptr).map(|s| s.as_str())
     }
+    /// Full module/namespace/name identity for an exact serialized type pointer.
+    pub fn type_identity_by_ptr(&self, ptr: i64) -> Option<&TypeIdentity> {
+        self.type_identity_by_ptr.get(&ptr)
+    }
     /// True if `name` is a known type (so a call to it is a constructor, not a method).
     pub fn is_type_name(&self, name: &str) -> bool {
         self.type_names.contains(name)
@@ -260,6 +281,15 @@ impl RefResolver {
     /// [`Self::class_super_of`] for the inherited view).
     pub fn class_field_types(&self, class: &str) -> Option<&HashMap<String, String>> {
         self.class_fields.get(class)
+    }
+    /// Field VALUE type declared directly on `class`, without walking its superclasses.
+    /// Mutation callers use this when the bytecode owner itself is part of the semantic identity;
+    /// inheriting a same-named base field would mislabel the declaring owner.
+    pub fn own_field_type_by_class(&self, class: &str, field: &str) -> Option<&str> {
+        self.class_fields
+            .get(class)
+            .and_then(|fields| fields.get(field))
+            .map(String::as_str)
     }
     /// Direct super-class name of a script class (None for engine types / roots).
     pub fn class_super_of(&self, class: &str) -> Option<&str> {
@@ -713,6 +743,21 @@ impl RefResolver {
             .as_ref()
             .and_then(|n| n.field_type(class, field))
     }
+    /// Native field type admissible as a cache-mutation witness. Unlike the decompiler's
+    /// best-effort [`Self::native_field_type`], this succeeds only for a SHA-256-sealed,
+    /// independently audited Binds.Cache profile paired with its audited script-cache GUID.
+    /// Callers must pass the GUID parsed from the same cache being inspected; an unknown GUID
+    /// returns no witness without affecting [`Self::native_field_type`].
+    pub fn verified_native_default_field_type(
+        &self,
+        script_cache_guid: &[u8; 16],
+        class: &str,
+        field: &str,
+    ) -> Option<&str> {
+        self.native
+            .as_ref()
+            .and_then(|native| native.verified_default_field_type(script_cache_guid, class, field))
+    }
     /// batch-32d: CONST object-handle fields of NATIVE structs — the live compiler treats a
     /// read of these as `const U*`, so a plain store into a same-typed local fails "Can't
     /// implicitly convert from 'const UItemDefinition' to 'UItemDefinition'" (and a same-type
@@ -967,5 +1012,41 @@ mod tests {
         assert_eq!(refs.native_arity_by_ptr(14, "GetComponent"), None);
         // An exact object-owner entry remains authoritative; only the name-only fallback is barred.
         assert_eq!(refs.native_arity_by_ptr(15, "ExactObject"), Some(1));
+    }
+
+    #[test]
+    fn unknown_cache_guid_hides_mutation_fields_but_not_decompiler_fields() {
+        let refs = RefResolver {
+            native: Some(super::super::binds::NativeApi::from_test_field_types(
+                &[("UItemDefinition", "m_Value", "int")],
+                &[("UItemDefinition", "m_Value", "int")],
+            )),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            refs.verified_native_default_field_type(&[0; 16], "UItemDefinition", "m_Value",),
+            None
+        );
+        assert_eq!(
+            refs.native_field_type("UItemDefinition", "m_Value"),
+            Some("int"),
+            "generic decompiler evidence must remain independent of the mutation GUID gate"
+        );
+    }
+
+    #[test]
+    fn exact_field_lookup_does_not_borrow_an_inherited_declaration() {
+        let mut refs = RefResolver::default();
+        refs.class_fields.insert(
+            "Base".into(),
+            [("Value".into(), "int".into())].into_iter().collect(),
+        );
+        refs.class_fields.insert("Mid".into(), HashMap::new());
+        refs.class_super.insert("Mid".into(), "Base".into());
+
+        assert_eq!(refs.field_type_by_class("Mid", "Value"), Some("int"));
+        assert_eq!(refs.own_field_type_by_class("Mid", "Value"), None);
+        assert_eq!(refs.own_field_type_by_class("Base", "Value"), Some("int"));
     }
 }

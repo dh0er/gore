@@ -1,7 +1,10 @@
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Subcommand;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use gore_as::cache::header::CacheHeader;
 use gore_as::cache::scan::scan_strings;
@@ -54,6 +57,42 @@ pub enum AsCmd {
         needle: String,
         #[arg(long, default_value_t = 20)]
         max: usize,
+    },
+    /// List uniquely patchable scalar assignments in generated `__InitDefaults` bytecode.
+    /// Only an exact, audited SetV/LoadThisR/WRTV pattern is reported.
+    DefaultSites {
+        cache: PathBuf,
+        /// Exact module-name filter.
+        #[arg(long)]
+        module: Option<String>,
+        /// Exact class-name filter.
+        #[arg(long)]
+        class: Option<String>,
+        /// Exact field-name filter.
+        #[arg(long)]
+        field: Option<String>,
+        /// Emit one machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Copy-on-write patch one `default-sites` scalar using semantic lookup plus raw CAS.
+    PatchDefault {
+        cache: PathBuf,
+        /// Strict selector JSON copied from `default-sites --json`.
+        #[arg(long, value_name = "SELECTOR.json")]
+        selector: PathBuf,
+        /// Complete current serialized immediate as lowercase hex (V1/V2/V4: 4 bytes; V8: 8).
+        #[arg(long, value_name = "HEX")]
+        expected_hex: String,
+        /// Complete replacement serialized immediate as lowercase hex.
+        #[arg(long, value_name = "HEX")]
+        replacement_hex: String,
+        /// New full cache path. Existing paths are never overwritten.
+        #[arg(short, long)]
+        out: PathBuf,
+        /// Emit one machine-readable JSON document.
+        #[arg(long)]
+        json: bool,
     },
     /// Offline-check whether the optional diagnostics hook has one safe AOB match. Does not launch
     /// the game or change the installation.
@@ -237,6 +276,132 @@ pub enum AsCmd {
     },
 }
 
+const DEFAULT_SELECTOR_MAX_BYTES: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DefaultSelectorJson {
+    format: String,
+    kind: String,
+    module: String,
+    class: String,
+    field_owner: String,
+    field: String,
+    value_type: String,
+}
+
+impl DefaultSelectorJson {
+    fn from_core(selector: &gore_as::cache::default_patch::DefaultSiteSelector) -> Self {
+        Self {
+            format: gore_as::cache::default_patch::DEFAULT_SITE_SELECTOR_FORMAT.to_owned(),
+            kind: "scalar".to_owned(),
+            module: selector.module.clone(),
+            class: selector.class.clone(),
+            field_owner: selector.field_owner.clone(),
+            field: selector.field.clone(),
+            value_type: selector.value_type.clone(),
+        }
+    }
+
+    fn into_core(self) -> Result<gore_as::cache::default_patch::DefaultSiteSelector> {
+        if self.format != gore_as::cache::default_patch::DEFAULT_SITE_SELECTOR_FORMAT {
+            bail!(
+                "AS_DEFAULT_SELECTOR: unsupported format {:?}; expected {:?}",
+                self.format,
+                gore_as::cache::default_patch::DEFAULT_SITE_SELECTOR_FORMAT
+            );
+        }
+        if self.kind != "scalar" {
+            bail!(
+                "AS_DEFAULT_SELECTOR: unsupported kind {:?}; expected \"scalar\"",
+                self.kind
+            );
+        }
+        for (name, value) in [
+            ("module", self.module.as_str()),
+            ("class", self.class.as_str()),
+            ("field_owner", self.field_owner.as_str()),
+            ("field", self.field.as_str()),
+            ("value_type", self.value_type.as_str()),
+        ] {
+            if value.is_empty() || value.trim() != value {
+                bail!("AS_DEFAULT_SELECTOR: {name} must be nonempty and have no outer whitespace");
+            }
+        }
+        Ok(gore_as::cache::default_patch::DefaultSiteSelector {
+            module: self.module,
+            class: self.class,
+            field_owner: self.field_owner,
+            field: self.field,
+            value_type: self.value_type,
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct DefaultSitesJson<'a> {
+    format: &'static str,
+    cache: CacheProofJson,
+    site_count: usize,
+    stats: DefaultStatsJson,
+    sites: Vec<DefaultSiteJson<'a>>,
+}
+
+#[derive(Serialize)]
+struct CacheProofJson {
+    path: String,
+    length: usize,
+    sha256: String,
+}
+
+#[derive(Serialize)]
+struct DefaultStatsJson {
+    init_functions: usize,
+    branched_init_functions: usize,
+    direct_windows: usize,
+    unresolved_fields: usize,
+    unresolved_types: usize,
+    unsupported_types: usize,
+    ambiguous_fields: usize,
+}
+
+#[derive(Serialize)]
+struct DefaultSiteJson<'a> {
+    selector: DefaultSelectorJson,
+    value_type: &'a str,
+    display_value: &'a str,
+    encoding: &'static str,
+    expected_hex: String,
+    provenance: DefaultProvenanceJson<'a>,
+}
+
+#[derive(Serialize)]
+struct DefaultProvenanceJson<'a> {
+    function: &'a str,
+    field_owner: &'a str,
+    owner_type_id: String,
+    member_offset: i32,
+    pattern: &'static str,
+    context_sha256: &'a str,
+    opcode: &'static str,
+    instruction_index: usize,
+    instruction_offset_dwords: usize,
+    operand_offset: usize,
+    length: usize,
+}
+
+#[derive(Serialize)]
+struct DefaultPatchJson<'a> {
+    format: &'static str,
+    status: &'static str,
+    selector: DefaultSelectorJson,
+    input: CacheProofJson,
+    output: CacheProofJson,
+    expected_hex: String,
+    replacement_hex: String,
+    provenance: DefaultProvenanceJson<'a>,
+}
+
 /// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
 /// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
 fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
@@ -253,6 +418,253 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
         None => eprintln!("warning: failed to parse {}", path.display()),
     }
     api
+}
+
+fn default_provenance_json(
+    site: &gore_as::cache::default_patch::DefaultSite,
+) -> DefaultProvenanceJson<'_> {
+    DefaultProvenanceJson {
+        function: &site.function,
+        field_owner: &site.field_owner,
+        owner_type_id: format!("0x{:x}", site.owner_type_id as u32),
+        member_offset: site.member_offset,
+        pattern: site.pattern.as_str(),
+        context_sha256: &site.context_sha256,
+        opcode: site.opcode,
+        instruction_index: site.instruction_index,
+        instruction_offset_dwords: site.instruction_offset_dw,
+        operand_offset: site.operand_offset,
+        length: site.encoding.width(),
+    }
+}
+
+fn default_site_json(site: &gore_as::cache::default_patch::DefaultSite) -> DefaultSiteJson<'_> {
+    DefaultSiteJson {
+        selector: DefaultSelectorJson::from_core(&site.selector),
+        value_type: &site.value_type,
+        display_value: &site.display_value,
+        encoding: site.encoding.as_str(),
+        expected_hex: gore_as::cache::default_patch::encode_hex(&site.expected),
+        provenance: default_provenance_json(site),
+    }
+}
+
+fn cache_proof(path: &Path, bytes: &[u8]) -> CacheProofJson {
+    CacheProofJson {
+        path: path.display().to_string(),
+        length: bytes.len(),
+        sha256: gore_as::cache::default_patch::encode_hex(&Sha256::digest(bytes)),
+    }
+}
+
+fn read_default_selector(path: &Path) -> Result<DefaultSelectorJson> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("AS_DEFAULT_SELECTOR: opening {}", path.display()))?;
+    let metadata = file.metadata().with_context(|| {
+        format!(
+            "AS_DEFAULT_SELECTOR: reading metadata for {}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        bail!(
+            "AS_DEFAULT_SELECTOR: selector is not a regular file: {}",
+            path.display()
+        );
+    }
+    if metadata.len() > DEFAULT_SELECTOR_MAX_BYTES {
+        bail!(
+            "AS_DEFAULT_SELECTOR: selector is {} bytes; limit is {}",
+            metadata.len(),
+            DEFAULT_SELECTOR_MAX_BYTES
+        );
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(DEFAULT_SELECTOR_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("AS_DEFAULT_SELECTOR: reading {}", path.display()))?;
+    if bytes.len() as u64 > DEFAULT_SELECTOR_MAX_BYTES {
+        bail!(
+            "AS_DEFAULT_SELECTOR: selector exceeded the {}-byte limit while reading",
+            DEFAULT_SELECTOR_MAX_BYTES
+        );
+    }
+    serde_json::from_slice(&bytes).with_context(|| {
+        format!(
+            "AS_DEFAULT_SELECTOR: parsing strict JSON from {}",
+            path.display()
+        )
+    })
+}
+
+fn decode_default_hex(value: &str, label: &'static str) -> Result<Vec<u8>> {
+    if !matches!(value.len(), 8 | 16)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        bail!("{label}: expected exactly 8 or 16 lowercase hexadecimal characters without 0x");
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for pair in value.as_bytes().chunks_exact(2) {
+        let high = hex_nibble(pair[0]).expect("validated hex");
+        let low = hex_nibble(pair[1]).expect("validated hex");
+        bytes.push((high << 4) | low);
+    }
+    Ok(bytes)
+}
+
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn publish_default_cache_noclobber(path: &Path, bytes: &[u8]) -> Result<Vec<u8>> {
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.is_dir() {
+        bail!(
+            "AS_DEFAULT_OUTPUT: output parent is not an existing directory: {}",
+            parent.display()
+        );
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).with_context(|| {
+        format!(
+            "AS_DEFAULT_OUTPUT: creating temporary file in {}",
+            parent.display()
+        )
+    })?;
+    temporary
+        .write_all(bytes)
+        .context("AS_DEFAULT_OUTPUT: writing verified cache")?;
+    temporary
+        .as_file_mut()
+        .sync_all()
+        .context("AS_DEFAULT_OUTPUT: syncing verified cache")?;
+    publish_default_temp_noclobber(temporary, path, parent)?;
+
+    // The receipt must prove what was actually published, not merely what was held in memory
+    // before the rename. Reopen by the final name and independently check all three invariants.
+    let persisted = std::fs::read(path).with_context(|| {
+        format!(
+            "AS_DEFAULT_OUTPUT: reopening published cache {} for verification",
+            path.display()
+        )
+    })?;
+    let expected_sha256 = Sha256::digest(bytes);
+    let persisted_sha256 = Sha256::digest(&persisted);
+    let length_matches = persisted.len() == bytes.len();
+    let hash_matches = persisted_sha256 == expected_sha256;
+    let bytes_match = persisted == bytes;
+    if !length_matches || !hash_matches || !bytes_match {
+        bail!(
+            "AS_DEFAULT_OUTPUT: persisted verification failed for {}: expected length {}, got {}; expected sha256 {}, got {}; byte_equal={}",
+            path.display(),
+            bytes.len(),
+            persisted.len(),
+            gore_as::cache::default_patch::encode_hex(&expected_sha256),
+            gore_as::cache::default_patch::encode_hex(&persisted_sha256),
+            bytes_match
+        );
+    }
+    Ok(persisted)
+}
+
+#[cfg(not(windows))]
+fn publish_default_temp_noclobber(
+    temporary: tempfile::NamedTempFile,
+    path: &Path,
+    parent: &Path,
+) -> Result<()> {
+    temporary.persist_noclobber(path).map_err(|error| {
+        anyhow::anyhow!(
+            "AS_DEFAULT_OUTPUT: output already exists or cannot be published without clobbering {}: {}",
+            path.display(),
+            error.error
+        )
+    })?;
+    sync_default_output_parent(parent)
+}
+
+#[cfg(windows)]
+fn publish_default_temp_noclobber(
+    temporary: tempfile::NamedTempFile,
+    path: &Path,
+    _parent: &Path,
+) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, SetFileAttributesW, FILE_ATTRIBUTE_NORMAL, MOVEFILE_WRITE_THROUGH,
+    };
+
+    // `persist_noclobber` is race-safe but does not request a durable directory-entry update on
+    // Windows. Consume the synced temp into a cleanup-owning path, normalize its temporary
+    // attribute, and publish with WRITE_THROUGH. Deliberately omit REPLACE_EXISTING so a racing
+    // creator wins and can never be overwritten.
+    let temporary = temporary.into_temp_path();
+    let source: Vec<u16> = temporary
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let destination: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: both buffers remain stable and NUL-terminated for the duration of each call.
+    unsafe {
+        if SetFileAttributesW(source.as_ptr(), FILE_ATTRIBUTE_NORMAL) == 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "AS_DEFAULT_OUTPUT: normalizing temporary cache before publishing {}",
+                    path.display()
+                )
+            });
+        }
+        if MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        ) == 0
+        {
+            let error = std::io::Error::last_os_error();
+            bail!(
+                "AS_DEFAULT_OUTPUT: output already exists or cannot be published durably without clobbering {}: {}",
+                path.display(),
+                error
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_default_output_parent(parent: &Path) -> Result<()> {
+    std::fs::File::open(parent)
+        .with_context(|| {
+            format!(
+                "AS_DEFAULT_OUTPUT: opening parent directory {} for sync",
+                parent.display()
+            )
+        })?
+        .sync_all()
+        .with_context(|| {
+            format!(
+                "AS_DEFAULT_OUTPUT: syncing parent directory {}",
+                parent.display()
+            )
+        })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_default_output_parent(_parent: &Path) -> Result<()> {
+    Ok(())
 }
 
 pub fn run(cmd: AsCmd) -> Result<()> {
@@ -389,6 +801,144 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 n += 1;
             }
             eprintln!("({n} function(s))");
+        }
+        AsCmd::DefaultSites {
+            cache,
+            module,
+            class,
+            field,
+            json,
+        } => {
+            let bytes = std::fs::read(&cache)
+                .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
+            let report =
+                gore_as::cache::default_patch::default_sites(&bytes, load_native_api(&cache))
+                    .context("AS_DEFAULT_INSPECT")?;
+            let sites: Vec<_> = report
+                .sites
+                .iter()
+                .filter(|site| {
+                    module
+                        .as_deref()
+                        .is_none_or(|value| site.selector.module == value)
+                        && class
+                            .as_deref()
+                            .is_none_or(|value| site.selector.class == value)
+                        && field
+                            .as_deref()
+                            .is_none_or(|value| site.selector.field == value)
+                })
+                .collect();
+            if json {
+                let document = DefaultSitesJson {
+                    format: gore_as::cache::default_patch::DEFAULT_SITES_REPORT_FORMAT,
+                    cache: CacheProofJson {
+                        path: cache.display().to_string(),
+                        length: report.cache_len,
+                        sha256: report.cache_sha256,
+                    },
+                    site_count: sites.len(),
+                    stats: DefaultStatsJson {
+                        init_functions: report.stats.init_functions,
+                        branched_init_functions: report.stats.branched_init_functions,
+                        direct_windows: report.stats.direct_windows,
+                        unresolved_fields: report.stats.unresolved_fields,
+                        unresolved_types: report.stats.unresolved_types,
+                        unsupported_types: report.stats.unsupported_types,
+                        ambiguous_fields: report.stats.ambiguous_fields,
+                    },
+                    sites: sites.iter().map(|site| default_site_json(site)).collect(),
+                };
+                println!("{}", serde_json::to_string_pretty(&document)?);
+            } else {
+                for site in &sites {
+                    let selector =
+                        serde_json::to_string(&DefaultSelectorJson::from_core(&site.selector))?;
+                    println!(
+                        "SITE\tmodule={}\tclass={}\tfield={}\ttype={}\tvalue={}\texpected_hex={}\tselector={}",
+                        site.selector.module,
+                        site.selector.class,
+                        site.selector.field,
+                        site.value_type,
+                        site.display_value,
+                        gore_as::cache::default_patch::encode_hex(&site.expected),
+                        selector
+                    );
+                }
+                eprintln!(
+                    "{} editable site(s); {} direct window(s), {} branched initializer(s), {} unresolved field(s), {} unresolved type(s), {} unsupported type(s), {} ambiguous field(s)",
+                    sites.len(),
+                    report.stats.direct_windows,
+                    report.stats.branched_init_functions,
+                    report.stats.unresolved_fields,
+                    report.stats.unresolved_types,
+                    report.stats.unsupported_types,
+                    report.stats.ambiguous_fields
+                );
+            }
+        }
+        AsCmd::PatchDefault {
+            cache,
+            selector,
+            expected_hex,
+            replacement_hex,
+            out,
+            json,
+        } => {
+            match std::fs::symlink_metadata(&out) {
+                Ok(_) => bail!(
+                    "AS_DEFAULT_OUTPUT: output already exists; refusing to publish without clobbering {}",
+                    out.display()
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!("AS_DEFAULT_OUTPUT: checking {}", out.display())
+                    })
+                }
+            }
+            let selector = read_default_selector(&selector)?.into_core()?;
+            let expected = decode_default_hex(&expected_hex, "AS_DEFAULT_EXPECTED")?;
+            let replacement = decode_default_hex(&replacement_hex, "AS_DEFAULT_REPLACEMENT")?;
+            let input = std::fs::read(&cache)
+                .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
+            let patch = gore_as::cache::default_patch::patch_default(
+                &input,
+                load_native_api(&cache),
+                &selector,
+                &expected,
+                &replacement,
+            )
+            .context("AS_DEFAULT_PATCH")?;
+            let persisted_output = publish_default_cache_noclobber(&out, &patch.bytes)?;
+
+            if json {
+                let document = DefaultPatchJson {
+                    format: gore_as::cache::default_patch::DEFAULT_PATCH_REPORT_FORMAT,
+                    status: "patched",
+                    selector: DefaultSelectorJson::from_core(&patch.after.selector),
+                    input: cache_proof(&cache, &input),
+                    output: cache_proof(&out, &persisted_output),
+                    expected_hex: gore_as::cache::default_patch::encode_hex(&patch.before.expected),
+                    replacement_hex: gore_as::cache::default_patch::encode_hex(
+                        &patch.after.expected,
+                    ),
+                    provenance: default_provenance_json(&patch.after),
+                };
+                println!("{}", serde_json::to_string_pretty(&document)?);
+            } else {
+                println!(
+                    "PATCHED\tmodule={}\tclass={}\tfield={}\texpected_hex={}\treplacement_hex={}\toffset={}\tlength={}\tout={}",
+                    patch.after.selector.module,
+                    patch.after.selector.class,
+                    patch.after.selector.field,
+                    gore_as::cache::default_patch::encode_hex(&patch.before.expected),
+                    gore_as::cache::default_patch::encode_hex(&patch.after.expected),
+                    patch.after.operand_offset,
+                    patch.after.encoding.width(),
+                    out.display()
+                );
+            }
         }
         AsCmd::DiagnosticsCheck { exe, game } => {
             let exe = match exe {
@@ -803,4 +1353,79 @@ pub fn run(cmd: AsCmd) -> Result<()> {
 
 fn hex16(b: &[u8; 16]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+#[cfg(test)]
+mod default_cli_tests {
+    use super::*;
+
+    const VALID: &str = r#"{
+        "format":"gore-as-default-site-v3",
+        "kind":"scalar",
+        "module":"Items.Food",
+        "class":"UApple",
+        "field_owner":"UItemDefinition",
+        "field":"m_Value",
+        "value_type":"int"
+    }"#;
+
+    #[test]
+    fn selector_json_is_strict_and_semantic_only() {
+        let selector: DefaultSelectorJson = serde_json::from_str(VALID).unwrap();
+        let core = selector.into_core().unwrap();
+        assert_eq!(core.module, "Items.Food");
+        assert_eq!(core.class, "UApple");
+        assert_eq!(core.field_owner, "UItemDefinition");
+        assert_eq!(core.field, "m_Value");
+        assert_eq!(core.value_type, "int");
+        assert!(!VALID.contains("offset"));
+
+        let missing_owner = VALID.replace("        \"field_owner\":\"UItemDefinition\",\n", "");
+        assert!(serde_json::from_str::<DefaultSelectorJson>(&missing_owner).is_err());
+
+        let unknown = VALID.replace(
+            "\"field\":\"m_Value\"",
+            "\"field\":\"m_Value\",\"operand_offset\":123",
+        );
+        assert!(serde_json::from_str::<DefaultSelectorJson>(&unknown).is_err());
+        let mut missing_type: serde_json::Value = serde_json::from_str(VALID).unwrap();
+        missing_type.as_object_mut().unwrap().remove("value_type");
+        assert!(serde_json::from_value::<DefaultSelectorJson>(missing_type).is_err());
+
+        let wrong_format = VALID.replace("gore-as-default-site-v3", "future-v4");
+        assert!(serde_json::from_str::<DefaultSelectorJson>(&wrong_format)
+            .unwrap()
+            .into_core()
+            .is_err());
+    }
+
+    #[test]
+    fn publish_reopens_verified_bytes_and_keeps_noclobber() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("patched.Cache");
+        let expected = b"verified cache bytes";
+
+        let persisted = publish_default_cache_noclobber(&output, expected).unwrap();
+        assert_eq!(persisted, expected);
+        assert_eq!(std::fs::read(&output).unwrap(), expected);
+
+        let error = publish_default_cache_noclobber(&output, b"replacement").unwrap_err();
+        assert!(error.to_string().contains("without clobbering"));
+        assert_eq!(std::fs::read(&output).unwrap(), expected);
+    }
+
+    #[test]
+    fn raw_cas_hex_is_canonical_and_fixed_width() {
+        assert_eq!(
+            decode_default_hex("04000000", "TEST").unwrap(),
+            [4, 0, 0, 0]
+        );
+        assert_eq!(
+            decode_default_hex("0000000000709740", "TEST").unwrap(),
+            [0, 0, 0, 0, 0, 0x70, 0x97, 0x40]
+        );
+        for invalid in ["04", "0400000", "0400000000", "0x04000000", "AB000000"] {
+            assert!(decode_default_hex(invalid, "TEST").is_err(), "{invalid}");
+        }
+    }
 }

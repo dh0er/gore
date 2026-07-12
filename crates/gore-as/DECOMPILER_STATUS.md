@@ -28,9 +28,11 @@ mistakes can exist in otherwise complete-looking source and are measured separat
 semantic `bytediff` oracle and game compiler. Compiler-generated special functions such
 as `__InitDefaults` are intentionally omitted from editable source. Existing-module edits can now
 carry the proven base records, compiler wrappers, behavior functions, and full method tables
-byte-for-byte through the strict base-keyspace remap path, but authored changes to those defaults
-are deliberately refused. The numbers therefore must not be read as proof that arbitrary
-class-default data can be reconstructed or edited. A fresh whole-tree game-compiler run reached
+byte-for-byte through the strict base-keyspace remap path, but authored source changes to those
+defaults are deliberately refused. Separately, the offline `default-sites` / `patch-default` path
+can change a uniquely proven, branch-free direct scalar assignment using a semantic selector and
+raw compare-and-swap guard. It cannot reconstruct or edit arbitrary class-default data. A fresh
+whole-tree game-compiler run reached
 the real generator and the diagnostics callback hook captured concrete file/line/column errors
 before the compiler exited without publishing a development cache. Those diagnostics exposed
 three generic emitter residues, which are fixed in the current tree. A final controlled compile of
@@ -94,13 +96,21 @@ requires reconstructing its body manually or first extending the decompiler.
 
 ## Root causes and next work
 
-1. **Generated defaults are safe to retain, not yet editable.** `compile-module --op edit` carries
+1. **Generated defaults are retained; direct scalars have a narrow offline patch path.**
+   `compile-module --op edit` carries
    existing `__InitDefaults` plus every emitter-omitted executable record only after exact
    header/tail/reference, declaration/layout, method-table, and cache-wide collision proofs. An
    authored CDO `default` token, new-symbol remap, unsupported `__*` shape, or any metadata drift
-   fails closed before publishing a mini-cache. A separate faithful source representation is still
-   required before NPC, quest, or arbitrary class-default authoring can be claimed; new modules may
-   continue to use explicit defaults through `--op add`.
+   fails closed before publishing a mini-cache. `gore as default-sites` and `patch-default` can
+   inspect and copy-on-write patch only a unique, branch-free
+   `SetV{1,2,4,8} / LoadThisR / WRTV{1,2,4,8}` scalar assignment with exact field-type evidence
+   (including parsed-kind proof for script enums),
+   a v3 `(module, class, field_owner, field, value_type)` identity with proven target-to-owner ancestry, raw
+   CAS, one terminal `RET`, and full-cache postconditions. Complex expressions, structs,
+   containers, and gameplay-tag maps remain unsupported; see
+   [`docs/angelscript-default-patching.md`](../../docs/angelscript-default-patching.md). A faithful
+   source representation is still required before arbitrary class-default authoring can be
+   claimed; new modules may continue to use explicit defaults through `--op add`.
 2. **Whole-tree compiler gate -- passed for the current 1.0.3 hotfix.** The shipping build suppresses AngelScript diagnostics from
    stdout and UE file logs, so `gore as compile` now uses a hotfix-safe signature scan plus a sparse
    callback-body fingerprint to attach to the per-error `asSMessageInfo` callback. It prints normal
