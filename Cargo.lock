@@ -930,10 +930,12 @@ dependencies = [
  "gore-modgen",
  "gore-reflect",
  "gore-tex",
+ "gore-vo",
  "image",
  "serde",
  "serde_json",
  "tempfile",
+ "zip",
 ]
 
 [[package]]
@@ -1045,9 +1047,11 @@ dependencies = [
 name = "gore-vo"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "windows-sys 0.61.2",
  "zip",
 ]
 

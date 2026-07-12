@@ -9,6 +9,16 @@
 //!   `override`); returns `{ok, files:{"enabled.txt":"","Scripts/main.lua":...}}`.
 //! - `validate` — payload `{config: OverridesConfig, model: ReflectionModel}`;
 //!   returns `{ok, valid, errors:[..]}`.
+//! - `voice_archive_list` — payload `{archive}`; returns exact entries plus the captured
+//!   `archive_size`/`archive_sha256` seal. Fails with `VOICE_ARCHIVE_LIMIT` for bounded ZIP
+//!   metadata violations or `VOICE_RESPONSE_LIMIT` before an oversized JSON result is built.
+//! - `voice_archive_extract` — payload `{archive, expected_archive_size,
+//!   expected_archive_sha256, entry_path, output_root}`; extracts only if that seal still matches.
+//!   The FFI caps archive entries at 50,000, central metadata at 64 MiB, entry paths at 1 KiB,
+//!   one extracted entry at 256 MiB, aggregate uncompressed metadata at 16 GiB, and list JSON at
+//!   8 MiB. Filesystem-path request strings are capped at 32 KiB.
+
+mod voice;
 
 use std::ffi::{c_char, CStr, CString};
 use std::ptr;
@@ -103,6 +113,8 @@ fn dispatch(input: &str) -> Value {
         "script_list_modules" => script_list_modules(payload),
         "script_emit_module" => script_emit_module(payload),
         "script_compile" => script_compile(payload),
+        "voice_archive_list" => voice::archive_list(payload),
+        "voice_archive_extract" => voice::archive_extract(payload),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }

@@ -4,8 +4,26 @@ use std::path::PathBuf;
 pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("voice archive source I/O failed at {path}: {source}")]
+    SourceIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("voice extraction output I/O failed at {path}: {source}")]
+    OutputIo {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("ZIP error: {0}")]
     Zip(#[from] zip::result::ZipError),
+    #[error("invalid archive payload for {path:?}: {source}")]
+    ArchiveData {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("resource limit exceeded for {kind}: {actual} > {limit}")]
     LimitExceeded {
         kind: &'static str,
@@ -21,6 +39,10 @@ pub enum Error {
     },
     #[error("unsafe archive path {path:?}: {reason}")]
     UnsafePath { path: String, reason: &'static str },
+    #[error("unsafe voice archive source {path}: {reason}")]
+    UnsafeSource { path: PathBuf, reason: &'static str },
+    #[error("unsafe voice extraction output {path}: {reason}")]
+    UnsafeOutput { path: PathBuf, reason: &'static str },
     #[error("archive contains an encrypted entry that cannot be processed safely: {0:?}")]
     EncryptedEntry(String),
     #[error("archive contains a symbolic-link entry that cannot be extracted safely: {0:?}")]
