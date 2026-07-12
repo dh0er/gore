@@ -1,0 +1,1535 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde::de::{self, MapAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::{
+    AssetRef, AssetStoreIndex, ContentSeal, Diagnostic, Entity, EntityId, EntityPayload, FormatV2,
+    GameGenerationAnchor, LocaleCode, OggCodec, OggMetadata, ProjectId, ProjectMeta, ProjectV2,
+    SchemaRevisionV1, Sha256Digest, ValidationProfile,
+};
+
+const HEAD_FILE_NAME: &str = "gore-project.json";
+const STORE_FORMAT: u32 = 1;
+const MAX_HEAD_BYTES_HARD: usize = 64 * 1024;
+const MAX_SNAPSHOT_BYTES_HARD: usize = 16 * 1024 * 1024;
+const MAX_ENTITY_BYTES_HARD: usize = 1024 * 1024;
+const MAX_REFERENCED_ENTITY_BYTES_HARD: u64 = 512 * 1024 * 1024;
+const MAX_ENTITIES_HARD: usize = 100_000;
+const MAX_ASSETS_HARD: usize = 100_000;
+const MAX_ASSET_BYTES_HARD: u64 = 64 * 1024 * 1024 * 1024;
+const MAX_OGG_BYTES_HARD: usize = 64 * 1024 * 1024;
+const MAX_LOGICAL_NAME_BYTES_HARD: usize = 1024;
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const WINDOWS_REPARSE_POINT_ATTRIBUTE: u32 = 0x400;
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Finite resource ceilings applied by a [`WorkingProjectStore`].
+///
+/// Values may be made stricter than the format ceilings, but never looser. This makes every
+/// store operation bounded without allowing one caller to create objects another conforming
+/// reader cannot safely open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkingStoreLimits {
+    pub max_head_bytes: usize,
+    pub max_snapshot_bytes: usize,
+    pub max_entity_bytes: usize,
+    pub max_referenced_entity_bytes: u64,
+    pub max_entities: usize,
+    pub max_assets: usize,
+    pub max_referenced_asset_bytes: u64,
+    pub max_ogg_bytes: usize,
+    pub max_logical_name_bytes: usize,
+}
+
+impl Default for WorkingStoreLimits {
+    fn default() -> Self {
+        Self {
+            max_head_bytes: MAX_HEAD_BYTES_HARD,
+            max_snapshot_bytes: MAX_SNAPSHOT_BYTES_HARD,
+            max_entity_bytes: MAX_ENTITY_BYTES_HARD,
+            max_referenced_entity_bytes: MAX_REFERENCED_ENTITY_BYTES_HARD,
+            max_entities: MAX_ENTITIES_HARD,
+            max_assets: MAX_ASSETS_HARD,
+            max_referenced_asset_bytes: MAX_ASSET_BYTES_HARD,
+            max_ogg_bytes: MAX_OGG_BYTES_HARD,
+            max_logical_name_bytes: MAX_LOGICAL_NAME_BYTES_HARD,
+        }
+    }
+}
+
+impl WorkingStoreLimits {
+    fn validate(self) -> Result<Self, WorkingStoreError> {
+        let checks = [
+            ("max_head_bytes", self.max_head_bytes, MAX_HEAD_BYTES_HARD),
+            (
+                "max_snapshot_bytes",
+                self.max_snapshot_bytes,
+                MAX_SNAPSHOT_BYTES_HARD,
+            ),
+            (
+                "max_entity_bytes",
+                self.max_entity_bytes,
+                MAX_ENTITY_BYTES_HARD,
+            ),
+            ("max_entities", self.max_entities, MAX_ENTITIES_HARD),
+            ("max_assets", self.max_assets, MAX_ASSETS_HARD),
+            ("max_ogg_bytes", self.max_ogg_bytes, MAX_OGG_BYTES_HARD),
+            (
+                "max_logical_name_bytes",
+                self.max_logical_name_bytes,
+                MAX_LOGICAL_NAME_BYTES_HARD,
+            ),
+        ];
+        for (name, value, hard_limit) in checks {
+            if value == 0 || value > hard_limit {
+                return Err(WorkingStoreError::InvalidLimits(format!(
+                    "{name} must be in 1..={hard_limit}, got {value}"
+                )));
+            }
+        }
+        if self.max_referenced_asset_bytes == 0
+            || self.max_referenced_asset_bytes > MAX_ASSET_BYTES_HARD
+        {
+            return Err(WorkingStoreError::InvalidLimits(format!(
+                "max_referenced_asset_bytes must be in 1..={MAX_ASSET_BYTES_HARD}, got {}",
+                self.max_referenced_asset_bytes
+            )));
+        }
+        if self.max_referenced_entity_bytes == 0
+            || self.max_referenced_entity_bytes > MAX_REFERENCED_ENTITY_BYTES_HARD
+        {
+            return Err(WorkingStoreError::InvalidLimits(format!(
+                "max_referenced_entity_bytes must be in 1..={MAX_REFERENCED_ENTITY_BYTES_HARD}, got {}",
+                self.max_referenced_entity_bytes
+            )));
+        }
+        Ok(self)
+    }
+}
+
+/// Exact immutable-store format marker. Only integer `1` is accepted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WorkingStoreFormat;
+
+impl<'de> Deserialize<'de> for WorkingStoreFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        if value == STORE_FORMAT {
+            Ok(Self)
+        } else {
+            Err(de::Error::custom(format!(
+                "unsupported working-store format {value}; expected {STORE_FORMAT}"
+            )))
+        }
+    }
+}
+
+impl Serialize for WorkingStoreFormat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u32(STORE_FORMAT)
+    }
+}
+
+/// Small fixed-head document. Publishing these bytes is intentionally the caller's CAS step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkingHead {
+    pub store_format: WorkingStoreFormat,
+    pub snapshot: ContentSeal,
+}
+
+/// Result of preparing a checkpoint without replacing the fixed head.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckpointPreparation {
+    pub head_bytes: Vec<u8>,
+    pub head: WorkingHead,
+    pub diagnostics: Vec<Diagnostic>,
+    pub blocks_build: bool,
+}
+
+/// Fully reconstituted project and its semantic validation result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenedCheckpoint {
+    pub head: WorkingHead,
+    pub project: ProjectV2,
+    pub diagnostics: Vec<Diagnostic>,
+    pub blocks_build: bool,
+}
+
+/// Physical blob verification performed while opening or checking an asset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetVerification {
+    /// Validate derived path, object type, link policy, and byte length.
+    Structural,
+    /// Perform structural checks and stream the complete SHA-256 digest.
+    Full,
+}
+
+/// Content-addressed result of importing one validated Ogg stream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedOgg {
+    pub asset: AssetRef,
+    pub ogg: OggMetadata,
+    pub deduplicated: bool,
+}
+
+/// Hard failures are store corruption, unsafe paths, resource-limit violations, or I/O errors.
+/// Semantic authoring diagnostics are returned by successful checkpoint operations instead.
+#[derive(Debug, thiserror::Error)]
+pub enum WorkingStoreError {
+    #[error("invalid working-store limits: {0}")]
+    InvalidLimits(String),
+    #[error("unsafe working-store path {path:?}: {reason}")]
+    UnsafePath { path: PathBuf, reason: String },
+    #[error("working-store resource limit exceeded for {kind}: {actual} > {limit}")]
+    LimitExceeded {
+        kind: &'static str,
+        actual: u64,
+        limit: u64,
+    },
+    #[error("working-store head conflict: expected {expected:?}, current is {actual:?}")]
+    HeadConflict {
+        expected: Option<WorkingHead>,
+        actual: Option<WorkingHead>,
+    },
+    #[error("working-store head does not exist at {0:?}")]
+    MissingHead(PathBuf),
+    #[error("immutable object is missing at {0:?}")]
+    MissingObject(PathBuf),
+    #[error("immutable object at {path:?} has an invalid seal: {reason}")]
+    SealMismatch { path: PathBuf, reason: String },
+    #[error("immutable object collision at {path:?}: {reason}")]
+    Collision { path: PathBuf, reason: String },
+    #[error("invalid {kind} JSON: {source}")]
+    InvalidJson {
+        kind: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{kind} JSON is not in canonical store encoding")]
+    NonCanonicalJson { kind: &'static str },
+    #[error("invalid working-store invariant: {0}")]
+    Invariant(String),
+    #[error("invalid Ogg asset: {0}")]
+    InvalidOgg(String),
+    #[error("failed to remove working-store staging file {path:?}: {source}")]
+    StagingCleanup {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(transparent)]
+    Io(#[from] io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SnapshotManifest {
+    store_format: WorkingStoreFormat,
+    format: FormatV2,
+    schema_revision: SchemaRevisionV1,
+    project_id: ProjectId,
+    #[serde(default)]
+    revision: u64,
+    meta: ProjectMeta,
+    target: GameGenerationAnchor,
+    #[serde(default, deserialize_with = "deserialize_unique_set")]
+    authoring_locales: BTreeSet<LocaleCode>,
+    #[serde(default, deserialize_with = "deserialize_unique_map")]
+    entities: BTreeMap<EntityId, ContentSeal>,
+    asset_store: AssetStoreIndex,
+}
+
+impl SnapshotManifest {
+    fn from_project(project: &ProjectV2, entities: BTreeMap<EntityId, ContentSeal>) -> Self {
+        Self {
+            store_format: WorkingStoreFormat,
+            format: project.format,
+            schema_revision: project.schema_revision,
+            project_id: project.project_id,
+            revision: project.revision,
+            meta: project.meta.clone(),
+            target: project.target.clone(),
+            authoring_locales: project.authoring_locales.clone(),
+            entities,
+            asset_store: project.asset_store.clone(),
+        }
+    }
+
+    fn into_project(self, entities: BTreeMap<EntityId, Entity>) -> ProjectV2 {
+        ProjectV2 {
+            format: self.format,
+            schema_revision: self.schema_revision,
+            project_id: self.project_id,
+            revision: self.revision,
+            meta: self.meta,
+            target: self.target,
+            authoring_locales: self.authoring_locales,
+            entities,
+            asset_store: self.asset_store,
+        }
+    }
+}
+
+/// Rooted immutable working-object store for format-2 authoring projects.
+#[derive(Debug, Clone)]
+pub struct WorkingProjectStore {
+    root: PathBuf,
+    limits: WorkingStoreLimits,
+}
+
+impl WorkingProjectStore {
+    /// Open or create a store root after rejecting links/reparse points in its prefix chain.
+    pub fn at(
+        root: impl AsRef<Path>,
+        limits: WorkingStoreLimits,
+    ) -> Result<Self, WorkingStoreError> {
+        let limits = limits.validate()?;
+        let root = absolute_path(root.as_ref())?;
+        create_directory_chain(&root)?;
+        ensure_safe_directory_chain(&root)?;
+        Ok(Self { root, limits })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub const fn limits(&self) -> WorkingStoreLimits {
+        self.limits
+    }
+
+    /// Parse the current fixed head, if present, without opening its snapshot.
+    pub fn current_head(&self) -> Result<Option<WorkingHead>, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        let path = self.head_path();
+        let Some(bytes) =
+            read_optional_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?
+        else {
+            return Ok(None);
+        };
+        let head: WorkingHead = parse_canonical_json(&bytes, "head")?;
+        validate_nonzero_seal(&head.snapshot, self.limits.max_snapshot_bytes, "snapshot")?;
+        Ok(Some(head))
+    }
+
+    /// Write no-clobber immutable entity and snapshot objects, then fully reopen the candidate.
+    /// The fixed `gore-project.json` head is never created or replaced by this method.
+    /// `expected_head` is a strict CAS token: `None` requires the fixed head to be absent.
+    pub fn prepare_checkpoint(
+        &self,
+        expected_head: Option<&WorkingHead>,
+        project: &ProjectV2,
+        profile: ValidationProfile,
+    ) -> Result<CheckpointPreparation, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)?;
+        self.validate_project_limits(project)?;
+        self.verify_asset_index(&project.asset_store, AssetVerification::Full)?;
+
+        let mut entity_seals = BTreeMap::new();
+        let mut total_entity_bytes = 0u64;
+        for (id, entity) in &project.entities {
+            if id != &entity.id {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "entity map key {id} does not match embedded id {}",
+                    entity.id
+                )));
+            }
+            let bytes = canonical_json(entity)?;
+            enforce_limit("entity bytes", bytes.len(), self.limits.max_entity_bytes)?;
+            total_entity_bytes = checked_bounded_sum(
+                "aggregate referenced entity bytes",
+                total_entity_bytes,
+                bytes.len() as u64,
+                self.limits.max_referenced_entity_bytes,
+            )?;
+            let seal = seal_bytes(&bytes);
+            let path = self.entity_path(*id, seal.sha256);
+            self.install_immutable_bytes(&path, &bytes, &seal)?;
+            entity_seals.insert(*id, seal);
+        }
+
+        let snapshot = SnapshotManifest::from_project(project, entity_seals);
+        let snapshot_bytes = canonical_json(&snapshot)?;
+        enforce_limit(
+            "snapshot bytes",
+            snapshot_bytes.len(),
+            self.limits.max_snapshot_bytes,
+        )?;
+        let snapshot_seal = seal_bytes(&snapshot_bytes);
+        let snapshot_path = self.snapshot_path(snapshot_seal.sha256);
+        self.install_immutable_bytes(&snapshot_path, &snapshot_bytes, &snapshot_seal)?;
+
+        let head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: snapshot_seal,
+        };
+        let head_bytes = canonical_json(&head)?;
+        enforce_limit("head bytes", head_bytes.len(), self.limits.max_head_bytes)?;
+
+        // A concurrent publisher may make these newly written objects orphaned. That is safe;
+        // immutable objects are never overwritten and callers still own the fixed-head CAS.
+        self.check_expected_head(expected_head)?;
+        let reopened = self.open_head_bytes(&head_bytes, AssetVerification::Full, profile)?;
+        if reopened.project != *project || reopened.head != head {
+            return Err(WorkingStoreError::Invariant(
+                "candidate checkpoint did not reconstitute exactly".to_owned(),
+            ));
+        }
+        Ok(CheckpointPreparation {
+            head_bytes,
+            head,
+            diagnostics: reopened.diagnostics,
+            blocks_build: reopened.blocks_build,
+        })
+    }
+
+    /// Open the currently published fixed head and exactly reconstitute its [`ProjectV2`].
+    pub fn open_current(
+        &self,
+        verification: AssetVerification,
+        profile: ValidationProfile,
+    ) -> Result<OpenedCheckpoint, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        let path = self.head_path();
+        let bytes = read_required_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?;
+        self.open_head_bytes(&bytes, verification, profile)
+    }
+
+    /// Validate canonical head bytes, all immutable manifests, and optionally complete assets.
+    pub fn open_head_bytes(
+        &self,
+        bytes: &[u8],
+        verification: AssetVerification,
+        profile: ValidationProfile,
+    ) -> Result<OpenedCheckpoint, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        enforce_limit("head bytes", bytes.len(), self.limits.max_head_bytes)?;
+        let head: WorkingHead = parse_canonical_json(bytes, "head")?;
+        validate_nonzero_seal(&head.snapshot, self.limits.max_snapshot_bytes, "snapshot")?;
+
+        let snapshot_path = self.snapshot_path(head.snapshot.sha256);
+        let snapshot_bytes = self.read_sealed_object(
+            &snapshot_path,
+            &head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "snapshot",
+            AssetVerification::Full,
+        )?;
+        let snapshot: SnapshotManifest = parse_canonical_json(&snapshot_bytes, "snapshot")?;
+        self.validate_manifest_limits(&snapshot)?;
+
+        let mut total_entity_bytes = 0u64;
+        for seal in snapshot.entities.values() {
+            validate_nonzero_seal(seal, self.limits.max_entity_bytes, "entity")?;
+            total_entity_bytes = checked_bounded_sum(
+                "aggregate referenced entity bytes",
+                total_entity_bytes,
+                seal.byte_len,
+                self.limits.max_referenced_entity_bytes,
+            )?;
+        }
+        // Finish every cheap manifest and entity-seal rejection before any attacker-amplifiable
+        // asset stat/hash work (up to 100k entries / 64 GiB by format limits).
+        self.verify_asset_index(&snapshot.asset_store, verification)?;
+
+        let mut entities = BTreeMap::new();
+        for (id, seal) in &snapshot.entities {
+            let entity_path = self.entity_path(*id, seal.sha256);
+            let entity_bytes = self.read_sealed_object(
+                &entity_path,
+                seal,
+                self.limits.max_entity_bytes,
+                "entity",
+                AssetVerification::Full,
+            )?;
+            let entity: Entity = parse_canonical_json(&entity_bytes, "entity")?;
+            if entity.id != *id {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "entity shard {} contains embedded id {}",
+                    id, entity.id
+                )));
+            }
+            entities.insert(*id, entity);
+        }
+
+        let project = snapshot.into_project(entities);
+        self.validate_project_limits(&project)?;
+        let diagnostics = project.validate_with_profile(profile);
+        let blocks_build = diagnostics.iter().any(|item| item.blocks_build);
+        Ok(OpenedCheckpoint {
+            head,
+            project,
+            diagnostics,
+            blocks_build,
+        })
+    }
+
+    /// Stream, bound, hash, validate, and no-clobber install one Ogg asset.
+    ///
+    /// The source is opened without following a final symlink/reparse point. Deleting or changing
+    /// the source after success cannot affect the stored blob.
+    /// `expected_head` is a strict CAS token: `None` requires the fixed head to be absent.
+    pub fn import_ogg(
+        &self,
+        source: impl AsRef<Path>,
+        logical_name: impl Into<String>,
+        expected_head: Option<&WorkingHead>,
+    ) -> Result<ImportedOgg, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)?;
+        let logical_name = logical_name.into();
+        self.validate_logical_name(&logical_name)?;
+
+        let source = absolute_path(source.as_ref())?;
+        ensure_safe_existing_chain(&source)?;
+        let source_meta = fs::symlink_metadata(&source)?;
+        ensure_regular_no_link(&source, &source_meta)?;
+        if source_meta.len() > self.limits.max_ogg_bytes as u64 {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind: "Ogg bytes",
+                actual: source_meta.len(),
+                limit: self.limits.max_ogg_bytes as u64,
+            });
+        }
+
+        let mut input = open_regular_read_no_follow(&source)?;
+        let (temp_path, mut temp) = self.create_temp_file()?;
+        let result = (|| {
+            let mut bytes = Vec::with_capacity(source_meta.len() as usize);
+            let mut hasher = Sha256::new();
+            let mut total = 0usize;
+            let mut buffer = [0u8; COPY_BUFFER_BYTES];
+            loop {
+                let count = input.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                total = total
+                    .checked_add(count)
+                    .ok_or(WorkingStoreError::LimitExceeded {
+                        kind: "Ogg bytes",
+                        actual: u64::MAX,
+                        limit: self.limits.max_ogg_bytes as u64,
+                    })?;
+                enforce_limit("Ogg bytes", total, self.limits.max_ogg_bytes)?;
+                hasher.update(&buffer[..count]);
+                temp.write_all(&buffer[..count])?;
+                bytes.extend_from_slice(&buffer[..count]);
+            }
+            temp.flush()?;
+            temp.sync_all()?;
+            if total as u64 != source_meta.len() {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "Ogg source length changed while reading: expected {}, read {total}",
+                    source_meta.len()
+                )));
+            }
+
+            let info = gore_vo::validate_ogg(&bytes, &self.ogg_limits())
+                .map_err(|error| WorkingStoreError::InvalidOgg(error.to_string()))?;
+            let (codec, channels, sample_rate) = match info.codec {
+                gore_vo::OggCodec::Vorbis {
+                    channels,
+                    sample_rate,
+                } => (OggCodec::Vorbis, channels, sample_rate),
+                gore_vo::OggCodec::Opus { channels, .. } => {
+                    // Opus always decodes at 48 kHz. OpusHead's input rate is informational and
+                    // may legitimately be zero, while the authoring model stores decode rate.
+                    (OggCodec::Opus, channels, 48_000)
+                }
+                gore_vo::OggCodec::Unknown => {
+                    return Err(WorkingStoreError::InvalidOgg(
+                        "Ogg codec is not Vorbis or Opus".to_owned(),
+                    ));
+                }
+            };
+            let pages = u32::try_from(info.pages).map_err(|_| {
+                WorkingStoreError::Invariant("Ogg page count does not fit u32".to_owned())
+            })?;
+            let logical_streams = u32::try_from(info.logical_streams).map_err(|_| {
+                WorkingStoreError::Invariant("Ogg stream count does not fit u32".to_owned())
+            })?;
+            let digest = digest_from_hasher(hasher);
+            let seal = ContentSeal {
+                byte_len: total as u64,
+                sha256: digest,
+            };
+            let destination = self.asset_path(digest);
+            self.check_expected_head(expected_head)?;
+            // Close the only writable handle before the immutable path becomes visible.
+            drop(temp);
+            let deduplicated = self.install_staged_file(&temp_path, &destination, &seal)?;
+            self.verify_seal_at(&destination, &seal, AssetVerification::Full, false)?;
+            Ok(ImportedOgg {
+                asset: AssetRef {
+                    sha256: digest,
+                    byte_len: total as u64,
+                    logical_name,
+                },
+                ogg: OggMetadata {
+                    codec,
+                    channels,
+                    sample_rate,
+                    pages,
+                    logical_streams,
+                },
+                deduplicated,
+            })
+        })();
+        let cleanup = cleanup_staged_file(&temp_path);
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(source)) => Err(WorkingStoreError::StagingCleanup {
+                path: temp_path,
+                source,
+            }),
+            (Err(error), _) => Err(error),
+        }
+    }
+
+    /// Verify one logical asset reference against its content-addressed object.
+    pub fn verify_asset(
+        &self,
+        asset: &AssetRef,
+        verification: AssetVerification,
+    ) -> Result<(), WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.validate_logical_name(&asset.logical_name)?;
+        if asset.byte_len > self.limits.max_ogg_bytes as u64 {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind: "Ogg bytes",
+                actual: asset.byte_len,
+                limit: self.limits.max_ogg_bytes as u64,
+            });
+        }
+        let seal = ContentSeal {
+            byte_len: asset.byte_len,
+            sha256: asset.sha256,
+        };
+        self.verify_seal_at(&self.asset_path(asset.sha256), &seal, verification, false)
+    }
+
+    fn head_path(&self) -> PathBuf {
+        self.root.join(HEAD_FILE_NAME)
+    }
+
+    fn snapshot_path(&self, digest: Sha256Digest) -> PathBuf {
+        let hex = digest.to_string();
+        self.root
+            .join("snapshots")
+            .join("sha256")
+            .join(&hex[..2])
+            .join(format!("{}.json", &hex[2..]))
+    }
+
+    fn entity_path(&self, id: EntityId, digest: Sha256Digest) -> PathBuf {
+        let id = id.to_string();
+        self.root
+            .join("entities")
+            .join(&id[..2])
+            .join(&id[2..])
+            .join(format!("{digest}.json"))
+    }
+
+    fn asset_path(&self, digest: Sha256Digest) -> PathBuf {
+        let hex = digest.to_string();
+        self.root
+            .join("assets")
+            .join("sha256")
+            .join(&hex[..2])
+            .join(&hex[2..])
+    }
+
+    fn ensure_root_safe(&self) -> Result<(), WorkingStoreError> {
+        ensure_safe_directory_chain(&self.root)
+    }
+
+    fn check_expected_head(&self, expected: Option<&WorkingHead>) -> Result<(), WorkingStoreError> {
+        let actual = self.current_head()?;
+        if actual.as_ref() != expected {
+            return Err(WorkingStoreError::HeadConflict {
+                expected: expected.cloned(),
+                actual,
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_project_limits(&self, project: &ProjectV2) -> Result<(), WorkingStoreError> {
+        enforce_limit(
+            "entity count",
+            project.entities.len(),
+            self.limits.max_entities,
+        )?;
+        self.validate_asset_index_limits(&project.asset_store)?;
+        for entity in project.entities.values() {
+            if let EntityPayload::VoiceTake(take) = &entity.payload {
+                self.validate_logical_name(&take.asset.logical_name)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_manifest_limits(
+        &self,
+        snapshot: &SnapshotManifest,
+    ) -> Result<(), WorkingStoreError> {
+        enforce_limit(
+            "entity count",
+            snapshot.entities.len(),
+            self.limits.max_entities,
+        )?;
+        self.validate_asset_index_limits(&snapshot.asset_store)
+    }
+
+    fn validate_asset_index_limits(
+        &self,
+        index: &AssetStoreIndex,
+    ) -> Result<(), WorkingStoreError> {
+        enforce_limit("asset count", index.assets.len(), self.limits.max_assets)?;
+        let mut total = 0u64;
+        for meta in index.assets.values() {
+            total = checked_bounded_sum(
+                "aggregate referenced asset bytes",
+                total,
+                meta.byte_len,
+                self.limits.max_referenced_asset_bytes,
+            )?;
+            if meta.media_type == "audio/ogg" && meta.byte_len > self.limits.max_ogg_bytes as u64 {
+                return Err(WorkingStoreError::LimitExceeded {
+                    kind: "Ogg bytes",
+                    actual: meta.byte_len,
+                    limit: self.limits.max_ogg_bytes as u64,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_logical_name(&self, name: &str) -> Result<(), WorkingStoreError> {
+        if name.is_empty() {
+            return Err(WorkingStoreError::Invariant(
+                "asset logical_name must not be empty".to_owned(),
+            ));
+        }
+        enforce_limit(
+            "logical_name UTF-8 bytes",
+            name.len(),
+            self.limits.max_logical_name_bytes,
+        )?;
+        if name.chars().any(char::is_control) {
+            return Err(WorkingStoreError::Invariant(
+                "asset logical_name must not contain control characters".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn verify_asset_index(
+        &self,
+        index: &AssetStoreIndex,
+        verification: AssetVerification,
+    ) -> Result<(), WorkingStoreError> {
+        self.validate_asset_index_limits(index)?;
+        for (digest, meta) in &index.assets {
+            let seal = ContentSeal {
+                byte_len: meta.byte_len,
+                sha256: *digest,
+            };
+            self.verify_seal_at(&self.asset_path(*digest), &seal, verification, false)?;
+        }
+        Ok(())
+    }
+
+    fn install_immutable_bytes(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+        seal: &ContentSeal,
+    ) -> Result<bool, WorkingStoreError> {
+        let (temp_path, mut temp) = self.create_temp_file()?;
+        let result = (|| {
+            temp.write_all(bytes)?;
+            temp.flush()?;
+            temp.sync_all()?;
+            // Never expose an immutable object while a writable staging handle aliases it.
+            drop(temp);
+            self.install_staged_file(&temp_path, destination, seal)
+        })();
+        let cleanup = cleanup_staged_file(&temp_path);
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(source)) => Err(WorkingStoreError::StagingCleanup {
+                path: temp_path,
+                source,
+            }),
+            (Err(error), _) => Err(error),
+        }
+    }
+
+    fn install_staged_file(
+        &self,
+        staged: &Path,
+        destination: &Path,
+        seal: &ContentSeal,
+    ) -> Result<bool, WorkingStoreError> {
+        let parent = destination
+            .parent()
+            .ok_or_else(|| WorkingStoreError::UnsafePath {
+                path: destination.to_path_buf(),
+                reason: "object path has no parent".to_owned(),
+            })?;
+        create_directory_chain(parent)?;
+        ensure_safe_directory_chain(parent)?;
+
+        match fs::symlink_metadata(destination) {
+            Ok(_) => {
+                self.verify_existing_collision(destination, seal)?;
+                cleanup_staged_file(staged).map_err(|source| {
+                    WorkingStoreError::StagingCleanup {
+                        path: staged.to_path_buf(),
+                        source,
+                    }
+                })?;
+                return Ok(true);
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        match install_no_clobber(staged, destination) {
+            Ok(()) => {
+                cleanup_staged_file(staged).map_err(|source| {
+                    WorkingStoreError::StagingCleanup {
+                        path: staged.to_path_buf(),
+                        source,
+                    }
+                })?;
+                self.verify_seal_at(destination, seal, AssetVerification::Full, false)?;
+                Ok(false)
+            }
+            Err(error) => {
+                require_preinstall_collision(error)?;
+                self.verify_existing_collision(destination, seal)?;
+                cleanup_staged_file(staged).map_err(|source| {
+                    WorkingStoreError::StagingCleanup {
+                        path: staged.to_path_buf(),
+                        source,
+                    }
+                })?;
+                Ok(true)
+            }
+        }
+    }
+
+    fn verify_existing_collision(
+        &self,
+        path: &Path,
+        seal: &ContentSeal,
+    ) -> Result<(), WorkingStoreError> {
+        self.verify_seal_at(path, seal, AssetVerification::Full, true)
+            .map_err(|error| match error {
+                WorkingStoreError::SealMismatch { reason, .. }
+                | WorkingStoreError::UnsafePath { reason, .. } => WorkingStoreError::Collision {
+                    path: path.to_path_buf(),
+                    reason,
+                },
+                other => other,
+            })
+    }
+
+    fn read_sealed_object(
+        &self,
+        path: &Path,
+        seal: &ContentSeal,
+        max_bytes: usize,
+        kind: &'static str,
+        verification: AssetVerification,
+    ) -> Result<Vec<u8>, WorkingStoreError> {
+        if seal.byte_len > max_bytes as u64 {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind,
+                actual: seal.byte_len,
+                limit: max_bytes as u64,
+            });
+        }
+        let bytes = read_required_regular_bounded(path, max_bytes, kind)?;
+        if bytes.len() as u64 != seal.byte_len {
+            return Err(WorkingStoreError::SealMismatch {
+                path: path.to_path_buf(),
+                reason: format!("expected {} bytes, found {}", seal.byte_len, bytes.len()),
+            });
+        }
+        if verification == AssetVerification::Full && seal_bytes(&bytes).sha256 != seal.sha256 {
+            return Err(WorkingStoreError::SealMismatch {
+                path: path.to_path_buf(),
+                reason: format!("content does not match expected SHA-256 {}", seal.sha256),
+            });
+        }
+        Ok(bytes)
+    }
+
+    fn verify_seal_at(
+        &self,
+        path: &Path,
+        seal: &ContentSeal,
+        verification: AssetVerification,
+        collision: bool,
+    ) -> Result<(), WorkingStoreError> {
+        ensure_safe_existing_chain(path)?;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(WorkingStoreError::MissingObject(path.to_path_buf()));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        ensure_regular_no_link(path, &metadata)?;
+        ensure_single_link(path, &metadata)?;
+        if metadata.len() != seal.byte_len {
+            let reason = format!("expected {} bytes, found {}", seal.byte_len, metadata.len());
+            return if collision {
+                Err(WorkingStoreError::Collision {
+                    path: path.to_path_buf(),
+                    reason,
+                })
+            } else {
+                Err(WorkingStoreError::SealMismatch {
+                    path: path.to_path_buf(),
+                    reason,
+                })
+            };
+        }
+        if verification == AssetVerification::Full {
+            let actual = hash_file(path, seal.byte_len)?;
+            if actual != seal.sha256 {
+                let reason = format!("expected SHA-256 {}, found {actual}", seal.sha256);
+                return if collision {
+                    Err(WorkingStoreError::Collision {
+                        path: path.to_path_buf(),
+                        reason,
+                    })
+                } else {
+                    Err(WorkingStoreError::SealMismatch {
+                        path: path.to_path_buf(),
+                        reason,
+                    })
+                };
+            }
+        }
+        Ok(())
+    }
+
+    fn create_temp_file(&self) -> Result<(PathBuf, File), WorkingStoreError> {
+        let directory = self.root.join(".gore").join("staging");
+        create_directory_chain(&directory)?;
+        ensure_safe_directory_chain(&directory)?;
+        for _ in 0..128 {
+            let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = directory.join(format!("object-{}-{sequence:016x}.tmp", std::process::id()));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => return Ok((path, file)),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(WorkingStoreError::Invariant(
+            "could not allocate a unique staging file".to_owned(),
+        ))
+    }
+
+    fn ogg_limits(&self) -> gore_vo::Limits {
+        gore_vo::Limits {
+            max_ogg_bytes: self.limits.max_ogg_bytes,
+            ..gore_vo::Limits::default()
+        }
+    }
+}
+
+fn deserialize_unique_set<'de, D, T>(deserializer: D) -> Result<BTreeSet<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Ord + Clone + std::fmt::Display,
+{
+    let values = Vec::<T>::deserialize(deserializer)?;
+    let mut set = BTreeSet::new();
+    for value in values {
+        if !set.insert(value.clone()) {
+            return Err(de::Error::custom(format!("duplicate set value {value}")));
+        }
+    }
+    Ok(set)
+}
+
+fn deserialize_unique_map<'de, D, K, V>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+where
+    D: Deserializer<'de>,
+    K: Deserialize<'de> + Ord + Clone + std::fmt::Display,
+    V: Deserialize<'de>,
+{
+    struct UniqueMapVisitor<K, V>(std::marker::PhantomData<(K, V)>);
+
+    impl<'de, K, V> Visitor<'de> for UniqueMapVisitor<K, V>
+    where
+        K: Deserialize<'de> + Ord + Clone + std::fmt::Display,
+        V: Deserialize<'de>,
+    {
+        type Value = BTreeMap<K, V>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a map with unique keys")
+        }
+
+        fn visit_map<A>(self, mut access: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut map = BTreeMap::new();
+            while let Some((key, value)) = access.next_entry::<K, V>()? {
+                if map.insert(key.clone(), value).is_some() {
+                    return Err(de::Error::custom(format!("duplicate map key {key}")));
+                }
+            }
+            Ok(map)
+        }
+    }
+
+    deserializer.deserialize_map(UniqueMapVisitor(std::marker::PhantomData))
+}
+
+fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, WorkingStoreError> {
+    serde_json::to_vec(value).map_err(|source| WorkingStoreError::InvalidJson {
+        kind: "canonical",
+        source,
+    })
+}
+
+fn parse_canonical_json<T>(bytes: &[u8], kind: &'static str) -> Result<T, WorkingStoreError>
+where
+    T: for<'de> Deserialize<'de> + Serialize,
+{
+    let value = serde_json::from_slice(bytes)
+        .map_err(|source| WorkingStoreError::InvalidJson { kind, source })?;
+    let canonical = canonical_json(&value)?;
+    if canonical != bytes {
+        return Err(WorkingStoreError::NonCanonicalJson { kind });
+    }
+    Ok(value)
+}
+
+fn seal_bytes(bytes: &[u8]) -> ContentSeal {
+    let digest = Sha256::digest(bytes);
+    ContentSeal {
+        byte_len: bytes.len() as u64,
+        sha256: Sha256Digest::from_bytes(digest.into()),
+    }
+}
+
+fn digest_from_hasher(hasher: Sha256) -> Sha256Digest {
+    Sha256Digest::from_bytes(hasher.finalize().into())
+}
+
+fn validate_nonzero_seal(
+    seal: &ContentSeal,
+    max: usize,
+    kind: &'static str,
+) -> Result<(), WorkingStoreError> {
+    if seal.byte_len == 0 {
+        return Err(WorkingStoreError::Invariant(format!(
+            "{kind} seal byte_len must be non-zero"
+        )));
+    }
+    if seal.byte_len > max as u64 {
+        return Err(WorkingStoreError::LimitExceeded {
+            kind,
+            actual: seal.byte_len,
+            limit: max as u64,
+        });
+    }
+    Ok(())
+}
+
+fn enforce_limit(kind: &'static str, actual: usize, limit: usize) -> Result<(), WorkingStoreError> {
+    if actual > limit {
+        Err(WorkingStoreError::LimitExceeded {
+            kind,
+            actual: actual as u64,
+            limit: limit as u64,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn checked_bounded_sum(
+    kind: &'static str,
+    current: u64,
+    addition: u64,
+    limit: u64,
+) -> Result<u64, WorkingStoreError> {
+    let total = current
+        .checked_add(addition)
+        .ok_or(WorkingStoreError::LimitExceeded {
+            kind,
+            actual: u64::MAX,
+            limit,
+        })?;
+    if total > limit {
+        Err(WorkingStoreError::LimitExceeded {
+            kind,
+            actual: total,
+            limit,
+        })
+    } else {
+        Ok(total)
+    }
+}
+
+fn cleanup_staged_file(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+enum NoClobberInstallError {
+    AlreadyExists,
+    Failed(WorkingStoreError),
+}
+
+impl From<WorkingStoreError> for NoClobberInstallError {
+    fn from(error: WorkingStoreError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl From<io::Error> for NoClobberInstallError {
+    fn from(error: io::Error) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
+fn classify_no_clobber_io(error: io::Error) -> NoClobberInstallError {
+    if error.kind() == io::ErrorKind::AlreadyExists
+        || matches!(error.raw_os_error(), Some(80 | 183))
+    {
+        NoClobberInstallError::AlreadyExists
+    } else {
+        NoClobberInstallError::Failed(error.into())
+    }
+}
+
+fn require_preinstall_collision(error: NoClobberInstallError) -> Result<(), WorkingStoreError> {
+    match error {
+        NoClobberInstallError::AlreadyExists => Ok(()),
+        // Cleanup, directory-sync, and write-through failures remain fatal even when the object
+        // entry is already visible; otherwise a non-durable object could be published by head.
+        NoClobberInstallError::Failed(error) => Err(error),
+    }
+}
+
+#[cfg(windows)]
+fn install_no_clobber(staged: &Path, destination: &Path) -> Result<(), NoClobberInstallError> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let staged_meta = fs::symlink_metadata(staged)?;
+    ensure_regular_no_link(staged, &staged_meta)?;
+    ensure_single_link(staged, &staged_meta)?;
+
+    // canonicalize gives Win32's verbatim absolute spelling, avoiding MAX_PATH truncation.
+    let staged = fs::canonicalize(staged)?;
+    let destination_parent =
+        fs::canonicalize(
+            destination
+                .parent()
+                .ok_or_else(|| WorkingStoreError::UnsafePath {
+                    path: destination.to_path_buf(),
+                    reason: "object path has no parent".to_owned(),
+                })?,
+        )?;
+    let destination = destination_parent.join(destination.file_name().ok_or_else(|| {
+        WorkingStoreError::UnsafePath {
+            path: destination.to_path_buf(),
+            reason: "object path has no filename".to_owned(),
+        }
+    })?);
+    let staged_wide = staged
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination_wide = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both pointers reference NUL-terminated buffers that live through the call. No
+    // replace flag is supplied, so an existing immutable destination is never overwritten.
+    let moved = unsafe {
+        MoveFileExW(
+            staged_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(classify_no_clobber_io(io::Error::last_os_error()))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+fn install_no_clobber(staged: &Path, destination: &Path) -> Result<(), NoClobberInstallError> {
+    let staged_meta = fs::symlink_metadata(staged)?;
+    ensure_regular_no_link(staged, &staged_meta)?;
+    ensure_single_link(staged, &staged_meta)?;
+    fs::hard_link(staged, destination).map_err(classify_no_clobber_io)?;
+    cleanup_staged_file(staged).map_err(|source| WorkingStoreError::StagingCleanup {
+        path: staged.to_path_buf(),
+        source,
+    })?;
+    sync_directory(destination.parent().expect("derived object has a parent"))?;
+    sync_directory(staged.parent().expect("staging object has a parent"))?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn sync_directory(path: &Path) -> Result<(), WorkingStoreError> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+fn read_optional_regular_bounded(
+    path: &Path,
+    max: usize,
+    kind: &'static str,
+) -> Result<Option<Vec<u8>>, WorkingStoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            ensure_safe_existing_chain(path)?;
+            ensure_regular_no_link(path, &metadata)?;
+            if metadata.len() > max as u64 {
+                return Err(WorkingStoreError::LimitExceeded {
+                    kind,
+                    actual: metadata.len(),
+                    limit: max as u64,
+                });
+            }
+            let mut file = open_regular_read_no_follow(path)?;
+            let opened_metadata = file.metadata()?;
+            ensure_regular_no_link(path, &opened_metadata)?;
+            ensure_single_link(path, &opened_metadata)?;
+            if opened_metadata.len() > max as u64 {
+                return Err(WorkingStoreError::LimitExceeded {
+                    kind,
+                    actual: opened_metadata.len(),
+                    limit: max as u64,
+                });
+            }
+            let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+            Read::by_ref(&mut file)
+                .take(max as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            enforce_limit(kind, bytes.len(), max)?;
+            if bytes.len() as u64 != opened_metadata.len() {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "{kind} length changed while reading {}: expected {}, read {}",
+                    path.display(),
+                    opened_metadata.len(),
+                    bytes.len()
+                )));
+            }
+            Ok(Some(bytes))
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn read_required_regular_bounded(
+    path: &Path,
+    max: usize,
+    kind: &'static str,
+) -> Result<Vec<u8>, WorkingStoreError> {
+    read_optional_regular_bounded(path, max, kind)?
+        .ok_or_else(|| WorkingStoreError::MissingObject(path.to_path_buf()))
+}
+
+fn hash_file(path: &Path, expected_len: u64) -> Result<Sha256Digest, WorkingStoreError> {
+    let mut file = open_regular_read_no_follow(path)?;
+    let metadata = file.metadata()?;
+    ensure_regular_no_link(path, &metadata)?;
+    ensure_single_link(path, &metadata)?;
+    let mut hasher = Sha256::new();
+    let mut total = 0u64;
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        total = total.checked_add(count as u64).ok_or_else(|| {
+            WorkingStoreError::Invariant("file length overflow while hashing".to_owned())
+        })?;
+        if total > expected_len {
+            return Err(WorkingStoreError::SealMismatch {
+                path: path.to_path_buf(),
+                reason: format!("file grew beyond expected {expected_len} bytes while hashing"),
+            });
+        }
+        hasher.update(&buffer[..count]);
+    }
+    if total != expected_len {
+        return Err(WorkingStoreError::SealMismatch {
+            path: path.to_path_buf(),
+            reason: format!("expected {expected_len} bytes, read {total}"),
+        });
+    }
+    Ok(digest_from_hasher(hasher))
+}
+
+fn open_regular_read_no_follow(path: &Path) -> Result<File, WorkingStoreError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Open the reparse point itself so handle metadata can reject it rather than following it.
+        options.custom_flags(0x0020_0000);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Linux O_NOFOLLOW. Other Unix targets retain prefix and post-open handle checks.
+        options.custom_flags(0x0002_0000);
+    }
+    let file = options.open(path)?;
+    ensure_regular_no_link(path, &file.metadata()?)?;
+    Ok(file)
+}
+
+fn absolute_path(path: &Path) -> Result<PathBuf, WorkingStoreError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    normalize_absolute(&absolute)
+}
+
+fn normalize_absolute(path: &Path) -> Result<PathBuf, WorkingStoreError> {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(WorkingStoreError::UnsafePath {
+                        path: path.to_path_buf(),
+                        reason: "path escapes its filesystem root".to_owned(),
+                    });
+                }
+            }
+        }
+    }
+    if !normalized.is_absolute() {
+        return Err(WorkingStoreError::UnsafePath {
+            path: path.to_path_buf(),
+            reason: "path could not be made absolute".to_owned(),
+        });
+    }
+    Ok(normalized)
+}
+
+fn create_directory_chain(path: &Path) -> Result<(), WorkingStoreError> {
+    // Reject any existing link before creation, then re-walk after creation. This deliberately
+    // avoids `create_dir_all` traversing an existing link/reparse prefix.
+    ensure_existing_prefixes_safe(path)?;
+    fs::create_dir_all(path)?;
+    ensure_safe_directory_chain(path)
+}
+
+fn ensure_safe_directory_chain(path: &Path) -> Result<(), WorkingStoreError> {
+    ensure_existing_prefixes_safe(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if is_link_or_reparse(&metadata) || !metadata.file_type().is_dir() {
+        return Err(WorkingStoreError::UnsafePath {
+            path: path.to_path_buf(),
+            reason: "expected a real directory, not a link/reparse point".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_safe_existing_chain(path: &Path) -> Result<(), WorkingStoreError> {
+    ensure_existing_prefixes_safe(path)
+}
+
+fn ensure_existing_prefixes_safe(path: &Path) -> Result<(), WorkingStoreError> {
+    let mut prefixes = path.ancestors().collect::<Vec<_>>();
+    prefixes.reverse();
+    for prefix in prefixes {
+        if prefix.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(prefix) {
+            Ok(metadata) => {
+                if is_link_or_reparse(&metadata) {
+                    return Err(WorkingStoreError::UnsafePath {
+                        path: prefix.to_path_buf(),
+                        reason: "link/reparse points are forbidden in store paths".to_owned(),
+                    });
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_regular_no_link(path: &Path, metadata: &fs::Metadata) -> Result<(), WorkingStoreError> {
+    if is_link_or_reparse(metadata) || !metadata.file_type().is_file() {
+        return Err(WorkingStoreError::UnsafePath {
+            path: path.to_path_buf(),
+            reason: "expected a regular file, not a link/reparse point".to_owned(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_single_link(path: &Path, _metadata: &fs::Metadata) -> Result<(), WorkingStoreError> {
+    #[cfg(windows)]
+    let count = windows_hard_link_count(path)?;
+    #[cfg(unix)]
+    let count = {
+        use std::os::unix::fs::MetadataExt;
+        _metadata.nlink()
+    };
+    #[cfg(not(any(windows, unix)))]
+    let count = 1;
+
+    if count != 1 {
+        Err(WorkingStoreError::UnsafePath {
+            path: path.to_path_buf(),
+            reason: format!("immutable object has {count} hard links; expected exactly one"),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn windows_hard_link_count(path: &Path) -> Result<u64, WorkingStoreError> {
+    use std::ffi::c_void;
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct FileTime {
+        dwLowDateTime: u32,
+        dwHighDateTime: u32,
+    }
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct ByHandleFileInformation {
+        dwFileAttributes: u32,
+        ftCreationTime: FileTime,
+        ftLastAccessTime: FileTime,
+        ftLastWriteTime: FileTime,
+        dwVolumeSerialNumber: u32,
+        nFileSizeHigh: u32,
+        nFileSizeLow: u32,
+        nNumberOfLinks: u32,
+        nFileIndexHigh: u32,
+        nFileIndexLow: u32,
+    }
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut c_void,
+            information: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    let file = open_regular_read_no_follow(path)?;
+    let mut information = MaybeUninit::<ByHandleFileInformation>::uninit();
+    // SAFETY: `file` remains open, and `information` points to writable storage of the exact
+    // Win32 BY_HANDLE_FILE_INFORMATION layout until the call returns.
+    let succeeded =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle(), information.as_mut_ptr()) };
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    // SAFETY: a successful call initializes the complete output structure.
+    let information = unsafe { information.assume_init() };
+    Ok(u64::from(information.nNumberOfLinks))
+}
+
+fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & WINDOWS_REPARSE_POINT_ATTRIBUTE != 0
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = WINDOWS_REPARSE_POINT_ATTRIBUTE;
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn post_install_durability_failure_is_never_reclassified_as_dedupe() {
+        let injected = WorkingStoreError::StagingCleanup {
+            path: PathBuf::from("injected-staging-object"),
+            source: io::Error::other("injected directory sync failure"),
+        };
+        assert!(matches!(
+            require_preinstall_collision(NoClobberInstallError::Failed(injected)),
+            Err(WorkingStoreError::StagingCleanup { .. })
+        ));
+        assert!(require_preinstall_collision(NoClobberInstallError::AlreadyExists).is_ok());
+    }
+}

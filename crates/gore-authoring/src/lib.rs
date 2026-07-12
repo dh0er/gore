@@ -10,6 +10,7 @@ mod model;
 mod npc;
 mod quest;
 mod validate;
+mod working_store;
 
 pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
 pub use model::{
@@ -37,3 +38,7 @@ pub use quest::{
     MAX_DRAFT_QUEST_TITLE_BYTES,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
+pub use working_store::{
+    AssetVerification, CheckpointPreparation, ImportedOgg, OpenedCheckpoint, WorkingHead,
+    WorkingProjectStore, WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
+};
