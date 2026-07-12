@@ -60,6 +60,18 @@ class AtomicSwapRecoveryException extends AtomicSwapException {
   String toString() => 'AtomicSwapRecoveryException: $message';
 }
 
+/// The target no longer contains the generation the caller based its edit on.
+///
+/// No replacement journal or content generation is created for this failure.
+/// Callers can safely offer reload/compare instead of overwriting external
+/// changes.
+class AtomicSwapConflictException extends AtomicSwapException {
+  const AtomicSwapConflictException(super.message);
+
+  @override
+  String toString() => 'AtomicSwapConflictException: $message';
+}
+
 /// Crash-recoverable replacement of complete byte files.
 ///
 /// Operations for the same normalized target are serialized process-wide,
@@ -121,6 +133,36 @@ class AtomicByteReplacement {
     final snapshot = Uint8List.fromList(bytes);
     return _serialized(normalizedTarget, () async {
       await _repairUnlocked(normalizedTarget, validate);
+      await _replaceUnlocked(normalizedTarget, snapshot, validate);
+    });
+  }
+
+  /// Replace [target] only if its complete current bytes still equal
+  /// [expectedBytes]. A null expectation means the target must still be absent.
+  ///
+  /// The comparison runs after interrupted-swap repair and inside the same
+  /// process-wide target lane as publication. This prevents a queued writer
+  /// from checking stale state before an earlier writer finishes. A separate
+  /// project/session lock is still required to exclude other processes.
+  Future<void> replaceIfUnchanged({
+    required File target,
+    required List<int> bytes,
+    required List<int>? expectedBytes,
+    required AtomicFileValidator validate,
+  }) {
+    final normalizedTarget = File(_normalizedAbsolute(target.path));
+    final snapshot = Uint8List.fromList(bytes);
+    final expectedSnapshot = expectedBytes == null
+        ? null
+        : Uint8List.fromList(expectedBytes);
+    return _serialized(normalizedTarget, () async {
+      await _repairUnlocked(normalizedTarget, validate);
+      if (!await _hasExpectedBytes(normalizedTarget, expectedSnapshot)) {
+        throw AtomicSwapConflictException(
+          'target changed since the caller captured its base generation: '
+          '${normalizedTarget.path}',
+        );
+      }
       await _replaceUnlocked(normalizedTarget, snapshot, validate);
     });
   }
@@ -428,6 +470,33 @@ class AtomicByteReplacement {
       return await validate(file);
     } catch (_) {
       return false;
+    }
+  }
+
+  static Future<bool> _hasExpectedBytes(File file, Uint8List? expected) async {
+    final type = await _safeType(file, label: 'expected target generation');
+    if (expected == null) return type == FileSystemEntityType.notFound;
+    if (type != FileSystemEntityType.file ||
+        await file.length() != expected.length) {
+      return false;
+    }
+
+    final handle = await file.open(mode: FileMode.read);
+    try {
+      const chunkSize = 64 * 1024;
+      var offset = 0;
+      while (offset < expected.length) {
+        final count = min(chunkSize, expected.length - offset);
+        final actual = await handle.read(count);
+        if (actual.length != count) return false;
+        for (var index = 0; index < count; index++) {
+          if (actual[index] != expected[offset + index]) return false;
+        }
+        offset += count;
+      }
+      return (await handle.read(1)).isEmpty;
+    } finally {
+      await handle.close();
     }
   }
 

@@ -78,6 +78,52 @@ void main() {
     },
   );
 
+  test('compare-and-replace accepts exact existing and absent bases', () async {
+    final first = AtomicByteReplacement(
+      operationIdFactory: () => '01000000000000000000000000000001',
+    );
+    await first.replaceIfUnchanged(
+      target: target,
+      bytes: _oldBytes,
+      expectedBytes: null,
+      validate: _validGeneration,
+    );
+    expect(await target.readAsBytes(), _oldBytes);
+
+    final second = AtomicByteReplacement(
+      operationIdFactory: () => '01000000000000000000000000000002',
+    );
+    await second.replaceIfUnchanged(
+      target: target,
+      bytes: _newBytes,
+      expectedBytes: _oldBytes,
+      validate: _validGeneration,
+    );
+    expect(await target.readAsBytes(), _newBytes);
+    expect(await directory.list().map((entry) => entry.path).toList(), [
+      target.path,
+    ]);
+  });
+
+  test('compare-and-replace rejects drift without creating residue', () async {
+    await target.writeAsBytes(_newBytes, flush: true);
+
+    await expectLater(
+      AtomicByteReplacement().replaceIfUnchanged(
+        target: target,
+        bytes: _newerBytes,
+        expectedBytes: _oldBytes,
+        validate: _validGeneration,
+      ),
+      throwsA(isA<AtomicSwapConflictException>()),
+    );
+
+    expect(await target.readAsBytes(), _newBytes);
+    expect(await directory.list().map((entry) => entry.path).toList(), [
+      target.path,
+    ]);
+  });
+
   test(
     'crash after journal commit but before temp creation keeps the target',
     () async {
@@ -500,4 +546,44 @@ void main() {
     expect(secondStarted, isTrue);
     expect(await target.readAsBytes(), _newerBytes);
   });
+
+  test(
+    'queued compare-and-replace checks its base inside the target lane',
+    () async {
+      await target.writeAsBytes(_oldBytes);
+      final firstBlocked = Completer<void>();
+      final releaseFirst = Completer<void>();
+      final first = AtomicByteReplacement(
+        operationIdFactory: () => '81000000000000000000000000000001',
+        onPhase: (phase) async {
+          if (phase == AtomicSwapPhase.journalCommitted &&
+              !firstBlocked.isCompleted) {
+            firstBlocked.complete();
+            await releaseFirst.future;
+          }
+        },
+      );
+
+      final firstWrite = first.replace(
+        target: target,
+        bytes: _newBytes,
+        validate: _validGeneration,
+      );
+      await firstBlocked.future;
+      final staleWrite = AtomicByteReplacement().replaceIfUnchanged(
+        target: target,
+        bytes: _newerBytes,
+        expectedBytes: _oldBytes,
+        validate: _validGeneration,
+      );
+
+      releaseFirst.complete();
+      await firstWrite;
+      await expectLater(
+        staleWrite,
+        throwsA(isA<AtomicSwapConflictException>()),
+      );
+      expect(await target.readAsBytes(), _newBytes);
+    },
+  );
 }
