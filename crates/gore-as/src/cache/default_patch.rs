@@ -15,6 +15,10 @@ use thiserror::Error;
 
 use super::binds::NativeApi;
 use super::default_ancestry::DefaultNativeAncestry;
+use super::default_class_hierarchy::{
+    DefaultClassAncestryProof as AncestryProof, DefaultClassHierarchy as ClassHierarchy,
+    DefaultClassHierarchyError, DefaultClassIdentity as ClassIdentity,
+};
 use super::default_fingerprint::{combined_default_cache_fingerprint, scalar_default_cache_sha256};
 pub use super::default_patterns::DefaultPattern;
 use super::default_patterns::{
@@ -162,6 +166,46 @@ pub enum DefaultSiteError {
     NativeProfileFingerprint(String),
 }
 
+impl From<DefaultClassHierarchyError> for DefaultSiteError {
+    fn from(error: DefaultClassHierarchyError) -> Self {
+        match error {
+            DefaultClassHierarchyError::DuplicateClass { module, class } => {
+                Self::DuplicateClass { module, class }
+            }
+            DefaultClassHierarchyError::DuplicateBareClass {
+                class,
+                first_module,
+                second_module,
+            } => Self::DuplicateBareClass {
+                class,
+                first_module,
+                second_module,
+            },
+            DefaultClassHierarchyError::DuplicateDirectField {
+                module,
+                class,
+                field,
+            } => Self::DuplicateDirectField {
+                module,
+                class,
+                field,
+            },
+            DefaultClassHierarchyError::CyclicClassHierarchy { class } => {
+                Self::CyclicClassHierarchy { class }
+            }
+            DefaultClassHierarchyError::AmbiguousInitializer {
+                module,
+                class,
+                count,
+            } => Self::AmbiguousInitializer {
+                module,
+                class,
+                count,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum DefaultPatchError {
     #[error(transparent)]
@@ -184,29 +228,14 @@ pub enum DefaultPatchError {
     Postcondition(String),
 }
 
-#[derive(Debug, Clone)]
-struct ClassIdentity {
-    module: String,
-    class: String,
-}
-
 #[derive(Debug)]
 struct InspectionContext {
     refs: RefResolver,
-    identities: HashMap<String, ClassIdentity>,
     hierarchy: ClassHierarchy,
     /// Exact direct script fields whose serialized `DataType.type_info` resolves to one parsed
     /// script enum's full module/namespace/name identity.
     script_enum_fields: HashMap<String, HashMap<String, TypeIdentity>>,
     script_cache_guid: [u8; 16],
-}
-
-#[derive(Debug, Clone)]
-struct ClassHierarchy {
-    /// Every script class appears exactly once. `None` means no declared super; a non-script
-    /// parent remains a valid terminal name so direct native ownership can still be proven.
-    supers: HashMap<String, Option<String>>,
-    native: Option<DefaultNativeAncestry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,12 +246,6 @@ enum ValueKind {
     Float32,
     Float64,
     Enum,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AncestryProof {
-    Script,
-    Native(&'static str),
 }
 
 /// Discover every uniquely editable direct-member default site in a cache.
@@ -402,10 +425,8 @@ impl InspectionContext {
         let mut refs = RefResolver::build(cache).map_err(wire_error)?;
         let script_enum_fields = proven_script_enum_fields(&modules, &refs);
         prepare_resolver_semantics(&modules, &mut refs, native);
-        let identities = class_identities(&modules)?;
         Ok(Self {
             refs,
-            identities,
             hierarchy,
             script_enum_fields,
             script_cache_guid,
@@ -420,7 +441,7 @@ impl InspectionContext {
         let mut init_counts: HashMap<&str, usize> = HashMap::new();
 
         for span in &spans {
-            let Some(identity) = self.identities.get(&span.code.func) else {
+            let Some(identity) = self.hierarchy.initializer_identity(&span.code.func) else {
                 continue;
             };
             if span.kind != FuncCodeKind::ClassMethod
@@ -697,95 +718,6 @@ fn validate_cache(cache: &[u8]) -> Result<(), DefaultSiteError> {
     Ok(())
 }
 
-impl ClassHierarchy {
-    fn build(
-        modules: &[Module],
-        native: Option<DefaultNativeAncestry>,
-    ) -> Result<Self, DefaultSiteError> {
-        let mut supers = HashMap::new();
-        let mut defining_modules: HashMap<String, String> = HashMap::new();
-        for module in modules {
-            for class in &module.classes {
-                if let Some(first_module) = defining_modules.get(&class.name) {
-                    return Err(DefaultSiteError::DuplicateBareClass {
-                        class: class.name.clone(),
-                        first_module: first_module.clone(),
-                        second_module: module.name.clone(),
-                    });
-                }
-                defining_modules.insert(class.name.clone(), module.name.clone());
-                let mut direct_fields = HashSet::new();
-                for field in &class.fields {
-                    if !direct_fields.insert(field.name.as_str()) {
-                        return Err(DefaultSiteError::DuplicateDirectField {
-                            module: module.name.clone(),
-                            class: class.name.clone(),
-                            field: field.name.clone(),
-                        });
-                    }
-                }
-                supers.insert(
-                    class.name.clone(),
-                    class.super_class.clone().filter(|name| !name.is_empty()),
-                );
-            }
-        }
-
-        let hierarchy = Self { supers, native };
-        for class in hierarchy.supers.keys() {
-            hierarchy.validate_chain(class)?;
-        }
-        Ok(hierarchy)
-    }
-
-    fn validate_chain(&self, start: &str) -> Result<(), DefaultSiteError> {
-        let mut seen = HashSet::new();
-        let mut current = start;
-        while let Some(Some(parent)) = self.supers.get(current) {
-            if !seen.insert(current) {
-                return Err(DefaultSiteError::CyclicClassHierarchy {
-                    class: start.to_owned(),
-                });
-            }
-            // An unparsed parent is a native terminal. Its name is still usable as the direct
-            // owner proof, but ancestry above it is deliberately unknown.
-            if !self.supers.contains_key(parent) {
-                return Ok(());
-            }
-            current = parent;
-        }
-        Ok(())
-    }
-
-    fn proves_ancestry(&self, target: &str, owner: &str) -> Option<AncestryProof> {
-        if target == owner {
-            return self
-                .supers
-                .contains_key(target)
-                .then_some(AncestryProof::Script);
-        }
-        let mut seen = HashSet::new();
-        let mut current = target;
-        while let Some(Some(parent)) = self.supers.get(current) {
-            if !seen.insert(current) {
-                return None;
-            }
-            if parent == owner {
-                return Some(AncestryProof::Script);
-            }
-            if !self.supers.contains_key(parent) {
-                return self
-                    .native
-                    .as_ref()
-                    .filter(|profile| profile.proves_ancestry(parent, owner))
-                    .map(|profile| AncestryProof::Native(profile.profile_id()));
-            }
-            current = parent;
-        }
-        None
-    }
-}
-
 fn proven_script_enum_fields(
     modules: &[Module],
     refs: &RefResolver,
@@ -858,53 +790,6 @@ fn canonical_script_enum_type(identity: &TypeIdentity) -> String {
         identity.name.len(),
         identity.name
     )
-}
-
-fn class_identities(
-    modules: &[Module],
-) -> Result<HashMap<String, ClassIdentity>, DefaultSiteError> {
-    let mut result = HashMap::new();
-    for module in modules {
-        for class in &module.classes {
-            let initializer_count = class
-                .methods
-                .iter()
-                .filter(|function| {
-                    function.name == "__InitDefaults"
-                        && is_initializer_traits(function.traits)
-                        && function.params.is_empty()
-                        && is_plain_void(&function.ret)
-                })
-                .count();
-            if initializer_count == 0 {
-                continue;
-            }
-            if initializer_count != 1 {
-                return Err(DefaultSiteError::AmbiguousInitializer {
-                    module: module.name.clone(),
-                    class: class.name.clone(),
-                    count: initializer_count,
-                });
-            }
-            let function = format!("{}.{}::__InitDefaults", module.name, class.name);
-            if result
-                .insert(
-                    function,
-                    ClassIdentity {
-                        module: module.name.clone(),
-                        class: class.name.clone(),
-                    },
-                )
-                .is_some()
-            {
-                return Err(DefaultSiteError::DuplicateClass {
-                    module: module.name.clone(),
-                    class: class.name.clone(),
-                });
-            }
-        }
-    }
-    Ok(result)
 }
 
 fn normalize_type_name(value: &str) -> String {
@@ -1276,7 +1161,7 @@ mod tests {
         ];
         assert!(matches!(
             ClassHierarchy::build(&duplicate, None),
-            Err(DefaultSiteError::DuplicateBareClass { .. })
+            Err(DefaultClassHierarchyError::DuplicateBareClass { .. })
         ));
 
         let cycle = [
@@ -1285,7 +1170,7 @@ mod tests {
         ];
         assert!(matches!(
             ClassHierarchy::build(&cycle, None),
-            Err(DefaultSiteError::CyclicClassHierarchy { .. })
+            Err(DefaultClassHierarchyError::CyclicClassHierarchy { .. })
         ));
     }
 
@@ -1312,7 +1197,7 @@ mod tests {
         ];
         assert!(matches!(
             ClassHierarchy::build(&[module], None),
-            Err(DefaultSiteError::DuplicateDirectField { field, .. }) if field == "Value"
+            Err(DefaultClassHierarchyError::DuplicateDirectField { field, .. }) if field == "Value"
         ));
     }
 

@@ -5,6 +5,7 @@ pub mod bytediff;
 pub mod cfg;
 pub mod decompile;
 pub mod default_ancestry;
+pub(crate) mod default_class_hierarchy;
 pub(crate) mod default_fingerprint;
 pub mod default_patch;
 pub(crate) mod default_patterns;

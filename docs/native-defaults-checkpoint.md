@@ -26,30 +26,34 @@ joins native ancestry only after the parsed script chain reaches an unresolved n
 
 The cache-only GameplayTag-to-float32 scanner in `default_tag_map.rs` remains read-only. It
 losslessly parses the exact tail identities and proves the generated initializer, `GameplayTag`
-global, and `TMap<FGameplayTag,float32>::Add` signature. The only public promotion boundary is now
-`inspect_native_tag_maps(cache, profile)`, which rebuilds the cache proof, binds full raw SHA/GUID
-and combined-fingerprint provenance, and admits only exact declared native USMAP field shapes into
-an opaque read-only report. The Shipping audit proves all 1,432 raw windows and eight distinct
-native map fields; Sword remains unique. The sealed field-profile digest is
+global, and `TMap<FGameplayTag,float32>::Add` signature. Public inspection through
+`inspect_native_tag_maps(cache, profile)` additionally proves one unique parsed target class and
+its duplicate-/cycle-safe script-to-native-owner ancestry before emitting a strict semantic v1
+selector in an opaque read-only report. Public offline mutation through `patch_native_tag_map`
+accepts only `cache + profile + selector + expected + replacement` and rebuilds that proof before
+and after one four-byte copy-on-write CAS. The Shipping audit proves all 1,432 raw windows and eight
+distinct native map fields; Sword remains unique. The sealed field-profile digest is
 `5fa2e35616cb6b04a3060202e55ff575d8e8aeab5a25602aeddc10b3ad542708`, and its opaque proof ID is
 `sha256:f20ce5ce571f3d121046ac1942e0705cfb30c3761a3e390cd5d77ea2c16159cc`.
 
 Configured Shipping tests prove that changing a tag operand changes the legacy scalar-only digest
 but preserves the combined fingerprint, permits ancestry reconstruction in a later pass, and
-rediscovers all 1,432 opaque native sites with the changed expected bytes. Native scalar-default
-inspection also retains the same sealed ancestry after that tag edit.
+rediscovers the opaque native sites with changed expected bytes. The core Sword E2E proves the
+unique native-ancestry selector for `m_DamageBase`, patches float32 `10` to `11` without changing
+the input, changes no bytes outside its four-byte operand, reconstructs ancestry from the output,
+and rejects stale replay CAS. Native scalar-default inspection also retains the same sealed
+ancestry after a tag edit.
 
 ## Required before enabling native mutation
 
 Ancestry tuple binding, selector v4, exact Class edges, content-sealed CLI USMAP discovery, and the
 real Sword scalar recovery/patch/rediscovery test are complete in `40611d8` and `6658f80`.
 
-The opaque cache/profile report, combined mutation-stable fingerprint, and post-tag reconstruction
-and rediscovery gates are complete. Tag-map mutation still requires a semantic selector with
-uniqueness rules, compare-and-swap and copy-on-write mutation, post-patch rebuild/reparse, CLI
-wiring, a real end-to-end patch fixture, full regression tests, and the release build. A future
-patch path must rebuild proof from its input cache and must never accept a retained inspection
-report as write authority.
+The opaque cache/profile report, combined mutation-stable fingerprint, strict semantic selector,
+uniqueness gate, compare-and-swap/copy-on-write mutation, post-patch rebuild, and core Sword E2E are
+complete. The patch path rebuilds proof from its input cache and never accepts a retained inspection
+report as write authority. Remaining work is durable CLI publication/writing, a CLI-level Shipping
+E2E, the full regression matrix, and the release build.
 
 Unrelated generated Flutter localization changes and the pre-existing rustfmt-only `splice.rs`
 change are intentionally excluded from this checkpoint.
