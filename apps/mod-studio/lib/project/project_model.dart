@@ -36,36 +36,51 @@ class ModProject {
     List<TextureReplacement>? textures,
     List<ScriptMod>? scripts,
     List<DialogTopicDefinition>? dialogTopics,
-  }) =>
-      ModProject(
-        name: name,
-        version: version,
-        author: author,
-        delayMs: delayMs,
-        overrides: overrides,
-        locEdits: locEdits,
-        audio: audio ?? this.audio,
-        textures: textures ?? this.textures,
-        scripts: scripts ?? this.scripts,
-        dialogTopics: dialogTopics ?? this.dialogTopics,
-      );
+  }) => ModProject(
+    name: name,
+    version: version,
+    author: author,
+    delayMs: delayMs,
+    overrides: overrides,
+    locEdits: locEdits,
+    audio: audio ?? this.audio,
+    textures: textures ?? this.textures,
+    scripts: scripts ?? this.scripts,
+    dialogTopics: dialogTopics ?? this.dialogTopics,
+  );
 
   Map<String, Object?> toJson() => {
-        'format': 1,
-        'mod': {'name': name, 'version': version, 'author': author},
-        'delay_ms': delayMs,
-        'overrides': [
-          for (final o in overrides)
-            {'class': o.classId, 'field': o.field, 'old': o.oldValue, 'new': o.newValue}
-        ],
-        'loc_edits': locEdits,
-        'audio': [for (final a in audio) a.toJson()],
-        'textures': [for (final t in textures) t.toJson()],
-        'scripts': [for (final s in scripts) s.toJson()],
-        'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
-      };
+    'format': 1,
+    'mod': {'name': name, 'version': version, 'author': author},
+    'delay_ms': delayMs,
+    'overrides': [
+      for (final o in overrides)
+        {
+          'class': o.classId,
+          'field': o.field,
+          'old': o.oldValue,
+          'new': o.newValue,
+        },
+    ],
+    'loc_edits': locEdits,
+    'audio': [for (final a in audio) a.toJson()],
+    'textures': [for (final t in textures) t.toJson()],
+    'scripts': [for (final s in scripts) s.toJson()],
+    'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
+  };
 
   factory ModProject.fromJson(Map<String, Object?> j) {
+    if (!j.containsKey('format')) {
+      throw const FormatException('missing project format; expected integer 1');
+    }
+    final format = j['format'];
+    if (format is! int) {
+      throw const FormatException('project format must be the integer 1');
+    }
+    if (format != 1) {
+      throw FormatException('unsupported project format $format; expected 1');
+    }
+
     final mod = (j['mod'] as Map?)?.cast<String, Object?>() ?? const {};
     return ModProject(
       name: (mod['name'] as String?) ?? 'Mod',
@@ -74,50 +89,56 @@ class ModProject {
       delayMs: (j['delay_ms'] as num?)?.toInt() ?? 0,
       overrides: [
         for (final o in (j['overrides'] as List? ?? const []))
-          _overrideFrom((o as Map).cast<String, Object?>())
+          _overrideFrom((o as Map).cast<String, Object?>()),
       ],
       locEdits: _locFrom(j['loc_edits']),
       audio: [
         for (final a in (j['audio'] as List? ?? const []))
-          AudioReplacement.fromJson((a as Map).cast<String, Object?>())
+          AudioReplacement.fromJson((a as Map).cast<String, Object?>()),
       ],
       textures: [
         for (final t in (j['textures'] as List? ?? const []))
-          TextureReplacement.fromJson((t as Map).cast<String, Object?>())
+          TextureReplacement.fromJson((t as Map).cast<String, Object?>()),
       ],
       scripts: [
         for (final s in (j['scripts'] as List? ?? const []))
-          ScriptMod.fromJson((s as Map).cast<String, Object?>())
+          ScriptMod.fromJson((s as Map).cast<String, Object?>()),
       ],
       dialogTopics: [
         for (final topic in (j['dialog_topics'] as List? ?? const []))
-          DialogTopicDefinition.fromJson((topic as Map).cast<String, Object?>())
+          DialogTopicDefinition.fromJson(
+            (topic as Map).cast<String, Object?>(),
+          ),
       ],
     );
   }
 
   /// The `BuildSpec` JSON for the `mod_build` FFI command.
   Map<String, Object?> toBuildSpec() => {
-        'meta': {'name': name, 'version': version, 'author': author},
-        'delay_ms': delayMs,
-        'overrides': [for (final o in overrides) o.toFfiJson()],
-        'loc_edits': locEdits,
-        'audio': [for (final a in audio) a.toJson()],
-        'texture': [for (final t in textures) t.toJson()],
-        'scripts': [
-          for (final s in scripts)
-            {'op': scriptOpToString(s.op), 'module_name': s.moduleName, 'mini_cache': s.miniPath}
-        ],
-        'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
-      };
+    'meta': {'name': name, 'version': version, 'author': author},
+    'delay_ms': delayMs,
+    'overrides': [for (final o in overrides) o.toFfiJson()],
+    'loc_edits': locEdits,
+    'audio': [for (final a in audio) a.toJson()],
+    'texture': [for (final t in textures) t.toJson()],
+    'scripts': [
+      for (final s in scripts)
+        {
+          'op': scriptOpToString(s.op),
+          'module_name': s.moduleName,
+          'mini_cache': s.miniPath,
+        },
+    ],
+    'dialog_topics': [for (final topic in dialogTopics) topic.toJson()],
+  };
 }
 
 OverrideEntry _overrideFrom(Map<String, Object?> j) => OverrideEntry(
-      classId: j['class'] as String,
-      field: j['field'] as String,
-      oldValue: j['old'],
-      newValue: j['new'] as Object,
-    );
+  classId: j['class'] as String,
+  field: j['field'] as String,
+  oldValue: j['old'],
+  newValue: j['new'] as Object,
+);
 
 Map<String, Map<String, String>> _locFrom(Object? v) {
   final out = <String, Map<String, String>>{};
