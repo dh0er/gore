@@ -176,6 +176,21 @@ class ModFfi {
     return AuthoringStoreOpenedResult.fromJson(response);
   }
 
+  /// Open the fixed canonical head and dispatch one closed schema-revision-1/2 document.
+  Future<AuthoringStoreOpenedResult> authoringStoreOpenDocument({
+    required String root,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    final response = await _call('authoring_store_open_document', {
+      'root': root,
+      'verification': verification.wireName,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoreOpenedResult.fromJson(response);
+  }
+
   /// Prepare immutable objects without publishing `gore-project.json`.
   ///
   /// `expectedHead == null` is a strict CAS assertion that the fixed head is absent. The raw
@@ -201,6 +216,32 @@ class ModFfi {
     return AuthoringCheckpointPreparation.fromJson(response);
   }
 
+  /// Prepare immutable objects for a closed schema-revision-1/2 document without publishing it.
+  ///
+  /// The raw document string and exact optional head CAS token are preserved byte-for-byte.
+  Future<AuthoringCheckpointPreparation>
+  authoringStorePrepareDocumentCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    _authoringStoreRequestString(
+      projectJson,
+      'projectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final response =
+        await _call('authoring_store_prepare_document_checkpoint', {
+          'root': root,
+          'expected_head_json': expectedHead?.canonicalJson,
+          'project_json': projectJson,
+          'profile': profile.wireName,
+        });
+    return AuthoringCheckpointPreparation.fromJson(response);
+  }
+
   /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.
   Future<AuthoringStoreOpenedResult> authoringStoreOpenHeadBytes({
     required String root,
@@ -210,6 +251,23 @@ class ModFfi {
   }) async {
     _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
     final response = await _call('authoring_store_open_head_bytes', {
+      'root': root,
+      'head_json': head.canonicalJson,
+      'verification': verification.wireName,
+      'profile': profile.wireName,
+    });
+    return AuthoringStoreOpenedResult.fromJson(response);
+  }
+
+  /// Reopen one revision-dispatched candidate from its exact canonical head bytes.
+  Future<AuthoringStoreOpenedResult> authoringStoreOpenHeadBytesDocument({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+    required AuthoringValidationProfile profile,
+  }) async {
+    _authoringStoreRequestString(root, 'root', _maxAuthoringStorePathBytes);
+    final response = await _call('authoring_store_open_head_bytes_document', {
       'root': root,
       'head_json': head.canonicalJson,
       'verification': verification.wireName,
@@ -606,7 +664,7 @@ String _authoringEntityId(String value, String field) {
   return value;
 }
 
-void _authoringRequireCanonicalProjectJson(String projectJson) {
+int _authoringRequireCanonicalProjectJson(String projectJson) {
   final Object? decoded;
   try {
     decoded = jsonDecode(projectJson);
@@ -627,11 +685,23 @@ void _authoringRequireCanonicalProjectJson(String projectJson) {
       );
     }
   }
+  if (project['format'] != 2) {
+    throw const FormatException(
+      'authoring store project JSON has an unsupported format',
+    );
+  }
+  final schemaRevision = project['schema_revision'];
+  if (schemaRevision is! int || (schemaRevision != 1 && schemaRevision != 2)) {
+    throw const FormatException(
+      'authoring store project JSON has an unsupported schema revision',
+    );
+  }
   if (jsonEncode(decoded) != projectJson) {
     throw const FormatException(
       'authoring store project JSON is not canonical',
     );
   }
+  return schemaRevision;
 }
 
 Map<String, Object?> _authoringDraftObjectField(
@@ -1917,7 +1987,8 @@ class AuthoringWorkingHead {
     }
     final object = _authoringRequiredObject(decoded, 'head');
     _authoringExactFields(object, const {'store_format', 'snapshot'}, 'head');
-    if (object['store_format'] != 1) {
+    final storeFormat = object['store_format'];
+    if (storeFormat is! int || storeFormat != 1) {
       throw const FormatException('authoring head store_format is not 1');
     }
     final snapshot = _authoringRequiredObject(
@@ -1985,9 +2056,21 @@ class AuthoringStoreOpenedResult {
       'project_json',
       maxBytes: _maxAuthoringProjectJsonBytes,
     );
-    _authoringRequireCanonicalProjectJson(projectJson);
+    final schemaRevision = _authoringRequireCanonicalProjectJson(projectJson);
     final diagnostics = _authoringDiagnostics(json);
     final blocksBuild = _authoringRequiredBool(json, 'blocks_build');
+    if (schemaRevision == 2 &&
+        (!blocksBuild ||
+            !diagnostics.any(
+              (diagnostic) =>
+                  diagnostic.code ==
+                      'REVISION2_COMBINED_VALIDATION_UNAVAILABLE' &&
+                  diagnostic.blocksBuild,
+            ))) {
+      throw const FormatException(
+        'authoring revision-2 store response is missing its blocking combined-validation gate',
+      );
+    }
     _authoringValidateBlocksBuild(blocksBuild, diagnostics);
     return AuthoringStoreOpenedResult._(
       head: head,

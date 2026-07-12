@@ -20,10 +20,11 @@
 //!   return deterministic offline-only previews. They never write, compile, deploy, or qualify
 //!   runtime behavior.
 //! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
-//!   `authoring_store_prepare_checkpoint` open or prepare immutable format-2 working-store
-//!   checkpoints. Head/project JSON crosses the outer protocol as bounded raw strings, preserving
-//!   canonical-byte CAS and duplicate-key rejection. Preparing writes immutable objects but never
-//!   publishes `gore-project.json`.
+//!   `authoring_store_prepare_checkpoint` retain the frozen schema-revision-1 working-store wire.
+//!   Their additive `*_document` counterparts dispatch between closed schema revisions 1 and 2.
+//!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
+//!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
+//!   `gore-project.json`.
 //! - `authoring_store_import_ogg` and `authoring_store_verify_asset` import or verify bounded
 //!   content-addressed Ogg assets. `expected_head_json` is a strict CAS token: null means the fixed
 //!   head must be absent; a canonical string means it must match exactly.
@@ -75,8 +76,11 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_project_check",
     "authoring_store_import_ogg",
     "authoring_store_open",
+    "authoring_store_open_document",
     "authoring_store_open_head_bytes",
+    "authoring_store_open_head_bytes_document",
     "authoring_store_prepare_checkpoint",
+    "authoring_store_prepare_document_checkpoint",
     "authoring_store_verify_asset",
     "core_info",
     "find_game",
@@ -162,8 +166,15 @@ fn dispatch(input: &str) -> Value {
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_store_import_ogg" => authoring_store::import_ogg(payload),
         "authoring_store_open" => authoring_store::open(payload),
+        "authoring_store_open_document" => authoring_store::open_document(payload),
         "authoring_store_open_head_bytes" => authoring_store::open_head_bytes(payload),
+        "authoring_store_open_head_bytes_document" => {
+            authoring_store::open_head_bytes_document(payload)
+        }
         "authoring_store_prepare_checkpoint" => authoring_store::prepare_checkpoint(payload),
+        "authoring_store_prepare_document_checkpoint" => {
+            authoring_store::prepare_document_checkpoint(payload)
+        }
         "authoring_store_verify_asset" => authoring_store::verify_asset(payload),
         "voice_archive_list" => voice::archive_list(payload),
         "voice_archive_match_line" => voice::archive_match_line(payload),
@@ -1017,8 +1028,11 @@ mod tests {
                     "authoring_project_check",
                     "authoring_store_import_ogg",
                     "authoring_store_open",
+                    "authoring_store_open_document",
                     "authoring_store_open_head_bytes",
+                    "authoring_store_open_head_bytes_document",
                     "authoring_store_prepare_checkpoint",
+                    "authoring_store_prepare_document_checkpoint",
                     "authoring_store_verify_asset",
                     "core_info",
                     "find_game",
@@ -1063,6 +1077,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_checkpoint"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_document_checkpoint"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));

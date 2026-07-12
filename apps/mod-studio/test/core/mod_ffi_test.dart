@@ -219,6 +219,25 @@ String _validCanonicalProjectJson() =>
     '"sha256":"${List.filled(64, '4').join()}"}},'
     '"authoring_locales":[],"entities":{},"asset_store":{"assets":{}}}';
 
+String _validCanonicalRevision2ProjectJson() =>
+    '{"format":2,"schema_revision":2,'
+    '"project_id":"00000000000000000000000000000002","revision":1,'
+    '"meta":{"name":"Store document bridge","version":"1.0.0","author":"tests"},'
+    '"target":{"executable":{"byte_len":1,'
+    '"sha256":"${List.filled(64, '5').join()}"}},'
+    '"authoring_locales":[],"entities":{},"asset_store":{"assets":{}}}';
+
+Map<String, Object?> _revision2CombinedValidationDiagnostic() => {
+  'code': 'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+  'severity': 'error',
+  'entity': null,
+  'property_path': 'schema_revision',
+  'message':
+      'schema revision 2 is not build-ready until combined story, voice, localization, and asset validation is implemented',
+  'related_entities': <Object?>[],
+  'blocks_build': true,
+};
+
 Map<String, Object?> _validStoreOpenedResponse() => {
   'ok': true,
   'head_json': _validWorkingHeadJson(),
@@ -227,11 +246,26 @@ Map<String, Object?> _validStoreOpenedResponse() => {
   'blocks_build': false,
 };
 
+Map<String, Object?> _validRevision2StoreOpenedResponse() => {
+  'ok': true,
+  'head_json': _validWorkingHeadJson(),
+  'project_json': _validCanonicalRevision2ProjectJson(),
+  'diagnostics': <Object?>[_revision2CombinedValidationDiagnostic()],
+  'blocks_build': true,
+};
+
 Map<String, Object?> _validCheckpointPreparationResponse() => {
   'ok': true,
   'head_json': _validWorkingHeadJson(),
   'diagnostics': <Object?>[],
   'blocks_build': false,
+};
+
+Map<String, Object?> _validRevision2CheckpointPreparationResponse() => {
+  'ok': true,
+  'head_json': _validWorkingHeadJson(),
+  'diagnostics': <Object?>[_revision2CombinedValidationDiagnostic()],
+  'blocks_build': true,
 };
 
 Map<String, Object?> _validImportedOggResponse() => {
@@ -909,6 +943,98 @@ void main() {
     },
   );
 
+  test(
+    'document working-store wrappers preserve raw bytes and accept revision 2',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_store_open_document': _validRevision2StoreOpenedResponse(),
+          'authoring_store_prepare_document_checkpoint':
+              _validRevision2CheckpointPreparationResponse(),
+          'authoring_store_open_head_bytes_document':
+              _validRevision2StoreOpenedResponse(),
+        },
+      );
+      final ffi = ModFfi(core);
+      final head = AuthoringWorkingHead.fromCanonicalJson(
+        _validWorkingHeadJson(),
+      );
+      const rawProject = '{"schema_revision":2,"revision":0,"revision":1}';
+
+      final opened = await ffi.authoringStoreOpenDocument(
+        root: r'C:\Mods\Story.goreproj',
+        verification: AuthoringAssetVerification.full,
+        profile: AuthoringValidationProfile.production,
+      );
+      final prepared = await ffi.authoringStorePrepareDocumentCheckpoint(
+        root: r'C:\Mods\Story.goreproj',
+        expectedHead: head,
+        projectJson: rawProject,
+        profile: AuthoringValidationProfile.experimental,
+      );
+      final candidate = await ffi.authoringStoreOpenHeadBytesDocument(
+        root: r'C:\Mods\Story.goreproj',
+        head: head,
+        verification: AuthoringAssetVerification.structural,
+        profile: AuthoringValidationProfile.experimental,
+      );
+
+      expect(opened.projectJson, _validCanonicalRevision2ProjectJson());
+      expect(opened.blocksBuild, isTrue);
+      expect(
+        opened.diagnostics.single.code,
+        'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+      );
+      expect(prepared.blocksBuild, isTrue);
+      expect(candidate.projectJson, _validCanonicalRevision2ProjectJson());
+      expect(core.calls.map((call) => call.command), <String>[
+        'authoring_store_open_document',
+        'authoring_store_prepare_document_checkpoint',
+        'authoring_store_open_head_bytes_document',
+      ]);
+      expect(core.calls[1].payload['project_json'], rawProject);
+      expect(
+        core.calls[1].payload['expected_head_json'],
+        _validWorkingHeadJson(),
+      );
+      expect(core.calls[2].payload['head_json'], _validWorkingHeadJson());
+    },
+  );
+
+  test('revision-2 store response requires its blocking combined gate', () {
+    expect(
+      () => AuthoringStoreOpenedResult.fromJson(
+        _validRevision2StoreOpenedResponse(),
+      ),
+      returnsNormally,
+    );
+
+    final missingDiagnostic = _validRevision2StoreOpenedResponse()
+      ..['diagnostics'] = <Object?>[]
+      ..['blocks_build'] = false;
+    expect(
+      () => AuthoringStoreOpenedResult.fromJson(missingDiagnostic),
+      throwsFormatException,
+    );
+
+    final nonblockingDiagnostic = _validRevision2StoreOpenedResponse();
+    ((nonblockingDiagnostic['diagnostics'] as List<Object?>).single
+            as Map<String, Object?>)['blocks_build'] =
+        false;
+    nonblockingDiagnostic['blocks_build'] = false;
+    expect(
+      () => AuthoringStoreOpenedResult.fromJson(nonblockingDiagnostic),
+      throwsFormatException,
+    );
+
+    final falseTopLevel = _validRevision2StoreOpenedResponse()
+      ..['blocks_build'] = false;
+    expect(
+      () => AuthoringStoreOpenedResult.fromJson(falseTopLevel),
+      throwsFormatException,
+    );
+  });
+
   test('working-head DTO accepts only exact canonical bounded bytes', () {
     final valid = AuthoringWorkingHead.fromCanonicalJson(
       _validWorkingHeadJson(),
@@ -922,6 +1048,10 @@ void main() {
       _validWorkingHeadJson().replaceFirst(
         '"store_format":1',
         '"store_format":2',
+      ),
+      _validWorkingHeadJson().replaceFirst(
+        '"store_format":1',
+        '"store_format":1.0',
       ),
       _validWorkingHeadJson().replaceFirst('"byte_len":321', '"byte_len":0'),
       _validWorkingHeadJson().replaceFirst(
@@ -956,6 +1086,10 @@ void main() {
             '"format":2,"schema_revision":1',
             '"schema_revision":1,"format":2',
           ),
+      (response) => response['project_json'] = _validCanonicalProjectJson()
+          .replaceFirst('"format":2', '"format":3'),
+      (response) => response['project_json'] = _validCanonicalProjectJson()
+          .replaceFirst('"schema_revision":1', '"schema_revision":3'),
       (response) => response['diagnostics'] = <Object?>[
         _validAuthoringCheckResponse()['diagnostics'] as List<Object?>,
       ],
@@ -1014,6 +1148,15 @@ void main() {
     );
     await expectLater(
       ffi.authoringStorePrepareCheckpoint(
+        root: 'root',
+        expectedHead: null,
+        projectJson: List.filled(16 * 1024 * 1024 + 1, 'x').join(),
+        profile: AuthoringValidationProfile.production,
+      ),
+      throwsArgumentError,
+    );
+    await expectLater(
+      ffi.authoringStorePrepareDocumentCheckpoint(
         root: 'root',
         expectedHead: null,
         projectJson: List.filled(16 * 1024 * 1024 + 1, 'x').join(),

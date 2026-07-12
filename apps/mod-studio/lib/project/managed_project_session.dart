@@ -52,7 +52,7 @@ class ManagedProjectSessionClosedException
   String toString() => 'ManagedProjectSessionClosedException: $message';
 }
 
-/// Narrow seam over the native managed-store API.
+/// Narrow seam over the native managed-store document API.
 ///
 /// The interface keeps session durability and ordering independently testable;
 /// production callers normally use [ModFfiManagedAuthoringStore].
@@ -88,7 +88,7 @@ class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
     required String root,
     required AuthoringAssetVerification verification,
     required AuthoringValidationProfile profile,
-  }) => ffi.authoringStoreOpen(
+  }) => ffi.authoringStoreOpenDocument(
     root: root,
     verification: verification,
     profile: profile,
@@ -100,7 +100,7 @@ class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
     required AuthoringWorkingHead? expectedHead,
     required String projectJson,
     required AuthoringValidationProfile profile,
-  }) => ffi.authoringStorePrepareCheckpoint(
+  }) => ffi.authoringStorePrepareDocumentCheckpoint(
     root: root,
     expectedHead: expectedHead,
     projectJson: projectJson,
@@ -113,7 +113,7 @@ class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
     required AuthoringWorkingHead head,
     required AuthoringAssetVerification verification,
     required AuthoringValidationProfile profile,
-  }) => ffi.authoringStoreOpenHeadBytes(
+  }) => ffi.authoringStoreOpenHeadBytesDocument(
     root: root,
     head: head,
     verification: verification,
@@ -121,7 +121,8 @@ class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
   );
 }
 
-/// Exclusive, crash-recoverable editing session for one format-2 working tree.
+/// Exclusive, crash-recoverable editing session for one closed schema-revision-1/2 format-2
+/// working tree.
 ///
 /// Immutable objects are prepared by the native store. The only Dart-owned
 /// mutation is publication of the fixed `gore-project.json` head. Publication
@@ -264,7 +265,7 @@ class ManagedAuthoringProjectSession {
     }
   }
 
-  /// Save a captured canonical format-2 snapshot in invocation order.
+  /// Save a captured canonical format-2 document in invocation order.
   Future<void> save(String projectJson) {
     if (_closeRequested) {
       return Future<void>.error(

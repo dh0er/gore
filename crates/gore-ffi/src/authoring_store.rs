@@ -8,9 +8,9 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use gore_authoring::{
-    AssetRef, AssetVerification, Diagnostic, ProjectJsonError, ProjectV2, ValidationProfile,
-    WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
-    MAX_PROJECT_JSON_BYTES,
+    AssetRef, AssetVerification, Diagnostic, OpenedDocumentCheckpoint, ProjectDocument,
+    ProjectDocumentError, ProjectJsonError, ProjectV2, ValidationProfile, WorkingHead,
+    WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
 };
 use serde_json::{json, Map, Value};
 
@@ -50,12 +50,24 @@ pub(super) fn open(payload: Value) -> Value {
     command_response(open_inner(&payload))
 }
 
+pub(super) fn open_document(payload: Value) -> Value {
+    command_response(open_document_inner(&payload))
+}
+
 pub(super) fn prepare_checkpoint(payload: Value) -> Value {
     command_response(prepare_checkpoint_inner(&payload))
 }
 
+pub(super) fn prepare_document_checkpoint(payload: Value) -> Value {
+    command_response(prepare_document_checkpoint_inner(&payload))
+}
+
 pub(super) fn open_head_bytes(payload: Value) -> Value {
     command_response(open_head_bytes_inner(&payload))
+}
+
+pub(super) fn open_head_bytes_document(payload: Value) -> Value {
+    command_response(open_head_bytes_document_inner(&payload))
 }
 
 pub(super) fn import_ogg(payload: Value) -> Value {
@@ -82,6 +94,17 @@ fn open_inner(payload: &Value) -> Result<Value, StoreFailure> {
         .open_current(verification, profile)
         .map_err(map_store_error)?;
     opened_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
+}
+
+fn open_document_inner(payload: &Value) -> Result<Value, StoreFailure> {
+    let object = exact_payload(payload, &["profile", "root", "verification"])?;
+    let store = open_existing_store(required_path(object, "root")?)?;
+    let verification = required_verification(object)?;
+    let profile = required_profile(object)?;
+    let opened = store
+        .open_current_document(verification, profile)
+        .map_err(map_store_error)?;
+    opened_document_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
 }
 
 fn prepare_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
@@ -123,6 +146,45 @@ fn prepare_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
     enforce_response_budget(response, MAX_AUTHORING_STORE_RESPONSE_BYTES)
 }
 
+fn prepare_document_checkpoint_inner(payload: &Value) -> Result<Value, StoreFailure> {
+    let object = exact_payload(
+        payload,
+        &["expected_head_json", "profile", "project_json", "root"],
+    )?;
+    let expected_head = required_expected_head(object)?;
+    let store = store_for_expected_head(required_path(object, "root")?, expected_head.as_ref())?;
+    let profile = required_profile(object)?;
+    let project_json = required_bounded_string(
+        object,
+        "project_json",
+        MAX_PROJECT_JSON_BYTES,
+        "authoring project JSON",
+    )?;
+
+    // Keep the nested string byte-for-byte intact so the closed document dispatcher can reject
+    // duplicate keys before selecting its revision-specific parser.
+    let document = ProjectDocument::from_json(project_json).map_err(map_project_document_error)?;
+    let prepared = store
+        .prepare_document_checkpoint(expected_head.as_ref(), &document, profile)
+        .map_err(map_store_error)?;
+    let head_json = String::from_utf8(prepared.head_bytes).map_err(|_| {
+        StoreFailure::new(
+            "AUTHORING_STORE_INVARIANT",
+            "prepared head is not valid UTF-8 JSON",
+        )
+    })?;
+    ensure_head_json(&head_json)?;
+    let diagnostics = diagnostics_to_wire(prepared.diagnostics)?;
+
+    let response = json!({
+        "ok": true,
+        "head_json": head_json,
+        "diagnostics": diagnostics,
+        "blocks_build": prepared.blocks_build,
+    });
+    enforce_response_budget(response, MAX_AUTHORING_STORE_RESPONSE_BYTES)
+}
+
 fn open_head_bytes_inner(payload: &Value) -> Result<Value, StoreFailure> {
     let object = exact_payload(payload, &["head_json", "profile", "root", "verification"])?;
     let store = open_existing_store(required_path(object, "root")?)?;
@@ -142,6 +204,25 @@ fn open_head_bytes_inner(payload: &Value) -> Result<Value, StoreFailure> {
         )
         .map_err(map_store_error)?;
     opened_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
+}
+
+fn open_head_bytes_document_inner(payload: &Value) -> Result<Value, StoreFailure> {
+    let object = exact_payload(payload, &["head_json", "profile", "root", "verification"])?;
+    let store = open_existing_store(required_path(object, "root")?)?;
+    let head_json = required_bounded_string(
+        object,
+        "head_json",
+        MAX_HEAD_JSON_BYTES,
+        "working-store head JSON",
+    )?;
+    let opened = store
+        .open_head_bytes_document(
+            head_json.as_bytes(),
+            required_verification(object)?,
+            required_profile(object)?,
+        )
+        .map_err(map_store_error)?;
+    opened_document_response(opened, MAX_AUTHORING_STORE_RESPONSE_BYTES)
 }
 
 fn import_ogg_inner(payload: &Value) -> Result<Value, StoreFailure> {
@@ -196,6 +277,40 @@ fn verify_asset_inner(payload: &Value) -> Result<Value, StoreFailure> {
 
 fn opened_response(
     opened: gore_authoring::OpenedCheckpoint,
+    response_limit: usize,
+) -> Result<Value, StoreFailure> {
+    let head_json = serde_json::to_string(&opened.head).map_err(|_| {
+        StoreFailure::new(
+            "AUTHORING_STORE_RESPONSE_SERIALIZE",
+            "working-store head serialization failed",
+        )
+    })?;
+    ensure_head_json(&head_json)?;
+    let project_json = opened.project.to_canonical_json().map_err(|_| {
+        StoreFailure::new(
+            "AUTHORING_STORE_RESPONSE_SERIALIZE",
+            "working-store project serialization failed",
+        )
+    })?;
+    if project_json.len() > MAX_PROJECT_JSON_BYTES {
+        return Err(StoreFailure::new(
+            "AUTHORING_STORE_RESPONSE_LIMIT",
+            format!("working-store project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
+        ));
+    }
+    let diagnostics = diagnostics_to_wire(opened.diagnostics)?;
+    let response = json!({
+        "ok": true,
+        "head_json": head_json,
+        "project_json": project_json,
+        "diagnostics": diagnostics,
+        "blocks_build": opened.blocks_build,
+    });
+    enforce_response_budget(response, response_limit)
+}
+
+fn opened_document_response(
+    opened: OpenedDocumentCheckpoint,
     response_limit: usize,
 ) -> Result<Value, StoreFailure> {
     let head_json = serde_json::to_string(&opened.head).map_err(|_| {
@@ -448,6 +563,16 @@ fn map_project_error(error: ProjectJsonError) -> StoreFailure {
     }
 }
 
+fn map_project_document_error(error: ProjectDocumentError) -> StoreFailure {
+    match error {
+        ProjectDocumentError::InputTooLarge { .. } => StoreFailure::new(
+            "AUTHORING_STORE_PROJECT_LIMIT",
+            format!("authoring project JSON exceeds the {MAX_PROJECT_JSON_BYTES}-byte limit"),
+        ),
+        error => StoreFailure::new("AUTHORING_STORE_PROJECT_INVALID", error.to_string()),
+    }
+}
+
 fn map_store_error(error: WorkingStoreError) -> StoreFailure {
     let code = match &error {
         WorkingStoreError::InvalidLimits(_) => "AUTHORING_STORE_LIMITS_INVALID",
@@ -548,6 +673,24 @@ mod tests {
         .to_string()
     }
 
+    fn revision2_project_json() -> String {
+        json!({
+            "format": 2,
+            "schema_revision": 2,
+            "project_id": "00000000000000000000000000000002",
+            "revision": 0,
+            "meta": {"name": "Store document bridge", "version": "1.0.0", "author": "tests"},
+            "target": {"executable": {
+                "byte_len": 123,
+                "sha256": "4343434343434343434343434343434343434343434343434343434343434343"
+            }},
+            "authoring_locales": [],
+            "entities": {},
+            "asset_store": {"assets": {}}
+        })
+        .to_string()
+    }
+
     fn vorbis_ogg(sample_rate: u32) -> Vec<u8> {
         let mut data = include_bytes!("../../gore-vo/testdata/tiny-vorbis.ogg").to_vec();
         let ident = data
@@ -635,10 +778,11 @@ mod tests {
     }
 
     fn call(command: &str, payload: Value) -> Value {
-        serde_json::from_str(&execute_json(
-            &json!({"command": command, "payload": payload}).to_string(),
-        ))
-        .unwrap()
+        serde_json::from_str(&call_json(command, payload)).unwrap()
+    }
+
+    fn call_json(command: &str, payload: Value) -> String {
+        execute_json(&json!({"command": command, "payload": payload}).to_string())
     }
 
     fn prepare(temp: &TempDir, project_json: String, expected_head_json: Value) -> Value {
@@ -651,6 +795,154 @@ mod tests {
                 "profile": "production",
             }),
         )
+    }
+
+    fn prepare_document(
+        temp: &TempDir,
+        project_json: String,
+        expected_head_json: Value,
+        profile: &str,
+    ) -> Value {
+        call(
+            "authoring_store_prepare_document_checkpoint",
+            json!({
+                "root": temp.path(),
+                "expected_head_json": expected_head_json,
+                "project_json": project_json,
+                "profile": profile,
+            }),
+        )
+    }
+
+    #[test]
+    fn document_commands_preserve_revision1_responses_exactly() {
+        let temp = TempDir::new().unwrap();
+        let legacy_prepared = prepare(&temp, project_json(), Value::Null);
+        let document_prepared = prepare_document(&temp, project_json(), Value::Null, "production");
+        assert_eq!(document_prepared, legacy_prepared);
+        let payload = json!({
+            "root": temp.path(),
+            "expected_head_json": null,
+            "project_json": project_json(),
+            "profile": "production",
+        });
+        assert_eq!(
+            call_json(
+                "authoring_store_prepare_document_checkpoint",
+                payload.clone(),
+            ),
+            call_json("authoring_store_prepare_checkpoint", payload),
+        );
+
+        let head_json = legacy_prepared["head_json"].as_str().unwrap();
+        fs::write(temp.path().join("gore-project.json"), head_json).unwrap();
+        let payload = json!({
+            "root": temp.path(),
+            "verification": "full",
+            "profile": "production",
+        });
+        assert_eq!(
+            call_json("authoring_store_open_document", payload.clone()),
+            call_json("authoring_store_open", payload),
+        );
+
+        let payload = json!({
+            "root": temp.path(),
+            "head_json": head_json,
+            "verification": "structural",
+            "profile": "experimental",
+        });
+        assert_eq!(
+            call_json("authoring_store_open_head_bytes_document", payload.clone(),),
+            call_json("authoring_store_open_head_bytes", payload),
+        );
+    }
+
+    #[test]
+    fn document_commands_round_trip_revision2_but_legacy_commands_stay_closed() {
+        let temp = TempDir::new().unwrap();
+        let raw_project = revision2_project_json();
+        let canonical_project = ProjectDocument::from_json(&raw_project)
+            .unwrap()
+            .to_canonical_json()
+            .unwrap();
+
+        let legacy_rejected = prepare(&temp, raw_project.clone(), Value::Null);
+        assert_eq!(
+            legacy_rejected["error"]["code"],
+            "AUTHORING_STORE_PROJECT_INVALID"
+        );
+
+        let prepared = prepare_document(&temp, raw_project, Value::Null, "production");
+        assert_eq!(prepared["ok"], true);
+        assert_eq!(prepared["blocks_build"], true);
+        assert_eq!(prepared["diagnostics"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            prepared["diagnostics"][0]["code"],
+            "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
+        );
+        assert_eq!(prepared["diagnostics"][0]["blocks_build"], true);
+
+        let head_json = prepared["head_json"].as_str().unwrap();
+        fs::write(temp.path().join("gore-project.json"), head_json).unwrap();
+
+        let legacy_open = call(
+            "authoring_store_open",
+            json!({
+                "root": temp.path(),
+                "verification": "full",
+                "profile": "production",
+            }),
+        );
+        assert_eq!(legacy_open["error"]["code"], "AUTHORING_STORE_JSON_INVALID");
+
+        for profile in ["production", "experimental"] {
+            let opened = call(
+                "authoring_store_open_document",
+                json!({
+                    "root": temp.path(),
+                    "verification": "full",
+                    "profile": profile,
+                }),
+            );
+            assert_eq!(opened["ok"], true);
+            assert_eq!(opened["head_json"], head_json);
+            assert_eq!(opened["project_json"], canonical_project);
+            assert_eq!(opened["blocks_build"], true);
+            assert!(opened["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|diagnostic| diagnostic["code"]
+                    == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
+                    && diagnostic["blocks_build"] == true));
+        }
+
+        let reopened = call(
+            "authoring_store_open_head_bytes_document",
+            json!({
+                "root": temp.path(),
+                "head_json": head_json,
+                "verification": "full",
+                "profile": "experimental",
+            }),
+        );
+        assert_eq!(reopened["ok"], true);
+        assert_eq!(reopened["project_json"], canonical_project);
+    }
+
+    #[test]
+    fn document_prepare_rejects_duplicates_and_unknown_dispatch_markers() {
+        for invalid in [
+            revision2_project_json().replacen("\"revision\":0", "\"revision\":0,\"revision\":1", 1),
+            revision2_project_json().replacen("\"format\":2", "\"format\":3", 1),
+            revision2_project_json().replacen("\"schema_revision\":2", "\"schema_revision\":3", 1),
+        ] {
+            let temp = TempDir::new().unwrap();
+            let rejected = prepare_document(&temp, invalid, Value::Null, "production");
+            assert_eq!(rejected["error"]["code"], "AUTHORING_STORE_PROJECT_INVALID");
+            assert!(!temp.path().join("gore-project.json").exists());
+        }
     }
 
     #[test]

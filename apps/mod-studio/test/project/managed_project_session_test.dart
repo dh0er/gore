@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/managed_project_lock.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
@@ -65,6 +66,100 @@ void main() {
       store.headVerifications,
       everyElement(AuthoringAssetVerification.full),
     );
+  });
+
+  test(
+    'production adapter routes only through additive document commands',
+    () async {
+      final project = _revision2ProjectJson(revision: 1, name: 'Adapter');
+      final fixtureStore = _FakeManagedStore();
+      final head = fixtureStore.register(project);
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'authoring_store_open_document': _openedResponse(head, project),
+          'authoring_store_prepare_document_checkpoint': _preparedResponse(
+            head,
+            project,
+          ),
+          'authoring_store_open_head_bytes_document': _openedResponse(
+            head,
+            project,
+          ),
+        },
+      );
+      final adapter = ModFfiManagedAuthoringStore(ModFfi(core));
+
+      await adapter.open(
+        root: fixture.path,
+        verification: AuthoringAssetVerification.full,
+        profile: AuthoringValidationProfile.production,
+      );
+      await adapter.prepareCheckpoint(
+        root: fixture.path,
+        expectedHead: head,
+        projectJson: project,
+        profile: AuthoringValidationProfile.production,
+      );
+      await adapter.openHeadBytes(
+        root: fixture.path,
+        head: head,
+        verification: AuthoringAssetVerification.full,
+        profile: AuthoringValidationProfile.production,
+      );
+
+      expect(core.calls.map((call) => call.command), <String>[
+        'authoring_store_open_document',
+        'authoring_store_prepare_document_checkpoint',
+        'authoring_store_open_head_bytes_document',
+      ]);
+    },
+  );
+
+  test('one exact-CAS save advances revision 1 to revision 2', () async {
+    final root = Directory(p.join(fixture.path, 'project'));
+    await root.create();
+    final store = _FakeManagedStore();
+    final revision1 = _projectJson(revision: 0, name: 'Before migration');
+    final revision2 = _revision2ProjectJson(
+      revision: 1,
+      name: 'After migration',
+    );
+    final session = await ManagedAuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision1,
+      profile: AuthoringValidationProfile.production,
+    );
+    expect(session.blocksBuild, isFalse);
+
+    await session.save(revision2);
+    final revision2Head = session.head.canonicalJson;
+    expect(session.projectJson, revision2);
+    expect(session.blocksBuild, isTrue);
+    expect(
+      session.diagnostics.single.code,
+      'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+    );
+    expect(await session.headFile.readAsString(), revision2Head);
+    await session.close();
+
+    final reopened = await ManagedAuthoringProjectSession.open(
+      root: root,
+      store: store,
+      profile: AuthoringValidationProfile.production,
+    );
+    expect(reopened.head.canonicalJson, revision2Head);
+    expect(reopened.projectJson, revision2);
+    expect(reopened.blocksBuild, isTrue);
+    expect(
+      store.openVerifications,
+      everyElement(AuthoringAssetVerification.full),
+    );
+    expect(
+      store.headVerifications,
+      everyElement(AuthoringAssetVerification.full),
+    );
+    await reopened.close();
   });
 
   test('save rejects exact head drift without overwriting it', () async {
@@ -499,24 +594,15 @@ class _FakeManagedStore implements ManagedAuthoringStore {
     final head = register(projectJson);
     await afterPrepare?.call(root, head, projectJson);
     afterPrepare = null;
-    return AuthoringCheckpointPreparation.fromJson({
-      'ok': true,
-      'head_json': head.canonicalJson,
-      'diagnostics': <Object?>[],
-      'blocks_build': false,
-    });
+    return AuthoringCheckpointPreparation.fromJson(
+      _preparedResponse(head, projectJson),
+    );
   }
 
   AuthoringStoreOpenedResult _opened(
     AuthoringWorkingHead head,
     String projectJson,
-  ) => AuthoringStoreOpenedResult.fromJson({
-    'ok': true,
-    'head_json': head.canonicalJson,
-    'project_json': projectJson,
-    'diagnostics': <Object?>[],
-    'blocks_build': false,
-  });
+  ) => AuthoringStoreOpenedResult.fromJson(_openedResponse(head, projectJson));
 }
 
 class _InjectedCrash implements Exception {
@@ -544,3 +630,63 @@ String _projectJson({required int revision, required String name}) =>
       'entities': <String, Object?>{},
       'asset_store': <String, Object?>{'assets': <String, Object?>{}},
     });
+
+String _revision2ProjectJson({required int revision, required String name}) =>
+    jsonEncode(<String, Object?>{
+      'format': 2,
+      'schema_revision': 2,
+      'project_id': '00000000000000000000000000000002',
+      'revision': revision,
+      'meta': <String, Object?>{
+        'name': name,
+        'version': '1.0.0',
+        'author': 'session tests',
+      },
+      'target': <String, Object?>{
+        'executable': <String, Object?>{
+          'byte_len': 1,
+          'sha256': List.filled(64, '5').join(),
+        },
+      },
+      'authoring_locales': <Object?>[],
+      'entities': <String, Object?>{},
+      'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+    });
+
+Map<String, Object?>
+_revision2CombinedValidationDiagnostic() => <String, Object?>{
+  'code': 'REVISION2_COMBINED_VALIDATION_UNAVAILABLE',
+  'severity': 'error',
+  'entity': null,
+  'property_path': 'schema_revision',
+  'message':
+      'schema revision 2 is not build-ready until combined story, voice, localization, and asset validation is implemented',
+  'related_entities': <Object?>[],
+  'blocks_build': true,
+};
+
+bool _isRevision2(String projectJson) =>
+    (jsonDecode(projectJson) as Map<String, Object?>)['schema_revision'] == 2;
+
+Map<String, Object?> _preparedResponse(
+  AuthoringWorkingHead head,
+  String projectJson,
+) {
+  final revision2 = _isRevision2(projectJson);
+  return <String, Object?>{
+    'ok': true,
+    'head_json': head.canonicalJson,
+    'diagnostics': <Object?>[
+      if (revision2) _revision2CombinedValidationDiagnostic(),
+    ],
+    'blocks_build': revision2,
+  };
+}
+
+Map<String, Object?> _openedResponse(
+  AuthoringWorkingHead head,
+  String projectJson,
+) => <String, Object?>{
+  ..._preparedResponse(head, projectJson),
+  'project_json': projectJson,
+};
