@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -238,7 +237,6 @@ pub enum AsCmd {
     },
 }
 
-/// Build the script-class hierarchy (class name -> super class name) from parsed modules.
 /// Locate and load the native API arities from Binds.Cache: `GORE_AS_BINDS` env if set, else a
 /// `Binds.Cache` sitting next to the input cache file. Absent/unparsable => None (no fallback).
 fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds::NativeApi> {
@@ -255,57 +253,6 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
         None => eprintln!("warning: failed to parse {}", path.display()),
     }
     api
-}
-
-fn class_hierarchy(
-    mods: &[gore_as::cache::model::Module],
-) -> std::collections::HashMap<String, String> {
-    let mut h = std::collections::HashMap::new();
-    for m in mods {
-        for c in &m.classes {
-            // Record EVERY script class so `is_script_class` recognizes it; a root class with
-            // no super maps to "" (is_subclass stops there). Omitting no-super classes made
-            // them look like engine types, skipping script-class casts/subclass checks.
-            let super_name = c
-                .super_class
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default();
-            h.insert(c.name.clone(), super_name);
-        }
-    }
-    h
-}
-
-/// All script-class METHOD names from the parsed modules (batch-24b shadow-gate input): a
-/// class method shadows a same-named free global inside class scope even when the method is
-/// never referenced by any bytecode (so T3 alone can miss it).
-fn class_method_names(mods: &[gore_as::cache::model::Module]) -> Vec<String> {
-    mods.iter()
-        .flat_map(|m| m.classes.iter())
-        .flat_map(|c| c.methods.iter())
-        .map(|f| f.name.clone())
-        .collect()
-}
-
-/// Per-class field-type maps (class -> field -> composed type name) from parsed modules, so the
-/// emitter can resolve INHERITED member types across module boundaries (batch-21 Class B).
-fn class_fields(
-    mods: &[gore_as::cache::model::Module],
-    refs: &gore_as::cache::refs::RefResolver,
-) -> HashMap<String, HashMap<String, String>> {
-    let mut out: HashMap<String, HashMap<String, String>> = HashMap::new();
-    for m in mods {
-        for c in &m.classes {
-            let fields: HashMap<String, String> = c
-                .fields
-                .iter()
-                .map(|f| (f.name.clone(), f.ty.base_name(refs)))
-                .collect();
-            out.insert(c.name.clone(), fields);
-        }
-    }
-    out
 }
 
 pub fn run(cmd: AsCmd) -> Result<()> {
@@ -344,13 +291,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             // Mirror `emit`/`emit-all`: load the class hierarchy and native arity table so
             // decompile output matches emitted source (subclass casts, native-call trimming).
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
-            refs.set_class_hierarchy(class_hierarchy(&mods));
-            let cf = class_fields(&mods, &refs);
-            refs.set_class_fields(cf);
-            refs.add_method_names(class_method_names(&mods));
-            if let Some(api) = load_native_api(&file) {
-                refs.set_native_api(api);
-            }
+            gore_as::cache::emit_all::prepare_resolver_semantics(
+                &mods,
+                &mut refs,
+                load_native_api(&file),
+            );
             let funcs =
                 gore_as::cache::walk_modules::collect_function_bytecodes(&bytes).context("walk")?;
             let mut n = 0;
@@ -368,99 +313,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
-            refs.set_class_hierarchy(class_hierarchy(&mods));
-            let cf = class_fields(&mods, &refs);
-            refs.set_class_fields(cf);
-            refs.add_method_names(class_method_names(&mods));
-            if let Some(api) = load_native_api(&file) {
-                refs.set_native_api(api);
-            }
-            // batch-25f: publish the collision renames as an ID-based map in the resolver so
-            // CALL/CALLINTF render sites in EVERY module resolve the renamed leaf. emit_all_tree
-            // (below) recomputes the SAME colliding set for the per-file TEXT rename of decls; both
-            // use the identical `_g{mi}` scheme so decls and call sites cannot disagree. The
-            // security-hardened output (outdir canonicalize + per-entry symlink/`..` guards) now
-            // lives inside emit_all_tree.
-            // Cross-module free-function collisions: AngelScript compiles all loose .as into ONE
-            // global scope, so two modules each defining `Foo(<same params>)` (even with different
-            // return types) collide as "a function with the same name and parameters already
-            // exists". Find such names and rename each per-module — a function's decl and its
-            // intra-module free calls live in the same emitted file, so a file-local rename
-            // de-collides without breaking resolution (cross-module calls of these don't occur).
-            let mut sig_mods: HashMap<String, HashSet<usize>> = HashMap::new();
-            for (i, m) in mods.iter().enumerate() {
-                for f in &m.functions {
-                    // generated factory accessors are skipped at emit (not free-emitted) — never
-                    // rename them, or free CALLS to the native binding would be broken.
-                    if matches!(
-                        f.name.as_str(),
-                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
-                    ) {
-                        continue;
-                    }
-                    // precise signature (render, not base_name) so only GENUINE same-signature
-                    // collisions are flagged — a coarse match falsely flags distinct overloads and
-                    // would rename (and break) functions that are validly called cross-module.
-                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
-                    sig_mods
-                        .entry(format!("{}({})", f.name, ptys.join(",")))
-                        .or_default()
-                        .insert(i);
-                }
-            }
-            // A name is safe to file-locally rename in a module only if EVERY emittable free
-            // function of that name in the module has a colliding signature. If the module also has
-            // a NON-colliding same-name overload, the name-based `rename_free_fn` would rewrite that
-            // overload's decl + calls too, breaking other modules that call it by its original name.
-            // In that mixed case leave the name un-renamed: the genuine collision then surfaces at
-            // generate as a "already exists" stub (rare, safe) instead of silently breaking a valid
-            // cross-module call to the non-colliding overload.
-            let colliding_sigs: HashSet<&str> = sig_mods
-                .iter()
-                .filter(|(_, modset)| modset.len() > 1)
-                .map(|(sig, _)| sig.as_str())
-                .collect();
-            let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
-            for (i, m) in mods.iter().enumerate() {
-                let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
-                for f in &m.functions {
-                    if matches!(
-                        f.name.as_str(),
-                        "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
-                    ) {
-                        continue;
-                    }
-                    let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(&refs)).collect();
-                    sigs_by_name
-                        .entry(f.name.as_str())
-                        .or_default()
-                        .push(format!("{}({})", f.name, ptys.join(",")));
-                }
-                for (name, sigs) in sigs_by_name {
-                    if sigs.iter().any(|s| colliding_sigs.contains(s.as_str()))
-                        && sigs.iter().all(|s| colliding_sigs.contains(s.as_str()))
-                    {
-                        colliding_in.entry(i).or_default().insert(name.to_string());
-                    }
-                }
-            }
-            // batch-25f: publish the collision renames as an ID-based map in the resolver so
-            // CALL/CALLINTF render sites in EVERY module resolve the renamed leaf. The TEXT
-            // pass below still rewrites the DECLARING module (declaration line; already-
-            // renamed `Name_g<mi>(` call sites don't match its word boundary, `_` is a word
-            // char, so the two passes never double-rename). Suffixes come from the same
-            // `colliding_in` set with the same `_g{mi}` scheme — decls and call sites cannot
-            // disagree.
-            let mut rename_map: HashMap<String, HashMap<String, String>> = HashMap::new();
-            for (mi, names) in &colliding_in {
-                let e = rename_map.entry(mods[*mi].name.clone()).or_default();
-                for name in names {
-                    e.insert(name.clone(), format!("{name}_g{mi}"));
-                }
-            }
-            refs.set_free_fn_renames(&rename_map);
-            let stats = gore_as::cache::emit_all::emit_all_tree(&mods, &refs, &outdir)
-                .with_context(|| format!("emitting to {}", outdir.display()))?;
+            let stats = gore_as::cache::emit_all::emit_all_tree(
+                &mods,
+                &mut refs,
+                load_native_api(&file),
+                &outdir,
+            )
+            .with_context(|| format!("emitting to {}", outdir.display()))?;
             eprintln!(
                 "emitted {} modules / {} body-bearing functions to {} ({} cache function records; {} modules / {} functions contain a stubbed body)",
                 stats.written,
@@ -476,19 +335,22 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 std::fs::read(&file).with_context(|| format!("reading {}", file.display()))?;
             let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).context("resolver")?;
             let mods = gore_as::cache::model::parse_modules(&bytes).context("parse modules")?;
-            refs.set_class_hierarchy(class_hierarchy(&mods));
-            let cf = class_fields(&mods, &refs);
-            refs.set_class_fields(cf);
-            refs.add_method_names(class_method_names(&mods));
-            if let Some(api) = load_native_api(&file) {
-                refs.set_native_api(api);
-            }
+            let prepared = gore_as::cache::emit_all::PreparedEmit::new(
+                &mods,
+                &mut refs,
+                load_native_api(&file),
+            )
+            .context("prepare emitted modules")?;
             let mut n = 0;
-            for m in mods.iter().filter(|m| m.name.contains(&needle)) {
+            for (module_index, _) in mods
+                .iter()
+                .enumerate()
+                .filter(|(_, module)| module.name.contains(&needle))
+            {
                 if n >= max {
                     break;
                 }
-                println!("{}", gore_as::cache::emit::emit_module(m, &refs));
+                println!("{}", prepared.emit_module(module_index)?);
                 n += 1;
             }
             eprintln!("({n} module(s))");

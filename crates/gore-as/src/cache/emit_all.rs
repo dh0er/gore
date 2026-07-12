@@ -2,12 +2,13 @@
 //! each module's ScriptRelativeFilename. Free-function name collisions across modules are
 //! de-collided per-module (AngelScript compiles all loose `.as` into one global scope).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
-use super::model::Module;
+use super::model::{Func, Module};
 use super::refs::RefResolver;
 
+#[derive(Debug)]
 pub struct EmitAllStats {
     pub written: usize,
     /// Functions with an editable body actually written to the source tree.
@@ -25,183 +26,1278 @@ pub struct EmitAllStats {
 pub enum EmitAllError {
     #[error("io: {0}")]
     Io(String),
+    #[error("invalid module layout: {0}")]
+    InvalidLayout(String),
+    #[error("module index {index} is out of range for {modules} modules")]
+    InvalidModuleIndex { index: usize, modules: usize },
 }
 
-/// Rename whole-word free occurrences of `name` to `newname` in `src` — occurrences NOT preceded
-/// by `.` (so member calls `obj.name(...)` are left alone; only the decl + free calls change).
-pub fn rename_free_fn(src: &str, name: &str, newname: &str) -> String {
-    let (b, nb) = (src.as_bytes(), name.as_bytes());
-    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
-    let mut out: Vec<u8> = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hit = b[i..].starts_with(nb)
-            && (i == 0 || (!word(b[i - 1]) && b[i - 1] != b'.' && b[i - 1] != b':'))
-            && (i + nb.len() >= b.len() || !word(b[i + nb.len()]));
-        if hit {
-            out.extend_from_slice(newname.as_bytes());
-            i += nb.len();
-        } else {
-            out.push(b[i]);
-            i += 1;
-        }
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ParameterSignature(Vec<Vec<String>>);
+
+/// Deterministic per-module names used only by a full loose-source tree.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FreeFunctionRenamePlan {
+    per_module: Vec<BTreeMap<String, String>>,
+    /// Token-preserving parameter signatures for every collision-bound original name. These are
+    /// the same deduplicated signatures `emit_module` writes, without the function name.
+    required_signatures: Vec<BTreeMap<String, BTreeSet<ParameterSignature>>>,
+    original_names: BTreeSet<String>,
+}
+
+impl FreeFunctionRenamePlan {
+    fn renames_for_module(&self, module_index: usize) -> &BTreeMap<String, String> {
+        self.per_module
+            .get(module_index)
+            .unwrap_or_else(|| empty_renames())
     }
-    String::from_utf8(out).unwrap_or_else(|_| src.to_string())
+
+    fn renamed(&self, module_index: usize, name: &str) -> Option<&str> {
+        self.renames_for_module(module_index)
+            .get(name)
+            .map(String::as_str)
+    }
+
+    /// Rewrite only top-level free-function declaration identifiers. Bytecode-derived call sites
+    /// are already renamed by `RefResolver::set_free_fn_renames`; touching arbitrary source tokens
+    /// would also mutate methods, literals, globals, and comments.
+    fn rewrite_emitted_module(&self, module_index: usize, source: &str) -> String {
+        rewrite_top_level_declarations(source, self.renames_for_module(module_index))
+    }
+
+    /// Make an authored overlay consistent with the collision-renamed vanilla tree. Existing edit
+    /// declarations can be rewritten safely because their declaring module is known. Any remaining
+    /// bare/global call using an original colliding name is ambiguous in authored source, so reject
+    /// it before starting the game compiler instead of guessing an overload/module target.
+    fn prepare_overlay(
+        &self,
+        mods: &[Module],
+        op: &str,
+        module_name: &str,
+        source: &str,
+    ) -> Result<String, String> {
+        let rewritten = if op == "edit" {
+            let indices = mods
+                .iter()
+                .enumerate()
+                .filter(|(_, module)| module.name == module_name)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let [module_index] = indices.as_slice() else {
+                return Err(format!(
+                    "edit overlay module {module_name:?} must identify exactly one base module (found {})",
+                    indices.len()
+                ));
+            };
+            let renames = self.renames_for_module(*module_index);
+            let required = self
+                .required_signatures
+                .get(*module_index)
+                .unwrap_or_else(|| empty_required_signatures());
+            validate_collision_bound_declarations(source, renames, required).map_err(|error| {
+                format!("edited module {module_name:?} has invalid collision-bound declarations: {error}")
+            })?;
+            rewrite_top_level_declarations(source, renames)
+        } else {
+            source.to_owned()
+        };
+
+        let unresolved = unresolved_collision_calls(&rewritten, &self.original_names);
+        if !unresolved.is_empty() {
+            return Err(format!(
+                "authored overlay contains collision-ambiguous free call(s): {}; use a prepared emitted module or remove/qualify the call",
+                unresolved.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+
+        Ok(rewritten)
+    }
 }
 
-/// Emit every module in `mods` to `outdir`, using `refs` for type/native resolution. Returns
-/// module/function totals and how many contain a stubbed (not-fully-recovered) body.
-pub fn emit_all_tree(
+fn empty_renames() -> &'static BTreeMap<String, String> {
+    static EMPTY: std::sync::OnceLock<BTreeMap<String, String>> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(BTreeMap::new)
+}
+
+fn empty_required_signatures() -> &'static BTreeMap<String, BTreeSet<ParameterSignature>> {
+    static EMPTY: std::sync::OnceLock<BTreeMap<String, BTreeSet<ParameterSignature>>> =
+        std::sync::OnceLock::new();
+    EMPTY.get_or_init(BTreeMap::new)
+}
+
+/// Populate resolver inputs that preserve cache semantics without inventing emit-tree-only names.
+/// `as decompile` uses this path so its output continues to describe the inspected cache.
+pub fn prepare_resolver_semantics(
+    mods: &[Module],
+    refs: &mut RefResolver,
+    native: Option<super::binds::NativeApi>,
+) {
+    let hierarchy = mods
+        .iter()
+        .flat_map(|module| module.classes.iter())
+        .map(|class| {
+            (
+                class.name.clone(),
+                class
+                    .super_class
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_default(),
+            )
+        })
+        .collect();
+    refs.set_class_hierarchy(hierarchy);
+
+    let fields = mods
+        .iter()
+        .flat_map(|module| module.classes.iter())
+        .map(|class| {
+            (
+                class.name.clone(),
+                class
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty.base_name(refs)))
+                    .collect(),
+            )
+        })
+        .collect();
+    refs.set_class_fields(fields);
+    refs.add_method_names(
+        mods.iter()
+            .flat_map(|module| module.classes.iter())
+            .flat_map(|class| class.methods.iter())
+            .map(|method| method.name.clone()),
+    );
+    if let Some(native) = native {
+        refs.set_native_api(native);
+    }
+}
+
+/// Populate every resolver input required by a full-tree emit and return the exact deterministic
+/// declaration plan consumed by the opaque prepared API.
+fn prepare_resolver_for_emit(
+    mods: &[Module],
+    refs: &mut RefResolver,
+    native: Option<super::binds::NativeApi>,
+) -> Result<FreeFunctionRenamePlan, String> {
+    prepare_resolver_semantics(mods, refs, native);
+    let plan = free_function_rename_plan(mods, refs)?;
+    let mut rename_map: HashMap<String, HashMap<String, String>> = HashMap::new();
+    for (module_index, names) in plan.per_module.iter().enumerate() {
+        if names.is_empty() {
+            continue;
+        }
+        rename_map.insert(
+            mods[module_index].name.clone(),
+            names.iter().map(|(a, b)| (a.clone(), b.clone())).collect(),
+        );
+    }
+    refs.set_free_fn_renames(&rename_map);
+    Ok(plan)
+}
+
+/// Mirror the exact free-function inclusion and overload identity used by `emit::emit_module`.
+/// These helpers deliberately live together; changing the emitter's rules requires updating the
+/// synthetic parity tests in `tests/emit_all_test.rs`.
+fn emitted_free_functions<'a>(module: &'a Module, refs: &RefResolver) -> Vec<(&'a Func, String)> {
+    let class_names: HashSet<&str> = module
+        .classes
+        .iter()
+        .map(|class| class.name.as_str())
+        .collect();
+    let class_members: HashMap<&str, HashSet<&str>> = module
+        .classes
+        .iter()
+        .map(|class| {
+            (
+                class.name.as_str(),
+                class
+                    .methods
+                    .iter()
+                    .chain(class.ctors.iter())
+                    .map(|function| function.name.as_str())
+                    .collect(),
+            )
+        })
+        .collect();
+    let mut seen = HashSet::new();
+    module
+        .functions
+        .iter()
+        .filter(|function| {
+            !is_generated_function(function, &class_names, &class_members)
+                && !is_generated_spawn(function, refs)
+        })
+        .filter_map(|function| {
+            let params = free_param_signature(function, refs);
+            let signature = format!("{}({params})", function.name);
+            seen.insert(signature.clone())
+                .then_some((function, signature))
+        })
+        .collect()
+}
+
+fn is_generated_function(
+    function: &Func,
+    class_names: &HashSet<&str>,
+    class_members: &HashMap<&str, HashSet<&str>>,
+) -> bool {
+    function.name == "StaticClass"
+        || class_names.contains(function.name.as_str())
+        || class_members
+            .get(function.namespace.as_str())
+            .is_some_and(|members| members.contains(function.name.as_str()))
+}
+
+fn is_generated_spawn(function: &Func, refs: &RefResolver) -> bool {
+    if !function.ret.is_object_handle {
+        return false;
+    }
+    let first = function
+        .params
+        .first()
+        .map(|parameter| parameter.ty.base_name(refs));
+    if function.name == "Spawn" && function.params.len() == 5 && first.as_deref() == Some("FVector")
+    {
+        return true;
+    }
+    if matches!(function.name.as_str(), "Get" | "GetOrCreate" | "Create")
+        && function.params.len() == 2
+        && first.as_deref() == Some("AActor")
+        && function
+            .params
+            .get(1)
+            .map(|parameter| parameter.ty.base_name(refs))
+            .as_deref()
+            == Some("FName")
+    {
+        return true;
+    }
+    matches!(function.name.as_str(), "Get" | "GetG1R") && function.params.is_empty()
+}
+
+fn free_param_signature(function: &Func, refs: &RefResolver) -> String {
+    function
+        .params
+        .iter()
+        .map(|parameter| {
+            let ty = parameter.ty.render(refs);
+            let reference = if parameter.ty.is_reference {
+                match parameter.flags & 3 {
+                    2 => "&out",
+                    3 => "&inout",
+                    _ => "&in",
+                }
+            } else {
+                ""
+            };
+            format!("{ty}{reference}")
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn function_parameter_signature(function: &Func, refs: &RefResolver) -> ParameterSignature {
+    ParameterSignature(
+        function
+            .params
+            .iter()
+            .map(|parameter| {
+                let rendered = parameter.ty.render(refs);
+                let mut tokens = code_tokens(&rendered)
+                    .iter()
+                    .map(|token| token_text(&rendered, token).to_owned())
+                    .collect::<Vec<_>>();
+                if parameter.ty.is_reference {
+                    tokens.push("&".into());
+                    tokens.push(
+                        match parameter.flags & 3 {
+                            2 => "out",
+                            3 => "inout",
+                            _ => "in",
+                        }
+                        .into(),
+                    );
+                }
+                tokens
+            })
+            .collect(),
+    )
+}
+
+fn free_function_rename_plan(
     mods: &[Module],
     refs: &RefResolver,
-    outdir: &Path,
-) -> Result<EmitAllStats, EmitAllError> {
-    let io = |ctx: &str| {
-        let ctx = ctx.to_string();
-        move |e: std::io::Error| EmitAllError::Io(format!("{ctx}: {e}"))
-    };
-    // Resolve the output root up front so a symlinked `outdir` is followed to its real
-    // target ONCE here — the per-entry component check below then guards the untrusted
-    // cache paths against that real root. (create_dir_all so canonicalize succeeds.)
-    std::fs::create_dir_all(outdir).map_err(io(&format!("creating {}", outdir.display())))?;
-    let outdir = outdir
-        .canonicalize()
-        .map_err(io(&format!("resolving {}", outdir.display())))?;
-    // Cross-module free-function collisions: AngelScript compiles all loose .as into ONE
-    // global scope, so two modules each defining `Foo(<same params>)` (even with different
-    // return types) collide as "a function with the same name and parameters already
-    // exists". Find such names and rename each per-module — a function's decl and its
-    // intra-module free calls live in the same emitted file, so a file-local rename
-    // de-collides without breaking resolution (cross-module calls of these don't occur).
+) -> Result<FreeFunctionRenamePlan, String> {
     let mut sig_mods: HashMap<String, HashSet<usize>> = HashMap::new();
-    for (i, m) in mods.iter().enumerate() {
-        for f in &m.functions {
-            // generated factory accessors are skipped at emit (not free-emitted) — never
-            // rename them, or free CALLS to the native binding would be broken.
-            if matches!(
-                f.name.as_str(),
-                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
-            ) {
-                continue;
-            }
-            // precise signature (render, not base_name) so only GENUINE same-signature
-            // collisions are flagged — a coarse match falsely flags distinct overloads and
-            // would rename (and break) functions that are validly called cross-module.
-            let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(refs)).collect();
-            sig_mods
-                .entry(format!("{}({})", f.name, ptys.join(",")))
-                .or_default()
-                .insert(i);
-        }
-    }
-    // A name is safe to file-locally rename in a module only if EVERY emittable free
-    // function of that name in the module has a colliding signature. If the module also has
-    // a NON-colliding same-name overload, the name-based `rename_free_fn` would rewrite that
-    // overload's decl + calls too, breaking other modules that call it by its original name.
-    // In that mixed case leave the name un-renamed: the genuine collision then surfaces at
-    // generate as a "already exists" stub (rare, safe) instead of silently breaking a valid
-    // cross-module call to the non-colliding overload.
-    let colliding_sigs: HashSet<&str> = sig_mods
+    let emitted = mods
         .iter()
-        .filter(|(_, modset)| modset.len() > 1)
-        .map(|(sig, _)| sig.as_str())
-        .collect();
-    let mut colliding_in: HashMap<usize, HashSet<String>> = HashMap::new();
-    for (i, m) in mods.iter().enumerate() {
-        let mut sigs_by_name: HashMap<&str, Vec<String>> = HashMap::new();
-        for f in &m.functions {
-            if matches!(
-                f.name.as_str(),
-                "Spawn" | "Get" | "GetOrCreate" | "Create" | "GetG1R" | "StaticClass"
-            ) {
-                continue;
-            }
-            let ptys: Vec<String> = f.params.iter().map(|p| p.ty.render(refs)).collect();
-            sigs_by_name
-                .entry(f.name.as_str())
+        .map(|module| emitted_free_functions(module, refs))
+        .collect::<Vec<_>>();
+    for (module_index, _) in mods.iter().enumerate() {
+        for (_, signature) in &emitted[module_index] {
+            sig_mods
+                .entry(signature.clone())
                 .or_default()
-                .push(format!("{}({})", f.name, ptys.join(",")));
+                .insert(module_index);
         }
-        for (name, sigs) in sigs_by_name {
-            if sigs.iter().any(|s| colliding_sigs.contains(s.as_str()))
-                && sigs.iter().all(|s| colliding_sigs.contains(s.as_str()))
+    }
+
+    let mut colliding = vec![BTreeSet::new(); mods.len()];
+    for (module_index, _) in mods.iter().enumerate() {
+        for (function, signature) in &emitted[module_index] {
+            if sig_mods
+                .get(signature)
+                .is_some_and(|participants| participants.len() > 1)
             {
-                colliding_in.entry(i).or_default().insert(name.to_string());
+                // One colliding overload binds the whole same-name family in every participating
+                // module. The resolver map is function-id based, so cross-module calls to the
+                // non-colliding siblings follow the declaration rename as well.
+                colliding[module_index].insert(function.name.clone());
             }
         }
     }
-    let (
-        mut written,
-        mut functions,
-        mut cache_function_records,
-        mut stubbed,
-        mut stubbed_functions,
-    ) = (0usize, 0usize, 0usize, 0usize, 0usize);
-    for (mi, m) in mods.iter().enumerate() {
-        let mut src = super::emit::emit_module(m, refs);
-        functions += super::emit::emitted_body_count(m, refs);
-        cache_function_records += m.functions.len()
-            + m.classes
+
+    let mut reserved = BTreeSet::new();
+    for module in mods {
+        reserved.extend(
+            module
+                .functions
                 .iter()
-                .map(|class| class.methods.len() + class.ctors.len())
-                .sum::<usize>();
-        if let Some(names) = colliding_in.get(&mi) {
-            for name in names {
-                src = rename_free_fn(&src, name, &format!("{name}_g{mi}"));
+                .map(|function| function.name.clone()),
+        );
+        reserved.extend(module.globals.iter().map(|global| global.name.clone()));
+        reserved.extend(module.classes.iter().map(|class| class.name.clone()));
+        reserved.extend(
+            module
+                .enums
+                .iter()
+                .map(|definition| definition.name.clone()),
+        );
+    }
+    let mut plan = FreeFunctionRenamePlan {
+        per_module: vec![BTreeMap::new(); mods.len()],
+        required_signatures: vec![BTreeMap::new(); mods.len()],
+        original_names: BTreeSet::new(),
+    };
+    for (module_index, names) in colliding.into_iter().enumerate() {
+        for name in names {
+            let preferred = format!("{name}_g{module_index}");
+            let mut target = preferred.clone();
+            let mut discriminator = 0usize;
+            while reserved.contains(&target) || refs.native_name_exists(&target) {
+                discriminator += 1;
+                target = format!("{preferred}_r{discriminator}");
+            }
+            reserved.insert(target.clone());
+            plan.original_names.insert(name.clone());
+            let signatures = emitted[module_index]
+                .iter()
+                .filter(|(function, _)| function.name == name)
+                .map(|(function, _)| function_parameter_signature(function, refs))
+                .collect::<BTreeSet<_>>();
+            plan.required_signatures[module_index].insert(name.clone(), signatures);
+            plan.per_module[module_index].insert(name, target);
+        }
+    }
+
+    // A rename plan is acceptable only if the final loose-source global scope has no duplicate
+    // emitted free-function signature. Treat any residue as an internal error before writing.
+    let mut final_signatures = BTreeMap::<String, usize>::new();
+    for (module_index, functions) in emitted.iter().enumerate() {
+        for (function, _) in functions {
+            let name = plan
+                .renamed(module_index, &function.name)
+                .unwrap_or(&function.name);
+            let signature = format!("{name}({})", free_param_signature(function, refs));
+            if let Some(previous) = final_signatures.insert(signature.clone(), module_index) {
+                return Err(format!(
+                    "free-function signature {signature} remains duplicated in modules {:?} and {:?}",
+                    mods[previous].name, mods[module_index].name
+                ));
             }
         }
-        let module_stubs = src.matches("body not fully recovered — stub [").count();
-        if module_stubs != 0 {
-            stubbed += 1;
-            stubbed_functions += module_stubs;
+    }
+    Ok(plan)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CodeToken {
+    start: usize,
+    end: usize,
+    brace_depth: usize,
+    identifier: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FunctionDeclaration {
+    name_token: usize,
+    open_paren: usize,
+    close_paren: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexState {
+    Code,
+    LineComment,
+    BlockComment,
+    Quoted(u8),
+}
+
+fn code_tokens(source: &str) -> Vec<CodeToken> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut state = LexState::Code;
+    let mut depth = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        match state {
+            LexState::Code => {
+                if bytes[index..].starts_with(b"//") {
+                    state = LexState::LineComment;
+                    index += 2;
+                } else if bytes[index..].starts_with(b"/*") {
+                    state = LexState::BlockComment;
+                    index += 2;
+                } else if matches!(bytes[index], b'\'' | b'"') {
+                    state = LexState::Quoted(bytes[index]);
+                    index += 1;
+                } else if bytes[index] == b'{' {
+                    tokens.push(CodeToken {
+                        start: index,
+                        end: index + 1,
+                        brace_depth: depth,
+                        identifier: false,
+                    });
+                    depth += 1;
+                    index += 1;
+                } else if bytes[index] == b'}' {
+                    depth = depth.saturating_sub(1);
+                    tokens.push(CodeToken {
+                        start: index,
+                        end: index + 1,
+                        brace_depth: depth,
+                        identifier: false,
+                    });
+                    index += 1;
+                } else if is_identifier_start(bytes[index]) {
+                    let start = index;
+                    index += 1;
+                    while index < bytes.len() && is_identifier_continue(bytes[index]) {
+                        index += 1;
+                    }
+                    tokens.push(CodeToken {
+                        start,
+                        end: index,
+                        brace_depth: depth,
+                        identifier: true,
+                    });
+                } else if bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                } else {
+                    tokens.push(CodeToken {
+                        start: index,
+                        end: index + 1,
+                        brace_depth: depth,
+                        identifier: false,
+                    });
+                    index += 1;
+                }
+            }
+            LexState::LineComment => {
+                if bytes[index] == b'\n' {
+                    state = LexState::Code;
+                }
+                index += 1;
+            }
+            LexState::BlockComment => {
+                if bytes[index..].starts_with(b"*/") {
+                    state = LexState::Code;
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+            }
+            LexState::Quoted(quote) => {
+                if bytes[index] == b'\\' {
+                    index = (index + 2).min(bytes.len());
+                } else {
+                    if bytes[index] == quote {
+                        state = LexState::Code;
+                    }
+                    index += 1;
+                }
+            }
         }
-        let rel = if m.file.is_empty() {
-            format!("{}.as", m.name)
-        } else {
-            m.file.clone()
-        };
-        let rel = rel.replace('\\', "/");
-        // A cache entry's relative filename is untrusted: reject `..`, absolute, or
-        // drive-prefixed components so output can never escape `outdir`.
-        if std::path::Path::new(&rel).components().any(|c| {
-            use std::path::Component::*;
-            matches!(c, ParentDir | RootDir | Prefix(_))
-        }) {
-            eprintln!("skipping {}: unsafe output path {rel:?}", m.name);
+    }
+    tokens
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_identifier_continue(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn token_text<'a>(source: &'a str, token: &CodeToken) -> &'a str {
+    &source[token.start..token.end]
+}
+
+fn matching_token(
+    source: &str,
+    tokens: &[CodeToken],
+    open: usize,
+    left: &str,
+    right: &str,
+) -> Option<usize> {
+    if token_text(source, tokens.get(open)?) != left {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (index, token) in tokens.iter().enumerate().skip(open) {
+        match token_text(source, token) {
+            value if value == left => depth += 1,
+            value if value == right => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn function_declarations(source: &str, tokens: &[CodeToken]) -> Vec<FunctionDeclaration> {
+    let mut declarations = Vec::new();
+    for (name_token, token) in tokens.iter().enumerate() {
+        if !token.identifier
+            || tokens
+                .get(name_token + 1)
+                .is_none_or(|next| token_text(source, next) != "(")
+        {
             continue;
         }
-        // The lexical check above stops `..`/absolute paths, but a pre-existing
-        // symlinked component under outdir would still be FOLLOWED by create_dir_all /
-        // write, escaping outdir. Reject any existing symlink along outdir -> path.
-        let mut cur = outdir.clone();
-        let mut symlinked = None;
-        for comp in std::path::Path::new(&rel).components() {
-            cur.push(comp);
-            if std::fs::symlink_metadata(&cur).is_ok_and(|md| md.file_type().is_symlink()) {
-                symlinked = Some(cur.clone());
+        let open_paren = name_token + 1;
+        let Some(close_paren) = matching_token(source, tokens, open_paren, "(", ")") else {
+            continue;
+        };
+        let mut body_open = close_paren + 1;
+        while tokens.get(body_open).is_some_and(|next| {
+            next.identifier
+                && matches!(
+                    token_text(source, next),
+                    "const" | "final" | "override" | "property"
+                )
+        }) {
+            body_open += 1;
+        }
+        if tokens
+            .get(body_open)
+            .is_some_and(|next| token_text(source, next) == "{")
+        {
+            declarations.push(FunctionDeclaration {
+                name_token,
+                open_paren,
+                close_paren,
+            });
+        }
+    }
+    declarations
+}
+
+fn rewrite_top_level_declarations(source: &str, renames: &BTreeMap<String, String>) -> String {
+    let tokens = code_tokens(source);
+    let declarations = function_declarations(source, &tokens);
+    let mut replacements = Vec::<(usize, usize, &str)>::new();
+    for declaration in declarations {
+        let identifier = tokens[declaration.name_token];
+        if identifier.brace_depth != 0 {
+            continue;
+        }
+        let name = &source[identifier.start..identifier.end];
+        if let Some(target) = renames.get(name) {
+            replacements.push((identifier.start, identifier.end, target.as_str()));
+        }
+    }
+    if replacements.is_empty() {
+        return source.to_owned();
+    }
+    let extra = replacements
+        .iter()
+        .map(|(start, end, target)| target.len().saturating_sub(end - start))
+        .sum::<usize>();
+    let mut output = String::with_capacity(source.len() + extra);
+    let mut copied = 0usize;
+    for (start, end, target) in replacements {
+        output.push_str(&source[copied..start]);
+        output.push_str(target);
+        copied = end;
+    }
+    output.push_str(&source[copied..]);
+    output
+}
+
+fn declaration_parameter_segments<'a>(
+    source: &str,
+    tokens: &'a [CodeToken],
+    declaration: FunctionDeclaration,
+) -> Option<Vec<&'a [CodeToken]>> {
+    let inner = &tokens[declaration.open_paren + 1..declaration.close_paren];
+    if inner.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut segments = Vec::<&[CodeToken]>::new();
+    let mut start = 0usize;
+    let mut angle = 0usize;
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    for (index, token) in inner.iter().enumerate() {
+        match token_text(source, token) {
+            "<" => angle += 1,
+            ">" => angle = angle.checked_sub(1)?,
+            "(" => paren += 1,
+            ")" => paren = paren.checked_sub(1)?,
+            "[" => bracket += 1,
+            "]" => bracket = bracket.checked_sub(1)?,
+            "{" => brace += 1,
+            "}" => brace = brace.checked_sub(1)?,
+            "," if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => {
+                if start == index {
+                    return None;
+                }
+                segments.push(&inner[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    if angle != 0 || paren != 0 || bracket != 0 || brace != 0 || start == inner.len() {
+        return None;
+    }
+    segments.push(&inner[start..]);
+    Some(segments)
+}
+
+fn parameter_matches_expected(source: &str, segment: &[CodeToken], expected: &[String]) -> bool {
+    let mut angle = 0usize;
+    let mut paren = 0usize;
+    let mut bracket = 0usize;
+    let mut brace = 0usize;
+    let mut end = segment.len();
+    for (index, token) in segment.iter().enumerate() {
+        let valid = match token_text(source, token) {
+            "<" => {
+                angle += 1;
+                true
+            }
+            ">" => angle.checked_sub(1).is_some_and(|next| {
+                angle = next;
+                true
+            }),
+            "(" => {
+                paren += 1;
+                true
+            }
+            ")" => paren.checked_sub(1).is_some_and(|next| {
+                paren = next;
+                true
+            }),
+            "[" => {
+                bracket += 1;
+                true
+            }
+            "]" => bracket.checked_sub(1).is_some_and(|next| {
+                bracket = next;
+                true
+            }),
+            "{" => {
+                brace += 1;
+                true
+            }
+            "}" => brace.checked_sub(1).is_some_and(|next| {
+                brace = next;
+                true
+            }),
+            "=" if angle == 0 && paren == 0 && bracket == 0 && brace == 0 => {
+                end = index;
                 break;
             }
+            _ => true,
+        };
+        if !valid {
+            return false;
         }
-        if let Some(link) = symlinked {
-            eprintln!(
-                "skipping {}: symlinked path component {}",
-                m.name,
-                link.display()
-            );
+    }
+    if end == segment.len() && (angle != 0 || paren != 0 || bracket != 0 || brace != 0) {
+        return false;
+    }
+    let declaration = &segment[..end];
+    let exact = declaration.len() == expected.len()
+        && declaration
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| token_text(source, actual) == expected);
+    let named = declaration.len() == expected.len() + 1
+        && declaration[..expected.len()]
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| token_text(source, actual) == expected)
+        && declaration.last().is_some_and(|token| token.identifier);
+    exact || named
+}
+
+fn declaration_matches_signature(
+    source: &str,
+    tokens: &[CodeToken],
+    declaration: FunctionDeclaration,
+    expected: &ParameterSignature,
+) -> bool {
+    let Some(segments) = declaration_parameter_segments(source, tokens, declaration) else {
+        return false;
+    };
+    segments.len() == expected.0.len()
+        && segments
+            .iter()
+            .zip(&expected.0)
+            .all(|(actual, expected)| parameter_matches_expected(source, actual, expected))
+}
+
+fn display_signature(signature: &ParameterSignature) -> String {
+    signature
+        .0
+        .iter()
+        .map(|parameter| parameter.join(" "))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn validate_collision_bound_declarations(
+    source: &str,
+    renames: &BTreeMap<String, String>,
+    required: &BTreeMap<String, BTreeSet<ParameterSignature>>,
+) -> Result<(), String> {
+    let tokens = code_tokens(source);
+    let declarations = function_declarations(source, &tokens);
+    let targets = renames
+        .iter()
+        .map(|(original, target)| (target.as_str(), original.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeMap::<String, BTreeSet<ParameterSignature>>::new();
+    for declaration in declarations {
+        let identifier = tokens[declaration.name_token];
+        if identifier.brace_depth != 0 {
             continue;
         }
-        let path = outdir.join(&rel);
-        if let Some(p) = path.parent() {
-            std::fs::create_dir_all(p).map_err(io(&format!("creating {}", p.display())))?;
+        let name = token_text(source, &identifier);
+        let original = if renames.contains_key(name) {
+            name
+        } else if let Some(original) = targets.get(name) {
+            original
+        } else {
+            continue;
+        };
+        let expected = required
+            .get(original)
+            .ok_or_else(|| format!("internal plan has no signatures for {original}"))?;
+        let matches = expected
+            .iter()
+            .filter(|signature| {
+                declaration_matches_signature(source, &tokens, declaration, signature)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let [signature] = matches.as_slice() else {
+            return Err(format!(
+                "declaration {name}(...) does not match exactly one required signature for {}",
+                renames.get(original).map(String::as_str).unwrap_or(name)
+            ));
+        };
+        if !seen
+            .entry(original.to_owned())
+            .or_default()
+            .insert(signature.clone())
+        {
+            return Err(format!(
+                "duplicate collision-bound overload {name}({})",
+                display_signature(signature)
+            ));
         }
-        std::fs::write(&path, src).map_err(io(&format!("writing {}", path.display())))?;
-        written += 1;
     }
-    Ok(EmitAllStats {
-        written,
-        functions,
-        cache_function_records,
-        stubbed,
-        stubbed_functions,
+    let mut problems = Vec::new();
+    for (original, signatures) in required {
+        let actual = seen.get(original).cloned().unwrap_or_default();
+        for missing in signatures.difference(&actual) {
+            problems.push(format!(
+                "missing {}({})",
+                renames[original],
+                display_signature(missing)
+            ));
+        }
+        for extra in actual.difference(signatures) {
+            problems.push(format!(
+                "unexpected {}({})",
+                renames[original],
+                display_signature(extra)
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join(", "))
+    }
+}
+
+fn unresolved_collision_calls(source: &str, originals: &BTreeSet<String>) -> BTreeSet<String> {
+    let tokens = code_tokens(source);
+    let declarations = function_declarations(source, &tokens);
+    let declaration_names = declarations
+        .iter()
+        .map(|declaration| declaration.name_token)
+        .collect::<HashSet<_>>();
+    let mut unresolved = BTreeSet::new();
+    for (index, identifier) in tokens.iter().enumerate() {
+        if !identifier.identifier {
+            continue;
+        }
+        let name = token_text(source, identifier);
+        if !originals.contains(name) || declaration_names.contains(&index) {
+            continue;
+        }
+        let call = tokens
+            .get(index + 1)
+            .is_some_and(|token| token_text(source, token) == "(");
+        let handle = index > 0 && token_text(source, &tokens[index - 1]) == "@";
+        if !call && !handle {
+            continue;
+        }
+        if index > 0 && token_text(source, &tokens[index - 1]) == "." {
+            continue; // explicit object/this/super member, with arbitrary trivia around `.`
+        }
+        unresolved.insert(name.to_owned());
+    }
+    unresolved
+}
+
+#[derive(Debug, Clone)]
+struct ModuleLayout {
+    relative: String,
+    key: String,
+}
+
+fn windows_casefold(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
+}
+
+fn module_name_key(name: &str) -> Result<String, String> {
+    if name.is_empty() || name.chars().any(char::is_control) {
+        return Err(format!("unsafe empty/control-bearing module name {name:?}"));
+    }
+    Ok(windows_casefold(name))
+}
+
+fn windows_reserved_component(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    let upper = stem.to_ascii_uppercase();
+    matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|suffix| suffix.len() == 1 && matches!(suffix.as_bytes()[0], b'1'..=b'9'))
+}
+
+fn normalize_output_path(raw: &str) -> Result<ModuleLayout, String> {
+    if raw.is_empty() || raw.chars().any(char::is_control) {
+        return Err(format!("unsafe empty/control-bearing output path {raw:?}"));
+    }
+    let slash = raw.replace('\\', "/");
+    if slash.starts_with('/') || slash.ends_with('/') {
+        return Err(format!("output path must be a relative file path: {raw:?}"));
+    }
+    let mut components = Vec::new();
+    for component in slash.split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".."
+            || component.contains(':')
+            || component
+                .chars()
+                .any(|character| matches!(character, '<' | '>' | '"' | '|' | '?' | '*'))
+            || component.ends_with([' ', '.'])
+            || windows_reserved_component(component)
+        {
+            return Err(format!(
+                "unsafe Windows output path component {component:?} in {raw:?}"
+            ));
+        }
+        components.push(component);
+    }
+    if components.is_empty() {
+        return Err(format!("output path has no file component: {raw:?}"));
+    }
+    let relative = components.join("/");
+    Ok(ModuleLayout {
+        key: windows_casefold(&relative),
+        relative,
     })
+}
+
+fn module_output_path(module: &Module) -> Result<ModuleLayout, String> {
+    let raw = if module.file.is_empty() {
+        format!("{}.as", module.name)
+    } else {
+        module.file.clone()
+    };
+    normalize_output_path(&raw)
+}
+
+fn validate_module_layout(mods: &[Module]) -> Result<Vec<ModuleLayout>, String> {
+    let mut names = BTreeMap::<String, usize>::new();
+    let mut paths = BTreeMap::<String, usize>::new();
+    let mut layout: Vec<ModuleLayout> = Vec::with_capacity(mods.len());
+    for (index, module) in mods.iter().enumerate() {
+        let name_key = module_name_key(&module.name)?;
+        if let Some(previous) = names.insert(name_key, index) {
+            return Err(format!(
+                "module names {:?} and {:?} collide under Windows case folding",
+                mods[previous].name, module.name
+            ));
+        }
+        let output = module_output_path(module)?;
+        if let Some(previous) = overlapping_path(&paths, &output.key) {
+            return Err(format!(
+                "module output paths {:?} and {:?} collide as the same path or as a file/directory ancestor under Windows",
+                layout[previous].relative, output.relative
+            ));
+        }
+        paths.insert(output.key.clone(), index);
+        layout.push(output);
+    }
+    Ok(layout)
+}
+
+fn path_keys_overlap(left: &str, right: &str) -> bool {
+    left == right
+        || left
+            .strip_prefix(right)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+        || right
+            .strip_prefix(left)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn overlapping_path(paths: &BTreeMap<String, usize>, key: &str) -> Option<usize> {
+    if let Some(index) = paths.get(key) {
+        return Some(*index);
+    }
+    for (separator, _) in key.match_indices('/') {
+        if let Some(index) = paths.get(&key[..separator]) {
+            return Some(*index);
+        }
+    }
+    let descendant_prefix = format!("{key}/");
+    paths
+        .range(descendant_prefix.clone()..)
+        .next()
+        .filter(|(candidate, _)| candidate.starts_with(&descendant_prefix))
+        .map(|(_, index)| *index)
+}
+
+/// Opaque, fully prepared view of one parsed cache. Construction validates the complete module
+/// layout, installs resolver semantics and function-id collision renames, and proves that the
+/// final emitted free-function signatures are unique.
+pub struct PreparedEmit<'a> {
+    mods: &'a [Module],
+    refs: &'a RefResolver,
+    rename_plan: FreeFunctionRenamePlan,
+    layout: Vec<ModuleLayout>,
+}
+
+impl<'a> PreparedEmit<'a> {
+    pub fn new(
+        mods: &'a [Module],
+        refs: &'a mut RefResolver,
+        native: Option<super::binds::NativeApi>,
+    ) -> Result<Self, EmitAllError> {
+        let layout = validate_module_layout(mods).map_err(EmitAllError::InvalidLayout)?;
+        let rename_plan =
+            prepare_resolver_for_emit(mods, refs, native).map_err(EmitAllError::InvalidLayout)?;
+        Ok(Self {
+            mods,
+            refs,
+            rename_plan,
+            layout,
+        })
+    }
+
+    /// Emit one module using the same full-cache resolver and collision plan as `emit_tree`.
+    pub fn emit_module(&self, module_index: usize) -> Result<String, EmitAllError> {
+        let module = self
+            .mods
+            .get(module_index)
+            .ok_or(EmitAllError::InvalidModuleIndex {
+                index: module_index,
+                modules: self.mods.len(),
+            })?;
+        let source = super::emit::emit_module(module, self.refs);
+        Ok(self
+            .rename_plan
+            .rewrite_emitted_module(module_index, &source))
+    }
+
+    /// Validate and rewrite an authored overlay against this prepared cache. Unqualified calls or
+    /// handles to a collision-bound name fail closed; only explicit `receiver.Name` access is safe.
+    pub fn prepare_overlay(
+        &self,
+        op: &str,
+        module_name: &str,
+        source: &str,
+    ) -> Result<String, String> {
+        self.rename_plan
+            .prepare_overlay(self.mods, op, module_name, source)
+    }
+
+    pub(crate) fn prepare_compile_overlay(
+        &self,
+        op: &str,
+        module_name: &str,
+        rel_path: &str,
+        source: &str,
+    ) -> Result<(String, String), String> {
+        let requested = normalize_output_path(rel_path)?;
+        let output_relative = match op {
+            "edit" => {
+                let indices = self
+                    .mods
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, module)| module.name == module_name)
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                let [module_index] = indices.as_slice() else {
+                    return Err(format!(
+                        "edit module {module_name:?} must identify exactly one base module (found {})",
+                        indices.len()
+                    ));
+                };
+                let expected = &self.layout[*module_index];
+                if requested.key != expected.key {
+                    return Err(format!(
+                        "edit path {:?} does not match base module {:?} path {:?}",
+                        requested.relative, module_name, expected.relative
+                    ));
+                }
+                expected.relative.clone()
+            }
+            "add" => {
+                let requested_name = module_name_key(module_name)?;
+                if let Some(existing) = self
+                    .mods
+                    .iter()
+                    .find(|module| windows_casefold(&module.name) == requested_name)
+                {
+                    return Err(format!(
+                        "add module name {module_name:?} collides with base module {:?}",
+                        existing.name
+                    ));
+                }
+                if let Some((index, _)) = self
+                    .layout
+                    .iter()
+                    .enumerate()
+                    .find(|(_, output)| path_keys_overlap(&output.key, &requested.key))
+                {
+                    return Err(format!(
+                        "add path {:?} collides with base module {:?} path {:?} as the same path or a file/directory ancestor",
+                        requested.relative, self.mods[index].name, self.layout[index].relative
+                    ));
+                }
+                requested.relative.clone()
+            }
+            _ => return Err(format!("invalid overlay operation {op:?}")),
+        };
+        let source = self.prepare_overlay(op, module_name, source)?;
+        Ok((source, output_relative))
+    }
+
+    /// Emit the prepared full tree. Module identities and normalized paths were validated by
+    /// `new` before this method can create the output directory or write a file.
+    pub fn emit_tree(&self, outdir: &Path) -> Result<EmitAllStats, EmitAllError> {
+        let io = |ctx: &str| {
+            let ctx = ctx.to_string();
+            move |error: std::io::Error| EmitAllError::Io(format!("{ctx}: {error}"))
+        };
+        std::fs::create_dir_all(outdir).map_err(io(&format!("creating {}", outdir.display())))?;
+        let outdir = outdir
+            .canonicalize()
+            .map_err(io(&format!("resolving {}", outdir.display())))?;
+
+        for output in &self.layout {
+            let mut current = outdir.clone();
+            for component in output.relative.split('/') {
+                current.push(component);
+                if std::fs::symlink_metadata(&current)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+                {
+                    return Err(EmitAllError::InvalidLayout(format!(
+                        "symlinked output path component {}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+
+        let (
+            mut written,
+            mut functions,
+            mut cache_function_records,
+            mut stubbed,
+            mut stubbed_functions,
+        ) = (0usize, 0usize, 0usize, 0usize, 0usize);
+        for (module_index, module) in self.mods.iter().enumerate() {
+            let source = self.emit_module(module_index)?;
+            functions += super::emit::emitted_body_count(module, self.refs);
+            cache_function_records += module.functions.len()
+                + module
+                    .classes
+                    .iter()
+                    .map(|class| class.methods.len() + class.ctors.len())
+                    .sum::<usize>();
+            let module_stubs = source.matches("body not fully recovered — stub [").count();
+            if module_stubs != 0 {
+                stubbed += 1;
+                stubbed_functions += module_stubs;
+            }
+            let path = outdir.join(&self.layout[module_index].relative);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(io(&format!("creating {}", parent.display())))?;
+            }
+            std::fs::write(&path, source).map_err(io(&format!("writing {}", path.display())))?;
+            written += 1;
+        }
+        Ok(EmitAllStats {
+            written,
+            functions,
+            cache_function_records,
+            stubbed,
+            stubbed_functions,
+        })
+    }
+}
+
+/// Convenience entry point for a complete loose-source tree.
+pub fn emit_all_tree(
+    mods: &[Module],
+    refs: &mut RefResolver,
+    native: Option<super::binds::NativeApi>,
+    outdir: &Path,
+) -> Result<EmitAllStats, EmitAllError> {
+    PreparedEmit::new(mods, refs, native)?.emit_tree(outdir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn signature(parameters: &[&str]) -> ParameterSignature {
+        ParameterSignature(
+            parameters
+                .iter()
+                .map(|parameter| {
+                    code_tokens(parameter)
+                        .iter()
+                        .map(|token| token_text(parameter, token).to_owned())
+                        .collect()
+                })
+                .collect(),
+        )
+    }
+
+    fn declaration_matches(source: &str, expected: &ParameterSignature) -> bool {
+        let tokens = code_tokens(source);
+        let declarations = function_declarations(source, &tokens);
+        let [declaration] = declarations.as_slice() else {
+            panic!("expected exactly one function declaration in {source:?}");
+        };
+        declaration_matches_signature(source, &tokens, *declaration, expected)
+    }
+
+    #[test]
+    fn declaration_rewrite_touches_only_top_level_function_names() {
+        let source = r#"// Foo stays
+void Foo() {}
+void Caller() { Foo(); Object.Foo(); }
+class C { void Foo() { Foo(); } }
+const FName Label = n"Foo";
+"#;
+        let rewritten = rewrite_top_level_declarations(
+            source,
+            &BTreeMap::from([("Foo".to_owned(), "Foo_g0".to_owned())]),
+        );
+        assert!(rewritten.contains("void Foo_g0() {}"));
+        assert!(rewritten.contains("void Caller() { Foo(); Object.Foo(); }"));
+        assert!(rewritten.contains("class C { void Foo() { Foo(); } }"));
+        assert!(rewritten.contains("// Foo stays"));
+        assert!(rewritten.contains("n\"Foo\""));
+    }
+
+    #[test]
+    fn exact_parameter_matching_preserves_token_boundaries_and_nested_type_syntax() {
+        let foo_bar = signature(&["FooBar"]);
+        assert!(declaration_matches(
+            "void Shared(FooBar Value = FooBar()) {}",
+            &foo_bar
+        ));
+        assert!(!declaration_matches("void Shared(Foo Bar) {}", &foo_bar));
+
+        let const_foo = signature(&["const Foo"]);
+        assert!(declaration_matches(
+            "void Shared(const /* trivia */ Foo Value) {}",
+            &const_foo
+        ));
+        assert!(!declaration_matches(
+            "void Shared(constFoo Value) {}",
+            &const_foo
+        ));
+
+        let nested = signature(&["const TArray<Foo@>[] &in"]);
+        assert!(declaration_matches(
+            "void Shared(const TArray<Foo@>[] /* trivia */ &in Values = Make<Foo@>(1, 2)) {}",
+            &nested
+        ));
+        assert!(!declaration_matches(
+            "void Shared(const TArray<Foo@>[] &out Values) {}",
+            &nested
+        ));
+        assert!(!declaration_matches(
+            "void Shared(const TArray<Foo@>[] &in Values Extra) {}",
+            &nested
+        ));
+    }
+
+    #[test]
+    fn edit_path_casefold_match_uses_the_base_modules_canonical_relative_path() {
+        let modules = vec![Module {
+            name: "Fixture".into(),
+            file: "Dir/Fixture.as".into(),
+            functions: Vec::new(),
+            classes: Vec::new(),
+            enums: Vec::new(),
+            globals: Vec::new(),
+        }];
+        let mut refs = RefResolver::default();
+        let prepared = PreparedEmit::new(&modules, &mut refs, None).unwrap();
+        let (_, relative) = prepared
+            .prepare_compile_overlay("edit", "Fixture", "dir\\FIXTURE.AS", "// replacement")
+            .unwrap();
+        assert_eq!(relative, "Dir/Fixture.as");
+    }
 }

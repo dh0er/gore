@@ -289,6 +289,22 @@ fn validate_generated_cache(bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Minis are intermediate module containers; every add/replace splice path publishes the base
+/// cache's outer header, never the mini's. Normalize the per-regeneration FGuid anyway so identical
+/// source/base inputs produce byte-identical mini artifacts across compiler runs.
+fn canonicalize_mini_guid(mini: &mut [u8], base: &[u8]) -> Result<(), String> {
+    const GUID_BYTES: usize = 16;
+    if mini.len() < GUID_BYTES || base.len() < GUID_BYTES {
+        return Err(format!(
+            "cannot canonicalize mini FGuid: mini/base shorter than {GUID_BYTES} bytes ({}/{})",
+            mini.len(),
+            base.len()
+        ));
+    }
+    mini[..GUID_BYTES].copy_from_slice(&base[..GUID_BYTES]);
+    Ok(())
+}
+
 /// Recreate the fixed `work_dir/tree` child from scratch. Refuse links and containment surprises
 /// before recursive deletion, so a hostile/stale tree cannot redirect cleanup outside work_dir.
 fn reset_compile_tree(work_dir: &Path) -> Result<PathBuf, String> {
@@ -369,29 +385,6 @@ fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> 
     }
 }
 
-/// A safe relative path inside the staged tree: non-empty, not absolute, every component a normal
-/// name (no `..`, no root/prefix), no control characters — so it can't escape the tree (and, since
-/// the same tree is later copied into the game's `Script/`, can't escape that either). Mirrors
-/// gore-mod's `is_safe_rel_path`.
-fn is_safe_rel_path(p: &str) -> bool {
-    use std::path::Component;
-    if p.is_empty() || p.chars().any(char::is_control) {
-        return false;
-    }
-    let path = Path::new(p);
-    if path.is_absolute() {
-        return false;
-    }
-    let mut any = false;
-    for c in path.components() {
-        match c {
-            Component::Normal(_) => any = true,
-            _ => return false,
-        }
-    }
-    any
-}
-
 /// `run_regen(game_dir, src_dir) -> regen cache path`. Injected so the orchestration is testable
 /// offline; the FFI passes [`game_run_regen`].
 pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutput, CompileError>
@@ -413,15 +406,6 @@ where
     // Read the overlay before clearing work_dir/tree. This also makes an input that intentionally
     // lives below that old tree safe: its bytes survive the clean rebuild, never its stale siblings.
     let overlay = std::fs::read(&opts.as_path).map_err(io("reading source .as"))?;
-    // Validate the untrusted overlay rel_path BEFORE the heavy work: it's joined onto the staged
-    // tree (and that tree is later copied into the game's Script/), so an absolute or `..` path
-    // could escape both. Reject it up front.
-    if !is_safe_rel_path(&opts.rel_path) {
-        return Err(CompileError::Other(format!(
-            "unsafe script rel_path: {:?}",
-            opts.rel_path
-        )));
-    }
     // The PRISTINE base cache to emit/remap against. Prefer the caller-supplied `base_override`
     // (the FFI passes gore-mod's drift-aware `pristine_script_cache`, so the base matches exactly
     // what deploy will splice against, even after a game update made the `*.gore-bak` stale).
@@ -437,28 +421,34 @@ where
         None => std::fs::read(&base_path).map_err(io("reading vanilla cache"))?,
     };
 
-    // 1. Emit a freshly rebuilt vanilla source tree. A previous failed compile must never leave a
-    // stale loose script that silently participates in the next generation.
-    let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
     let mut refs =
         RefResolver::build(&base).map_err(|e| CompileError::Other(format!("resolver: {e}")))?;
     let mods =
         model::parse_modules(&base).map_err(|e| CompileError::Other(format!("parse: {e}")))?;
-    refs.set_class_hierarchy(class_hierarchy(&mods));
-    // Load native-call arities (Binds.Cache next to the vanilla cache) so emitted source has the
-    // right native-call shapes and recompiles — mirrors `AsCmd::EmitAll`. Absent => no fallback.
-    if let Some(api) = native_api(&base_path) {
-        refs.set_native_api(api);
-    }
-    emit_all::emit_all_tree(&mods, &refs, &tree)
+    // Use the exact same resolver preparation as `as emit-all`. Class fields, method-shadow names,
+    // and id-based free-function collision renames are all compile-significant; the old partial
+    // setup produced 287 divergent vanilla files on the 1.0.3 cache before the authored overlay
+    // was even considered.
+    let prepared = emit_all::PreparedEmit::new(&mods, &mut refs, native_api(&base_path))
+        .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?;
+    let overlay = std::str::from_utf8(&overlay)
+        .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
+    let (overlay, overlay_rel_path) = prepared
+        .prepare_compile_overlay(&opts.op, &opts.module_name, &opts.rel_path, overlay)
+        .map_err(|error| CompileError::Other(format!("preparing authored overlay: {error}")))?;
+
+    // 1. Only after all base and authored target checks succeed, clear and rebuild the tree.
+    let tree = reset_compile_tree(&opts.work_dir).map_err(CompileError::Other)?;
+    prepared
+        .emit_tree(&tree)
         .map_err(|e| CompileError::Other(format!("emit tree: {e}")))?;
 
     // 2. Overlay the user's .as at its rel path.
-    let dst = tree.join(&opts.rel_path);
+    let dst = tree.join(&overlay_rel_path);
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(io("mkdir overlay"))?;
     }
-    std::fs::write(&dst, &overlay).map_err(io("overlay .as"))?;
+    std::fs::write(&dst, overlay.as_bytes()).map_err(io("overlay .as"))?;
 
     // 3. Drive the game to regenerate the precompiled cache from `tree`.
     let regen_path = run_regen(&opts.game_dir, &tree).map_err(CompileError::Regen)?;
@@ -499,7 +489,7 @@ where
     //    new rows that cannot resolve in vanilla; it never copies the regen's full global tables.
     //    Deploy still differs by op — gore-mod uses `splice_auto` for add and `replace_module` for
     //    edit — while both accept either minimal shape.
-    let mini = {
+    let mut mini = {
         let out = splice::extract_module(&regen, &target)
             .map_err(|e| CompileError::Other(format!("extract: {e}")))?;
         remap::remap_module_to_base_with_options(
@@ -512,6 +502,7 @@ where
         .map_err(|e| CompileError::Other(format!("remap: {e}")))?
         .0
     };
+    canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
 
     let mini_path = opts.work_dir.join("module.cache");
     std::fs::write(&mini_path, &mini).map_err(io("writing mini"))?;
@@ -519,21 +510,6 @@ where
         mini_path,
         module_name: target,
     })
-}
-
-fn class_hierarchy(mods: &[model::Module]) -> std::collections::HashMap<String, String> {
-    let mut h = std::collections::HashMap::new();
-    for m in mods {
-        for c in &m.classes {
-            let sup = c
-                .super_class
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default();
-            h.insert(c.name.clone(), sup);
-        }
-    }
-    h
 }
 
 /// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
@@ -2350,30 +2326,35 @@ mod tests {
         out
     }
 
-    /// Small but structurally complete cache: one empty module followed by all seven empty tails.
-    fn valid_cache() -> Vec<u8> {
-        let module = "TestModule";
+    fn cache_with_empty_modules(modules: &[(&str, &str)]) -> Vec<u8> {
         let mut out = vec![0u8; 16];
         out.extend_from_slice(&crate::cache::header::CACHE_MAGIC.to_le_bytes());
-        out.extend_from_slice(&1u32.to_le_bytes());
-        out.extend_from_slice(&fstring(module));
-        out.extend_from_slice(&sia(module));
-        out.extend_from_slice(&0i32.to_le_bytes()); // functions
-        out.extend_from_slice(&0i32.to_le_bytes()); // classes
-        out.extend_from_slice(&0i32.to_le_bytes()); // enums
-        out.extend_from_slice(&0i32.to_le_bytes()); // globals
-        out.extend_from_slice(&0i32.to_le_bytes()); // function imports
-        out.extend_from_slice(&0i64.to_le_bytes()); // code hash
-        out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
-        out.extend_from_slice(&sia("")); // statics class
-        out.extend_from_slice(&0i32.to_le_bytes()); // events
-        out.extend_from_slice(&0i32.to_le_bytes()); // delegates
-        out.extend_from_slice(&sia("TestModule.as"));
-        out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        out.extend_from_slice(&(modules.len() as u32).to_le_bytes());
+        for (module, file) in modules {
+            out.extend_from_slice(&fstring(module));
+            out.extend_from_slice(&sia(module));
+            out.extend_from_slice(&0i32.to_le_bytes()); // functions
+            out.extend_from_slice(&0i32.to_le_bytes()); // classes
+            out.extend_from_slice(&0i32.to_le_bytes()); // enums
+            out.extend_from_slice(&0i32.to_le_bytes()); // globals
+            out.extend_from_slice(&0i32.to_le_bytes()); // function imports
+            out.extend_from_slice(&0i64.to_le_bytes()); // code hash
+            out.extend_from_slice(&0i32.to_le_bytes()); // imported modules
+            out.extend_from_slice(&sia("")); // statics class
+            out.extend_from_slice(&0i32.to_le_bytes()); // events
+            out.extend_from_slice(&0i32.to_le_bytes()); // delegates
+            out.extend_from_slice(&sia(file));
+            out.extend_from_slice(&0i32.to_le_bytes()); // post-init functions
+        }
         for _ in 0..crate::cache::tables::N_TABLES {
             out.extend_from_slice(&0i32.to_le_bytes());
         }
         out
+    }
+
+    /// Small but structurally complete cache: one empty module followed by all seven empty tails.
+    fn valid_cache() -> Vec<u8> {
+        cache_with_empty_modules(&[("TestModule", "TestModule.as")])
     }
 
     /// Stub generator: emulate the game creating a complete development cache and return it.
@@ -2418,6 +2399,114 @@ mod tests {
         assert!(validate_generated_cache(&trailing)
             .unwrap_err()
             .contains("file length"));
+    }
+
+    #[test]
+    fn compile_target_and_layout_preflight_never_reset_or_run_regen_on_rejection() {
+        let duplicate_paths =
+            cache_with_empty_modules(&[("Alpha", "Dir/Foo.as"), ("Beta", "dir\\foo.AS")]);
+        let prefix_paths =
+            cache_with_empty_modules(&[("PrefixFile", "Foo.as"), ("PrefixChild", "foo.AS/Bar.as")]);
+        let existing_directory = cache_with_empty_modules(&[("Nested", "Existing/Child.as")]);
+        let cases = [
+            (duplicate_paths, "add", "New", "New.as", "module layout"),
+            (prefix_paths, "add", "New", "New.as", "module layout"),
+            (
+                valid_cache(),
+                "edit",
+                "TestModule",
+                "Wrong.as",
+                "does not match",
+            ),
+            (valid_cache(), "add", "testmodule", "New.as", "module name"),
+            (
+                valid_cache(),
+                "add",
+                "NewModule",
+                "testmodule.AS",
+                "add path",
+            ),
+            (
+                valid_cache(),
+                "add",
+                "NewModule",
+                "New?.as",
+                "unsafe Windows output path",
+            ),
+            (
+                valid_cache(),
+                "add",
+                "NewModule",
+                "testmodule.AS/Child.as",
+                "file/directory ancestor",
+            ),
+            (
+                existing_directory,
+                "add",
+                "NewModule",
+                "EXISTING",
+                "file/directory ancestor",
+            ),
+        ];
+
+        for (case, (base_cache, op, module_name, rel_path, expected)) in
+            cases.into_iter().enumerate()
+        {
+            let root = std::env::temp_dir().join(format!(
+                "gore-as-compile-preflight-{}-{case}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            let tree = root.join("tree");
+            std::fs::create_dir_all(&tree).unwrap();
+            let sentinel = tree.join("sentinel.as");
+            std::fs::write(&sentinel, b"keep").unwrap();
+            let source = root.join("overlay.as");
+            std::fs::write(&source, b"// overlay").unwrap();
+            let opts = CompileOpts {
+                game_dir: root.join("game"),
+                op: op.into(),
+                module_name: module_name.into(),
+                rel_path: rel_path.into(),
+                as_path: source,
+                work_dir: root.clone(),
+                allow_new_symbols: false,
+                base_override: Some(base_cache),
+            };
+            let called = std::cell::Cell::new(false);
+            let error = compile_module(&opts, |_, _| {
+                called.set(true);
+                Err("regen must not run".into())
+            })
+            .unwrap_err();
+
+            assert!(error.to_string().contains(expected), "{error}");
+            assert!(!called.get(), "regen callback ran for case {case}");
+            assert_eq!(std::fs::read(&sentinel).unwrap(), b"keep");
+            assert!(!root.join("module.cache").exists());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn mini_guid_is_canonicalized_to_base_without_changing_payload() {
+        let mut mini = valid_cache();
+        let mut base = mini.clone();
+        mini[..16].fill(0x11);
+        base[..16].fill(0xa5);
+        let remainder = mini[16..].to_vec();
+        let published_before =
+            crate::cache::splice::replace_module(&base, &mini, "TestModule").unwrap();
+
+        canonicalize_mini_guid(&mut mini, &base).unwrap();
+
+        assert_eq!(&mini[..16], &base[..16]);
+        assert_eq!(&mini[16..], remainder);
+        let published_after =
+            crate::cache::splice::replace_module(&base, &mini, "TestModule").unwrap();
+        assert_eq!(published_after, published_before);
+        assert_eq!(&published_after[..16], &base[..16]);
+        assert!(canonicalize_mini_guid(&mut mini[..8], &base).is_err());
     }
 
     #[test]

@@ -479,24 +479,6 @@ fn texture_extract(payload: Value) -> Value {
         "is_virtual": info.is_virtual, "vt_layers": info.vt_layers, "mipmapped": info.mipmapped })
 }
 
-/// Build the class name -> super name map so emitted source gets subclass casts right.
-fn as_class_hierarchy(
-    mods: &[gore_as::cache::model::Module],
-) -> std::collections::HashMap<String, String> {
-    let mut h = std::collections::HashMap::new();
-    for m in mods {
-        for c in &m.classes {
-            let sup = c
-                .super_class
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default();
-            h.insert(c.name.clone(), sup);
-        }
-    }
-    h
-}
-
 /// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
 /// to `cache_file`, if present. Mirrors the CLI's `load_native_api` (quietly — no logging) so the
 /// CLI and mod-studio resolve the same arities when `GORE_AS_BINDS` is set.
@@ -551,14 +533,21 @@ fn script_emit_module(payload: Value) -> Value {
         Ok(m) => m,
         Err(e) => return err("PARSE", format!("{e}")),
     };
-    refs.set_class_hierarchy(as_class_hierarchy(&mods));
-    if let Some(api) = as_native_api(std::path::Path::new(cache)) {
-        refs.set_native_api(api);
-    }
-    let Some(m) = mods.iter().find(|m| m.name == module) else {
+    let Some(module_index) = mods.iter().position(|candidate| candidate.name == module) else {
         return err("NOT_FOUND", format!("module not found: {module}"));
     };
-    let source = gore_as::cache::emit::emit_module(m, &refs);
+    let prepared = match gore_as::cache::emit_all::PreparedEmit::new(
+        &mods,
+        &mut refs,
+        as_native_api(std::path::Path::new(cache)),
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => return err("EMIT", format!("preparing cache: {error}")),
+    };
+    let source = match prepared.emit_module(module_index) {
+        Ok(source) => source,
+        Err(error) => return err("EMIT", format!("emitting module: {error}")),
+    };
     json!({"ok": true, "source": source})
 }
 
@@ -982,6 +971,70 @@ mod tests {
     // ── mgr_* commands ─────────────────────────────────────────────────────────
     // Round-tripped through `execute_json` (the real FFI seam), each against temp `library_dir`
     // / `loadout_path` overrides so nothing touches the shared per-user store.
+
+    fn script_fixture_sia(value: &str) -> Vec<u8> {
+        if value.is_empty() {
+            return 0i32.to_le_bytes().to_vec();
+        }
+        let mut output = (value.len() as i32).to_le_bytes().to_vec();
+        output.extend_from_slice(value.as_bytes());
+        output.push(0);
+        output
+    }
+
+    fn script_fixture_fstring(value: &str) -> Vec<u8> {
+        let mut output = ((value.len() + 1) as i32).to_le_bytes().to_vec();
+        output.extend_from_slice(value.as_bytes());
+        output.push(0);
+        output
+    }
+
+    fn empty_script_fixture_cache() -> Vec<u8> {
+        let module = "FfiFixture";
+        let mut output = vec![0u8; 16];
+        output.extend_from_slice(&gore_as::cache::header::CACHE_MAGIC.to_le_bytes());
+        output.extend_from_slice(&1u32.to_le_bytes());
+        output.extend_from_slice(&script_fixture_fstring(module));
+        output.extend_from_slice(&script_fixture_sia(module));
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i64.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&script_fixture_sia(""));
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&0i32.to_le_bytes());
+        output.extend_from_slice(&script_fixture_sia("FfiFixture.as"));
+        output.extend_from_slice(&0i32.to_le_bytes());
+        for _ in 0..gore_as::cache::tables::N_TABLES {
+            output.extend_from_slice(&0i32.to_le_bytes());
+        }
+        output
+    }
+
+    #[test]
+    fn script_emit_module_matches_the_prepared_emit_all_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("fixture.cache");
+        let bytes = empty_script_fixture_cache();
+        std::fs::write(&cache, &bytes).unwrap();
+
+        let request = json!({
+            "command": "script_emit_module",
+            "payload": {"cache": cache, "module": "FfiFixture"}
+        });
+        let response: Value = serde_json::from_str(&execute_json(&request.to_string())).unwrap();
+        assert_eq!(response["ok"], true, "{response}");
+
+        let modules = gore_as::cache::model::parse_modules(&bytes).unwrap();
+        let mut refs = gore_as::cache::refs::RefResolver::build(&bytes).unwrap();
+        let output = temp.path().join("all");
+        gore_as::cache::emit_all::emit_all_tree(&modules, &mut refs, None, &output).unwrap();
+        let expected = std::fs::read_to_string(output.join("FfiFixture.as")).unwrap();
+        assert_eq!(response["source"].as_str(), Some(expected.as_str()));
+    }
 
     /// Run a command with a JSON `payload` value, returning the parsed response.
     fn mgr_call(command: &str, payload: Value) -> Value {
