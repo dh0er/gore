@@ -277,6 +277,9 @@ pub enum AsCmd {
 }
 
 const DEFAULT_SELECTOR_MAX_BYTES: u64 = 64 * 1024;
+const DEFAULT_USMAP_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES: usize = 1_024;
+const DEFAULT_USMAP_MAX_CANDIDATES: usize = 16;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -440,6 +443,182 @@ fn load_native_api(cache_file: &std::path::Path) -> Option<gore_as::cache::binds
         None => eprintln!("warning: failed to parse {}", path.display()),
     }
     api
+}
+
+struct DefaultMutationEvidence {
+    native: Option<gore_as::cache::binds::NativeApi>,
+    ancestry: Option<gore_as::cache::default_ancestry::DefaultNativeAncestry>,
+}
+
+/// Resolve USMAP candidates without trusting a Steam location or versioned filename. An explicit
+/// `GORE_AS_USMAP` is the sole candidate. Otherwise only regular `.usmap` files in the game-layout
+/// directory relative to `<G1R>/Script/<cache>` are considered; their content seals remain the
+/// authority.
+fn default_usmap_candidates(
+    cache_file: &Path,
+    configured: Option<PathBuf>,
+) -> Result<Vec<PathBuf>> {
+    if let Some(path) = configured {
+        return Ok(vec![path]);
+    }
+    let Some(script_dir) = cache_file.parent() else {
+        return Ok(Vec::new());
+    };
+    if !script_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("Script"))
+    {
+        return Ok(Vec::new());
+    }
+    let Some(g1r_dir) = script_dir.parent() else {
+        return Ok(Vec::new());
+    };
+    let directory = g1r_dir.join("Binaries").join("Win64").join("ue4ss");
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("AS_DEFAULT_USMAP: enumerating {}", directory.display()))
+        }
+    };
+    let mut candidates = Vec::new();
+    for (index, entry) in entries.enumerate() {
+        if index >= DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES {
+            bail!(
+                "AS_DEFAULT_USMAP: {} contains more than {} entries",
+                directory.display(),
+                DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES
+            );
+        }
+        let entry = entry.with_context(|| {
+            format!(
+                "AS_DEFAULT_USMAP: enumerating an entry in {}",
+                directory.display()
+            )
+        })?;
+        let kind = entry.file_type().with_context(|| {
+            format!(
+                "AS_DEFAULT_USMAP: reading file type for {}",
+                entry.path().display()
+            )
+        })?;
+        let path = entry.path();
+        if kind.is_file()
+            && path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("usmap"))
+        {
+            if candidates.len() >= DEFAULT_USMAP_MAX_CANDIDATES {
+                bail!(
+                    "AS_DEFAULT_USMAP: {} contains more than {} .usmap candidates",
+                    directory.display(),
+                    DEFAULT_USMAP_MAX_CANDIDATES
+                );
+            }
+            candidates.push(path);
+        }
+    }
+    candidates.sort();
+    Ok(candidates)
+}
+
+fn read_default_usmap(path: &Path) -> Result<Vec<u8>> {
+    let file = std::fs::File::open(path)
+        .with_context(|| format!("AS_DEFAULT_USMAP: opening {}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("AS_DEFAULT_USMAP: reading metadata for {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("AS_DEFAULT_USMAP: {} is not a regular file", path.display());
+    }
+    if metadata.len() > DEFAULT_USMAP_MAX_BYTES {
+        bail!(
+            "AS_DEFAULT_USMAP: {} is {} bytes; limit is {}",
+            path.display(),
+            metadata.len(),
+            DEFAULT_USMAP_MAX_BYTES
+        );
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.take(DEFAULT_USMAP_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("AS_DEFAULT_USMAP: reading {}", path.display()))?;
+    if bytes.len() as u64 != metadata.len() || bytes.len() as u64 > DEFAULT_USMAP_MAX_BYTES {
+        bail!(
+            "AS_DEFAULT_USMAP: {} changed size while being read or exceeded the limit",
+            path.display()
+        );
+    }
+    Ok(bytes)
+}
+
+/// Load optional native mutation evidence. Every failure deliberately preserves the existing
+/// scalar-only path: the sealed Binds data may still prove direct native field types, while no
+/// native-grandparent ancestry is supplied.
+fn load_default_mutation_evidence(cache_file: &Path, cache: &[u8]) -> DefaultMutationEvidence {
+    let native = load_native_api(cache_file);
+    let Some(native_ref) = native.as_ref() else {
+        return DefaultMutationEvidence {
+            native,
+            ancestry: None,
+        };
+    };
+    let configured = std::env::var_os("GORE_AS_USMAP").map(PathBuf::from);
+    let candidates = match default_usmap_candidates(cache_file, configured) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            eprintln!("warning: USMAP autodiscovery failed closed: {error:#}");
+            Vec::new()
+        }
+    };
+    let mut matches = Vec::new();
+    for path in candidates {
+        let result = read_default_usmap(&path)
+            .and_then(|bytes| {
+                gore_asset::SchemaDb::from_usmap(&bytes)
+                    .map_err(anyhow::Error::from)
+                    .context("AS_DEFAULT_USMAP: parsing sealed schema map")
+            })
+            .and_then(|schemas| {
+                gore_as::cache::default_ancestry::DefaultNativeAncestry::from_schema_db(
+                    native_ref, cache, &schemas,
+                )
+                .map_err(anyhow::Error::from)
+                .context("AS_DEFAULT_ANCESTRY: validating cache/Binds/USMAP tuple")
+            });
+        match result {
+            Ok(profile) => matches.push((path, profile)),
+            Err(error) => eprintln!(
+                "warning: {} is not usable native-default evidence: {error:#}",
+                path.display()
+            ),
+        }
+    }
+    let ancestry = match matches.len() {
+        1 => {
+            let (path, profile) = matches.pop().expect("one match");
+            eprintln!(
+                "loaded sealed native-default ancestry {} from {}",
+                profile.profile_id(),
+                path.display()
+            );
+            Some(profile)
+        }
+        0 => {
+            eprintln!("native-default ancestry unavailable; using strict scalar-only fallback");
+            None
+        }
+        count => {
+            eprintln!(
+                "warning: {count} sealed USMAP candidates matched; refusing ambiguous native-default ancestry"
+            );
+            None
+        }
+    };
+    DefaultMutationEvidence { native, ancestry }
 }
 
 fn default_provenance_json(
@@ -833,9 +1012,13 @@ pub fn run(cmd: AsCmd) -> Result<()> {
         } => {
             let bytes = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let report =
-                gore_as::cache::default_patch::default_sites(&bytes, load_native_api(&cache))
-                    .context("AS_DEFAULT_INSPECT")?;
+            let evidence = load_default_mutation_evidence(&cache, &bytes);
+            let report = gore_as::cache::default_patch::default_sites_with_native_ancestry(
+                &bytes,
+                evidence.native,
+                evidence.ancestry,
+            )
+            .context("AS_DEFAULT_INSPECT")?;
             let sites: Vec<_> = report
                 .sites
                 .iter()
@@ -924,9 +1107,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             let replacement = decode_default_hex(&replacement_hex, "AS_DEFAULT_REPLACEMENT")?;
             let input = std::fs::read(&cache)
                 .with_context(|| format!("AS_DEFAULT_INPUT: reading {}", cache.display()))?;
-            let patch = gore_as::cache::default_patch::patch_default(
+            let evidence = load_default_mutation_evidence(&cache, &input);
+            let patch = gore_as::cache::default_patch::patch_default_with_native_ancestry(
                 &input,
-                load_native_api(&cache),
+                evidence.native,
+                evidence.ancestry,
                 &selector,
                 &expected,
                 &replacement,
@@ -1472,5 +1657,64 @@ mod default_cli_tests {
         for invalid in ["04", "0400000", "0400000000", "0x04000000", "AB000000"] {
             assert!(decode_default_hex(invalid, "TEST").is_err(), "{invalid}");
         }
+    }
+
+    #[test]
+    fn usmap_autodiscovery_is_layout_relative_and_content_agnostic() {
+        let root = tempfile::tempdir().unwrap();
+        let g1r = root.path().join("G1R");
+        let script = g1r.join("Script");
+        let maps = g1r.join("Binaries/Win64/ue4ss");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::create_dir_all(&maps).unwrap();
+        std::fs::write(maps.join("b.USMAP"), b"unknown-b").unwrap();
+        std::fs::write(maps.join("a.usmap"), b"unknown-a").unwrap();
+        std::fs::write(maps.join("ignored.txt"), b"not a map").unwrap();
+        std::fs::create_dir(maps.join("directory.usmap")).unwrap();
+
+        let cache = script.join("PrecompiledScript_Shipping.Cache");
+        assert_eq!(
+            default_usmap_candidates(&cache, None).unwrap(),
+            vec![maps.join("a.usmap"), maps.join("b.USMAP")]
+        );
+        let explicit = root.path().join("custom.bin");
+        assert_eq!(
+            default_usmap_candidates(&cache, Some(explicit.clone())).unwrap(),
+            vec![explicit]
+        );
+        assert!(
+            default_usmap_candidates(&root.path().join("elsewhere.Cache"), None)
+                .unwrap()
+                .is_empty()
+        );
+
+        for index in 0..=DEFAULT_USMAP_MAX_CANDIDATES {
+            std::fs::write(maps.join(format!("overflow-{index}.usmap")), b"map").unwrap();
+        }
+        assert!(default_usmap_candidates(&cache, None).is_err());
+
+        let flood = tempfile::tempdir().unwrap();
+        let flood_script = flood.path().join("G1R/Script");
+        let flood_maps = flood.path().join("G1R/Binaries/Win64/ue4ss");
+        std::fs::create_dir_all(&flood_script).unwrap();
+        std::fs::create_dir_all(&flood_maps).unwrap();
+        for index in 0..=DEFAULT_USMAP_MAX_DIRECTORY_ENTRIES {
+            std::fs::write(flood_maps.join(format!("entry-{index}.txt")), b"x").unwrap();
+        }
+        assert!(default_usmap_candidates(&flood_script.join("cache.Cache"), None).is_err());
+    }
+
+    #[test]
+    fn usmap_reads_are_regular_bounded_and_exact_length() {
+        let root = tempfile::tempdir().unwrap();
+        let small = root.path().join("small.usmap");
+        std::fs::write(&small, b"exact bytes").unwrap();
+        assert_eq!(read_default_usmap(&small).unwrap(), b"exact bytes");
+        assert!(read_default_usmap(root.path()).is_err());
+
+        let large = root.path().join("large.usmap");
+        let file = std::fs::File::create(&large).unwrap();
+        file.set_len(DEFAULT_USMAP_MAX_BYTES + 1).unwrap();
+        assert!(read_default_usmap(&large).is_err());
     }
 }

@@ -42,9 +42,10 @@ Bare class names must be globally unique across modules, every parsed inheritanc
 cycle-free, and the target class must reach the declaring `field_owner` by exact names. When a
 chain reaches an unparsed native parent, that direct parent is a valid terminal owner, but ancestry
 above it is unknown and is not guessed. This keeps inherited and shadowed same-name fields distinct.
-In the audited Shipping cache this deliberately leaves 5,197 otherwise exact scalar windows
-uneditable because their declaring owner lies above the first native parent. A separately sealed
-native-ancestry profile is required before those sites can be enabled.
+Without additional evidence this deliberately leaves 5,197 otherwise exact Shipping scalar
+windows uneditable because their declaring owner lies above the first native parent. The current
+Shipping profile can recover that ancestry only when the cache semantic fingerprint, Binds bytes
+and bridge, and USMAP bytes and exact Class graph all match their one atomic sealed tuple.
 
 Script-declared field types come from the parsed module model. Native field types are mutation
 evidence only when `Binds.Cache` matches both the sealed audited file identity
@@ -55,6 +56,15 @@ and the inspected `PrecompiledScript_Shipping.Cache` header has the paired audit
 `GORE_AS_BINDS` when set, otherwise `Binds.Cache` beside the input cache. An absent, unreadable,
 unknown, parser-drifted, or differently paired native profile supplies no native mutation
 evidence; its generic field information can still assist read-only decompilation.
+
+For default inspection and patching, set `GORE_AS_USMAP` to an exact mappings file when the cache
+is outside its game layout. Otherwise the CLI scans regular `.usmap` files under
+`<G1R>/Binaries/Win64/ue4ss`, derived from `<G1R>/Script/<cache>`. Neither a Steam location nor a
+filename/version is trusted: bounded file contents are parsed once and must satisfy every sealed
+identity and parser-output digest. Missing, unreadable, unknown, ambiguous, oversized, or
+mismatched candidates produce a warning and the strict scalar-only fallback. Direct/script-proven
+sites remain available; a selector with a non-null native `ancestry_profile` becomes not-found and
+cannot publish output.
 
 Calls, computed expressions, branched initializers, structs, object handles, strings/text, arrays,
 containers, gameplay-tag maps, and other complex defaults are not patchable. Repeated assignments
