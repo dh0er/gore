@@ -15,6 +15,7 @@ import '../../loc/game_lang.dart';
 import '../../loc/primary_set.dart';
 import '../../loc/ui/lang_fields.dart';
 import '../../project/dialog_topics_notifier.dart';
+import '../../voice/ui/voice_line_editor.dart';
 import '../domain/dialog_catalog_provider.dart';
 
 /// Currently selected dialog line (loc id), shared by all [DialogeTab]
@@ -893,6 +894,7 @@ class _DialogEditor extends ConsumerWidget {
         // Filtered embeddings (the Changes tab) review staged edits, so show
         // only the languages that actually carry one; the main tab shows all.
         LangFieldsEditor(locId: id, onlyEdited: onlyIds != null),
+        VoiceLineEditor(key: ValueKey('voice-$id'), locId: id),
       ],
     );
   }
