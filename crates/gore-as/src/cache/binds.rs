@@ -65,6 +65,8 @@ const VERIFIED_DEFAULT_SCRIPT_CACHE_GUID: [u8; 16] = [
     0x45, 0x0d, 0x65, 0xc0, 0x4f, 0x0c, 0x01, 0x4f, 0xbe, 0xc5, 0x68, 0x01, 0x63, 0x78, 0xe6, 0x9a,
 ];
 
+type VerifiedDefaultClassProfileDigests = ([u8; 32], [u8; 32]);
+
 /// Native AngelScript method/function arities extracted from `Binds.Cache`.
 #[derive(Debug)]
 pub struct NativeApi {
@@ -87,6 +89,10 @@ pub struct NativeApi {
     /// for the sealed Binds bytes and sealed parser-output digest; a USMAP profile independently
     /// filters this to classes before it can become ancestry evidence.
     verified_default_class_paths: HashMap<String, String>,
+    /// Actual digests observed while constructing the sealed class bridge. Stored rather than
+    /// inferred from hard-coded constants so downstream evidence IDs bind the live verified
+    /// tuple that produced this instance.
+    verified_default_class_profile_digests: Option<VerifiedDefaultClassProfileDigests>,
 }
 
 impl NativeApi {
@@ -107,6 +113,7 @@ impl NativeApi {
             field_types: HashMap::new(),
             verified_default_field_types: HashMap::new(),
             verified_default_class_paths: HashMap::new(),
+            verified_default_class_profile_digests: None,
         }
     }
 
@@ -131,6 +138,7 @@ impl NativeApi {
             field_types: fields(generic),
             verified_default_field_types: fields(verified),
             verified_default_class_paths: HashMap::new(),
+            verified_default_class_profile_digests: None,
         }
     }
 
@@ -143,7 +151,8 @@ impl NativeApi {
         }
         let (by_class, field_types) = parse_records(&data);
         let verified_default_field_types = verified_default_field_types(&data);
-        let verified_default_class_paths = verified_default_class_paths(&data);
+        let (verified_default_class_paths, verified_default_class_profile_digests) =
+            verified_default_class_paths(&data);
         let by_name = scan_by_name(&data);
         // A partially readable cache may populate only one table; keep any useful table.
         if by_name.is_empty()
@@ -160,6 +169,7 @@ impl NativeApi {
             field_types,
             verified_default_field_types,
             verified_default_class_paths,
+            verified_default_class_profile_digests,
         })
     }
 
@@ -222,6 +232,18 @@ impl NativeApi {
         .then_some(&self.verified_default_class_paths)
     }
 
+    /// Actual `(Binds bytes, canonical class bridge)` digests paired with
+    /// [`Self::verified_default_class_paths`]. Unknown/unsealed builds expose neither half.
+    pub(crate) fn verified_default_class_profile_digests(
+        &self,
+        script_cache_guid: &[u8; 16],
+    ) -> Option<VerifiedDefaultClassProfileDigests> {
+        (script_cache_guid == &VERIFIED_DEFAULT_SCRIPT_CACHE_GUID
+            && !self.verified_default_class_paths.is_empty())
+        .then_some(self.verified_default_class_profile_digests)
+        .flatten()
+    }
+
     /// Number of distinct `(class, field)` plain-field type entries (diagnostic).
     pub fn field_type_count(&self) -> usize {
         self.field_types.len()
@@ -252,16 +274,22 @@ fn verified_default_field_types(data: &[u8]) -> HashMap<(String, String), String
     }
 }
 
-fn verified_default_class_paths(data: &[u8]) -> HashMap<String, String> {
+fn verified_default_class_paths(
+    data: &[u8],
+) -> (
+    HashMap<String, String>,
+    Option<VerifiedDefaultClassProfileDigests>,
+) {
     let source_sha256: [u8; 32] = Sha256::digest(data).into();
     if source_sha256 != VERIFIED_DEFAULT_FIELD_BINDS_SHA256 {
-        return HashMap::new();
+        return (HashMap::new(), None);
     }
     let paths = scan_type_paths(data);
-    if string_map_sha256(&paths) == VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256 {
-        paths
+    let bridge_sha256 = string_map_sha256(&paths);
+    if bridge_sha256 == VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256 {
+        (paths, Some((source_sha256, bridge_sha256)))
     } else {
-        HashMap::new()
+        (HashMap::new(), None)
     }
 }
 
@@ -930,6 +958,11 @@ mod tests {
             return;
         }
         let api = NativeApi::load(path).expect("load Binds.Cache");
+        let (source_sha256, bridge_sha256) = api
+            .verified_default_class_profile_digests(&VERIFIED_DEFAULT_SCRIPT_CACHE_GUID)
+            .expect("sealed Binds class-profile digests");
+        assert_eq!(source_sha256, VERIFIED_DEFAULT_FIELD_BINDS_SHA256);
+        assert_eq!(bridge_sha256, VERIFIED_DEFAULT_CLASS_PATH_MAP_SHA256);
 
         eprintln!("distinct (class,name) entries : {}", api.class_name_count());
         eprintln!("distinct by-name entries       : {}", api.name_count());

@@ -17,6 +17,14 @@ pub enum SchemaKind {
     Class,
 }
 
+/// Narrow, mutation-safe declared-property shapes exposed without leaking the USMAP parser's
+/// dependency type across crate boundaries. Variants are added only after an exact wire/profile
+/// audit; unknown or merely similar shapes are represented by `None` at lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExactDeclaredPropertyShape {
+    GameplayTagFloat32Map,
+}
+
 #[derive(Debug, Clone)]
 pub struct SchemaRecord {
     pub id: SchemaId,
@@ -96,6 +104,12 @@ pub enum SchemaError {
     NotAClass(String),
     #[error("schema id {0} is out of range")]
     InvalidSchemaId(SchemaId),
+    #[error("schema {schema} declares property {property:?} {count} times")]
+    DuplicateDeclaredProperty {
+        schema: String,
+        property: String,
+        count: usize,
+    },
     #[error("super schema {super_name:?} for {schema} was not found")]
     SuperNotFound { schema: String, super_name: String },
     #[error("super schema {super_name:?} for {schema} is ambiguous: {candidates:?}")]
@@ -315,6 +329,48 @@ impl SchemaDb {
             [parent] => Ok(Some(*parent)),
             _ => Err(self.super_ambiguous(schema, super_name, candidates)),
         }
+    }
+
+    /// Resolve one property declared directly on an exact Class schema.
+    ///
+    /// The lookup is case-sensitive, never walks parents, rejects duplicate declarations, and
+    /// recognizes only scalar (`array_dim == 1`) `TMap<FGameplayTag,float32>` encoded by USMAP as
+    /// `Map { key: Struct { name: "GameplayTag" }, value: Float }`.
+    pub fn exact_declared_property_shape(
+        &self,
+        id: SchemaId,
+        property_name: &str,
+    ) -> Result<Option<ExactDeclaredPropertyShape>, SchemaError> {
+        let schema = self.schema(id)?;
+        if schema.kind != SchemaKind::Class {
+            return Err(SchemaError::NotAClass(schema.qualified_name()));
+        }
+        let matches: Vec<_> = schema
+            .properties
+            .iter()
+            .filter(|property| property.name == property_name)
+            .collect();
+        let property = match matches.as_slice() {
+            [] => return Ok(None),
+            [property] => *property,
+            many => {
+                return Err(SchemaError::DuplicateDeclaredProperty {
+                    schema: schema.qualified_name(),
+                    property: property_name.to_owned(),
+                    count: many.len(),
+                });
+            }
+        };
+        if property.array_dim != 1 {
+            return Ok(None);
+        }
+        let exact = matches!(
+            &property.inner,
+            usmap::PropertyInner::Map { key, value }
+                if matches!(key.as_ref(), usmap::PropertyInner::Struct { name } if name == "GameplayTag")
+                    && matches!(value.as_ref(), usmap::PropertyInner::Float)
+        );
+        Ok(exact.then_some(ExactDeclaredPropertyShape::GameplayTagFloat32Map))
     }
 
     /// Resolve either a short name or `/Script/Module.Name`. Short names must
@@ -792,6 +848,86 @@ mod tests {
         assert!(matches!(
             db.exact_class_super_schema_id(derived),
             Err(SchemaError::SuperAmbiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_declared_gameplay_tag_float_map_is_case_unique_class_and_scalar_only() {
+        let exact_map = || usmap::Property {
+            name: "Damage".into(),
+            array_dim: 1,
+            index: 3,
+            inner: usmap::PropertyInner::Map {
+                key: Box::new(usmap::PropertyInner::Struct {
+                    name: "GameplayTag".into(),
+                }),
+                value: Box::new(usmap::PropertyInner::Float),
+            },
+        };
+        let mut map = fixture();
+        map.structs[0].properties.push(exact_map());
+        let db = SchemaDb::from_parsed(map).unwrap();
+        let derived = db.resolve_class("/Script/Game.Derived").unwrap();
+        assert_eq!(
+            db.exact_declared_property_shape(derived, "Damage").unwrap(),
+            Some(ExactDeclaredPropertyShape::GameplayTagFloat32Map)
+        );
+        assert_eq!(
+            db.exact_declared_property_shape(derived, "damage").unwrap(),
+            None,
+            "case folding is forbidden"
+        );
+        assert_eq!(
+            db.exact_declared_property_shape(derived, "Count").unwrap(),
+            None,
+            "declared-only lookup must not walk Base"
+        );
+
+        let mut wide = fixture();
+        let mut property = exact_map();
+        property.array_dim = 2;
+        wide.structs[0].properties.push(property);
+        let db = SchemaDb::from_parsed(wide).unwrap();
+        let derived = db.resolve_class("Derived").unwrap();
+        assert_eq!(
+            db.exact_declared_property_shape(derived, "Damage").unwrap(),
+            None
+        );
+
+        let mut wrong_key = fixture();
+        let mut property = exact_map();
+        let usmap::PropertyInner::Map { key, .. } = &mut property.inner else {
+            unreachable!()
+        };
+        **key = usmap::PropertyInner::Struct {
+            name: "FGameplayTag".into(),
+        };
+        wrong_key.structs[0].properties.push(property);
+        let db = SchemaDb::from_parsed(wrong_key).unwrap();
+        let derived = db.resolve_class("Derived").unwrap();
+        assert_eq!(
+            db.exact_declared_property_shape(derived, "Damage").unwrap(),
+            None
+        );
+
+        let mut duplicate = fixture();
+        duplicate.structs[0]
+            .properties
+            .extend([exact_map(), exact_map()]);
+        let db = SchemaDb::from_parsed(duplicate).unwrap();
+        let derived = db.resolve_class("Derived").unwrap();
+        assert!(matches!(
+            db.exact_declared_property_shape(derived, "Damage"),
+            Err(SchemaError::DuplicateDeclaredProperty { count: 2, .. })
+        ));
+
+        let mut not_class = fixture();
+        not_class.eatr.as_mut().unwrap().struct_flags[0] = flags(usmap::FlagsType::Struct);
+        let db = SchemaDb::from_parsed(not_class).unwrap();
+        let derived = db.resolve("Derived").unwrap();
+        assert!(matches!(
+            db.exact_declared_property_shape(derived, "Damage"),
+            Err(SchemaError::NotAClass(_))
         ));
     }
 
