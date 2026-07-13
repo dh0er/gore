@@ -16,6 +16,9 @@ both decisions. The known 2026-07-10 hotfix match is documented in source; no fi
 signature, structural, or hook failure causes the Rust side to terminate the diagnostic attempt and
 run the ordinary compiler only after process-tree exit is confirmed.
 
+The read-only four-release regression results and the exact future/non-Steam capability contract are
+documented in [`../../DIAGNOSTICS_PORTABILITY.md`](../../DIAGNOSTICS_PORTABILITY.md).
+
 Capture content reserves room below the 8 MiB limit for a newline-terminated truncation marker. The
 Rust side treats either that marker or a file reaching the hard cap as incomplete and never accepts
 an otherwise successful cache when compiler errors may have been omitted.
