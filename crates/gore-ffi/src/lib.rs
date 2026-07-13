@@ -25,6 +25,10 @@
 //! - `authoring_project_story_quest_draft_insert_v1` accepts friendly Quest intent plus one game
 //!   root, then rebuilds all catalog/collision provenance natively and runs the existing atomic
 //!   transaction. It never accepts provenance from clients or compiles, writes, or publishes.
+//! - `authoring_npc_archetype_catalog_v1_build_for_game_root` accepts only one game root and
+//!   returns the canonical, generation-sealed, read-only NPC archetype catalog. Native code fixes
+//!   executable/Binds paths and selects only the deployment-aware pristine Shipping snapshot; it
+//!   never writes, launches, builds, deploys, publishes, or claims runtime qualification.
 //! - `authoring_story_build_plan_v1_generate` derives one deterministic, sealed source-inspection
 //!   plan from exact canonical revision-2 project bytes. It always remains runtime-unqualified,
 //!   build-blocked, and non-publishable and never compiles, writes, deploys, or launches the game.
@@ -63,6 +67,7 @@
 
 mod authoring;
 mod authoring_drafts;
+mod authoring_npc_catalog;
 mod authoring_store;
 mod authoring_story;
 mod authoring_story_build;
@@ -97,6 +102,7 @@ const CORE_COMMANDS: &[&str] = &[
     "audio_list",
     "authoring_draft_quest_skeleton_v1_generate",
     "authoring_logical_npc_clone_draft_v1_generate",
+    "authoring_npc_archetype_catalog_v1_build_for_game_root",
     "authoring_project_check",
     "authoring_project_story_draft_insert_v1",
     "authoring_project_story_quest_draft_insert_v1",
@@ -193,6 +199,9 @@ fn dispatch(input: &str) -> Value {
         }
         "authoring_logical_npc_clone_draft_v1_generate" => {
             authoring_drafts::logical_npc_clone(payload)
+        }
+        "authoring_npc_archetype_catalog_v1_build_for_game_root" => {
+            authoring_npc_catalog::build_for_game_root_v1(payload)
         }
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_project_story_draft_insert_v1" => {
@@ -1077,6 +1086,7 @@ mod tests {
                     "audio_list",
                     "authoring_draft_quest_skeleton_v1_generate",
                     "authoring_logical_npc_clone_draft_v1_generate",
+                    "authoring_npc_archetype_catalog_v1_build_for_game_root",
                     "authoring_project_check",
                     "authoring_project_story_draft_insert_v1",
                     "authoring_project_story_quest_draft_insert_v1",
@@ -1151,6 +1161,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_logical_npc_clone_draft_v1_generate"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_npc_archetype_catalog_v1_build_for_game_root"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_checkpoint"));

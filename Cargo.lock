@@ -944,6 +944,7 @@ dependencies = [
  "gore-loc",
  "gore-mod",
  "gore-modgen",
+ "gore-npc-catalog",
  "gore-reflect",
  "gore-story-build",
  "gore-story-catalog",

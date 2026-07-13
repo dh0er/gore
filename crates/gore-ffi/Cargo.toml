@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gore-authoring = { path = "../gore-authoring" }
+gore-npc-catalog = { path = "../gore-npc-catalog" }
 gore-story-catalog = { path = "../gore-story-catalog" }
 gore-story-build = { path = "../gore-story-build" }
 gore-story-inventory = { path = "../gore-story-inventory" }

@@ -124,3 +124,24 @@ mark that class chain as offline-qualified while keeping runtime spawn,
 persistence, dialog, and quest capabilities explicitly blocked or
 Experimental. It must not label a compiled but unspawned class chain as a
 working new NPC.
+
+## Native read-only archetype catalog
+
+The native command
+`authoring_npc_archetype_catalog_v1_build_for_game_root` accepts exactly
+`{"game_root":"..."}`. It derives the executable and `Binds.Cache` paths and
+selects the Shipping cache only through the deployment-aware pristine selector;
+clients cannot submit cache paths, backups, catalog provenance, or claims.
+
+On success it returns one bounded canonical `npc_archetype_catalog.v1` JSON
+string, a domain-separated binding to the exact game-root request, generation,
+catalog/source/payload seals, record/rejection counts, and these fixed claims:
+
+- linkage: `sealed_linkage_verified`;
+- runtime: `runtime_unqualified`;
+- build, deploy, publication: `not_supported`.
+
+Executable and Binds guards plus the pristine Shipping selection are
+revalidated around catalog serialization and bounded response construction.
+Errors never include native paths. The command performs no filesystem writes,
+game launch, build, deploy, publication, or runtime qualification.
