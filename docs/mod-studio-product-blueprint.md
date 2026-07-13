@@ -95,16 +95,16 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 
 | Area | Studio integration now | Offline/backend evidence | Runtime boundary and complete experience |
 |---|---|---|---|
-| Project and content library | The Flutter app still has a legacy format-1 archive and separate provider/tab state. Its compatibility session now owns the current path and extracted workspace, serializes Open/Save/New, distinguishes Save from Save As, preserves edits made during I/O as dirty, and uses strict bounded ZIP validation, canonical embedded paths, and crash-recoverable byte swaps. A V2 working project, one transaction log, history, recovery, and unified library are **not integrated**. | `gore-authoring` implements a closed phase-one `ProjectV2` model for localization/dialog-line/voice concepts, strict IDs/refs, canonical JSON, validation, and an AssetStore **index**. It does not yet implement the complete working-directory store, blob lifecycle, transaction journal, migration, or Studio session. | Runtime is not applicable. End state is safe create/open/recover, global search, collections, backlinks, lineage, source layers, and deterministic export from one managed project. |
+| Project and content library | The normal Flutter project still uses a legacy format-1 archive and separate provider/tab state. Its compatibility session owns the current path and extracted workspace, serializes Open/Save/New, distinguishes Save from Save As, preserves edits made during I/O as dirty, and uses strict bounded ZIP validation, canonical embedded paths, and crash-recoverable byte swaps. Separately, the visible Story create/open flow owns an exclusive schema-revision-2 managed working directory, serialized derive/save lane, exact-head CAS publication, repair journal, and full reopen. It is not the normal app project, has no revision-3 adapter, and does not provide one unified library, transaction history, autosave/recovery model, or all-domain session. | `gore-authoring` now has closed revision-1/2/3 documents, explicit revision-2-to-3 migration, strict IDs/refs and canonical JSON, plus an immutable working-directory store with sealed heads, snapshot/entity shards, physical Ogg and Quest-artifact CAS blobs, and prepare-only revision-3 checkpoints. Dedicated revision-3 Store FFI commands and strict Studio wrappers/DTOs can open the fixed head, reopen exact candidate-head bytes, and prepare immutable checkpoint objects without publishing the fixed head. A revision-3 managed-session adapter and publication transaction, migration orchestration, full history/recovery, and unified content library remain integration work. | Runtime is not applicable. End state is safe create/open/recover, global search, collections, backlinks, lineage, source layers, and deterministic export from one managed project. |
 | Existing game content | Item scalar, localization/dialog text, FMOD, texture, script, change, and build surfaces are **integrated subsets**. They are separate views/providers rather than one semantic graph. | Bounded scalar/default, localization, archive, script, texture, bundle, and fixed-leaf DataAsset paths have separate offline evidence. Evidence for one field/format does not generalize to another. | Only operations named in the normative matrix may be presented as supported. End state adds visible-name search, semantic references, compare/revert, and reviewed schemas. |
 | Dialog and narrative | Existing text editing and explicit technical topic registration are integrated; transcript/outline/graph/state views and semantic condition/effect editing are **not integrated**. | Compiler, localization, and guarded registration paths have bounded evidence. | The retained runtime proof is **render-only** on one generation: a naturally registered topic appeared in the choice UI, nothing was selected, and no condition, effect, quest state, save, or persistence behavior was proved. All selection behavior remains **Research-gated**. |
-| Localization and spoken dialog | Localization is integrated. A bounded line-first editor can now replace an existing spoken line per locale directly beside its dialog text: it resolves installed language archives, blocks zero matches, requires an explicit choice for ambiguity, stages a sealed Ogg replacement, previews/removes it, and participates in strict portable save/reopen, dirty state, Build, and Deploy. Actor-qualified Asghan/Viper IDs are visible in the browser. The managed V2 line -> locale -> multi-take/status workflow is **not integrated**. | Localization lowering, exact-path bounded Ogg replacement, sealed target resolution, bundle construction, and archive verification have bounded backend evidence. Manifest v2 now enforces the observed pristine archive SHA/size and exact member size/CRC before mutation; legacy unsealed manifest v1 remains readable. A read-only real-data probe uniquely resolved one Asghan and one Viper line on the named German archive seal. The V2 core models slots/takes but its AssetStore is currently an index contract, not complete blob I/O. | Existing-member and new-member behavior retain separate operation/version gates; Studio keeps new members Draft-only and build-blocked, and a zero basename match never proves a new path. Offline rewrite/deploy safety does not by itself prove audible gameplay behavior. End state adds multiple takes, recording/import, approval, duration, coverage, and managed history at the line. |
-| NPCs | No semantic NPC browser/wizard or managed-project NPC entity is integrated. | A deterministic backend generator can create the bounded three-class logical-clone Draft; the retained Asghan-derived chain compiles, composes, reopens, and resolves offline. That generator is not a Studio workflow and compile/compose success is not spawning. | New-class residence, effective visuals, distinct identity, conservative spawn, AI, dialog/quest separation, streaming, save/reload, persistence, and uninstall behavior are **separate NPC research gates**. |
-| Quests | No semantic quest catalog/editor or managed-project quest entity is integrated. | A backend discovery-only Draft generator produces a fixed root plus one objective with no transitions/effects; it is not a Studio workflow. Separately, a retained probe showed two added quest subclasses instantiated as `Available` on one generation. That probe does not automatically qualify generator output. | Availability/start/success/failure transitions, dialog selection, journal, rewards, knowledge, effects, save/reload, persistence, and uninstall behavior are **separate quest research gates**. They do not become qualified when NPC spawning works. |
+| Localization and spoken dialog | Localization is integrated. A bounded line-first editor can replace an existing spoken line per locale directly beside its dialog text: it resolves installed language archives, blocks zero matches, requires an explicit choice for ambiguity, validates the selected Ogg natively before staging, shows codec/page/stream/size/hash facts, previews/removes it, and participates in strict portable save/reopen, dirty state, Build, and Deploy. Actor-qualified Asghan/Viper IDs are visible in the browser. The managed revision-3 line -> locale -> multi-take/status workflow is **not integrated**. | Localization lowering, exact-path bounded Ogg inspection/replacement, sealed target resolution, bundle construction, and archive verification have bounded backend evidence. Manifest v2 enforces the observed pristine archive SHA/size and exact member size/CRC before mutation; legacy unsealed manifest v1 remains readable. A read-only real-data probe uniquely resolved one Asghan and one Viper line on the named German archive seal. Revision 3 models slots/takes and the working store persists verified Ogg blobs, but no managed Studio Voice workflow uses that revision-3 store yet. | Existing-member and new-member behavior retain separate operation/version gates; Studio keeps new members Draft-only and build-blocked, and a zero basename match never proves a new path. Offline rewrite/deploy safety does not by itself prove audible gameplay behavior. End state adds multiple takes, recording/import, approval, duration, coverage, and managed history at the line. |
+| NPCs | In the visible schema-revision-2 Story flow, Mod Studio has a searchable, generation-bound, source-sealed NPC archetype catalog and picker. Creating from it atomically persists one offline NPC Draft plus deterministic `ScriptModule` through the managed session's serialized derive/save lane, exact-head CAS publication, and full reopen; the UI shows the saved Draft and generated source. The result remains build-blocked/runtime-unqualified. There is no revision-3 adapter, unified semantic NPC inspector, production lowering, spawn, or runtime workflow. | A deterministic backend generator creates the bounded three-class logical-clone Draft; the retained Asghan-derived chain compiles, composes, reopens, and resolves offline. Source-sealed selection and verified schema-revision-2 persistence do not prove build or spawn behavior. | New-class residence, effective visuals, distinct identity, conservative spawn, AI, dialog/quest separation, streaming, save/reload, persistence, and uninstall behavior are **separate NPC research gates**. |
+| Quests | No semantic quest catalog/editor or friendly revision-3 managed-project wizard is integrated yet. The existing managed Story create/open flow remains schema revision 2. | Revision 3 stores compact Quest artifact references, can import/reopen the exact collision artifact and old basis snapshot, atomically insert the first offline Quest Draft plus deterministic ScriptModule, and regenerate it for source inspection only after a fresh source-bound capability verifies every retained identity. The dedicated revision-3 Store/FFI/Studio checkpoint bridge supports exact open/reopen and prepare-only heads, but it is not wired into a semantic quest editor or revision-3 managed session and grants no build, runtime, deployment, or publication authority. All Quest outcomes remain build-blocked/runtime-unqualified; repeated multi-Quest insertion and the complete managed Quest workflow remain separate work. A retained probe independently showed two added quest subclasses instantiated as `Available` on one generation; that does not qualify generated transitions or effects. | Availability/start/success/failure transitions, dialog selection, journal, rewards, knowledge, effects, save/reload, persistence, and uninstall behavior are **separate quest research gates**. They do not become qualified when NPC spawning works. |
 | Items and economy | Existing scalar edits are an integrated subset; semantic clone/new-item/economy workflows are not. | Bounded existing-value paths exist. A general new-item identity/package pipeline is not offline-proven. | New identity, construction, visuals, equip/use behavior, trade/loot integration, and persistence are **Research-gated** independently. |
-| World, routines, and spawns | No semantic map/routine/spawn authoring surface is integrated. | A typed Draft model is planned; arbitrary level/world-partition output is not proven. | Qualified anchors, schedules, spawns, triggers, navigation, streaming, ownership, and persistence require operation-specific research. A map pin must not imply writable world content. |
-| DataAssets and cooked content | No semantic Studio DataAsset surface is integrated. | Receipt-bound existing fixed-width leaf edits are a proven offline subset. General package/export/name/reference/array/map/collection writing is not. | Existing fixed-leaf runtime semantics are only as broad as their reviewed field proof. Structural creation remains **Research-gated** until complete round-trip and runtime qualification. |
-| Visual media | Existing texture replacement is integrated. General visual content is not. | Texture bundle output has bounded evidence; general material, mesh, character visual, animation, and VFX package creation does not. | New cooked visual registration/resolution is **Research-gated**. End state includes import validation, thumbnails, lineage, and qualified previews. |
+| World, routines, and spawns | No semantic map/routine/spawn authoring surface is integrated. | A typed Draft model and an optional sealed Unreal handoff are planned, but neither a bridge nor arbitrary level/world-partition output is implemented or proven. | Qualified anchors, schedules, spawns, triggers, navigation, streaming, ownership, and persistence require operation-specific research. A map pin or Unreal handoff must not imply writable or game-compatible world content. |
+| DataAssets and cooked content | A read-only DataAsset Lab now opens a selected local `.uasset`/`.uexp` snapshot with its exact `.usmap`, separates walked/partial/unsupported exports, and lazily searches proven fixed-width leaves. It exposes no patch, stage, save, pack, deploy, raw-offset, or Unreal-bridge control; native paths do not enter the evidence DTO, and a semantic browser/editor is still missing. | The native inspector uses guarded no-follow reads, allocation/work/hash/depth/count budgets, exact pair/USMAP seals, and offset-free selectors. Receipt-bound copy-on-write fixed-width leaf edits remain the proven write subset. General package/export/name/reference/array/map/collection writing and the optional sealed Unreal handoff are not implemented. | Existing fixed-leaf runtime semantics are only as broad as their reviewed field proof. Structural creation remains **Research-gated** until complete round-trip and runtime qualification. A stock Unreal Editor is not assumed to open cooked G1R packages or emit compatible output. |
+| Visual media | Existing texture replacement is integrated. General visual content and the optional Unreal handoff are not. | Texture bundle output has bounded evidence; general material, mesh, character visual, animation, VFX package creation, and Unreal round-trip do not. | New cooked visual registration/resolution is **Research-gated**. End state includes import validation, thumbnails, lineage, qualified previews, and an optional sealed specialist-tool handoff only for explicitly supported asset types. |
 | Audio and music | FMOD sample browsing/preview/replacement is integrated. Semantic cue/event creation is not. | Existing-bank replacement has bounded backend evidence. | New event/cue integration is **Research-gated**. End state adds batch normalize/transcode, loudness/codec checks, ownership, and conflict handling. |
 | Cinematics and presentation | No Studio integration. | No current authoring pipeline claim. | Scene timelines, cameras, staging, subtitle/audio sync, animation, and reusable sequences are **future Research-gated** capabilities. |
 | Gameplay systems | Only bounded existing scalar/default and Expert script paths are available. | Evidence is selector-, field-, and generator-specific. | General factions, AI, combat, talents, spells, economy, rules, and reusable runtime effects are **Research-gated**; Expert source cannot bypass qualification. |
@@ -119,14 +119,49 @@ qualified for the selected game version. Unknown game-source/property
 structures remain visible and preserved but read-only; unknown required project
 schema content follows the strict block-or-migrate contract in Section 5.
 
-### 3.1 Remaining legacy-session limits
+### 3.1 Planned optional Unreal Editor hybrid
+
+For reviewed DataAsset, visual-media, and world-content operations, the intended
+end state may use Unreal Editor as an optional specialist surface instead of
+recreating its high-fidelity tools inside Mod Studio. No such bridge is
+implemented today. A future bridge must export a bounded, versioned handoff
+manifest tied to the selected game generation, exact input seals, declared
+asset identities/references, adapter version, and required editor/plugin
+identity. Re-import is a new validated Mod Studio transaction over declared
+outputs; launching Unreal or exporting files alone is not a round trip.
+
+Mod Studio remains the source of truth for semantic IDs, references, project
+history, provenance, validation, and Build/Test/Release. The Unreal workspace
+is an explicit tool workspace, not a second implicit project state, deployment
+path, or authority source. The bridge never writes the game installation.
+Authored source and accepted outputs enter the managed project only through its
+bounded AssetStore/import rules.
+
+This plan does **not** claim that stock Unreal Editor can open cooked G1R
+packages or emit game-compatible cooked content. Matching a nominal engine
+version is insufficient: package/reference/cook/registration chains, game
+plugins and custom types, output reopening, and runtime behavior must each be
+proven for the exact operation and generation. Unsupported outputs remain
+Draft-only and build-blocked. The handoff is contextual in DataAsset, visual,
+and World workflows or Expert mode; it is not a new permanent top-level tab and
+is not required for ordinary supported Studio operations.
+
+### 3.2 Remaining legacy-session limits
 
 The current format-1 Flutter session must not be treated as the durable
 foundation for new authoring domains. Strict archive validation, atomic
 publication, current-path and workspace ownership, a serialized Open/Save/New
 lane, exact saved snapshots, metadata-aware dirty state, true **Save** versus
 **Save As**, and `Ctrl+S` make it a substantially safer compatibility/import
-bridge. Its remaining managed-authoring limits are:
+bridge.
+
+The separate schema-revision-2 Story workspace already proves an exclusive
+lock, serialized derive/save, exact-head CAS publication, repair journal, and
+full reopen through the working store. Those guarantees must be reused rather
+than reinvented, but that Story-only session is not yet a revision-3 adapter or
+the unified normal application project.
+
+The remaining managed-authoring limits are:
 
 - the bounded format-1 encoder/reader is intentionally in-memory and capped; it
   is not the streaming, sharded, content-addressed storage needed by large mods;
@@ -135,8 +170,9 @@ bridge. Its remaining managed-authoring limits are:
   one duplicate-validation pass before mutation or publication;
 - format-1 embedded source paths are extraction derivatives rather than
   immutable AssetStore refs, so they remain unsuitable as durable entity state;
-- autosave recovery, named checkpoints, crash-safe transaction replay, V2
-  migration, and managed AssetStore blob ownership are not implemented.
+- autosave recovery, named checkpoints, crash-safe transaction replay, and
+  wiring the implemented revision migration and managed AssetStore blob
+  ownership into the unified revision-3 Studio session are not implemented.
 
 These are release blockers for the managed authoring substrate, not reasons to
 hide user data or add another domain-specific save mechanism. New Voice, NPC,
@@ -203,11 +239,12 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |
 
-The first line-centric Voice slice must implement the minimum real form of this
-substrate rather than adding another format-1 list. It needs a managed V2
-working project, current-path/session ownership, strict bounded open/import,
-AssetStore **blob I/O** (not only the implemented index type), one transaction
-boundary across line/text/slot/take, exact saved-revision capture, serialized
+The first line-centric Voice slice must extend the proven Story-only managed
+session guarantees rather than adding another format-1 list or parallel project
+state. It needs a managed revision-3 working project integrated with the normal
+app, strict bounded open/import, the implemented working-store AssetStore
+**blob I/O** wired into that session, one transaction boundary across
+line/text/slot/take, exact saved-revision capture, serialized
 save/open, crash recovery, and deterministic export/build materialization. That
 foundation is part of the slice, not a large prerequisite postponed indefinitely.
 
@@ -219,8 +256,13 @@ reopens, and leaves the source untouched. Otherwise it blocks editing and build
 with a version explanation and offers only operations that preserve the bytes.
 Optional forward data is allowed only inside an explicitly versioned extension
 envelope with declared preservation semantics; there is no generic catch-all
-map. The implemented phase-one V2 parser already rejects unknown fields, but
-complete working-project persistence and migrations are still integration work.
+map. Closed revision-1/2/3 parsers, revision-2-to-3 migration, working-store
+persistence, and dedicated revision-3 read/prepare FFI/Studio DTOs exist.
+A revision-3 session adapter and fixed-head publication path, migration
+orchestration into it, autosave/full history, and unified normal-app ownership
+remain integration work; the existing schema-revision-2 Story session already
+provides exclusive locking, serialized saves, repair, CAS publication, and full
+reopen for its narrower scope.
 
 ## 6. Progressive disclosure without a toy mode
 
@@ -619,7 +661,10 @@ safe test, and return the machine to the recorded clean state.
 
 ## 16. Product traps to avoid
 
-- Do not recreate Unreal Editor as a collection of raw object trees.
+- Do not recreate Unreal Editor as a collection of raw object trees. Use the
+  planned optional handoff only for explicitly supported, sealed operations.
+- Do not call launching stock Unreal, exporting loose files, or importing an
+  unchecked `.uasset` a bridge round trip or game-compatible output.
 - Do not make every storage format a permanent top-level tab.
 - Do not hide or reorder primary navigation because a project is empty or a
   capability is unavailable; use honest, useful empty states.

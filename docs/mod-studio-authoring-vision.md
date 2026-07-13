@@ -176,26 +176,26 @@ proof. It does not widen that evidence to adjacent use cases.
 
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
-| Project save/load | **Partial** | `.goremod` format 1 stores overrides, localization, FMOD replacements, textures, scripts, and runtime dialog-topic registrations. It embeds selected source files, but it has no typed cross-domain graph, stable entity IDs, content-addressed store, migration layer, or durable history. |
-| Unified content browser | **Missing** | Items, dialog/localization, FMOD audio, textures, and scripts have separate tabs. There is no global entity search, reference graph, NPC/quest browser, or source-aware clone workflow. |
+| Project save/load | **Partial Studio paths; revision-3 backend bridge proven** | The normal app session still saves `.goremod` format 1 and has no typed cross-domain graph or durable history. Separately, the visible Story create/open flow owns an exclusive schema-revision-2 managed working directory with a serialized derive/save lane, exact-head CAS publication, repair journal, and full reopen. It is not the unified normal app project and has no revision-3 adapter. `gore-authoring` also has closed revision-1/2/3 documents, explicit revision-2-to-3 migration, and an immutable working store with sealed heads, snapshot/entity shards, and physical Ogg/Quest-artifact CAS blobs. Dedicated native FFI commands plus strict Studio wrappers/DTOs open the fixed revision-3 head, reopen exact candidate-head bytes, and prepare immutable checkpoint objects under exact CAS; they do not publish the revision-3 fixed head or constitute its managed-session adapter. |
+| Unified content browser | **Missing as a unified surface** | Items, dialog/localization, FMOD audio, textures, scripts, and the read-only DataAsset Lab remain separate surfaces. A searchable, generation-bound NPC archetype catalog and picker now exist, but there is still no global entity search, reference graph, semantic NPC/quest browser, or source-aware clone workflow. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
-| Existing NPC edits | **Partial backend, missing authoring UI** | Catalog/model generation and generic CDO overrides can describe some existing NPC-class fields, but Mod Studio has no NPC entity browser or semantic NPC editor and no end-to-end NPC authoring proof. |
-| New NPC identity | **Offline compile/compose proven; runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. The composed cache resolves exactly the three intended classes and their defaults. Spawning another body for an existing identity remains a different, weaker proof because it shares that identity's dialog/quest state. Runtime class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not yet proven. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
+| Existing NPC edits | **Partial backend and source-sealed picker; semantic editor missing** | The visible schema-revision-2 Story flow now has a searchable, generation-bound NPC archetype catalog and picker. It selects a source-sealed catalog record and drives new-Draft creation, but it does not semantically edit an existing NPC entity or provide an end-to-end existing-NPC inspector. Generic CDO overrides remain a separate existing-class subset. |
+| New NPC identity | **Offline compile/compose and managed revision-2 Draft persistence proven; runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. In the visible Story flow, the source-sealed picker drives the native story transaction, which atomically persists one schema-revision-2 NPC Draft plus deterministic `ScriptModule` through the managed session's serialized derive/save lane, exact-head CAS publication, and full reopen. The saved result remains build-blocked/runtime-unqualified; there is no revision-3 adapter, production lowerer, spawn, or runtime workflow. Class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not proven. Spawning another body for an existing identity remains a different, weaker proof because it shares that identity's dialog/quest state. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
 | Existing localized dialog lines | **Proven** | The Dialogs tab groups `info_`/`dia_`/`gvl_`/`svm_` IDs, edits languages, and can add an explicit missing localization ID. Localization alone does not create a selectable topic. |
 | New dialog topic insertion/rendering | **Proven narrow runtime path** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration reached the natural choice UI and was visually confirmed. The current Studio editor exposes those technical identities manually. Automatic discovery remains unproven. See [dialog authoring](dialog-authoring.md). |
 | Dialog selection effects | **Unproven** | Topic selection, quest/knowledge changes, `ActedTopics`, and selection-side save effects are outside the render proof. The safe proof intentionally selected nothing. |
-| Quest inspection/edit/create | **Missing Studio path; narrow CLI/discovery proofs** | Save-editor quest-marker support is save editing, not mod authoring. Mod Studio has no quest catalog, typed quest graph, quest generator, or validated lowering. The CLI can strictly edit ordinary methods in an exact existing quest module and patch a separately sealed primitive default site, but that is not semantic quest authoring. A retained native crash report for the current game version lists runtime instances of two added `UQuest` subclasses as `Available`, proving narrow automatic class discovery and instantiation on world/save load. It does not prove authored transitions, dialog selection, effects, rewards, or persistence. See [quest authoring](quest-authoring.md). |
-| Voice archive editing | **Proven backend, missing Studio integration** | `gore voice` and `gore-mod::BuildSpec.voice` support bounded exact-path Ogg add/replace and transactional bundle deployment. Format-1 Studio projects and `toBuildSpec()` do not carry voice entries, and no voice is linked to a dialog line in the UI. Brand-new voice-path resolution remains runtime-dependent. |
+| Quest inspection/edit/create | **Missing semantic Studio path; revision-3 offline Draft pipeline** | Mod Studio still has no semantic quest catalog, graph, or friendly revision-3 managed wizard; the existing managed Story create/open flow remains schema revision 2. Revision 3 stores compact Quest collision-artifact references, imports and reopens the exact artifact plus old basis snapshot, atomically inserts one offline Quest Draft with its deterministic `ScriptModule`, and regenerates it for source inspection only after a fresh source-bound capability verifies retained identities. The dedicated revision-3 Store/FFI/Studio bridge can open/reopen and prepare checkpoints, but it is not a quest session or publication path. Every generated outcome remains build-blocked/runtime-unqualified. A retained report of two added `UQuest` instances as `Available` proves only narrow discovery/instantiation on one generation, not transitions, dialog selection, effects, rewards, or persistence. See [quest authoring](quest-authoring.md). |
+| Voice archive editing | **Proven bounded existing-member Studio slice; managed revision 3 missing** | A line-first Studio editor resolves installed language archives beside dialog text, blocks zero matches, requires explicit ambiguity selection, validates the chosen Ogg natively before staging, shows codec/page/stream/size/hash facts, previews/removes it, persists it in the current portable project, and includes it in Build/Deploy. `gore voice` and `gore-mod::BuildSpec.voice` retain bounded exact-path add/replace and transactional deployment evidence. The managed revision-3 line/locale/multi-take session is not connected, and brand-new member runtime lookup remains separately unqualified. |
 | FMOD sound/music replacement | **Proven** | Studio browses samples, previews originals or staged WAVs, and stages replacements for the bundle engine. This is sound-bank replacement, not spoken-dialog voice authoring. |
-| Texture replacement | **Proven subset** | Existing texture assets can be browsed and replaced with additive IoStore output. This is not general cooked-asset creation. |
-| Existing cooked DataAsset fixed leaves | **Proven narrow offline path** | Extract, inspect, same-width compare-and-swap patch, re-inspect, and offline pack are receipt-bound. Only structurally proven fixed-width leaves are editable. There is no Studio surface or semantic gameplay validation. See [DataAsset authoring](dataasset-authoring.md). |
-| DataAsset creation/reference/collection editing | **Missing** | New exports/packages, `FName`/object/package reference creation, map keys, variable-width values, unversioned-header growth, and array/map shape changes are unsupported. These are hard prerequisites for genuinely new visual/content assets and for any content path that is proven to require new cooked package/reference/collection shapes. Current evidence does not establish them as universal prerequisites for logical NPC, item, or quest identities. |
+| Texture replacement | **Proven subset** | Existing texture assets can be browsed and replaced with additive IoStore output. This is not general cooked-asset creation, visual-media round trip, or an Unreal Editor bridge. |
+| Existing cooked DataAsset fixed leaves | **Proven narrow offline write path; read-only Studio inspection** | Extract, same-width compare-and-swap patch, re-inspect, and offline pack remain receipt-bound. The read-only DataAsset Lab can safely open a selected local `.uasset`/`.uexp` pair with its exact `.usmap`, separate walked/partial/unsupported exports, and lazily search offset-free proven leaves under native allocation/work/hash/depth/count budgets and exact seals. It exposes no patch, stage, save, pack, deploy, raw-offset, or semantic gameplay control. See [DataAsset authoring](dataasset-authoring.md). |
+| DataAsset creation/reference/collection editing | **Missing** | New exports/packages, `FName`/object/package reference creation, map keys, variable-width values, unversioned-header growth, array/map shape changes, and the optional sealed Unreal handoff are not implemented. These are hard prerequisites for genuinely new visual/content assets and for any content path that is proven to require new cooked package/reference/collection shapes. Current evidence does not establish them as universal prerequisites for logical NPC, item, or quest identities. Stock Unreal Editor is not assumed to open cooked G1R packages or emit compatible output. |
 | AngelScript source authoring | **Experimental** | Studio can stage new/edit modules and use the game compiler, with guarded diagnostics and mini-cache lowering. Existing generated `__InitDefaults` methods are not generally source-editable; new modules are the supported path for authored defaults. |
 | Existing native default edits | **Proven narrow CLI path** | Scalar direct assignments and already-present `GameplayTag -> float32` entries can be patched offline under sealed selectors. Keys, maps, code size, and general generated source cannot be added. |
-| Items/world/spawns | **Partial/missing** | Existing item scalar overrides are present. New item identity, placed world actors, spawn points, routines, level edits, and world-partition integration have no semantic Studio workflow or production proof. |
+| Items/world/spawns | **Partial/missing** | Existing item scalar overrides are present. New item identity, placed world actors, spawn points, routines, level edits, and world-partition integration have no semantic Studio workflow or production proof. An optional sealed Unreal handoff is planned only for explicitly supported future operations; no bridge or compatible world writer exists today. |
 | Localization | **Proven** | Multi-language edits and explicit new IDs lower to `BuildSpec.loc_edits`; deploy is backup/restore aware. Referential completeness across quests, dialog, and voices is not yet validated as one graph. |
-| Build/deploy/undeploy | **Proven for represented domains** | Studio drives the same bundle engine as the CLI and can restore its deployment. Voice and cooked DataAsset authoring are not represented by the current Studio project. A build dialog is not yet a project-wide dependency/risk review. |
-| Validation | **Partial** | Scalar field validation, script freshness gates, bounded codecs, selector proofs, and backend build checks exist. There is no incremental graph validator, reachability analysis, semantic quest validation, or one-click diagnostic system. |
+| Build/deploy/undeploy | **Proven for represented domains** | Studio drives the same bundle engine as the CLI and can restore its deployment. The bounded existing-member spoken-line replacement participates in the current portable Save/Reopen and Build/Deploy path; cooked DataAsset authoring and the revision-3 managed project do not. A build dialog is not yet a project-wide dependency/risk review. |
+| Validation | **Partial** | Scalar field validation, script freshness gates, bounded codecs, native Ogg preflight, offset-free DataAsset inspection, selector proofs, and backend build checks exist. There is no incremental graph validator, reachability analysis, semantic quest validation, or one-click diagnostic system. |
 | Undo/redo/history | **Missing as a system** | Individual edits can often be cleared or removed, but there is no shared command log, multi-domain atomic undo/redo, crash journal, or named checkpoints. |
 | Templates/clone/batch/CSV | **Missing** | No dependency-aware templates, clone modes, transactional bulk editor, or CSV round trip exists. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
@@ -376,6 +376,14 @@ invalidates them and must force target re-resolution before deployment.
 
 ### 4.7 DataAsset inspector: semantic and expert layers
 
+The current Studio surface is deliberately narrower than this target. Its
+read-only DataAsset Lab opens a selected local `.uasset`/`.uexp` pair with the
+exact `.usmap`, reports walked/partial/unsupported exports, and lazily searches
+only proven offset-free fixed leaves. It has no patch, stage, save, pack,
+deploy, raw-offset, or semantic-edit control. That inspection surface does not
+turn the separately proven receipt-bound fixed-leaf writer into Studio
+authoring.
+
 The semantic layer is a registry of reviewed schemas and widgets for known
 gameplay concepts. It provides domain names, units, ranges, typed references,
 and invariant-aware collection editors. The expert layer shows the complete
@@ -389,6 +397,35 @@ correctly rebuild names, imports, exports, object/package references,
 unversioned headers, and collection shapes, then reopen and semantically verify
 the complete package. Until those proofs exist, the UI must not emulate them
 with byte patches.
+
+#### Planned optional Unreal Editor hybrid
+
+For explicitly reviewed DataAsset, visual-media, and world-content operations,
+the long-term architecture may use Unreal Editor as an optional specialist
+surface instead of rebuilding its native visual tools in Mod Studio. This
+bridge is **not implemented**. A valid handoff must be bounded, versioned, and
+sealed to the selected game generation, exact input assets, declared semantic
+identities/references, adapter version, and required editor/plugin identity.
+Re-import verifies the declared outputs, reopens them through the applicable
+bounded validators, and applies them as one ordinary Mod Studio transaction.
+Launching an editor, exporting loose files, or noticing a new `.uasset` is not a
+round trip.
+
+Mod Studio remains the sole source of truth for semantic IDs, references,
+project history, provenance, validation, and Build/Test/Release. The Unreal
+workspace is an explicit tool workspace, not a second implicit project state,
+content registry, deployment path, or qualification authority. The handoff
+never writes the game installation; accepted source and output artifacts enter
+the project only through its managed AssetStore/import contract.
+
+Nothing here claims that stock Unreal Editor can open cooked G1R packages or
+produce game-compatible cooked output. A nominal engine-version match is not
+sufficient: game plugins/custom types, package/reference/cook/registration
+chains, deterministic reopen, and runtime behavior require separate evidence
+for the exact operation and game generation. Unsupported outputs remain
+Draft-only and build-blocked. The bridge is contextual to eligible DataAsset,
+visual, or World workflows and Expert mode, never a permanent backend-format
+tab or a prerequisite for ordinary supported authoring.
 
 ### 4.8 Items, world, and spawns
 
@@ -409,6 +446,12 @@ and coordinates, but writing arbitrary levels or world-partition cells is a
 separate capability and must not be implied by a pin-on-map UI. Every spawn
 shows which NPC, transform, activation condition, persistence policy, and quest
 dependencies it uses.
+
+The planned optional Unreal handoff does not widen this boundary. Until one
+specific world operation has a sealed export/import contract, complete package
+reopen, and generation-qualified runtime evidence, Studio must treat its output
+as Draft-only and must not present an Unreal-authored map, actor, or partition
+cell as writable game content.
 
 ### 4.9 Localization workspace
 
