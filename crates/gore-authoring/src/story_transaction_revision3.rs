@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::model_revision2::GeneratedStoryIdentity;
 use crate::model_revision3::{
-    Entity, EntityKind, EntityPayload, OriginRef, QuestDraft, QuestDraftInput, TypedRef,
+    quest_collision_artifact_media_for_layer, Entity, EntityKind, EntityPayload, OriginRef,
+    QuestDraft, QuestDraftInput, TypedRef,
 };
 use crate::revision3_quest::regenerate_revision3_quest_module_v2_with_identity;
 use crate::strict_json::reject_duplicate_object_keys;
@@ -22,7 +23,6 @@ use crate::{
     QuestCollisionCatalogInput, Revision3QuestFreeBasisError, Revision3QuestGenerationError,
     Revision3QuestGiverInput, Revision3QuestParentInput, Sha256Digest,
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITIES, MAX_REVISION3_SNAPSHOT_BYTES,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
@@ -347,9 +347,11 @@ pub fn apply_revision3_quest_draft_transaction_v2(
     if reference.generation != project.target {
         reject!(Revision3QuestDraftInsertConflictV2::ArtifactGenerationMismatch);
     }
-    if reference.catalog_layer != QUEST_COLLISION_CATALOG_LAYER {
+    let Some(expected_media_type) =
+        quest_collision_artifact_media_for_layer(&reference.catalog_layer)
+    else {
         reject!(Revision3QuestDraftInsertConflictV2::ArtifactCatalogLayerMismatch);
-    }
+    };
     if !valid_artifact_seals(&reference.artifact, &reference.source_seal) {
         reject!(Revision3QuestDraftInsertConflictV2::InvalidArtifactSeals);
     }
@@ -362,7 +364,7 @@ pub fn apply_revision3_quest_draft_transaction_v2(
         });
     };
     if asset_meta.byte_len != reference.artifact.byte_len
-        || asset_meta.media_type != QUEST_COLLISION_ARTIFACT_MEDIA_TYPE
+        || asset_meta.media_type != expected_media_type
     {
         reject!(
             Revision3QuestDraftInsertConflictV2::ArtifactAssetMetadataMismatch {

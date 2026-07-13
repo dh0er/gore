@@ -34,6 +34,16 @@ pub const QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION: u32 = 1;
 pub const QUEST_COLLISION_ARTIFACT_MEDIA_TYPE: &str =
     "application/vnd.gore.quest-collision-capability+json;version=1";
 pub const QUEST_COLLISION_CATALOG_LAYER: &str = "base-game-plus-exact-project.story-collisions.v1";
+/// Media type reserved for collision evidence rebuilt from the exact current revision-3
+/// project, including already-authored Quest identities.
+///
+/// Version 1 constants and wire fields deliberately remain unchanged. The catalog layer is the
+/// discriminator carried by [`QuestCollisionArtifactRef`]; closed-model validation requires this
+/// media type and [`QUEST_COLLISION_CATALOG_LAYER_V2`] as an exact pair.
+pub const QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2: &str =
+    "application/vnd.gore.quest-collision-capability+json;version=2";
+pub const QUEST_COLLISION_CATALOG_LAYER_V2: &str =
+    "base-game-plus-exact-revision3-project.story-collisions.v2";
 pub const MAX_QUEST_COLLISION_ARTIFACT_BYTES: u64 = 24 * 1024 * 1024;
 pub const MAX_REVISION3_ENTITY_JSON_BYTES: usize = 1024 * 1024;
 pub const MAX_REVISION3_ENTITIES: usize = 100_000;
@@ -43,6 +53,19 @@ pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
 const MAX_CATALOG_LAYER_BYTES: usize = 128;
+
+pub(crate) fn quest_collision_artifact_media_for_layer(layer: &str) -> Option<&'static str> {
+    match layer {
+        QUEST_COLLISION_CATALOG_LAYER => Some(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE),
+        QUEST_COLLISION_CATALOG_LAYER_V2 => Some(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2),
+        _ => None,
+    }
+}
+
+pub(crate) fn is_quest_collision_artifact_media_type(media_type: &str) -> bool {
+    media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE
+        || media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SchemaRevisionV3;

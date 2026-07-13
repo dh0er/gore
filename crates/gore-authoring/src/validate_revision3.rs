@@ -3,11 +3,11 @@
 use sha2::{Digest as _, Sha256};
 
 use crate::model_revision3::{
-    EntityKind, EntityPayload, OriginRef, ProjectRevision3, ProjectRevision3ValidationError,
-    ScriptModuleStatus, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS,
-    MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    quest_collision_artifact_media_for_layer, EntityKind, EntityPayload, OriginRef,
+    ProjectRevision3, ProjectRevision3ValidationError, ScriptModuleStatus,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
+    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 impl ProjectRevision3 {
@@ -122,11 +122,13 @@ impl ProjectRevision3 {
         {
             return Err(invalid("Quest parent or giver source seal is empty"));
         }
-        if reference.catalog_layer != QUEST_COLLISION_CATALOG_LAYER {
+        let Some(expected_media_type) =
+            quest_collision_artifact_media_for_layer(&reference.catalog_layer)
+        else {
             return Err(invalid(
                 "collision catalog layer is not the closed revision-3 layer",
             ));
-        }
+        };
         if reference.artifact.byte_len == 0
             || reference.artifact.byte_len > MAX_QUEST_COLLISION_ARTIFACT_BYTES
             || reference.source_seal.byte_len != reference.artifact.byte_len
@@ -157,7 +159,7 @@ impl ProjectRevision3 {
                 },
             );
         }
-        if meta.media_type != QUEST_COLLISION_ARTIFACT_MEDIA_TYPE {
+        if meta.media_type != expected_media_type {
             return Err(
                 ProjectRevision3ValidationError::QuestArtifactMetadataMismatch {
                     quest: quest_id,

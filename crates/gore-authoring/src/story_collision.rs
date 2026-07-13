@@ -103,17 +103,61 @@ pub enum StoryCollisionCollectionError {
     },
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StoryCollisionCollectionLimits {
+    pub max_count: usize,
+    pub max_bytes: usize,
+    pub max_value_bytes: usize,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum BoundedStoryCollisionCollectionError {
+    #[error(transparent)]
+    Collection(#[from] StoryCollisionCollectionError),
+    #[error("Story collision resource limit exceeded for {kind}: {actual} > {limit}")]
+    ResourceLimit {
+        kind: &'static str,
+        actual: usize,
+        limit: usize,
+    },
+}
+
 /// Regenerate the complete Story collision footprint for one exact revision-2 project.
 pub fn collect_project_story_collision_identities(
     project: &ProjectRevision2,
 ) -> Result<ProjectStoryCollisionIdentities, StoryCollisionCollectionError> {
-    let blockers = project
-        .validate_story_entities_with_profile(ValidationProfile::Experimental)
+    collect_project_story_collision_identities_inner(project, None).map_err(|error| match error {
+        BoundedStoryCollisionCollectionError::Collection(error) => error,
+        BoundedStoryCollisionCollectionError::ResourceLimit { .. } => {
+            unreachable!("the unbounded public collector has no resource budget")
+        }
+    })
+}
+
+pub(crate) fn collect_project_story_collision_identities_bounded(
+    project: &ProjectRevision2,
+    limits: StoryCollisionCollectionLimits,
+) -> Result<ProjectStoryCollisionIdentities, BoundedStoryCollisionCollectionError> {
+    collect_project_story_collision_identities_inner(project, Some(limits))
+}
+
+fn collect_project_story_collision_identities_inner(
+    project: &ProjectRevision2,
+    limits: Option<StoryCollisionCollectionLimits>,
+) -> Result<ProjectStoryCollisionIdentities, BoundedStoryCollisionCollectionError> {
+    let diagnostics = if limits.is_some() {
+        project.validate_story_entities_for_bounded_collision_collection(
+            ValidationProfile::Experimental,
+        )
+    } else {
+        project.validate_story_entities_with_profile(ValidationProfile::Experimental)
+    };
+    let blockers = diagnostics
         .into_iter()
         .filter(|diagnostic| diagnostic.code != DiagnosticCode::RuntimeUnqualified)
         .count();
     if blockers != 0 {
-        return Err(StoryCollisionCollectionError::InvalidProject { count: blockers });
+        return Err(StoryCollisionCollectionError::InvalidProject { count: blockers }.into());
     }
 
     let canonical = project
@@ -124,6 +168,7 @@ pub fn collect_project_story_collision_identities(
     let mut relative_paths = BTreeMap::new();
     let mut symbols = BTreeMap::new();
     let mut claimed_modules = BTreeMap::new();
+    let mut budget = limits.map(StoryCollisionBudget::new);
 
     for (owner, entity) in &project.entities {
         let (module_ref, identity) = match &entity.payload {
@@ -160,24 +205,34 @@ pub fn collect_project_story_collision_identities(
         if module_ref.project_id != project.project_id
             || module_ref.expected_kind != EntityKind::ScriptModule
         {
-            return Err(StoryCollisionCollectionError::InvalidModuleReference { owner: *owner });
+            return Err(
+                StoryCollisionCollectionError::InvalidModuleReference { owner: *owner }.into(),
+            );
         }
         if let Some(first_owner) = claimed_modules.insert(module_ref.id, *owner) {
             return Err(StoryCollisionCollectionError::SharedModule {
                 module: module_ref.id,
                 first_owner,
                 second_owner: *owner,
-            });
+            }
+            .into());
         }
-        insert_identity("module", &mut modules, identity.module_namespace, *owner)?;
+        insert_identity(
+            "module",
+            &mut modules,
+            identity.module_namespace,
+            *owner,
+            &mut budget,
+        )?;
         insert_identity(
             "relative path",
             &mut relative_paths,
             identity.module_relative_path,
             *owner,
+            &mut budget,
         )?;
         for symbol in identity.symbols {
-            insert_identity("symbol", &mut symbols, symbol, *owner)?;
+            insert_identity("symbol", &mut symbols, symbol, *owner, &mut budget)?;
         }
     }
 
@@ -197,7 +252,11 @@ fn insert_identity(
     identities: &mut BTreeMap<String, EntityId>,
     value: String,
     owner: EntityId,
-) -> Result<(), StoryCollisionCollectionError> {
+    budget: &mut Option<StoryCollisionBudget>,
+) -> Result<(), BoundedStoryCollisionCollectionError> {
+    if let Some(budget) = budget {
+        budget.charge(&value)?;
+    }
     let value = value.to_ascii_lowercase();
     if let Some(first_owner) = identities.insert(value.clone(), owner) {
         return Err(StoryCollisionCollectionError::Collision {
@@ -205,9 +264,53 @@ fn insert_identity(
             value,
             first_owner,
             second_owner: owner,
-        });
+        }
+        .into());
     }
     Ok(())
+}
+
+struct StoryCollisionBudget {
+    limits: StoryCollisionCollectionLimits,
+    count: usize,
+    bytes: usize,
+}
+
+impl StoryCollisionBudget {
+    fn new(limits: StoryCollisionCollectionLimits) -> Self {
+        Self {
+            limits,
+            count: 0,
+            bytes: 0,
+        }
+    }
+
+    fn charge(&mut self, value: &str) -> Result<(), BoundedStoryCollisionCollectionError> {
+        if value.len() > self.limits.max_value_bytes {
+            return Err(BoundedStoryCollisionCollectionError::ResourceLimit {
+                kind: "single collision identity bytes",
+                actual: value.len(),
+                limit: self.limits.max_value_bytes,
+            });
+        }
+        self.count = self.count.saturating_add(1);
+        if self.count > self.limits.max_count {
+            return Err(BoundedStoryCollisionCollectionError::ResourceLimit {
+                kind: "collision identity count",
+                actual: self.count,
+                limit: self.limits.max_count,
+            });
+        }
+        self.bytes = self.bytes.saturating_add(value.len());
+        if self.bytes > self.limits.max_bytes {
+            return Err(BoundedStoryCollisionCollectionError::ResourceLimit {
+                kind: "collision identity bytes",
+                actual: self.bytes,
+                limit: self.limits.max_bytes,
+            });
+        }
+        Ok(())
+    }
 }
 
 fn seal_bytes(bytes: &[u8]) -> ContentSeal {
@@ -424,5 +527,41 @@ mod tests {
         next.revision += 1;
         let second = collect_project_story_collision_identities(&next).unwrap();
         assert_ne!(first.canonical_project(), second.canonical_project());
+    }
+
+    #[test]
+    fn bounded_collection_debits_before_growing_complete_identity_maps() {
+        let mut project = empty_project();
+        add_npc(&mut project, 10, 11, "GoreMods.Npcs.Bounded", "BoundedNpc");
+
+        assert!(matches!(
+            collect_project_story_collision_identities_bounded(
+                &project,
+                StoryCollisionCollectionLimits {
+                    max_count: 1,
+                    max_bytes: 16 * 1024,
+                    max_value_bytes: 512,
+                },
+            ),
+            Err(BoundedStoryCollisionCollectionError::ResourceLimit {
+                kind: "collision identity count",
+                actual: 2,
+                limit: 1,
+            })
+        ));
+        assert!(matches!(
+            collect_project_story_collision_identities_bounded(
+                &project,
+                StoryCollisionCollectionLimits {
+                    max_count: 100,
+                    max_bytes: 16 * 1024,
+                    max_value_bytes: 3,
+                },
+            ),
+            Err(BoundedStoryCollisionCollectionError::ResourceLimit {
+                kind: "single collision identity bytes",
+                ..
+            })
+        ));
     }
 }

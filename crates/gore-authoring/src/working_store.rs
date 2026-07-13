@@ -12,11 +12,15 @@ use crate::model_revision2::{
     Entity as Revision2Entity, EntityPayload as Revision2EntityPayload,
     OggCodec as Revision2OggCodec, OggMetadata as Revision2OggMetadata,
 };
-use crate::model_revision3::{Entity as Revision3Entity, EntityPayload as Revision3EntityPayload};
+use crate::model_revision3::{
+    is_quest_collision_artifact_media_type, Entity as Revision3Entity,
+    EntityPayload as Revision3EntityPayload,
+};
 use crate::{
     AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, Diagnostic, DiagnosticCode, Entity,
     EntityId, EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, OggCodec, OggMetadata,
-    ProjectDocument, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3, ProjectV2,
+    PreparedRevision3QuestCollisionSourceV2, ProjectDocument, ProjectId, ProjectMeta,
+    ProjectRevision2, ProjectRevision3, ProjectV2, Revision3QuestCollisionSourceErrorV2,
     SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3, Sha256Digest, ValidationProfile,
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
 };
@@ -712,6 +716,121 @@ impl WorkingProjectStore {
         let path = self.head_path();
         let bytes = read_required_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?;
         self.open_revision3_head_bytes(&bytes, verification)
+    }
+
+    /// Prepare exact-current-project collision source evidence for additive revision-3 Quests.
+    ///
+    /// Only the fixed head's exact current snapshot and entity shards are source inputs. Prior
+    /// Quest artifact blobs and every historical `basis_snapshot` are intentionally neither read
+    /// nor trusted. All remaining non-Quest assets are fully verified before an opaque capsule is
+    /// returned. `expected_head` is checked before and after the complete operation.
+    pub fn prepare_current_revision3_quest_collision_source_v2(
+        &self,
+        expected_head: &WorkingHead,
+    ) -> Result<PreparedRevision3QuestCollisionSourceV2, Revision3QuestCollisionSourceErrorV2> {
+        self.prepare_current_revision3_quest_collision_source_v2_with_final_head_hook(
+            expected_head,
+            || Ok(()),
+        )
+    }
+
+    fn prepare_current_revision3_quest_collision_source_v2_with_final_head_hook<F>(
+        &self,
+        expected_head: &WorkingHead,
+        before_final_head_check: F,
+    ) -> Result<PreparedRevision3QuestCollisionSourceV2, Revision3QuestCollisionSourceErrorV2>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        self.ensure_root_safe()?;
+        self.check_expected_head(Some(expected_head))?;
+        validate_nonzero_seal(
+            &expected_head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "current revision-3 snapshot",
+        )?;
+
+        let snapshot_path = self.snapshot_path(expected_head.snapshot.sha256);
+        let snapshot_bytes = self.read_sealed_object(
+            &snapshot_path,
+            &expected_head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "current revision-3 snapshot",
+            AssetVerification::Full,
+        )?;
+        let snapshot: Revision3SnapshotManifest =
+            parse_canonical_json(&snapshot_bytes, "current revision-3 snapshot")?;
+        self.validate_revision3_manifest_limits(&snapshot)?;
+
+        // A monolithic current project is capped at 16 MiB. Entity JSON is a strict lower bound
+        // on that spelling, so reject an impossible candidate before allocating/reading as much
+        // as the store's broader 512 MiB shard aggregate allowance.
+        let entity_bytes_lower_bound =
+            snapshot.entities.values().try_fold(0u64, |total, seal| {
+                total.checked_add(seal.byte_len).ok_or(
+                    Revision3QuestCollisionSourceErrorV2::Limit {
+                        kind: "canonical current project bytes",
+                        actual: usize::MAX,
+                        limit: crate::MAX_PROJECT_JSON_BYTES,
+                    },
+                )
+            })?;
+        if entity_bytes_lower_bound > crate::MAX_PROJECT_JSON_BYTES as u64 {
+            return Err(Revision3QuestCollisionSourceErrorV2::Limit {
+                kind: "canonical current project bytes",
+                actual: usize::try_from(entity_bytes_lower_bound).unwrap_or(usize::MAX),
+                limit: crate::MAX_PROJECT_JSON_BYTES,
+            });
+        }
+
+        let mut entities = BTreeMap::new();
+        let mut entity_seals = BTreeMap::new();
+        for (id, seal) in &snapshot.entities {
+            let entity_path = self.entity_path(*id, seal.sha256);
+            let entity_bytes = self.read_sealed_object(
+                &entity_path,
+                seal,
+                self.limits.max_entity_bytes,
+                "current revision-3 entity",
+                AssetVerification::Full,
+            )?;
+            let entity: Revision3Entity =
+                parse_canonical_json(&entity_bytes, "current revision-3 entity")?;
+            if entity.id != *id {
+                return Err(
+                    Revision3QuestCollisionSourceErrorV2::InvalidCurrentProject {
+                        reason: format!(
+                            "current revision-3 entity shard {id} contains embedded id {}",
+                            entity.id
+                        ),
+                    },
+                );
+            }
+            entities.insert(*id, entity);
+            entity_seals.insert(*id, seal.clone());
+        }
+        let original_manifest = snapshot.clone();
+        let project = snapshot.into_project(entities);
+        if Revision3SnapshotManifest::from_project(&project, entity_seals) != original_manifest {
+            return Err(Revision3QuestCollisionSourceErrorV2::CurrentSnapshotDrift);
+        }
+
+        let prepared =
+            crate::revision3_quest_source_v2::prepare_exact_revision3_quest_collision_source_v2(
+                &project,
+                expected_head.clone(),
+            )?;
+
+        // Verify only the exact non-Quest projection. Historical Quest artifacts removed by the
+        // splitter and their historical basis snapshots are deliberately absent from this I/O.
+        let nonquest = prepared.nonquest_basis().project();
+        validate_revision2_persistability(nonquest, &self.limits)?;
+        self.verify_asset_index(&nonquest.asset_store, AssetVerification::Full)?;
+        self.verify_revision2_voice_take_ogg_metadata(nonquest, AssetVerification::Full)?;
+
+        before_final_head_check()?;
+        self.check_expected_head(Some(expected_head))?;
+        Ok(prepared)
     }
 
     /// Open canonical head bytes and require their sealed snapshot to be schema revision 3.
@@ -2094,7 +2213,7 @@ fn validate_revision3_asset_index_persistability(
 ) -> Result<(), WorkingStoreError> {
     validate_asset_index_persistability(index, limits)?;
     for meta in index.assets.values() {
-        if meta.media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE {
+        if is_quest_collision_artifact_media_type(&meta.media_type) {
             validate_quest_collision_artifact_length(meta.byte_len)?;
         }
     }
@@ -2729,6 +2848,66 @@ mod tests {
                 false,
             )
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn current_revision3_quest_source_rechecks_the_fixed_head_after_full_preparation() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-current-quest-source-final-head-race-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let project = ProjectRevision3 {
+            format: FormatV2,
+            schema_revision: SchemaRevisionV3,
+            project_id: ProjectId::from_bytes([0x31; 16]),
+            revision: 4,
+            meta: ProjectMeta {
+                name: "current Quest source race".into(),
+                version: "0.1.0".into(),
+                author: "tests".into(),
+            },
+            target: GameGenerationAnchor {
+                executable: ContentSeal {
+                    byte_len: 170_000_000,
+                    sha256: Sha256Digest::from_bytes([0x41; 32]),
+                },
+            },
+            authoring_locales: BTreeSet::new(),
+            entities: BTreeMap::new(),
+            asset_store: AssetStoreIndex::default(),
+        };
+        let current = store.prepare_revision3_checkpoint(None, &project).unwrap();
+        fs::write(store.head_path(), &current.head_bytes).unwrap();
+        let raced_head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: ContentSeal {
+                byte_len: 1,
+                sha256: Sha256Digest::from_bytes([0x51; 32]),
+            },
+        };
+        let raced_head_bytes = canonical_json(&raced_head).unwrap();
+
+        let result = store
+            .prepare_current_revision3_quest_collision_source_v2_with_final_head_hook(
+                &current.head,
+                || {
+                    fs::write(store.head_path(), &raced_head_bytes)?;
+                    Ok(())
+                },
+            );
+        assert!(matches!(
+            result,
+            Err(Revision3QuestCollisionSourceErrorV2::Store(
+                WorkingStoreError::HeadConflict {
+                    expected: Some(expected),
+                    actual: Some(actual),
+                }
+            )) if expected == current.head && actual == raced_head
+        ));
         let _ = fs::remove_dir_all(root);
     }
 }

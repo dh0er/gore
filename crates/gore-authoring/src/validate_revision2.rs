@@ -29,6 +29,25 @@ impl ProjectRevision2 {
         &self,
         profile: ValidationProfile,
     ) -> Vec<Diagnostic> {
+        self.validate_story_entities_internal(profile, true)
+    }
+
+    /// Validate per-entity Story ownership/regeneration without first materializing the global
+    /// identity maps. The bounded collision collector immediately performs that global pass with
+    /// debit-before-insert budgets; its revision-3 caller separately validates authored runtime
+    /// IDs across the exact current project.
+    pub(crate) fn validate_story_entities_for_bounded_collision_collection(
+        &self,
+        profile: ValidationProfile,
+    ) -> Vec<Diagnostic> {
+        self.validate_story_entities_internal(profile, false)
+    }
+
+    fn validate_story_entities_internal(
+        &self,
+        profile: ValidationProfile,
+        validate_global_identities: bool,
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
 
         if self.target.executable.byte_len == 0 {
@@ -86,7 +105,9 @@ impl ProjectRevision2 {
             }
         }
 
-        validate_global_story_identities(self, &mut diagnostics);
+        if validate_global_identities {
+            validate_global_story_identities(self, &mut diagnostics);
+        }
 
         for diagnostic in &mut diagnostics {
             diagnostic.related_entities.sort_unstable();

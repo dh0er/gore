@@ -15,6 +15,7 @@ pub mod model_revision3;
 mod npc;
 mod quest;
 mod revision3_quest;
+mod revision3_quest_source_v2;
 mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
@@ -68,8 +69,10 @@ pub use model_revision3::{
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
     MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
     MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_FORMAT,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION,
-    QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+    QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION, QUEST_COLLISION_CATALOG_LAYER,
+    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
@@ -93,6 +96,12 @@ pub use revision3_quest::{
     project_revision3_quest_free_basis_to_revision2, regenerate_revision3_quest_module_v2,
     revision3_quest_input_fingerprint_v2, Revision3QuestFreeBasisError,
     Revision3QuestGenerationError,
+};
+pub use revision3_quest_source_v2::{
+    PreparedRevision3QuestCollisionSourceV2, Revision3NonQuestCollisionBasisV2,
+    Revision3PriorQuestEvidenceV2, Revision3QuestCollisionSourceErrorV2,
+    MAX_REVISION3_COLLISION_IDENTITIES_V2, MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2,
+    MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2, MAX_REVISION3_PRIOR_QUESTS_V2,
 };
 pub use story_collision::{
     collect_project_story_collision_identities, ProjectStoryCollisionIdentities,
