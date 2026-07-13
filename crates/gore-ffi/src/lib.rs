@@ -45,6 +45,12 @@
 //! - `authoring_store_open`, `authoring_store_open_head_bytes`, and
 //!   `authoring_store_prepare_checkpoint` retain the frozen schema-revision-1 working-store wire.
 //!   Their additive `*_document` counterparts dispatch between closed schema revisions 1 and 2.
+//!   The dedicated `authoring_store_open_revision3`, `authoring_store_open_revision3_head_bytes`,
+//!   and `authoring_store_prepare_revision3_checkpoint` commands exclusively carry schema
+//!   revision 3. Opens return exact canonical head/project JSON; preparation returns only the
+//!   canonical candidate head after a full exact reopen. It never publishes the fixed head, and
+//!   generic document preparation remains revision-1/2-only. Their bounded raw request envelopes
+//!   reject duplicate, unknown, missing, and wrongly typed outer or payload fields.
 //!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
 //!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
 //!   `gore-project.json`.
@@ -118,8 +124,11 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_open_document",
     "authoring_store_open_head_bytes",
     "authoring_store_open_head_bytes_document",
+    "authoring_store_open_revision3",
+    "authoring_store_open_revision3_head_bytes",
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
+    "authoring_store_prepare_revision3_checkpoint",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -176,6 +185,23 @@ fn dispatch(input: &str) -> Value {
         Err(e) => return err("BAD_REQUEST", format!("invalid request json: {e}")),
     };
     let command = req.get("command").and_then(Value::as_str).unwrap_or("");
+    // These security-sensitive additive Store routes must see the original wire. Drop the
+    // dispatch probe and return before cloning its payload, so a maximum-size canonical project
+    // is never retained in two decoded representations while the raw parser runs.
+    let revision3_store_raw_route: Option<fn(&str) -> Value> = match command {
+        "authoring_store_open_revision3" => Some(authoring_store::open_revision3_raw),
+        "authoring_store_open_revision3_head_bytes" => {
+            Some(authoring_store::open_revision3_head_bytes_raw)
+        }
+        "authoring_store_prepare_revision3_checkpoint" => {
+            Some(authoring_store::prepare_revision3_checkpoint_raw)
+        }
+        _ => None,
+    };
+    if let Some(route) = revision3_store_raw_route {
+        drop(req);
+        return route(input);
+    }
     let payload = req.get("payload").cloned().unwrap_or(Value::Null);
     match command {
         "core_info" => core_info(),
@@ -1106,8 +1132,11 @@ mod tests {
                     "authoring_store_open_document",
                     "authoring_store_open_head_bytes",
                     "authoring_store_open_head_bytes_document",
+                    "authoring_store_open_revision3",
+                    "authoring_store_open_revision3_head_bytes",
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
+                    "authoring_store_prepare_revision3_checkpoint",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
