@@ -162,30 +162,337 @@ class ModFfiManagedAuthoringStore implements ManagedAuthoringStore {
   );
 }
 
+/// Narrow seam over the dedicated schema-revision-3 managed-store API.
+///
+/// Revision 3 deliberately has no validation profile, diagnostics, readiness, runtime, deployment,
+/// or publication-authority fields. Production callers normally use
+/// [ModFfiManagedRevision3AuthoringStore].
+abstract interface class ManagedRevision3AuthoringStore {
+  Future<AuthoringRevision3StoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  });
+
+  Future<AuthoringRevision3CheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  });
+
+  Future<AuthoringRevision3StoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  });
+}
+
+final class ModFfiManagedRevision3AuthoringStore
+    implements ManagedRevision3AuthoringStore {
+  const ModFfiManagedRevision3AuthoringStore(this.ffi);
+
+  final ModFfi ffi;
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) => ffi.authoringStoreOpenRevision3(root: root, verification: verification);
+
+  @override
+  Future<AuthoringRevision3CheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) => ffi.authoringStorePrepareRevision3Checkpoint(
+    root: root,
+    expectedHead: expectedHead,
+    projectJson: projectJson,
+  );
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) => ffi.authoringStoreOpenRevision3HeadBytes(
+    root: root,
+    head: head,
+    verification: verification,
+  );
+}
+
+final class _ManagedOpenedCheckpoint {
+  const _ManagedOpenedCheckpoint({
+    required this.head,
+    required this.projectJson,
+    this.diagnostics,
+    this.blocksBuild,
+    this.projectId,
+    this.projectRevision,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final List<AuthoringDiagnostic>? diagnostics;
+  final bool? blocksBuild;
+  final String? projectId;
+  final int? projectRevision;
+}
+
+abstract interface class _ManagedCheckpointStore {
+  Future<_ManagedOpenedCheckpoint> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  });
+
+  Future<AuthoringWorkingHead> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  });
+
+  Future<_ManagedOpenedCheckpoint> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  });
+}
+
+final class _Revision12ManagedCheckpointStore
+    implements _ManagedCheckpointStore {
+  const _Revision12ManagedCheckpointStore(this.store, this.profile);
+
+  final ManagedAuthoringStore store;
+  final AuthoringValidationProfile profile;
+
+  @override
+  Future<_ManagedOpenedCheckpoint> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) async => _fromOpened(
+    await store.open(root: root, verification: verification, profile: profile),
+  );
+
+  @override
+  Future<AuthoringWorkingHead> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) async {
+    final prepared = await store.prepareCheckpoint(
+      root: root,
+      expectedHead: expectedHead,
+      projectJson: projectJson,
+      profile: profile,
+    );
+    return prepared.head;
+  }
+
+  @override
+  Future<_ManagedOpenedCheckpoint> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) async => _fromOpened(
+    await store.openHeadBytes(
+      root: root,
+      head: head,
+      verification: verification,
+      profile: profile,
+    ),
+  );
+
+  static _ManagedOpenedCheckpoint _fromOpened(
+    AuthoringStoreOpenedResult opened,
+  ) => _ManagedOpenedCheckpoint(
+    head: opened.head,
+    projectJson: opened.projectJson,
+    diagnostics: opened.diagnostics,
+    blocksBuild: opened.blocksBuild,
+  );
+}
+
+final class _Revision3ManagedCheckpointStore
+    implements _ManagedCheckpointStore {
+  const _Revision3ManagedCheckpointStore(this.store);
+
+  final ManagedRevision3AuthoringStore store;
+
+  @override
+  Future<_ManagedOpenedCheckpoint> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) async =>
+      _fromOpened(await store.open(root: root, verification: verification));
+
+  @override
+  Future<AuthoringWorkingHead> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) async {
+    final prepared = await store.prepareCheckpoint(
+      root: root,
+      expectedHead: expectedHead,
+      projectJson: projectJson,
+    );
+    return prepared.head;
+  }
+
+  @override
+  Future<_ManagedOpenedCheckpoint> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) async => _fromOpened(
+    await store.openHeadBytes(
+      root: root,
+      head: head,
+      verification: verification,
+    ),
+  );
+
+  static _ManagedOpenedCheckpoint _fromOpened(
+    AuthoringRevision3StoreOpenedResult opened,
+  ) => _ManagedOpenedCheckpoint(
+    head: opened.head,
+    projectJson: opened.projectJson,
+    projectId: opened.projectId,
+    projectRevision: opened.projectRevision,
+  );
+}
+
 /// Exclusive, crash-recoverable editing session for one closed schema-revision-1/2 format-2
 /// working tree.
 ///
-/// Immutable objects are prepared by the native store. The only Dart-owned
-/// mutation is publication of the fixed `gore-project.json` head. Publication
-/// is an exact byte-for-byte CAS and every candidate, repaired generation, and
-/// published generation is reopened using full asset verification.
+/// Immutable objects are prepared by the native store. The only Dart-owned mutation is
+/// publication of the fixed `gore-project.json` head. Publication is an exact byte-for-byte CAS
+/// and every candidate, repaired generation, and published generation is reopened using full
+/// asset verification.
 class ManagedAuthoringProjectSession {
-  ManagedAuthoringProjectSession._({
+  ManagedAuthoringProjectSession._(this._core, this._profile);
+
+  final _ManagedProjectSessionCore _core;
+  final AuthoringValidationProfile _profile;
+
+  Directory get root => _core.root;
+  String get projectJson => _core.projectJson;
+  AuthoringWorkingHead get head => _core.head;
+  List<AuthoringDiagnostic> get diagnostics => _core._opened.diagnostics!;
+  bool get blocksBuild => _core._opened.blocksBuild!;
+  AuthoringValidationProfile get profile => _profile;
+  bool get isClosed => _core.isClosed;
+  bool get requiresReopen => _core.requiresReopen;
+  File get headFile => _core.headFile;
+
+  static Future<ManagedAuthoringProjectSession> create({
+    required Directory root,
+    required ManagedAuthoringStore store,
+    required String projectJson,
+    required AuthoringValidationProfile profile,
+    AtomicByteReplacement? replacement,
+  }) async => ManagedAuthoringProjectSession._(
+    await _ManagedProjectSessionCore.create(
+      root: root,
+      store: _Revision12ManagedCheckpointStore(store, profile),
+      projectJson: projectJson,
+      replacement: replacement,
+    ),
+    profile,
+  );
+
+  static Future<ManagedAuthoringProjectSession> open({
+    required Directory root,
+    required ManagedAuthoringStore store,
+    required AuthoringValidationProfile profile,
+    AtomicByteReplacement? replacement,
+  }) async => ManagedAuthoringProjectSession._(
+    await _ManagedProjectSessionCore.open(
+      root: root,
+      store: _Revision12ManagedCheckpointStore(store, profile),
+      replacement: replacement,
+    ),
+    profile,
+  );
+
+  Future<void> save(String projectJson) => _core.save(projectJson);
+
+  Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
+      _core.deriveAndSave(derive);
+
+  Future<void> close() => _core.close();
+}
+
+/// Safe managed session for a canonical schema-revision-3 format-2 working tree.
+///
+/// This API exposes only durable checkpoint identity. Revision 3 store responses do not carry
+/// diagnostics, build readiness, runtime compatibility, deployment status, or publication
+/// authority, so this session intentionally does not synthesize or expose any of those claims.
+/// It otherwise uses the exact same lock, serialized operation lane, compare-and-swap,
+/// verification, repair, and no-clobber publication core as [ManagedAuthoringProjectSession].
+class ManagedRevision3AuthoringProjectSession {
+  ManagedRevision3AuthoringProjectSession._(this._core);
+
+  final _ManagedProjectSessionCore _core;
+
+  Directory get root => _core.root;
+  String get projectJson => _core.projectJson;
+  AuthoringWorkingHead get head => _core.head;
+  String get projectId => _core._opened.projectId!;
+  int get projectRevision => _core._opened.projectRevision!;
+  bool get isClosed => _core.isClosed;
+  bool get requiresReopen => _core.requiresReopen;
+  File get headFile => _core.headFile;
+
+  static Future<ManagedRevision3AuthoringProjectSession> create({
+    required Directory root,
+    required ManagedRevision3AuthoringStore store,
+    required String projectJson,
+    AtomicByteReplacement? replacement,
+  }) async => ManagedRevision3AuthoringProjectSession._(
+    await _ManagedProjectSessionCore.create(
+      root: root,
+      store: _Revision3ManagedCheckpointStore(store),
+      projectJson: projectJson,
+      replacement: replacement,
+    ),
+  );
+
+  static Future<ManagedRevision3AuthoringProjectSession> open({
+    required Directory root,
+    required ManagedRevision3AuthoringStore store,
+    AtomicByteReplacement? replacement,
+  }) async => ManagedRevision3AuthoringProjectSession._(
+    await _ManagedProjectSessionCore.open(
+      root: root,
+      store: _Revision3ManagedCheckpointStore(store),
+      replacement: replacement,
+    ),
+  );
+
+  Future<void> save(String projectJson) => _core.save(projectJson);
+
+  Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
+      _core.deriveAndSave(derive);
+
+  Future<void> close() => _core.close();
+}
+
+class _ManagedProjectSessionCore {
+  _ManagedProjectSessionCore._({
     required this.root,
     required this._store,
     required this._lock,
     required this._replacement,
-    required this._profile,
     required this._opened,
   });
 
   final Directory root;
-  final ManagedAuthoringStore _store;
+  final _ManagedCheckpointStore _store;
   final ManagedProjectSessionLock _lock;
   final AtomicByteReplacement _replacement;
-  final AuthoringValidationProfile _profile;
 
-  AuthoringStoreOpenedResult _opened;
+  _ManagedOpenedCheckpoint _opened;
   Future<void> _tail = Future<void>.value();
   Future<void>? _closeFuture;
   bool _closeRequested = false;
@@ -195,9 +502,6 @@ class ManagedAuthoringProjectSession {
 
   String get projectJson => _opened.projectJson;
   AuthoringWorkingHead get head => _opened.head;
-  List<AuthoringDiagnostic> get diagnostics => _opened.diagnostics;
-  bool get blocksBuild => _opened.blocksBuild;
-  AuthoringValidationProfile get profile => _profile;
   bool get isClosed => _closed;
 
   /// True after an I/O or verification failure leaves publication state
@@ -206,11 +510,10 @@ class ManagedAuthoringProjectSession {
 
   File get headFile => File(p.join(root.path, 'gore-project.json'));
 
-  static Future<ManagedAuthoringProjectSession> create({
+  static Future<_ManagedProjectSessionCore> create({
     required Directory root,
-    required ManagedAuthoringStore store,
+    required _ManagedCheckpointStore store,
     required String projectJson,
-    required AuthoringValidationProfile profile,
     AtomicByteReplacement? replacement,
   }) async {
     final lock = await ManagedProjectSessionLock.acquire(root);
@@ -221,7 +524,6 @@ class ManagedAuthoringProjectSession {
         root: normalizedRoot,
         store: store,
         replacement: byteReplacement,
-        profile: profile,
       );
       final headType = await FileSystemEntity.type(
         operations.headFile.path,
@@ -243,27 +545,25 @@ class ManagedAuthoringProjectSession {
       // can only discard journal staging that predates any content mutation.
       await operations.repairHead();
 
-      final prepared = await store.prepareCheckpoint(
+      final preparedHead = await store.prepareCheckpoint(
         root: normalizedRoot.path,
         expectedHead: null,
         projectJson: projectJson,
-        profile: profile,
       );
       await operations.verifyPreparedCheckpoint(
-        prepared.head,
+        preparedHead,
         expectedProjectJson: projectJson,
       );
-      await operations.publish(prepared.head, expectedHead: null);
+      await operations.publish(preparedHead, expectedHead: null);
       final opened = await operations.openPublished(
-        expectedHead: prepared.head,
+        expectedHead: preparedHead,
         expectedProjectJson: projectJson,
       );
-      return ManagedAuthoringProjectSession._(
+      return _ManagedProjectSessionCore._(
         root: normalizedRoot,
         store: store,
         lock: lock,
         replacement: byteReplacement,
-        profile: profile,
         opened: opened,
       );
     } catch (error, stackTrace) {
@@ -274,10 +574,9 @@ class ManagedAuthoringProjectSession {
     }
   }
 
-  static Future<ManagedAuthoringProjectSession> open({
+  static Future<_ManagedProjectSessionCore> open({
     required Directory root,
-    required ManagedAuthoringStore store,
-    required AuthoringValidationProfile profile,
+    required _ManagedCheckpointStore store,
     AtomicByteReplacement? replacement,
   }) async {
     final lock = await ManagedProjectSessionLock.acquire(root);
@@ -288,16 +587,14 @@ class ManagedAuthoringProjectSession {
         root: normalizedRoot,
         store: store,
         replacement: byteReplacement,
-        profile: profile,
       );
       await operations.repairHead();
       final opened = await operations.openPublished();
-      return ManagedAuthoringProjectSession._(
+      return _ManagedProjectSessionCore._(
         root: normalizedRoot,
         store: store,
         lock: lock,
         replacement: byteReplacement,
-        profile: profile,
         opened: opened,
       );
     } catch (error, stackTrace) {
@@ -340,7 +637,6 @@ class ManagedAuthoringProjectSession {
         root: root,
         store: _store,
         replacement: _replacement,
-        profile: _profile,
       );
       await _requireExactPublishedHead(operations, exactHead);
 
@@ -399,16 +695,14 @@ class ManagedAuthoringProjectSession {
       root: root,
       store: _store,
       replacement: _replacement,
-      profile: _profile,
     );
     await _requireExactPublishedHead(operations, oldHead);
-    final AuthoringCheckpointPreparation prepared;
+    final AuthoringWorkingHead preparedHead;
     try {
-      prepared = await _store.prepareCheckpoint(
+      preparedHead = await _store.prepareCheckpoint(
         root: root.path,
         expectedHead: oldHead,
         projectJson: capturedProjectJson,
-        profile: _profile,
       );
     } on ModFfiException catch (error) {
       if (error.code == 'AUTHORING_STORE_HEAD_CONFLICT') {
@@ -425,12 +719,12 @@ class ManagedAuthoringProjectSession {
       rethrow;
     }
     await operations.verifyPreparedCheckpoint(
-      prepared.head,
+      preparedHead,
       expectedProjectJson: capturedProjectJson,
     );
 
     try {
-      await operations.publish(prepared.head, expectedHead: oldHead);
+      await operations.publish(preparedHead, expectedHead: oldHead);
     } on AtomicSwapConflictException catch (error) {
       _requiresReopen = true;
       throw ManagedProjectHeadConflictException(error.message);
@@ -441,7 +735,7 @@ class ManagedAuthoringProjectSession {
 
     try {
       _opened = await operations.openPublished(
-        expectedHead: prepared.head,
+        expectedHead: preparedHead,
         expectedProjectJson: capturedProjectJson,
       );
     } catch (_) {
@@ -512,13 +806,11 @@ class _ManagedSessionOperations {
     required this.root,
     required this.store,
     required this.replacement,
-    required this.profile,
   });
 
   final Directory root;
-  final ManagedAuthoringStore store;
+  final _ManagedCheckpointStore store;
   final AtomicByteReplacement replacement;
-  final AuthoringValidationProfile profile;
 
   File get headFile => File(p.join(root.path, 'gore-project.json'));
 
@@ -533,7 +825,6 @@ class _ManagedSessionOperations {
       root: root.path,
       head: head,
       verification: AuthoringAssetVerification.full,
-      profile: profile,
     );
     _requireExactOpened(
       opened,
@@ -564,7 +855,7 @@ class _ManagedSessionOperations {
     validate: _validateHeadCandidate,
   );
 
-  Future<AuthoringStoreOpenedResult> openPublished({
+  Future<_ManagedOpenedCheckpoint> openPublished({
     AuthoringWorkingHead? expectedHead,
     String? expectedProjectJson,
   }) async {
@@ -572,7 +863,6 @@ class _ManagedSessionOperations {
     final opened = await store.open(
       root: root.path,
       verification: AuthoringAssetVerification.full,
-      profile: profile,
     );
     _requireExactOpened(
       opened,
@@ -595,7 +885,6 @@ class _ManagedSessionOperations {
         root: root.path,
         head: head,
         verification: AuthoringAssetVerification.full,
-        profile: profile,
       );
       _requireExactOpened(
         opened,
@@ -671,7 +960,7 @@ Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {
 }
 
 void _requireExactOpened(
-  AuthoringStoreOpenedResult opened, {
+  _ManagedOpenedCheckpoint opened, {
   required AuthoringWorkingHead expectedHead,
   String? expectedProjectJson,
   required String context,
