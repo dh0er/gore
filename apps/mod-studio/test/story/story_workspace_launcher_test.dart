@@ -92,6 +92,9 @@ void main() {
       expect(core.catalogBuildPayloads.single, <String, Object?>{
         'game_root': game.root.path,
       });
+      expect(core.npcCatalogBuildPayloads.single, <String, Object?>{
+        'game_root': game.root.path,
+      });
       expect(core.selectedShippingPath, backup.path);
       await launched.close();
     },
@@ -141,6 +144,36 @@ void main() {
   );
 
   test(
+    'native NPC catalog failure is path-free and acquires no lock',
+    () async {
+      final game = await _createGame(fixture);
+      final workspace = await _workspace(fixture);
+      final launcher = StoryWorkspaceLauncher(
+        ModFfi(_LauncherCore(failNpcCatalog: true)),
+      );
+
+      final failure = await _launchFailure(
+        launcher.create(
+          configuredGamePath: game.root.path,
+          workspaceRoot: workspace,
+          metadata: _metadata('NPC catalog failure'),
+          projectIdSource: const _FixedProjectIdSource(_projectId),
+        ),
+      );
+      expect(failure.code, StoryWorkspaceLaunchError.npcCatalogBuildFailed);
+      expect(failure.message, isNot(contains(game.root.path)));
+      expect(failure.message, isNot(contains('secret NPC parser detail')));
+      expect(
+        await FileSystemEntity.type(
+          p.join(workspace.path, '.gore', 'session.lock'),
+          followLinks: false,
+        ),
+        FileSystemEntityType.notFound,
+      );
+    },
+  );
+
+  test(
     'create and open use only native game roots and production sessions',
     () async {
       final game = await _createGame(fixture);
@@ -162,6 +195,10 @@ void main() {
       expect(core.catalogBuildPayloads.single, <String, Object?>{
         'game_root': game.root.path,
       });
+      expect(core.npcCatalogBuildPayloads.single, <String, Object?>{
+        'game_root': game.root.path,
+      });
+      expect(created.workspace.adapter.npcArchetypeIndex?.search('').length, 2);
       final expectedExecutableSeal = await _contentSeal(game.executable.path);
       expect(
         jsonDecode(created.workspace.session.projectJson),
@@ -181,6 +218,7 @@ void main() {
       );
       await opened.close();
       expect(core.catalogBuildPayloads, hasLength(2));
+      expect(core.npcCatalogBuildPayloads, hasLength(2));
       expect(
         core.calls.map((call) => call.payload['profile']).whereType<String>(),
         everyElement('production'),
@@ -336,16 +374,19 @@ final class _LauncherCore implements GoreCoreFfiService {
   _LauncherCore({
     this.failOpen = false,
     this.failCatalog = false,
+    this.failNpcCatalog = false,
     this.useBackupShipping = false,
   });
 
   bool failOpen;
   final bool failCatalog;
+  final bool failNpcCatalog;
   final bool useBackupShipping;
   String? selectedShippingPath;
   final Map<String, String> _projectsByHead = <String, String>{};
   final List<({String command, Map<String, Object?> payload})> calls = [];
   final List<Map<String, Object?>> catalogBuildPayloads = [];
+  final List<Map<String, Object?>> npcCatalogBuildPayloads = [];
   Map<String, Object?>? _generation;
   String? _catalogJson;
 
@@ -367,6 +408,9 @@ final class _LauncherCore implements GoreCoreFfiService {
         return _buildCatalog(payload);
       case 'authoring_story_catalog_v1_read':
         return _readCatalog(payload);
+      case 'authoring_npc_archetype_catalog_v1_build_for_game_root':
+        if (failNpcCatalog) return _failure('secret NPC parser detail');
+        return _buildNpcCatalog(payload);
       case 'authoring_store_prepare_document_checkpoint':
         return _prepare(payload);
       case 'authoring_store_open_head_bytes_document':
@@ -426,6 +470,72 @@ final class _LauncherCore implements GoreCoreFfiService {
       return _failure('catalog replay mismatch');
     }
     return _catalogResponse(catalogJson, _generation!);
+  }
+
+  Future<Map<String, Object?>> _buildNpcCatalog(
+    Map<String, Object?> payload,
+  ) async {
+    npcCatalogBuildPayloads.add(Map<String, Object?>.from(payload));
+    final root = payload['game_root']! as String;
+    final g1r = p.join(root, 'G1R');
+    final executable = p.join(
+      g1r,
+      'Binaries',
+      'Win64',
+      'G1R-Win64-Shipping.exe',
+    );
+    final live = p.join(g1r, 'Script', 'PrecompiledScript_Shipping.Cache');
+    final shipping = useBackupShipping ? '$live.gore-bak' : live;
+    final binds = p.join(g1r, 'Script', 'Binds.Cache');
+    final generation = <String, Object?>{
+      'edition': 'g1r-steam',
+      'executable': await _contentSeal(executable),
+      'shipping_cache': await _contentSeal(shipping),
+      'binds_cache': await _contentSeal(binds),
+    };
+    final sourceIdentity = <String, Object?>{
+      'shipping_cache': generation['shipping_cache'],
+      'binds_cache': generation['binds_cache'],
+    };
+    final source = <String, Object?>{
+      ...sourceIdentity,
+      'source_pair_seal': _jsonSeal(sourceIdentity),
+    };
+    final records = <Object?>[
+      _npcArchetype(viper: false),
+      _npcArchetype(viper: true),
+    ];
+    final npcPayload = <String, Object?>{
+      'extractor_records_sha256': List<String>.filled(64, '7').join(),
+      'records': records,
+      'rejections': <Object?>[],
+    };
+    final catalog = <String, Object?>{
+      'generation': generation,
+      'story_catalog_seal': _fixedSeal('4', 5611),
+      'qualification': _npcQualification(),
+      'source': source,
+      'payload': npcPayload,
+      'payload_seal': _jsonSeal(npcPayload),
+    };
+    final artifact = <String, Object?>{
+      'format': 'npc_archetype_catalog',
+      'schema_revision': 1,
+      'catalog': catalog,
+      'catalog_seal': _jsonSeal(catalog),
+    };
+    return <String, Object?>{
+      'ok': true,
+      'request_binding_sha256': _npcCatalogGameRootBinding(root),
+      'catalog_json': jsonEncode(artifact),
+      'generation': generation,
+      'catalog_seal': artifact['catalog_seal'],
+      'source': source,
+      'payload_seal': catalog['payload_seal'],
+      'record_count': records.length,
+      'rejection_count': 0,
+      'qualification': catalog['qualification'],
+    };
   }
 
   Future<Map<String, Object?>> _prepare(Map<String, Object?> payload) async {
@@ -496,6 +606,19 @@ String _catalogGameRootBinding(String root) {
   return crypto.sha256.convert(<int>[
     ...utf8.encode(
       'gore-story-catalog.authoring-build-for-game-root-v1.request-binding\u0000',
+    ),
+    ...length,
+    ...encoded,
+  ]).toString();
+}
+
+String _npcCatalogGameRootBinding(String root) {
+  final encoded = utf8.encode(root);
+  final length = Uint8List(8);
+  ByteData.sublistView(length).setUint64(0, encoded.length, Endian.little);
+  return crypto.sha256.convert(<int>[
+    ...utf8.encode(
+      'gore-ffi.authoring-npc-archetype-catalog-v1.build-for-game-root.request-binding\u0000',
     ),
     ...length,
     ...encoded,
@@ -578,6 +701,81 @@ Map<String, Object?> _npc({required bool viper}) {
         ? 'npc-logical-clone-v1:viper-current-v1'
         : 'npc-logical-clone-v1',
     'blocks_build': true,
+  };
+}
+
+Map<String, Object?> _npcArchetype({required bool viper}) {
+  final runtime = viper ? 'OM_STT_Viper_302' : 'OM_GRD_Asghan_263';
+  final spawn = 'USpawnAIAgentDefinition_$runtime';
+  final ai = 'UAIAgentConfig_Human_$runtime';
+  final character = 'UCharacterDefinition_Human_$runtime';
+  final actor = viper ? 'BP_Viper' : 'BP_Asghan';
+  return <String, Object?>{
+    'spawn': _npcArchetypeClass(spawn, 'USpawnAIAgentDefinition', 'c'),
+    'ai_config': _npcArchetypeClass(ai, 'UAIAgentConfig', 'b'),
+    'character_definition': _npcArchetypeClass(
+      character,
+      'UCharacterDefinition',
+      'a',
+    ),
+    'actor_blueprint': actor,
+    'blueprint_family': 'human_base',
+    'spawn_ai_edge': _npcArchetypeEdge(spawn, 'AIAgentConfigClass', ai, '1'),
+    'spawn_blueprint_edge': _npcArchetypeEdge(
+      spawn,
+      'AIAgentCharacterClass',
+      actor,
+      '2',
+    ),
+    'ai_character_edge': _npcArchetypeEdge(
+      ai,
+      'm_CharacterDefinition',
+      character,
+      '3',
+    ),
+    'evidence_sha256': List<String>.filled(64, '8').join(),
+  };
+}
+
+Map<String, Object?> _npcArchetypeClass(
+  String name,
+  String parent,
+  String sealByte,
+) => <String, Object?>{
+  'class_name': name,
+  'super_class': parent,
+  'module_name': 'World',
+  'relative_path': 'World/$name.as',
+  'source_seal': _fixedSeal(sealByte, 100),
+};
+
+Map<String, Object?> _npcArchetypeEdge(
+  String owner,
+  String field,
+  String assigned,
+  String sealByte,
+) => <String, Object?>{
+  'owner_class': owner,
+  'field_name': field,
+  'assigned_value': assigned,
+  'instruction_offset_dwords': 1,
+  'init_defaults_bytecode_seal': _fixedSeal(sealByte, 20),
+  'evidence_sha256': List<String>.filled(64, sealByte).join(),
+};
+
+Map<String, Object?> _npcQualification() => <String, Object?>{
+  'linkage': 'sealed_linkage_verified',
+  'runtime': 'runtime_unqualified',
+  'build': 'not_supported',
+  'deploy': 'not_supported',
+  'publication': 'not_supported',
+};
+
+Map<String, Object?> _jsonSeal(Map<String, Object?> value) {
+  final bytes = utf8.encode(jsonEncode(value));
+  return <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
   };
 }
 

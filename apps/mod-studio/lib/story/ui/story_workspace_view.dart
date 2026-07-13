@@ -7,11 +7,29 @@ import '../../core/mod_ffi.dart';
 import '../domain/story_catalog_adapter.dart';
 import '../domain/story_draft_requests.dart';
 import '../domain/story_workspace_controller.dart';
+import 'story_npc_archetype_picker.dart';
 
 typedef StoryNpcDraftCreator =
     Future<StoryDraftCreateResult> Function(StoryNpcDraftInput input);
 typedef StoryBuildReadinessChecker =
     Future<StoryBuildReadinessCheckResult> Function();
+
+const _npcPickerLabels = StoryNpcArchetypePickerLabels(
+  title: 'Choose an NPC archetype',
+  search: 'Search by name, class, or Blueprint',
+  showExperimental: 'Show experimental archetypes',
+  offlineQualified: 'Offline clone qualified',
+  experimentalStaticLinkage: 'Experimental · static linkage only',
+  empty: 'No NPC archetypes match this search.',
+  spawnClass: 'Spawn class',
+  aiConfigClass: 'AI config class',
+  characterDefinitionClass: 'Character definition class',
+  actorBlueprint: 'Actor Blueprint',
+  bodyBlueprintFamily: 'Body/Blueprint family',
+  humanBaseFamily: 'Human base family',
+  humanWomanFamily: 'Human-woman family',
+  otherFamily: 'Other family',
+);
 
 /// Friendly, draft-only Story authoring surface.
 ///
@@ -186,6 +204,18 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
       _diagnostics = const <AuthoringDiagnostic>[];
       _applyChoiceDefaults();
     });
+  }
+
+  Future<void> _pickNpcArchetype() async {
+    final index = widget.catalog.npcArchetypeIndex;
+    if (index == null || _managedActionBusy) return;
+    final selected = await showStoryNpcArchetypePicker(
+      context: context,
+      index: index,
+      labels: _npcPickerLabels,
+    );
+    if (!mounted) return;
+    _selectNpc(selected);
   }
 
   Future<void> _createDraft() async {
@@ -448,24 +478,61 @@ final class _StoryWorkspaceViewState extends State<StoryWorkspaceView> {
               'Start from a known character, then give your new NPC a friendly name and identity.',
             ),
             const SizedBox(height: 20),
-            DropdownButtonFormField<String>(
-              key: ValueKey<String?>(_selectedCatalogId),
-              initialValue: _selectedCatalogId,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Start from NPC',
-                helperText: 'Copies safe defaults from the selected character.',
-                border: OutlineInputBorder(),
-              ),
-              items: <DropdownMenuItem<String>>[
-                for (final choice in widget.catalog.npcChoices)
-                  DropdownMenuItem<String>(
-                    value: choice.catalogId,
-                    child: Text(choice.displayName),
+            if (widget.catalog.npcArchetypeIndex != null)
+              OutlinedButton(
+                key: const Key('story-open-npc-archetype-picker'),
+                onPressed: _managedActionBusy ? null : _pickNpcArchetype,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
                   ),
-              ],
-              onChanged: _managedActionBusy ? null : _selectNpc,
-            ),
+                  alignment: Alignment.centerLeft,
+                ),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(Icons.people_alt_outlined),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            _selectedChoice?.displayName ??
+                                'Choose an NPC archetype',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 2),
+                          const Text(
+                            'Search verified defaults; experimental archetypes stay disabled.',
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.arrow_drop_down),
+                  ],
+                ),
+              )
+            else
+              DropdownButtonFormField<String>(
+                key: ValueKey<String?>(_selectedCatalogId),
+                initialValue: _selectedCatalogId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Start from NPC',
+                  helperText:
+                      'Copies safe defaults from the selected character.',
+                  border: OutlineInputBorder(),
+                ),
+                items: <DropdownMenuItem<String>>[
+                  for (final choice in widget.catalog.npcChoices)
+                    DropdownMenuItem<String>(
+                      value: choice.catalogId,
+                      child: Text(choice.displayName),
+                    ),
+                ],
+                onChanged: _managedActionBusy ? null : _selectNpc,
+              ),
             const SizedBox(height: 16),
             TextFormField(
               key: const Key('story-display-name-field'),

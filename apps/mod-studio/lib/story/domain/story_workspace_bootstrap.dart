@@ -129,11 +129,12 @@ abstract final class StoryWorkspaceBootstrap {
     required Directory root,
     required ModFfi ffi,
     required AuthoringStoryCatalogSelections catalogSelections,
+    AuthoringNpcArchetypeCatalogBuildResult? npcArchetypes,
     required AuthoringValidationProfile profile,
     required StoryProjectMetadata metadata,
     StoryProjectIdSource? projectIdSource,
   }) async {
-    final adapter = StoryCatalogAdapter.fromSelections(catalogSelections);
+    final adapter = _adapter(catalogSelections, npcArchetypes);
     final projectId = (projectIdSource ?? SecureStoryProjectIdSource())
         .nextProjectId();
     _requireProjectId(projectId);
@@ -179,9 +180,10 @@ abstract final class StoryWorkspaceBootstrap {
     required Directory root,
     required ModFfi ffi,
     required AuthoringStoryCatalogSelections catalogSelections,
+    AuthoringNpcArchetypeCatalogBuildResult? npcArchetypes,
     required AuthoringValidationProfile profile,
   }) async {
-    final adapter = StoryCatalogAdapter.fromSelections(catalogSelections);
+    final adapter = _adapter(catalogSelections, npcArchetypes);
     final session = await ManagedAuthoringProjectSession.open(
       root: root,
       store: ModFfiManagedAuthoringStore(ffi),
@@ -207,6 +209,13 @@ abstract final class StoryWorkspaceBootstrap {
     }
   }
 }
+
+StoryCatalogAdapter _adapter(
+  AuthoringStoryCatalogSelections catalog,
+  AuthoringNpcArchetypeCatalogBuildResult? archetypes,
+) => archetypes == null
+    ? StoryCatalogAdapter.fromSelections(catalog)
+    : StoryCatalogAdapter.fromSelectionsAndArchetypes(catalog, archetypes);
 
 String _emptyProjectJson({
   required String projectId,

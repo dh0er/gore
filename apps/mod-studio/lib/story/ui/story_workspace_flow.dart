@@ -532,6 +532,8 @@ String _friendlyLaunchError(Object error) {
         'The selected workspace must be an existing safe directory.',
       StoryWorkspaceLaunchError.catalogBuildFailed =>
         'The Story catalog could not be read from this game installation.',
+      StoryWorkspaceLaunchError.npcCatalogBuildFailed =>
+        'The NPC archetype catalog could not be read from this game installation.',
       StoryWorkspaceLaunchError.workspaceBootstrapFailed =>
         'The managed workspace could not be created or opened. It may already be open or need recovery.',
     };

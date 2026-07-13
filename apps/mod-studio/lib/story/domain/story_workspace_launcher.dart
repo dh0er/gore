@@ -15,6 +15,7 @@ enum StoryWorkspaceLaunchError {
   invalidWorkspace,
   pathInspectionFailed,
   catalogBuildFailed,
+  npcCatalogBuildFailed,
   workspaceBootstrapFailed,
 }
 
@@ -71,10 +72,11 @@ final class StoryWorkspaceLauncher {
   }) => _launch(
     configuredGamePath: configuredGamePath,
     workspaceRoot: workspaceRoot,
-    bootstrap: (catalog) => StoryWorkspaceBootstrap.create(
+    bootstrap: (catalog, archetypes) => StoryWorkspaceBootstrap.create(
       root: workspaceRoot,
       ffi: _ffi,
       catalogSelections: catalog,
+      npcArchetypes: archetypes,
       profile: AuthoringValidationProfile.production,
       metadata: metadata,
       projectIdSource: projectIdSource,
@@ -87,10 +89,11 @@ final class StoryWorkspaceLauncher {
   }) => _launch(
     configuredGamePath: configuredGamePath,
     workspaceRoot: workspaceRoot,
-    bootstrap: (catalog) => StoryWorkspaceBootstrap.open(
+    bootstrap: (catalog, archetypes) => StoryWorkspaceBootstrap.open(
       root: workspaceRoot,
       ffi: _ffi,
       catalogSelections: catalog,
+      npcArchetypes: archetypes,
       profile: AuthoringValidationProfile.production,
     ),
   );
@@ -167,6 +170,7 @@ final class StoryWorkspaceLauncher {
     required Directory workspaceRoot,
     required Future<StoryWorkspaceHandle> Function(
       AuthoringStoryCatalogSelections catalog,
+      AuthoringNpcArchetypeCatalogBuildResult archetypes,
     )
     bootstrap,
   }) async {
@@ -189,21 +193,40 @@ final class StoryWorkspaceLauncher {
     }
 
     final inputs = await resolveGameInputs(configuredGamePath);
-    final AuthoringStoryCatalogSelections catalog;
-    try {
-      catalog = await _ffi.authoringStoryCatalogV1BuildAndReadForGameRoot(
+    // Both native builders are read-only, independently seal/revalidate the
+    // same game generation, and are joined fail-closed below. Starting them
+    // together avoids making workspace launch pay both large cache scans in
+    // series.
+    final catalogAttempt = _attempt(
+      _ffi.authoringStoryCatalogV1BuildAndReadForGameRoot(
         gameRoot: inputs.gameRoot,
-      );
-    } catch (_) {
+      ),
+    );
+    final archetypeAttempt = _attempt(
+      _ffi.authoringNpcArchetypeCatalogV1BuildForGameRoot(
+        gameRoot: inputs.gameRoot,
+      ),
+    );
+    final catalogResult = await catalogAttempt;
+    final archetypeResult = await archetypeAttempt;
+    if (catalogResult.error != null) {
       throw const StoryWorkspaceLaunchException(
         StoryWorkspaceLaunchError.catalogBuildFailed,
         'The trusted Story catalog could not be built for this game generation.',
       );
     }
+    if (archetypeResult.error != null) {
+      throw const StoryWorkspaceLaunchException(
+        StoryWorkspaceLaunchError.npcCatalogBuildFailed,
+        'The trusted NPC archetype catalog could not be built for this game generation.',
+      );
+    }
+    final catalog = catalogResult.value!;
+    final archetypes = archetypeResult.value!;
 
     StoryWorkspaceHandle? handle;
     try {
-      handle = await bootstrap(catalog);
+      handle = await bootstrap(catalog, archetypes);
       return StoryWorkspaceLaunch._(inputs: inputs, workspace: handle);
     } catch (error, stackTrace) {
       if (handle != null) {
@@ -270,6 +293,22 @@ final class StoryWorkspaceLauncher {
       );
     }
     return root;
+  }
+}
+
+final class _LaunchAttempt<T> {
+  const _LaunchAttempt.success(this.value) : error = null;
+  const _LaunchAttempt.failure(this.error) : value = null;
+
+  final T? value;
+  final Object? error;
+}
+
+Future<_LaunchAttempt<T>> _attempt<T>(Future<T> operation) async {
+  try {
+    return _LaunchAttempt<T>.success(await operation);
+  } catch (error) {
+    return _LaunchAttempt<T>.failure(error);
   }
 }
 

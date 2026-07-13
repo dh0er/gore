@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import '../../core/mod_ffi.dart';
 import 'story_draft_requests.dart';
+import 'story_npc_archetype_index.dart';
 
 const int _maxNpcDisplayNameBytes = 256;
 const int _maxNpcModuleNamespaceBytes = 255;
@@ -115,12 +116,32 @@ final class StoryCatalogAdapter {
     required this.questAvailability,
     required Map<String, AuthoringStoryCatalogNpcSelection> npcsById,
     required this._generation,
+    required this.npcArchetypeIndex,
   }) : _npcsById = Map<String, AuthoringStoryCatalogNpcSelection>.unmodifiable(
          npcsById,
        );
 
   factory StoryCatalogAdapter.fromSelections(
     AuthoringStoryCatalogSelections selections,
+  ) => _fromSelections(selections, null);
+
+  /// Join the broad native archetype catalog only through its exact Story
+  /// generation/catalog binding. Callers cannot attach an unrelated picker
+  /// index to this adapter.
+  factory StoryCatalogAdapter.fromSelectionsAndArchetypes(
+    AuthoringStoryCatalogSelections selections,
+    AuthoringNpcArchetypeCatalogBuildResult archetypes,
+  ) => _fromSelections(
+    selections,
+    StoryNpcArchetypeIndex.fromCatalogs(
+      story: selections,
+      archetypes: archetypes,
+    ),
+  );
+
+  static StoryCatalogAdapter _fromSelections(
+    AuthoringStoryCatalogSelections selections,
+    StoryNpcArchetypeIndex? npcArchetypeIndex,
   ) {
     _requireSupportedReadiness(selections);
     final npcsById = <String, AuthoringStoryCatalogNpcSelection>{};
@@ -180,11 +201,18 @@ final class StoryCatalogAdapter {
       ),
       npcsById: npcsById,
       generation: selections.generation,
+      npcArchetypeIndex: npcArchetypeIndex,
     );
   }
 
   final List<StoryCatalogNpcChoice> npcChoices;
   final StoryCatalogQuestDraftAvailability questAvailability;
+
+  /// Full native archetype picker index when the production launcher loaded it.
+  ///
+  /// Legacy/test callers that only project the curated Story catalog may omit
+  /// it; draft creation remains restricted to [npcChoices] either way.
+  final StoryNpcArchetypeIndex? npcArchetypeIndex;
   final Map<String, AuthoringStoryCatalogNpcSelection> _npcsById;
   final AuthoringStoryCatalogGeneration _generation;
 
