@@ -24,13 +24,17 @@ pub enum SpliceError {
     Wire(#[from] WireError),
     #[error("mini-cache must contain exactly 1 module, found {0}")]
     MiniNotSingle(u32),
-    #[error("mini-cache has non-empty global tables ({0} trailing bytes): strict splice only accepts referenceless modules; use splice_auto for a remapped class/function-bearing mini")]
+    #[error(
+        "mini-cache has non-empty global tables ({0} trailing bytes): strict splice only accepts referenceless modules; use splice_auto for a remapped class/function-bearing mini"
+    )]
     MiniHasGlobalRefs(usize),
     #[error("module name {0:?} already exists in the base cache (splicing would overwrite it)")]
     NameCollision(String),
     #[error("module name {0:?} not found in the base cache (nothing to replace)")]
     NameNotFound(String),
-    #[error("module name {0:?} is ambiguous: it matches one module's TMap key and a different module's inner name — pass the exact TMap key")]
+    #[error(
+        "module name {0:?} is ambiguous: it matches one module's TMap key and a different module's inner name — pass the exact TMap key"
+    )]
     AmbiguousTarget(String),
     #[error(
         "tail tables of {which} don't end at EOF (ended {got:#x}, len {len:#x}) — parse desync"

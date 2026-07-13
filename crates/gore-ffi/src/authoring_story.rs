@@ -3,14 +3,14 @@
 use std::collections::BTreeSet;
 
 use gore_authoring::{
-    Diagnostic, DiagnosticCode, DiagnosticSeverity, EntityId, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    story_draft_insert_request_binding_sha256, Diagnostic, DiagnosticCode, DiagnosticSeverity,
+    EntityId, ProjectDocument, ProjectDocumentError, ProjectId, Revision2EntityKind,
+    Revision2EntityPayload, Revision2OriginRef, StoryDraftCreate, StoryDraftInsertError,
+    StoryDraftInsertEvaluation, StoryDraftInsertJsonError, StoryDraftInsertOutcome,
+    StoryDraftInsertRequest, ValidationProfile, LOGICAL_NPC_CLONE_GENERATOR_ID,
     LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_PROJECT_JSON_BYTES, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
-    ProjectDocument, ProjectDocumentError, ProjectId, Revision2EntityKind, Revision2EntityPayload,
-    Revision2OriginRef, StoryDraftCreate, StoryDraftInsertError, StoryDraftInsertEvaluation,
-    StoryDraftInsertJsonError, StoryDraftInsertOutcome, StoryDraftInsertRequest, ValidationProfile,
-    story_draft_insert_request_binding_sha256,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{json, Map, Value};
 
 use crate::err;
 
@@ -739,10 +739,14 @@ mod tests {
             "11111111111111111111111111111111"
         );
         assert_eq!(response["blocks_build"], true);
-        assert!(response["diagnostics"].as_array().unwrap().iter().any(
-            |diagnostic| diagnostic["code"] == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
-                && diagnostic["blocks_build"] == true
-        ));
+        assert!(response["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |diagnostic| diagnostic["code"] == "REVISION2_COMBINED_VALIDATION_UNAVAILABLE"
+                    && diagnostic["blocks_build"] == true
+            ));
         let candidate = response["project_json"].as_str().unwrap();
         assert_eq!(
             ProjectDocument::from_json(candidate)
@@ -797,14 +801,12 @@ mod tests {
             )
             .to_string()
         );
-        assert!(
-            response["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|diagnostic| diagnostic["severity"] == "error"
-                    && diagnostic["blocks_build"] == true)
-        );
+        assert!(response["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|diagnostic| diagnostic["severity"] == "error"
+                && diagnostic["blocks_build"] == true));
         assert!(response.get("project_json").is_none());
     }
 
