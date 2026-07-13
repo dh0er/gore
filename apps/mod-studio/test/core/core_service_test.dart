@@ -149,6 +149,15 @@ void main() {
               )
               .toList(),
         );
+        final missingNpcCatalog = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command !=
+                    'authoring_npc_archetype_catalog_v1_build_for_game_root',
+              )
+              .toList(),
+        );
         final missingQuestDraft = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -173,10 +182,11 @@ void main() {
           missingStoryCatalogRootBuild,
           missingStoryInventoryBuild,
           missingNpcDraft,
+          missingNpcCatalog,
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(14), everyElement(isNull));
+        expect(decisions.take(15), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -215,6 +225,8 @@ void main() {
                 command != 'authoring_store_open_document' &&
                 command != 'voice_archive_match_line' &&
                 command != 'authoring_logical_npc_clone_draft_v1_generate' &&
+                command !=
+                    'authoring_npc_archetype_catalog_v1_build_for_game_root' &&
                 command != 'authoring_draft_quest_skeleton_v1_generate',
           )
           .toList();
@@ -226,6 +238,7 @@ void main() {
       expect(info.missingRequiredCommands, [
         'authoring_draft_quest_skeleton_v1_generate',
         'authoring_logical_npc_clone_draft_v1_generate',
+        'authoring_npc_archetype_catalog_v1_build_for_game_root',
         'authoring_project_check',
         'authoring_project_story_draft_insert_v1',
         'authoring_store_open_document',

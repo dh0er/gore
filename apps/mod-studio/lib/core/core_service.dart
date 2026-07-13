@@ -47,6 +47,7 @@ const requiredStudioCoreCommands = <String>[
   'audio_list',
   'authoring_draft_quest_skeleton_v1_generate',
   'authoring_logical_npc_clone_draft_v1_generate',
+  'authoring_npc_archetype_catalog_v1_build_for_game_root',
   'authoring_project_check',
   'authoring_project_story_draft_insert_v1',
   'authoring_store_import_ogg',
