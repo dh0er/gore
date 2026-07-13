@@ -64,6 +64,9 @@
 //!   one extracted entry at 256 MiB, aggregate uncompressed metadata at 16 GiB, and list JSON at
 //!   8 MiB. Line-match localization IDs are capped at 512 bytes and match JSON at 1 MiB.
 //!   Filesystem-path request strings are capped at 32 KiB.
+//! - `voice_ogg_inspect_v1` accepts exactly `{ogg_path}` and safely validates one bounded,
+//!   single-link regular Ogg file without following links. It returns only the proven codec/page/
+//!   stream facts and the exact validated content seal; native paths are never returned.
 
 mod authoring;
 mod authoring_drafts;
@@ -145,6 +148,7 @@ const CORE_COMMANDS: &[&str] = &[
     "voice_archive_extract",
     "voice_archive_list",
     "voice_archive_match_line",
+    "voice_ogg_inspect_v1",
 ];
 
 // The C ABI entry points live in `transport`; they are re-exported above so the Rust API and
@@ -240,6 +244,7 @@ fn dispatch(input: &str) -> Value {
         "voice_archive_list" => voice::archive_list(payload),
         "voice_archive_match_line" => voice::archive_match_line(payload),
         "voice_archive_extract" => voice::archive_extract(payload),
+        "voice_ogg_inspect_v1" => voice::ogg_inspect_v1_raw(input),
         other => err("UNKNOWN_COMMAND", format!("unknown command: {other}")),
     }
 }
@@ -1129,6 +1134,7 @@ mod tests {
                     "voice_archive_extract",
                     "voice_archive_list",
                     "voice_archive_match_line",
+                    "voice_ogg_inspect_v1",
                 ],
             })
         );

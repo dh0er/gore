@@ -1,4 +1,4 @@
-//! Bounded, read-only voice-archive commands for Mod Studio.
+//! Bounded, read-only voice-archive and standalone Ogg-inspection commands for Mod Studio.
 //!
 //! The source ZIP is never edited. `gore-vo` copies each no-follow source handle into a private,
 //! bounded, disk-backed snapshot before parsing. Extraction verifies the list response's exact
@@ -8,15 +8,17 @@
 //! serialized-response ceilings; extraction applies FFI-specific entry-path and output-byte
 //! ceilings. Oversized responses fail with `VOICE_RESPONSE_LIMIT` instead of being materialized.
 
-use std::fs;
-use std::io;
+use std::fs::{self, File as FsFile, OpenOptions};
+use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
 
 use gore_vo::{
     validate_archive_entry_path, validate_output_root_ancestors, ArchiveEntry, ArchiveIndex,
-    ArchiveSeal, Error, Limits,
+    ArchiveSeal, Error, Limits, OggCodec, OggError,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest as _, Sha256};
 
 use super::err;
 
@@ -29,6 +31,9 @@ const MAX_FFI_TOTAL_UNCOMPRESSED_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 const MAX_FFI_LIST_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_FFI_MATCH_JSON_BYTES: usize = 1024 * 1024;
 const MAX_FFI_LOC_ID_BYTES: usize = 512;
+const MAX_FFI_OGG_INSPECT_JSON_BYTES: usize = 1024;
+// One decoded path byte can occupy six raw JSON bytes (`\uXXXX`), plus a fixed closed envelope.
+const MAX_FFI_OGG_INSPECT_REQUEST_BYTES: usize = MAX_FILESYSTEM_PATH_BYTES * 6 + 256;
 
 #[derive(Debug)]
 struct VoiceFailure {
@@ -46,6 +51,567 @@ impl VoiceFailure {
 
     fn response(self) -> Value {
         err(self.code, self.message)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OggFileIdentity {
+    volume: u64,
+    file: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OggChangeStamp([i64; 4]);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OggHandleSnapshot {
+    identity: OggFileIdentity,
+    byte_len: u64,
+    link_count: u64,
+    change_stamp: OggChangeStamp,
+    is_regular: bool,
+    is_reparse: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OggSourceReadError {
+    Unavailable,
+    Unsafe,
+    Limit,
+    Changed,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OggInspectWireRequest {
+    command: String,
+    payload: OggInspectWirePayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OggInspectWirePayload {
+    ogg_path: String,
+}
+
+/// `payload: {ogg_path}` -> bounded structural facts and the exact seal of the bytes validated.
+///
+/// This command never returns the native source path. It opens the final component without
+/// following links, requires a single-link regular file, captures handle identity/size/change
+/// metadata around the bounded read, and reopens the path to detect replacement.
+pub(super) fn ogg_inspect_v1_raw(input: &str) -> Value {
+    if input.len() > MAX_FFI_OGG_INSPECT_REQUEST_BYTES {
+        return ogg_bad_request().response();
+    }
+    let request: OggInspectWireRequest = match serde_json::from_str(input) {
+        Ok(request) => request,
+        Err(_) => return ogg_bad_request().response(),
+    };
+    if request.command != "voice_ogg_inspect_v1" {
+        return ogg_bad_request().response();
+    }
+    match ogg_inspect_v1_inner(&request.payload.ogg_path) {
+        Ok(response) => response,
+        Err(error) => error.response(),
+    }
+}
+
+fn ogg_inspect_v1_inner(ogg_path: &str) -> Result<Value, VoiceFailure> {
+    if ogg_path.is_empty() || ogg_path.len() > MAX_FILESYSTEM_PATH_BYTES || ogg_path.contains('\0')
+    {
+        return Err(ogg_bad_request());
+    }
+    let project_max_ogg_bytes = gore_authoring::WorkingStoreLimits::default().max_ogg_bytes;
+    let limits = Limits {
+        max_ogg_bytes: project_max_ogg_bytes,
+        ..Limits::default()
+    };
+    let max_ogg_bytes = u64::try_from(project_max_ogg_bytes).map_err(|_| {
+        VoiceFailure::new(
+            "VOICE_OGG_LIMIT",
+            "the supported Ogg byte limit cannot be represented on this platform",
+        )
+    })?;
+    let bytes = read_ogg_source_no_follow(Path::new(ogg_path), max_ogg_bytes)
+        .map_err(map_ogg_source_read_error)?;
+    let info = gore_vo::validate_ogg(&bytes, &limits).map_err(map_ogg_validation_error)?;
+    let codec = match info.codec {
+        OggCodec::Vorbis { .. } => "vorbis",
+        OggCodec::Opus { .. } => "opus",
+        OggCodec::Unknown => {
+            return Err(VoiceFailure::new(
+                "VOICE_OGG_INVALID",
+                "the source is not a supported valid Vorbis or Opus Ogg stream",
+            ));
+        }
+    };
+    let byte_len = u64::try_from(bytes.len()).map_err(|_| {
+        VoiceFailure::new(
+            "VOICE_OGG_LIMIT",
+            "the validated Ogg byte length cannot be represented",
+        )
+    })?;
+    let sha256 = format_sha256(Sha256::digest(&bytes).into());
+    let response = json!({
+        "ok": true,
+        "codec": codec,
+        "pages": info.pages,
+        "streams": info.logical_streams,
+        "content_seal": {
+            "byte_len": byte_len,
+            "sha256": sha256,
+        },
+    });
+    let serialized_len = serde_json::to_vec(&response)
+        .map_err(|_| {
+            VoiceFailure::new(
+                "VOICE_OGG_LIMIT",
+                "the bounded Ogg inspection response could not be serialized",
+            )
+        })?
+        .len();
+    if serialized_len > MAX_FFI_OGG_INSPECT_JSON_BYTES {
+        return Err(VoiceFailure::new(
+            "VOICE_OGG_LIMIT",
+            "the Ogg inspection response exceeds its resource limit",
+        ));
+    }
+    Ok(response)
+}
+
+fn ogg_bad_request() -> VoiceFailure {
+    VoiceFailure::new(
+        "VOICE_OGG_REQUEST_INVALID",
+        "payload must contain exactly one non-empty 'ogg_path' string within the path limit",
+    )
+}
+
+fn read_ogg_source_no_follow(path: &Path, max_bytes: u64) -> Result<Vec<u8>, OggSourceReadError> {
+    read_ogg_source_no_follow_with_hook(path, max_bytes, || {})
+}
+
+fn read_ogg_source_no_follow_with_hook(
+    path: &Path,
+    max_bytes: u64,
+    after_read: impl FnOnce(),
+) -> Result<Vec<u8>, OggSourceReadError> {
+    let path = normalized_absolute_ogg_source_path(path)?;
+    let mut source = open_guarded_ogg_source(&path)?;
+    let initial = source.initial;
+    if initial.byte_len > max_bytes {
+        return Err(OggSourceReadError::Limit);
+    }
+    let capacity = usize::try_from(initial.byte_len).map_err(|_| OggSourceReadError::Limit)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| OggSourceReadError::Limit)?;
+    let read_limit = max_bytes.checked_add(1).ok_or(OggSourceReadError::Limit)?;
+    source
+        .file
+        .by_ref()
+        .take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    if bytes.len() as u64 != initial.byte_len {
+        return Err(OggSourceReadError::Changed);
+    }
+    if bytes.len() as u64 > max_bytes {
+        return Err(OggSourceReadError::Limit);
+    }
+
+    after_read();
+
+    let final_snapshot = snapshot_open_ogg_handle(&source.file).and_then(|snapshot| {
+        validate_ogg_snapshot(snapshot)?;
+        Ok(snapshot)
+    });
+    let reopened = source.reopen().map(|(_, snapshot)| snapshot);
+    ensure_ogg_source_unchanged(initial, final_snapshot, reopened)?;
+    Ok(bytes)
+}
+
+fn ensure_ogg_source_unchanged(
+    initial: OggHandleSnapshot,
+    final_snapshot: Result<OggHandleSnapshot, OggSourceReadError>,
+    reopened: Result<OggHandleSnapshot, OggSourceReadError>,
+) -> Result<(), OggSourceReadError> {
+    let final_snapshot = final_snapshot.map_err(|_| OggSourceReadError::Changed)?;
+    let reopened = reopened.map_err(|_| OggSourceReadError::Changed)?;
+    if final_snapshot != initial || reopened != initial {
+        return Err(OggSourceReadError::Changed);
+    }
+    Ok(())
+}
+
+fn normalized_absolute_ogg_source_path(path: &Path) -> Result<PathBuf, OggSourceReadError> {
+    use std::path::Component;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|_| OggSourceReadError::Unavailable)?
+            .join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+            Component::CurDir => {}
+            Component::ParentDir => return Err(OggSourceReadError::Unsafe),
+        }
+    }
+    if !normalized.is_absolute() {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(normalized)
+}
+
+#[cfg(windows)]
+fn ogg_metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+struct GuardedOggSource {
+    file: FsFile,
+    initial: OggHandleSnapshot,
+    #[cfg(unix)]
+    parent: FsFile,
+    #[cfg(unix)]
+    final_name: std::ffi::OsString,
+    #[cfg(unix)]
+    _ancestor_handles: Vec<FsFile>,
+    #[cfg(windows)]
+    path: PathBuf,
+    #[cfg(windows)]
+    _ancestor_handles: Vec<FsFile>,
+}
+
+impl GuardedOggSource {
+    #[cfg(unix)]
+    fn reopen(&self) -> Result<(FsFile, OggHandleSnapshot), OggSourceReadError> {
+        open_unix_ogg_file_at(&self.parent, &self.final_name)
+    }
+
+    #[cfg(windows)]
+    fn reopen(&self) -> Result<(FsFile, OggHandleSnapshot), OggSourceReadError> {
+        open_windows_ogg_file(&self.path)
+    }
+}
+
+#[cfg(unix)]
+fn open_guarded_ogg_source(path: &Path) -> Result<GuardedOggSource, OggSourceReadError> {
+    use std::path::Component;
+
+    let mut names = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_os_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let final_name = names.pop().ok_or(OggSourceReadError::Unsafe)?;
+    let mut parent = open_unix_root_directory()?;
+    let mut ancestor_handles = Vec::new();
+    ancestor_handles
+        .try_reserve_exact(names.len())
+        .map_err(|_| OggSourceReadError::Limit)?;
+    for name in names {
+        let next = open_unix_directory_at(&parent, &name)?;
+        ancestor_handles.push(parent);
+        parent = next;
+    }
+    let (file, initial) = open_unix_ogg_file_at(&parent, &final_name)?;
+    Ok(GuardedOggSource {
+        file,
+        initial,
+        parent,
+        final_name,
+        _ancestor_handles: ancestor_handles,
+    })
+}
+
+#[cfg(unix)]
+fn open_unix_root_directory() -> Result<FsFile, OggSourceReadError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let root = options
+        .open(Path::new("/"))
+        .map_err(classify_ogg_open_error)?;
+    validate_unix_directory_handle(&root)?;
+    Ok(root)
+}
+
+#[cfg(unix)]
+fn open_unix_directory_at(
+    parent: &FsFile,
+    name: &std::ffi::OsStr,
+) -> Result<FsFile, OggSourceReadError> {
+    let file = unix_openat(
+        parent,
+        name,
+        libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+    )?;
+    validate_unix_directory_handle(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn validate_unix_directory_handle(file: &FsFile) -> Result<(), OggSourceReadError> {
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    if !metadata.is_dir() {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_unix_ogg_file_at(
+    parent: &FsFile,
+    name: &std::ffi::OsStr,
+) -> Result<(FsFile, OggHandleSnapshot), OggSourceReadError> {
+    let file = unix_openat(
+        parent,
+        name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+    )?;
+    let snapshot = snapshot_open_ogg_handle(&file)?;
+    validate_ogg_snapshot(snapshot)?;
+    Ok((file, snapshot))
+}
+
+#[cfg(unix)]
+fn unix_openat(
+    parent: &FsFile,
+    name: &std::ffi::OsStr,
+    flags: i32,
+) -> Result<FsFile, OggSourceReadError> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let name = std::ffi::CString::new(name.as_bytes()).map_err(|_| OggSourceReadError::Unsafe)?;
+    // SAFETY: `parent` owns a valid directory fd, `name` is NUL-terminated, and no mode argument
+    // is required because these read-only flags never include O_CREAT.
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if fd < 0 {
+        return Err(classify_ogg_open_error(io::Error::last_os_error()));
+    }
+    // SAFETY: `openat` returned a new owned descriptor on success.
+    Ok(unsafe { FsFile::from_raw_fd(fd) })
+}
+
+#[cfg(windows)]
+fn open_guarded_ogg_source(path: &Path) -> Result<GuardedOggSource, OggSourceReadError> {
+    let mut prefixes = path.ancestors().collect::<Vec<_>>();
+    prefixes.reverse();
+    let mut ancestor_handles = Vec::new();
+    ancestor_handles
+        .try_reserve_exact(prefixes.len().saturating_sub(1))
+        .map_err(|_| OggSourceReadError::Limit)?;
+    for prefix in prefixes {
+        if prefix.as_os_str().is_empty() || prefix == path {
+            continue;
+        }
+        ancestor_handles.push(open_windows_directory_no_follow(prefix)?);
+    }
+    let (file, initial) = open_windows_ogg_file(path)?;
+    Ok(GuardedOggSource {
+        file,
+        initial,
+        path: path.to_path_buf(),
+        _ancestor_handles: ancestor_handles,
+    })
+}
+
+#[cfg(windows)]
+fn open_windows_directory_no_follow(path: &Path) -> Result<FsFile, OggSourceReadError> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileType, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+        FILE_TYPE_DISK,
+    };
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        // Excluding WRITE/DELETE sharing keeps this exact directory object from being converted,
+        // renamed, or replaced while its descendants are opened and verified.
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options.open(path).map_err(classify_ogg_open_error)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    // SAFETY: `file` owns a valid handle.
+    let is_disk = unsafe { GetFileType(file.as_raw_handle()) } == FILE_TYPE_DISK;
+    if !is_disk || !metadata.is_dir() || ogg_metadata_is_reparse_point(&metadata) {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_windows_ogg_file(path: &Path) -> Result<(FsFile, OggHandleSnapshot), OggSourceReadError> {
+    let file = open_regular_ogg_handle_no_follow(path).map_err(classify_ogg_open_error)?;
+    let snapshot = snapshot_open_ogg_handle(&file)?;
+    validate_ogg_snapshot(snapshot)?;
+    Ok((file, snapshot))
+}
+
+fn validate_ogg_snapshot(snapshot: OggHandleSnapshot) -> Result<(), OggSourceReadError> {
+    if !snapshot.is_regular || snapshot.is_reparse || snapshot.link_count != 1 {
+        return Err(OggSourceReadError::Unsafe);
+    }
+    Ok(())
+}
+
+fn classify_ogg_open_error(error: io::Error) -> OggSourceReadError {
+    #[cfg(unix)]
+    if let Some(code) = error.raw_os_error() {
+        if matches!(code, libc::ELOOP | libc::ENOTDIR | libc::ENXIO) {
+            return OggSourceReadError::Unsafe;
+        }
+    }
+    let _ = error;
+    OggSourceReadError::Unavailable
+}
+
+#[cfg(windows)]
+fn open_regular_ogg_handle_no_follow(path: &Path) -> io::Result<FsFile> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    options.open(path)
+}
+
+#[cfg(windows)]
+fn snapshot_open_ogg_handle(file: &FsFile) -> Result<OggHandleSnapshot, OggSourceReadError> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx, GetFileType,
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_BASIC_INFO, FILE_TYPE_DISK,
+    };
+
+    let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    // SAFETY: `file` owns a valid handle and `info` is writable for the call.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+        return Err(OggSourceReadError::Unavailable);
+    }
+    let mut basic = FILE_BASIC_INFO::default();
+    // SAFETY: `file` owns a valid handle and `basic` is a correctly sized writable buffer.
+    if unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle(),
+            FileBasicInfo,
+            std::ptr::addr_of_mut!(basic).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(OggSourceReadError::Unavailable);
+    }
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    // SAFETY: `file` owns a valid handle. Non-disk handles (pipes/devices) are not regular files.
+    let is_disk_file = unsafe { GetFileType(file.as_raw_handle()) } == FILE_TYPE_DISK;
+    Ok(OggHandleSnapshot {
+        identity: OggFileIdentity {
+            volume: u64::from(info.dwVolumeSerialNumber),
+            file: (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow),
+        },
+        byte_len: (u64::from(info.nFileSizeHigh) << 32) | u64::from(info.nFileSizeLow),
+        link_count: u64::from(info.nNumberOfLinks),
+        change_stamp: OggChangeStamp([
+            basic.ChangeTime,
+            basic.LastWriteTime,
+            basic.CreationTime,
+            i64::from(basic.FileAttributes),
+        ]),
+        is_regular: is_disk_file
+            && metadata.is_file()
+            && info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0,
+        is_reparse: info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0,
+    })
+}
+
+#[cfg(unix)]
+fn snapshot_open_ogg_handle(file: &FsFile) -> Result<OggHandleSnapshot, OggSourceReadError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file
+        .metadata()
+        .map_err(|_| OggSourceReadError::Unavailable)?;
+    Ok(OggHandleSnapshot {
+        identity: OggFileIdentity {
+            volume: metadata.dev(),
+            file: metadata.ino(),
+        },
+        byte_len: metadata.len(),
+        link_count: metadata.nlink(),
+        change_stamp: OggChangeStamp([
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.ctime(),
+            metadata.ctime_nsec(),
+        ]),
+        is_regular: metadata.is_file(),
+        is_reparse: false,
+    })
+}
+
+fn map_ogg_source_read_error(error: OggSourceReadError) -> VoiceFailure {
+    match error {
+        OggSourceReadError::Unavailable => VoiceFailure::new(
+            "VOICE_OGG_UNAVAILABLE",
+            "the Ogg source could not be opened or read",
+        ),
+        OggSourceReadError::Unsafe => VoiceFailure::new(
+            "VOICE_OGG_UNSAFE",
+            "the Ogg source is not a safe single-link regular file",
+        ),
+        OggSourceReadError::Limit => VoiceFailure::new(
+            "VOICE_OGG_LIMIT",
+            "the Ogg source exceeds the supported resource limit",
+        ),
+        OggSourceReadError::Changed => VoiceFailure::new(
+            "VOICE_OGG_CHANGED",
+            "the Ogg source changed while it was read",
+        ),
+    }
+}
+
+fn map_ogg_validation_error(error: OggError) -> VoiceFailure {
+    match error {
+        OggError::LimitExceeded { .. } => VoiceFailure::new(
+            "VOICE_OGG_LIMIT",
+            "the Ogg source exceeds the supported resource limit",
+        ),
+        _ => VoiceFailure::new(
+            "VOICE_OGG_INVALID",
+            "the source is not a supported valid Vorbis or Opus Ogg stream",
+        ),
     }
 }
 
@@ -768,6 +1334,302 @@ mod tests {
             "entry_path": entry_path,
             "output_root": output_root.display().to_string(),
         })
+    }
+
+    #[test]
+    fn ogg_inspect_accepts_valid_vorbis_and_opus_with_exact_bounded_schema() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixtures = [
+            ("vorbis", synthetic_vorbis_ogg(44_100)),
+            (
+                "opus",
+                include_bytes!("../../gore-vo/testdata/tiny-opus.ogg").to_vec(),
+            ),
+        ];
+
+        for (index, (codec, bytes)) in fixtures.into_iter().enumerate() {
+            let path = temp.path().join(format!("voice-{index}.ogg"));
+            fs::write(&path, &bytes).unwrap();
+            let info = gore_vo::validate_ogg(&bytes, &Limits::default()).unwrap();
+            let sha256 = format_sha256(Sha256::digest(&bytes).into());
+
+            let response = call(
+                "voice_ogg_inspect_v1",
+                json!({"ogg_path": path.display().to_string()}),
+            );
+
+            assert_eq!(
+                response,
+                json!({
+                    "ok": true,
+                    "codec": codec,
+                    "pages": info.pages,
+                    "streams": info.logical_streams,
+                    "content_seal": {
+                        "byte_len": bytes.len(),
+                        "sha256": sha256,
+                    },
+                })
+            );
+            assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_FFI_OGG_INSPECT_JSON_BYTES);
+            assert!(!response
+                .to_string()
+                .contains(path.to_string_lossy().as_ref()));
+        }
+    }
+
+    #[test]
+    fn ogg_inspect_rejects_non_exact_or_unbounded_payloads() {
+        let oversized = "x".repeat(MAX_FILESYSTEM_PATH_BYTES + 1);
+        for payload in [
+            Value::Null,
+            json!([]),
+            json!({}),
+            json!({"ogg_path": 7}),
+            json!({"ogg_path": ""}),
+            json!({"ogg_path": "a\0b"}),
+            json!({"ogg_path": oversized}),
+            json!({"ogg_path": "voice.ogg", "extra": true}),
+            json!({"other": "voice.ogg"}),
+        ] {
+            assert_eq!(
+                call("voice_ogg_inspect_v1", payload),
+                json!({
+                    "ok": false,
+                    "error": {
+                        "code": "VOICE_OGG_REQUEST_INVALID",
+                        "message": "payload must contain exactly one non-empty 'ogg_path' string within the path limit",
+                    },
+                })
+            );
+        }
+
+        let raw_bad_request = json!({
+            "ok": false,
+            "error": {
+                "code": "VOICE_OGG_REQUEST_INVALID",
+                "message": "payload must contain exactly one non-empty 'ogg_path' string within the path limit",
+            },
+        });
+        for raw in [
+            r#"{"command":"voice_ogg_inspect_v1","payload":{"ogg_path":"first.ogg","ogg_path":"second.ogg"}}"#,
+            r#"{"command":"voice_ogg_inspect_v1","payload":{"ogg_path":"first.ogg"},"payload":{"ogg_path":"second.ogg"}}"#,
+            r#"{"command":"voice_ogg_inspect_v1","command":"voice_ogg_inspect_v1","payload":{"ogg_path":"voice.ogg"}}"#,
+            r#"{"command":"voice_ogg_inspect_v1","payload":{"ogg_path":"voice.ogg"},"extra":true}"#,
+        ] {
+            let response: Value = serde_json::from_str(&execute_json(raw)).unwrap();
+            assert_eq!(response, raw_bad_request);
+        }
+
+        let escaped_at_decoded_limit = "\\u0061".repeat(MAX_FILESYSTEM_PATH_BYTES);
+        let raw_at_decoded_limit = format!(
+            r#"{{"command":"voice_ogg_inspect_v1","payload":{{"ogg_path":"{escaped_at_decoded_limit}"}}}}"#
+        );
+        assert!(raw_at_decoded_limit.len() <= MAX_FFI_OGG_INSPECT_REQUEST_BYTES);
+        let response: Value = serde_json::from_str(&execute_json(&raw_at_decoded_limit)).unwrap();
+        assert_eq!(response["error"]["code"], "VOICE_OGG_UNAVAILABLE");
+
+        let escaped_over_decoded_limit = "\\u0061".repeat(MAX_FILESYSTEM_PATH_BYTES + 1);
+        let raw_over_decoded_limit = format!(
+            r#"{{"command":"voice_ogg_inspect_v1","payload":{{"ogg_path":"{escaped_over_decoded_limit}"}}}}"#
+        );
+        assert!(raw_over_decoded_limit.len() <= MAX_FFI_OGG_INSPECT_REQUEST_BYTES);
+        let response: Value = serde_json::from_str(&execute_json(&raw_over_decoded_limit)).unwrap();
+        assert_eq!(response, raw_bad_request);
+
+        let raw_over_command_limit = format!(
+            r#"{{"command":"voice_ogg_inspect_v1","payload":{{"ogg_path":"{}"}}}}"#,
+            "x".repeat(MAX_FFI_OGG_INSPECT_REQUEST_BYTES)
+        );
+        assert!(raw_over_command_limit.len() > MAX_FFI_OGG_INSPECT_REQUEST_BYTES);
+        let response: Value = serde_json::from_str(&execute_json(&raw_over_command_limit)).unwrap();
+        assert_eq!(response, raw_bad_request);
+    }
+
+    #[test]
+    fn ogg_inspect_maps_unavailable_and_invalid_without_leaking_native_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("private-missing-voice.ogg");
+        let unavailable = call(
+            "voice_ogg_inspect_v1",
+            json!({"ogg_path": missing.display().to_string()}),
+        );
+        assert_eq!(unavailable["error"]["code"], "VOICE_OGG_UNAVAILABLE");
+        assert!(!unavailable
+            .to_string()
+            .contains(missing.to_string_lossy().as_ref()));
+
+        let invalid_path = temp.path().join("private-invalid-voice.ogg");
+        fs::write(&invalid_path, b"not an Ogg stream").unwrap();
+        let invalid = call(
+            "voice_ogg_inspect_v1",
+            json!({"ogg_path": invalid_path.display().to_string()}),
+        );
+        assert_eq!(
+            invalid,
+            json!({
+                "ok": false,
+                "error": {
+                    "code": "VOICE_OGG_INVALID",
+                    "message": "the source is not a supported valid Vorbis or Opus Ogg stream",
+                },
+            })
+        );
+        assert!(!invalid
+            .to_string()
+            .contains(invalid_path.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn ogg_guarded_reader_enforces_limit_and_detects_post_read_drift() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("changing.ogg");
+        fs::write(&path, b"1234").unwrap();
+        assert_eq!(
+            read_ogg_source_no_follow(&path, 3),
+            Err(OggSourceReadError::Limit)
+        );
+
+        fs::write(&path, b"initial bytes").unwrap();
+        #[cfg(unix)]
+        assert_eq!(
+            read_ogg_source_no_follow_with_hook(&path, 1024, || {
+                fs::write(&path, b"changed bytes with a different length").unwrap();
+            }),
+            Err(OggSourceReadError::Changed)
+        );
+        // Windows denies concurrent write/delete access while the production handle is alive;
+        // every platform also exercises the common post-read drift classifier directly.
+        let source = open_guarded_ogg_source(&path).unwrap();
+        let initial = source.initial;
+        let mut grown = initial;
+        grown.byte_len += 1;
+        let mut truncated = initial;
+        truncated.byte_len -= 1;
+        let mut replaced = initial;
+        replaced.identity.file ^= 1;
+        for result in [
+            ensure_ogg_source_unchanged(initial, Ok(grown), Ok(initial)),
+            ensure_ogg_source_unchanged(initial, Ok(truncated), Ok(initial)),
+            ensure_ogg_source_unchanged(initial, Ok(replaced), Ok(replaced)),
+            ensure_ogg_source_unchanged(initial, Ok(initial), Err(OggSourceReadError::Unavailable)),
+            ensure_ogg_source_unchanged(initial, Err(OggSourceReadError::Unsafe), Ok(initial)),
+        ] {
+            assert_eq!(result, Err(OggSourceReadError::Changed));
+        }
+        assert_eq!(
+            map_ogg_source_read_error(OggSourceReadError::Changed).response()["error"]["code"],
+            "VOICE_OGG_CHANGED"
+        );
+    }
+
+    #[test]
+    fn ogg_inspect_rejects_multi_link_and_symlink_or_reparse_sources() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.ogg");
+        fs::write(&source, synthetic_vorbis_ogg(44_100)).unwrap();
+        let hard_link = temp.path().join("hard-link.ogg");
+        fs::hard_link(&source, &hard_link).unwrap();
+        let multi_link = call(
+            "voice_ogg_inspect_v1",
+            json!({"ogg_path": source.display().to_string()}),
+        );
+        assert_eq!(multi_link["error"]["code"], "VOICE_OGG_UNSAFE");
+        assert!(!multi_link
+            .to_string()
+            .contains(source.to_string_lossy().as_ref()));
+
+        fs::remove_file(&hard_link).unwrap();
+        let link = temp.path().join("symbolic-link.ogg");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&source, &link).is_err() {
+            return;
+        }
+        let linked = call(
+            "voice_ogg_inspect_v1",
+            json!({"ogg_path": link.display().to_string()}),
+        );
+        assert_eq!(linked["error"]["code"], "VOICE_OGG_UNSAFE");
+        assert!(!linked.to_string().contains(link.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn ogg_inspect_rejects_symlink_or_junction_ancestors() {
+        let temp = tempfile::tempdir().unwrap();
+        let outside = temp.path().join("outside");
+        let linked_parent = temp.path().join("linked-parent");
+        fs::create_dir(&outside).unwrap();
+        let source = outside.join("voice.ogg");
+        fs::write(&source, synthetic_vorbis_ogg(44_100)).unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked_parent).unwrap();
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(&linked_parent)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            if !status.success() {
+                return;
+            }
+        }
+
+        let requested = linked_parent.join("voice.ogg");
+        let response = call(
+            "voice_ogg_inspect_v1",
+            json!({"ogg_path": requested.display().to_string()}),
+        );
+        assert_eq!(response["error"]["code"], "VOICE_OGG_UNSAFE");
+        assert!(!response
+            .to_string()
+            .contains(requested.to_string_lossy().as_ref()));
+
+        #[cfg(unix)]
+        fs::remove_file(&linked_parent).unwrap();
+        #[cfg(windows)]
+        fs::remove_dir(&linked_parent).unwrap();
+    }
+
+    #[test]
+    fn guarded_ancestor_handles_bind_the_source_through_reopen() {
+        let temp = tempfile::tempdir().unwrap();
+        let parent = temp.path().join("guarded-parent");
+        let moved = temp.path().join("moved-parent");
+        fs::create_dir(&parent).unwrap();
+        let source = parent.join("voice.ogg");
+        fs::write(&source, synthetic_vorbis_ogg(44_100)).unwrap();
+        let guarded = open_guarded_ogg_source(&source).unwrap();
+
+        #[cfg(windows)]
+        {
+            // Every root-to-parent handle excludes FILE_SHARE_DELETE, so Windows cannot swap an
+            // opened ancestor until verification/reopen releases the complete guard.
+            assert!(fs::rename(&parent, &moved).is_err());
+            let (reopened, snapshot) = guarded.reopen().unwrap();
+            assert_eq!(snapshot, guarded.initial);
+            drop(reopened);
+            drop(guarded);
+            fs::rename(&parent, &moved).unwrap();
+        }
+
+        #[cfg(unix)]
+        {
+            // Unix permits the lexical path to move, but reopen remains relative to the retained
+            // parent dirfd and therefore resolves the original file, never the replacement path.
+            fs::rename(&parent, &moved).unwrap();
+            let replacement = temp.path().join("replacement-parent");
+            fs::create_dir(&replacement).unwrap();
+            fs::write(replacement.join("voice.ogg"), b"replacement").unwrap();
+            std::os::unix::fs::symlink(&replacement, &parent).unwrap();
+            let (_reopened, snapshot) = guarded.reopen().unwrap();
+            assert_eq!(snapshot, guarded.initial);
+            fs::remove_file(&parent).unwrap();
+        }
     }
 
     #[test]
