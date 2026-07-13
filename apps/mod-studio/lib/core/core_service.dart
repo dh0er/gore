@@ -77,6 +77,7 @@ const requiredStudioCoreCommands = <String>[
   'texture_extract',
   'texture_index',
   'voice_archive_match_line',
+  'voice_ogg_inspect_v1',
 ];
 
 const _maxCoreInfoResponseBytes = 64 * 1024;

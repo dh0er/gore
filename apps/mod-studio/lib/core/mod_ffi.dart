@@ -7,6 +7,9 @@ import 'core_service.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
+const _maxVoiceOggPathBytes = 32 * 1024;
+const _maxVoiceOggInspectRequestBytes = _maxVoiceOggPathBytes * 6 + 256;
+const _maxVoiceOggBytes = 64 * 1024 * 1024;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
@@ -152,6 +155,17 @@ class ModFfi {
       'loc_id': locId,
     });
     return VoiceArchiveMatchLineResult.fromJson(r);
+  }
+
+  /// Safely inspect one selected Ogg before it can enter a Voice edit.
+  Future<VoiceOggInspectionResult> voiceOggInspectV1({
+    required String oggPath,
+  }) async {
+    _voiceOggInspectPath(oggPath);
+    const command = 'voice_ogg_inspect_v1';
+    _voiceOggInspectEnvelopePreflight(command, oggPath);
+    final response = await _call(command, {'ogg_path': oggPath});
+    return VoiceOggInspectionResult.fromJson(response);
   }
 
   /// Parse, canonicalize, and validate one format-2 authoring snapshot without retaining state.
@@ -727,6 +741,50 @@ void _authoringStoreRequestString(String value, String field, int maxBytes) {
       field,
       'must be 1..=$maxBytes UTF-8 bytes',
     );
+  }
+}
+
+void _voiceOggInspectPath(String value) {
+  if (value.isEmpty || value.contains('\u0000')) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      'oggPath',
+      'must be a non-empty path without NUL',
+    );
+  }
+  _authoringDraftRequestString(value, 'oggPath', _maxVoiceOggPathBytes);
+}
+
+void _voiceOggInspectEnvelopePreflight(String command, String oggPath) {
+  var encodedBytes =
+      '{"command":"","payload":{"ogg_path":""}}'.length + command.length;
+  for (var index = 0; index < oggPath.length; index++) {
+    final unit = oggPath.codeUnitAt(index);
+    final int added;
+    if (unit <= 0x1f || unit == 0x2028 || unit == 0x2029) {
+      added = 6;
+    } else if (unit == 0x22 || unit == 0x5c) {
+      added = 2;
+    } else if (unit <= 0x7f) {
+      added = 1;
+    } else if (unit <= 0x7ff) {
+      added = 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      // `_voiceOggInspectPath` already proved this is a paired surrogate.
+      index++;
+      added = 4;
+    } else {
+      added = 3;
+    }
+    if (added > _maxVoiceOggInspectRequestBytes - encodedBytes) {
+      throw ArgumentError.value(
+        '<${oggPath.length} characters>',
+        'oggPath',
+        'escaped command envelope exceeds the '
+            '$_maxVoiceOggInspectRequestBytes-byte native request limit',
+      );
+    }
+    encodedBytes += added;
   }
 }
 
@@ -7118,7 +7176,107 @@ class AuthoringImportedOgg {
   }
 }
 
+enum VoiceOggCodec { vorbis, opus }
+
+class VoiceOggContentSeal {
+  const VoiceOggContentSeal._({required this.byteLength, required this.sha256});
+
+  final int byteLength;
+  final String sha256;
+
+  factory VoiceOggContentSeal.fromJson(Map<String, Object?> json) {
+    _voiceExactFields(json, const {'byte_len', 'sha256'}, 'content seal');
+    final sha256 = _voiceRequiredString(json, 'sha256');
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(sha256)) {
+      throw const FormatException(
+        'voice Ogg content seal has an invalid SHA-256',
+      );
+    }
+    return VoiceOggContentSeal._(
+      byteLength: _voiceRequiredInt(
+        json,
+        'byte_len',
+        min: 27,
+        max: _maxVoiceOggBytes,
+      ),
+      sha256: sha256,
+    );
+  }
+}
+
+class VoiceOggInspectionResult {
+  const VoiceOggInspectionResult._({
+    required this.codec,
+    required this.pages,
+    required this.streams,
+    required this.contentSeal,
+  });
+
+  final VoiceOggCodec codec;
+  final int pages;
+  final int streams;
+  final VoiceOggContentSeal contentSeal;
+
+  factory VoiceOggInspectionResult.fromJson(Map<String, Object?> json) {
+    _voiceExactFields(json, const {
+      'ok',
+      'codec',
+      'pages',
+      'streams',
+      'content_seal',
+    }, 'Ogg inspection response');
+    if (json['ok'] != true) {
+      throw const FormatException('voice Ogg inspection response is not ok');
+    }
+    final codec = switch (json['codec']) {
+      'vorbis' => VoiceOggCodec.vorbis,
+      'opus' => VoiceOggCodec.opus,
+      _ => throw const FormatException('unknown voice Ogg codec'),
+    };
+    final pages = _voiceRequiredInt(json, 'pages', min: 1, max: 0xffffffff);
+    final streams = _voiceRequiredInt(json, 'streams', min: 1, max: 0xffffffff);
+    final contentSeal = VoiceOggContentSeal.fromJson(
+      _voiceRequiredObject(json['content_seal'], 'Ogg content seal'),
+    );
+    if (streams > pages || pages > contentSeal.byteLength ~/ 27) {
+      throw const FormatException(
+        'voice Ogg stream/page counts are inconsistent with its byte length',
+      );
+    }
+    return VoiceOggInspectionResult._(
+      codec: codec,
+      pages: pages,
+      streams: streams,
+      contentSeal: contentSeal,
+    );
+  }
+}
+
 enum VoiceArchiveLineResolution { unresolved, unique, ambiguous }
+
+void _voiceExactFields(
+  Map<String, Object?> json,
+  Set<String> expected,
+  String context,
+) {
+  if (json.length != expected.length || !expected.every(json.containsKey)) {
+    throw FormatException('voice $context has an invalid schema');
+  }
+}
+
+Map<String, Object?> _voiceRequiredObject(Object? value, String context) {
+  if (value is! Map) {
+    throw FormatException('voice $context is not an object');
+  }
+  final result = <String, Object?>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String) {
+      throw FormatException('voice $context has a non-string field');
+    }
+    result[entry.key as String] = entry.value;
+  }
+  return result;
+}
 
 String _voiceRequiredString(Map<String, Object?> json, String field) {
   final value = json[field];

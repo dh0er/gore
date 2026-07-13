@@ -24,6 +24,7 @@ void main() {
     addTearDown(fixture.dispose);
     final ogg = fixture.ogg('replacement.ogg');
     var pickerCalls = 0;
+    final inspectedPaths = <String>[];
     final container = await _pumpEditor(
       tester,
       gameRoot: fixture.root.path,
@@ -36,12 +37,17 @@ void main() {
         pickerCalls++;
         return ogg;
       },
+      inspector: ({required oggPath}) async {
+        inspectedPaths.add(oggPath);
+        return _oggInspection();
+      },
     );
 
     await tester.tap(find.byKey(const ValueKey('voice-choose-ogg')));
     await tester.pumpAndSettle();
 
     expect(pickerCalls, 1);
+    expect(inspectedPaths, [ogg]);
     final edit = container.read(voiceEditsProvider).entries.single;
     expect(edit.locId, _locId);
     expect(edit.locale, 'de');
@@ -55,6 +61,44 @@ void main() {
     expect(edit.observation.memberProof.uncompressedSize, 4321);
     expect(edit.observation.memberProof.crc32, 1234);
     expect(find.byKey(const ValueKey('voice-staged')), findsOneWidget);
+    expect(find.textContaining('Validated Vorbis Ogg'), findsOneWidget);
+    expect(find.textContaining('2 pages, 1 stream, 4.0 KiB'), findsOneWidget);
+  });
+
+  testWidgets('native Ogg rejection never reaches Voice edit staging', (
+    tester,
+  ) async {
+    final fixture = _VoiceFixture.create();
+    addTearDown(fixture.dispose);
+    final ogg = fixture.ogg('invalid.ogg');
+    var inspectorCalls = 0;
+    final container = await _pumpEditor(
+      tester,
+      gameRoot: fixture.root.path,
+      matcher: ({required archive, required locId}) async => _match(
+        archive: archive,
+        locId: locId,
+        matches: [_entry(7, 'dialog/$locId.ogg')],
+      ),
+      picker: () async => ogg,
+      inspector: ({required oggPath}) async {
+        inspectorCalls++;
+        expect(oggPath, ogg);
+        throw const ModFfiException(
+          command: 'voice_ogg_inspect_v1',
+          code: 'VOICE_OGG_INVALID',
+          message: 'the source is not a supported valid Ogg stream',
+        );
+      },
+    );
+
+    await tester.tap(find.byKey(const ValueKey('voice-choose-ogg')));
+    await tester.pumpAndSettle();
+
+    expect(inspectorCalls, 1);
+    expect(container.read(voiceEditsProvider).entries, isEmpty);
+    expect(find.byKey(const ValueKey('voice-staged')), findsNothing);
+    expect(find.textContaining('VOICE_OGG_INVALID'), findsOneWidget);
   });
 
   testWidgets('zero matches explains the limitation and never opens picker', (
@@ -233,6 +277,36 @@ void main() {
     expect(find.textContaining('Replacement staged'), findsNothing);
   });
 
+  testWidgets('a locale change invalidates an in-flight Ogg inspection', (
+    tester,
+  ) async {
+    final fixture = _VoiceFixture.create(withEnglish: true);
+    addTearDown(fixture.dispose);
+    final inspection = Completer<VoiceOggInspectionResult>();
+    final container = await _pumpEditor(
+      tester,
+      gameRoot: fixture.root.path,
+      matcher: ({required archive, required locId}) async => _match(
+        archive: archive,
+        locId: locId,
+        matches: [_entry(1, 'speech/$locId.ogg')],
+      ),
+      picker: () async => fixture.ogg('stale.ogg'),
+      inspector: ({required oggPath}) => inspection.future,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('voice-choose-ogg')));
+    await tester.pump();
+    expect(find.textContaining('Validating the selected Ogg'), findsOneWidget);
+    expect(container.read(voiceEditsProvider).entries, isEmpty);
+    await _chooseLocale(tester, 'English');
+    inspection.complete(_oggInspection());
+    await tester.pumpAndSettle();
+
+    expect(container.read(voiceEditsProvider).entries, isEmpty);
+    expect(find.textContaining('Replacement staged'), findsNothing);
+  });
+
   testWidgets('an existing staged take can be removed', (tester) async {
     final fixture = _VoiceFixture.create();
     addTearDown(fixture.dispose);
@@ -293,6 +367,7 @@ Future<ProviderContainer> _pumpEditor(
   String? gameRoot,
   required VoiceArchiveMatcher matcher,
   required VoiceOggPicker picker,
+  VoiceOggInspector? inspector,
 }) async {
   final container = ProviderContainer();
   addTearDown(container.dispose);
@@ -300,7 +375,13 @@ Future<ProviderContainer> _pumpEditor(
   if (gameRoot != null) {
     container.read(gameExePathProvider.notifier).set(gameRoot);
   }
-  await _pumpWithContainer(tester, container, matcher: matcher, picker: picker);
+  await _pumpWithContainer(
+    tester,
+    container,
+    matcher: matcher,
+    picker: picker,
+    inspector: inspector,
+  );
   return container;
 }
 
@@ -309,6 +390,7 @@ Future<void> _pumpWithContainer(
   ProviderContainer container, {
   required VoiceArchiveMatcher matcher,
   required VoiceOggPicker picker,
+  VoiceOggInspector? inspector,
 }) async {
   tester.view.physicalSize = const Size(1200, 1000);
   tester.view.devicePixelRatio = 1;
@@ -323,6 +405,8 @@ Future<void> _pumpWithContainer(
               locId: _locId,
               matcher: matcher,
               oggPicker: picker,
+              oggInspector:
+                  inspector ?? ({required oggPath}) async => _oggInspection(),
             ),
           ),
         ),
@@ -377,6 +461,14 @@ VoiceArchiveEntryInfo _entry(
   isSymlink: false,
   encrypted: false,
 );
+
+VoiceOggInspectionResult _oggInspection() => VoiceOggInspectionResult.fromJson({
+  'ok': true,
+  'codec': 'vorbis',
+  'pages': 2,
+  'streams': 1,
+  'content_seal': <String, Object?>{'byte_len': 4096, 'sha256': _digest},
+});
 
 VoiceArchiveEdit _edit({
   required String oggPath,

@@ -88,6 +88,11 @@ void main() {
               .where((command) => command != 'voice_archive_match_line')
               .toList(),
         );
+        final missingVoiceOggInspect = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where((command) => command != 'voice_ogg_inspect_v1')
+              .toList(),
+        );
         final missingWorkingStore = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -173,6 +178,7 @@ void main() {
           wrongAbi,
           missingAuthoring,
           missingVoice,
+          missingVoiceOggInspect,
           missingWorkingStore,
           missingDocumentStore,
           missingStoryTransaction,
@@ -186,7 +192,7 @@ void main() {
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(15), everyElement(isNull));
+        expect(decisions.take(16), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -224,6 +230,7 @@ void main() {
                 command != 'authoring_story_inventory_v1_build' &&
                 command != 'authoring_store_open_document' &&
                 command != 'voice_archive_match_line' &&
+                command != 'voice_ogg_inspect_v1' &&
                 command != 'authoring_logical_npc_clone_draft_v1_generate' &&
                 command !=
                     'authoring_npc_archetype_catalog_v1_build_for_game_root' &&
@@ -248,6 +255,7 @@ void main() {
         'authoring_story_catalog_v1_read',
         'authoring_story_inventory_v1_build',
         'voice_archive_match_line',
+        'voice_ogg_inspect_v1',
       ]);
     });
 

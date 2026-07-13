@@ -376,6 +376,17 @@ Map<String, Object?> _validVoiceMatchResponse() => {
   ],
 };
 
+Map<String, Object?> _validVoiceOggInspectResponse() => {
+  'ok': true,
+  'codec': 'vorbis',
+  'pages': 2,
+  'streams': 1,
+  'content_seal': <String, Object?>{
+    'byte_len': 4096,
+    'sha256': List.filled(64, 'a').join(),
+  },
+};
+
 Map<String, Object?> _firstVoiceMatch(Map<String, Object?> response) =>
     ((response['matches'] as List<Object?>).single as Map)
         .cast<String, Object?>();
@@ -1017,6 +1028,111 @@ void main() {
       });
     },
   );
+
+  test(
+    'voiceOggInspectV1 sends only the selected path and parses facts',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {'voice_ogg_inspect_v1': _validVoiceOggInspectResponse()},
+      );
+
+      final result = await ModFfi(
+        core,
+      ).voiceOggInspectV1(oggPath: r'C:\Recordings\viper.ogg');
+
+      expect(result.codec, VoiceOggCodec.vorbis);
+      expect(result.pages, 2);
+      expect(result.streams, 1);
+      expect(result.contentSeal.byteLength, 4096);
+      expect(result.contentSeal.sha256, List.filled(64, 'a').join());
+      expect(core.calls.single.command, 'voice_ogg_inspect_v1');
+      expect(core.calls.single.payload, {
+        'ogg_path': r'C:\Recordings\viper.ogg',
+      });
+    },
+  );
+
+  test('voice Ogg request bounds fail locally before core execution', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {'voice_ogg_inspect_v1': _validVoiceOggInspectResponse()},
+    );
+    final ffi = ModFfi(core);
+
+    for (final path in <String>[
+      '',
+      'bad\u0000path.ogg',
+      List.filled(32 * 1024 + 1, 'x').join(),
+      List.filled(10923, '\u20ac').join(),
+      String.fromCharCode(0xd800),
+    ]) {
+      await expectLater(
+        ffi.voiceOggInspectV1(oggPath: path),
+        throwsArgumentError,
+      );
+    }
+    expect(core.calls, isEmpty);
+  });
+
+  test(
+    'voice Ogg request accepts the native escaped-envelope boundary',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {'voice_ogg_inspect_v1': _validVoiceOggInspectResponse()},
+      );
+      final boundaryPath = List.filled(32 * 1024, '\u0001').join();
+
+      await ModFfi(core).voiceOggInspectV1(oggPath: boundaryPath);
+
+      expect(core.calls.single.payload, {'ogg_path': boundaryPath});
+    },
+  );
+
+  test('voice Ogg inspection DTO rejects non-exact or implausible facts', () {
+    final malformed = <void Function(Map<String, Object?>)>[
+      (response) => response['extra'] = true,
+      (response) => response.remove('streams'),
+      (response) => response['ok'] = false,
+      (response) => response['codec'] = 'mp3',
+      (response) => response['pages'] = 0,
+      (response) => response['pages'] = 1.5,
+      (response) => response['pages'] = 0x100000000,
+      (response) => response['streams'] = 0,
+      (response) => response['streams'] = 3,
+      (response) => response['content_seal'] = 'not-an-object',
+      (response) =>
+          (response['content_seal'] as Map<String, Object?>)['extra'] = true,
+      (response) =>
+          (response['content_seal'] as Map<String, Object?>)['byte_len'] = 26,
+      (response) =>
+          (response['content_seal'] as Map<String, Object?>)['byte_len'] =
+              64 * 1024 * 1024 + 1,
+      (response) =>
+          (response['content_seal'] as Map<String, Object?>)['sha256'] =
+              List.filled(64, 'A').join(),
+      (response) {
+        response['pages'] = 2;
+        (response['content_seal'] as Map<String, Object?>)['byte_len'] = 53;
+      },
+    ];
+
+    for (final mutate in malformed) {
+      final response = _validVoiceOggInspectResponse();
+      mutate(response);
+      expect(
+        () => VoiceOggInspectionResult.fromJson(response),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('voice Ogg inspection DTO accepts the closed Opus codec', () {
+    final response = _validVoiceOggInspectResponse()..['codec'] = 'opus';
+
+    expect(
+      VoiceOggInspectionResult.fromJson(response).codec,
+      VoiceOggCodec.opus,
+    );
+  });
 
   test(
     'authoringProjectCheck preserves raw JSON and uses a closed profile',

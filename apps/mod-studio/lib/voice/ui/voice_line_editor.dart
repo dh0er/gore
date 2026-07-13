@@ -20,6 +20,9 @@ typedef VoiceArchiveMatcher =
 
 typedef VoiceOggPicker = Future<String?> Function();
 
+typedef VoiceOggInspector =
+    Future<VoiceOggInspectionResult> Function({required String oggPath});
+
 /// Line-first authoring for replacing one existing spoken localization line.
 ///
 /// This deliberately does not offer voice additions. A replacement is staged
@@ -30,6 +33,7 @@ class VoiceLineEditor extends ConsumerStatefulWidget {
     required this.locId,
     this.matcher,
     this.oggPicker,
+    this.oggInspector,
     super.key,
   });
 
@@ -40,6 +44,9 @@ class VoiceLineEditor extends ConsumerStatefulWidget {
 
   /// Test seam for hermetic file selection.
   final VoiceOggPicker? oggPicker;
+
+  /// Test seam for hermetic native Ogg validation.
+  final VoiceOggInspector? oggInspector;
 
   @override
   ConsumerState<VoiceLineEditor> createState() => _VoiceLineEditorState();
@@ -52,6 +59,7 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
   String? _status;
   VoiceArchiveMatchLineResult? _ambiguousResult;
   VoiceArchiveEntryInfo? _selectedCandidate;
+  VoiceOggInspectionResult? _oggInspection;
 
   @override
   void initState() {
@@ -69,6 +77,7 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
     _status = null;
     _ambiguousResult = null;
     _selectedCandidate = null;
+    _oggInspection = null;
   }
 
   @override
@@ -85,6 +94,12 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
 
   VoiceOggPicker get _oggPicker => widget.oggPicker ?? _pickOgg;
 
+  VoiceOggInspector get _oggInspector =>
+      widget.oggInspector ??
+      ({required String oggPath}) => ModFfi(
+        ref.read(coreServiceProvider),
+      ).voiceOggInspectV1(oggPath: oggPath);
+
   bool _isCurrent(int generation, String locId, String locale) =>
       mounted &&
       generation == _generation &&
@@ -100,6 +115,7 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
       _status = null;
       _ambiguousResult = null;
       _selectedCandidate = null;
+      _oggInspection = null;
     });
   }
 
@@ -112,6 +128,7 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
       _status = 'Checking the original spoken line…';
       _ambiguousResult = null;
       _selectedCandidate = null;
+      _oggInspection = null;
     });
 
     try {
@@ -201,6 +218,11 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
       }
       _validatePickedOgg(oggPath);
       if (!_isCurrent(generation, locId, locale)) return;
+      setState(() {
+        _status = 'Validating the selected Ogg recording…';
+      });
+      final inspection = await _oggInspector(oggPath: oggPath);
+      if (!_isCurrent(generation, locId, locale)) return;
 
       final edit = VoiceArchiveEdit(
         locId: locId,
@@ -226,7 +248,10 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
       }
       setState(() {
         _busy = false;
-        _status = 'Replacement staged for ${gameLangByCode(locale).endonym}.';
+        _oggInspection = inspection;
+        _status =
+            'Replacement staged for ${gameLangByCode(locale).endonym}. '
+            '${_inspectionSummary(inspection)}';
         _ambiguousResult = null;
         _selectedCandidate = null;
       });
@@ -234,6 +259,7 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
       if (!_isCurrent(generation, locId, locale)) return;
       setState(() {
         _busy = false;
+        _oggInspection = null;
         _status = 'The replacement could not be staged: $error';
       });
     }
@@ -374,9 +400,15 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
                       tooltip: 'Remove spoken-line replacement',
                       onPressed: _busy
                           ? null
-                          : () => ref
-                                .read(voiceEditsProvider.notifier)
-                                .remove(widget.locId, _localeCode),
+                          : () {
+                              ref
+                                  .read(voiceEditsProvider.notifier)
+                                  .remove(widget.locId, _localeCode);
+                              setState(() {
+                                _status = null;
+                                _oggInspection = null;
+                              });
+                            },
                       icon: const Icon(Icons.delete_outline),
                     ),
                   ],
@@ -454,6 +486,15 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
                       style: theme.textTheme.bodySmall,
                     ),
                   ),
+                  if (_oggInspection != null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        _inspectionTechnicalDetails(_oggInspection!),
+                        key: const ValueKey('voice-ogg-details'),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ),
                 ],
               ),
           ],
@@ -521,3 +562,26 @@ void _validatePickedOgg(String path) {
 }
 
 bool _isControlRune(int rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f);
+
+String _inspectionSummary(VoiceOggInspectionResult inspection) {
+  final codec = switch (inspection.codec) {
+    VoiceOggCodec.vorbis => 'Vorbis',
+    VoiceOggCodec.opus => 'Opus',
+  };
+  final pages = inspection.pages == 1 ? 'page' : 'pages';
+  final streams = inspection.streams == 1 ? 'stream' : 'streams';
+  return 'Validated $codec Ogg: ${inspection.pages} $pages, '
+      '${inspection.streams} $streams, '
+      '${_formatByteLength(inspection.contentSeal.byteLength)}.';
+}
+
+String _inspectionTechnicalDetails(VoiceOggInspectionResult inspection) =>
+    '${_inspectionSummary(inspection)}\n'
+    'Validated size: ${inspection.contentSeal.byteLength} bytes\n'
+    'SHA-256: ${inspection.contentSeal.sha256}';
+
+String _formatByteLength(int bytes) {
+  if (bytes < 1024) return '$bytes bytes';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KiB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MiB';
+}
