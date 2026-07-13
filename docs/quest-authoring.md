@@ -118,6 +118,33 @@ The generator always reports `OfflineDraft`, `RuntimeUnqualified`, and
 statuses. Runtime discovery evidence belongs to the versioned capability
 registry and must match this exact generated operation independently.
 
+### Native Quest-intent transaction
+
+The native command `authoring_project_story_quest_draft_insert_v1` closes the
+provenance boundary for the Studio-facing MVP. Its payload contains exactly
+`project_json`, `intent_json`, `profile`, and `game_root`. The bounded
+`intent_json` contains only transaction/CAS IDs, display and Quest text fields,
+module/technical identities, and `parent_catalog_id`/`giver_catalog_id`. It
+cannot contain source seals, an inventory artifact, or collision arrays.
+
+Native code selects the deployment-aware pristine Shipping cache, derives the
+fixed executable and Binds paths, rebuilds the closed Story catalog and
+base-game collision inventory, binds both to the exact canonical revision-2
+project, resolves the two catalog IDs, and invokes the existing atomic Story
+Draft transaction. Responses bind the four untouched raw inputs and retain the
+fixed claims `base_game_and_exact_project_only`, `runtime_unqualified`,
+`blocked`, and `not_supported`. Generation inputs and the pristine selection
+are revalidated around the transaction and response serialization. No compile,
+write, deploy, publish, or game launch occurs.
+
+On the current pinned generation the complete combined collision set makes a
+single Quest entity about 3.52 MiB, above the working store's unchanged 1 MiB
+per-entity limit. The command therefore returns the explicit bounded error
+`AUTHORING_STORY_QUEST_PROJECT_LIMIT`; it does not raise the limit, omit
+collision evidence, or return a partial candidate. A more compact committed
+collision-capability representation is required before this exact real-game
+Quest can be inserted through the managed store.
+
 ## Safe qualification order
 
 1. Build the new module offline and reopen the mini-cache.
