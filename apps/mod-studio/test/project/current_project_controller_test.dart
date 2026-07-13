@@ -186,6 +186,16 @@ void main() {
     final state = coordinator.state as ManagedRevision3CurrentProjectState;
     expect(state.requiresReopen, isTrue);
     expect(managed.verifyCalls, 1);
+
+    await expectLater(
+      coordinator.saveCurrent(),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+    await expectLater(
+      coordinator.verifyCurrent(),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+    expect(managed.verifyCalls, 1);
   });
 
   test('adopting legacy retires the managed lease exactly once', () async {
@@ -413,6 +423,98 @@ void main() {
       expect(legacy.closeCalls, 1);
     },
   );
+
+  test(
+    'legacy open is validated in the coordinator lane before replacing managed',
+    () async {
+      final candidate = _FakeLegacyLease();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-before-legacy-open'),
+        projectIdValue: '11111111111111111111111111111111',
+        projectRevision: 11,
+        head: _head(11),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        createLegacy: () => candidate,
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final opened = await coordinator.openLegacyFromPath('opened.goremod');
+
+      expect(opened.path, 'opened.goremod');
+      expect(coordinator.state, isA<LegacyCurrentProjectState>());
+      expect(candidate.openFromPathCalls, 1);
+      expect(candidate.closeCalls, 0);
+      expect(managed.closeCalls, 1);
+    },
+  );
+
+  test(
+    'failed legacy candidate open preserves the exact managed current project',
+    () async {
+      final expectedError = StateError('legacy candidate is invalid');
+      final candidate = _FakeLegacyLease(
+        onOpenFromPath: (_) => throw expectedError,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('managed-preserved'),
+        projectIdValue: '12121212121212121212121212121212',
+        projectRevision: 12,
+        head: _head(12),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        createLegacy: () => candidate,
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+      final before = coordinator.state;
+
+      await expectLater(
+        coordinator.openLegacyFromPath('invalid.goremod'),
+        throwsA(same(expectedError)),
+      );
+
+      expect(coordinator.state, same(before));
+      expect(candidate.openFromPathCalls, 1);
+      expect(candidate.closeCalls, 1);
+      expect(managed.closeCalls, 0);
+    },
+  );
+
+  test('managed current project rejects compatibility Save As', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('managed-no-save-as'),
+      projectIdValue: '13131313131313131313131313131313',
+      projectRevision: 13,
+      head: _head(13),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      createLegacy: () => _FakeLegacyLease(),
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.saveLegacyToPath('forbidden.goremod'),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+
+    expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+    expect(managed.verifyCalls, 0);
+  });
 }
 
 final class _FakeLegacyLease implements LegacyCurrentProjectLease {
@@ -420,15 +522,20 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
     this.path,
     this.hasUnsavedChanges = false,
     this.onSave,
+    this.onOpenFromPath,
     this.onClose,
   });
 
-  final String? path;
+  String? path;
   @override
   final bool hasUnsavedChanges;
   final FutureOr<void> Function()? onSave;
+  final FutureOr<void> Function(String path)? onOpenFromPath;
   final FutureOr<void> Function()? onClose;
   int saveCalls = 0;
+  int saveToPathCalls = 0;
+  int openFromPathCalls = 0;
+  int newProjectCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -438,6 +545,25 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
   Future<void> saveCurrent() async {
     saveCalls++;
     await onSave?.call();
+  }
+
+  @override
+  Future<void> saveToPath(String path) async {
+    saveToPathCalls++;
+    this.path = path;
+  }
+
+  @override
+  Future<void> openFromPath(String path) async {
+    openFromPathCalls++;
+    await onOpenFromPath?.call(path);
+    this.path = path;
+  }
+
+  @override
+  Future<void> newProject() async {
+    newProjectCalls++;
+    path = null;
   }
 
   @override

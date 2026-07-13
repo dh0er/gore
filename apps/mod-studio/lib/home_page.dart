@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +26,7 @@ import 'l10n/app_localizations.dart';
 import 'loc/domain/loc_catalog_provider.dart';
 import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
+import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
@@ -30,6 +35,18 @@ import 'story/domain/story_workspace_launcher.dart';
 import 'story/ui/story_workspace_flow.dart';
 import 'textures/domain/texture_index_provider.dart';
 import 'textures/ui/texture_tab.dart';
+
+typedef ManagedRevision3DirectoryPicker =
+    Future<String?> Function(String confirmButtonText);
+
+/// Injectable selection boundary; opening and adoption remain owned by the
+/// app-wide [CurrentProjectCoordinator].
+final managedRevision3DirectoryPickerProvider =
+    Provider<ManagedRevision3DirectoryPicker>(
+      (ref) =>
+          (confirmButtonText) =>
+              getDirectoryPath(confirmButtonText: confirmButtonText),
+    );
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
 const _texturesTabIndex = 3;
@@ -94,6 +111,8 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage>
     with WidgetsBindingObserver {
+  bool _projectActionBusy = false;
+
   @override
   void initState() {
     super.initState();
@@ -160,27 +179,81 @@ class _HomePageState extends ConsumerState<HomePage>
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _saveProject() async {
+  Future<void> _runProjectAction(Future<void> Function() action) async {
+    if (_projectActionBusy) return;
+    setState(() => _projectActionBusy = true);
     try {
-      final path = await saveProjectInteractive(ref);
-      if (path != null) _snack('Saved project to $path');
-    } catch (e) {
-      _snack('Save failed: $e');
+      await action();
+    } finally {
+      if (mounted) setState(() => _projectActionBusy = false);
     }
   }
 
-  Future<void> _saveProjectAs() async {
+  Future<void> _saveProject() => _runProjectAction(() async {
+    final current = ref.read(currentProjectCoordinatorProvider);
+    final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+    final l10n = AppLocalizations.of(context);
     try {
-      final path = await saveProjectAsInteractive(ref);
-      if (path != null) _snack('Saved project to $path');
+      switch (current) {
+        case LegacyCurrentProjectState(:final path):
+          if (path == null) {
+            await _saveLegacyProjectAs(coordinator);
+            return;
+          }
+          final saved = await coordinator.saveCurrent();
+          _snack(
+            'Saved project to ${(saved as LegacyCurrentProjectState).path}',
+          );
+        case ManagedRevision3CurrentProjectState(:final requiresReopen):
+          if (requiresReopen) {
+            _snack(l10n.projectManagedRevision3VerifyBlocked);
+            return;
+          }
+          final verified =
+              await coordinator.saveCurrent()
+                  as ManagedRevision3CurrentProjectState;
+          _snack(
+            l10n.projectManagedRevision3Verified(verified.head.snapshotSha256),
+          );
+        case NoCurrentProjectState():
+          _snack('There is no current project to save.');
+      }
+    } catch (e) {
+      if (current is ManagedRevision3CurrentProjectState) {
+        _snack(l10n.projectManagedRevision3VerifyFailed('$e'));
+      } else {
+        _snack('Save failed: $e');
+      }
+    }
+  });
+
+  Future<void> _saveProjectAs() => _runProjectAction(() async {
+    try {
+      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+      await _saveLegacyProjectAs(coordinator);
     } catch (e) {
       _snack('Save failed: $e');
     }
+  });
+
+  Future<void> _saveLegacyProjectAs(
+    CurrentProjectCoordinator coordinator,
+  ) async {
+    final path = await pickProjectSavePath(ref);
+    if (path == null) return;
+    final saved = await coordinator.saveLegacyToPath(path);
+    _snack('Saved project to ${saved.path}');
   }
 
   // Unsaved = there is staged content AND it differs from the last saved/loaded project, so a
   // project that was just saved doesn't prompt to discard on New/Open.
-  bool _hasUnsavedEdits() => hasUnsavedChanges(ref);
+  bool _hasUnsavedEdits() {
+    if (ref.read(currentProjectCoordinatorProvider)
+        is! LegacyCurrentProjectState) {
+      return false;
+    }
+    return hasUnsavedChanges(ref);
+  }
 
   /// Confirm before discarding staged (unsaved) edits. Returns true to proceed.
   Future<bool> _confirmDiscardIfDirty() async {
@@ -207,18 +280,69 @@ class _HomePageState extends ConsumerState<HomePage>
     return ok ?? false;
   }
 
-  Future<void> _newProject() async {
-    if (await _confirmDiscardIfDirty()) await newProject(ref);
-  }
-
-  Future<void> _openProject() async {
+  Future<void> _newProject() => _runProjectAction(() async {
     if (!await _confirmDiscardIfDirty()) return;
     try {
-      final path = await openProjectInteractive(ref);
-      if (path != null) _snack('Loaded project $path');
+      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+      await coordinator.newLegacyProject();
+      _showTransitionCleanupWarningIfAdded(coordinator, cleanupFailuresBefore);
+    } catch (e) {
+      _snack('New project failed: $e');
+    }
+  });
+
+  Future<void> _openProject() => _runProjectAction(() async {
+    if (!await _confirmDiscardIfDirty()) return;
+    try {
+      final path = await pickProjectOpenPath();
+      if (path == null) return;
+      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+      final opened = await coordinator.openLegacyFromPath(path);
+      if (!_showTransitionCleanupWarningIfAdded(
+        coordinator,
+        cleanupFailuresBefore,
+      )) {
+        _snack('Loaded project ${opened.path}');
+      }
     } catch (e) {
       _snack('Open failed: $e');
     }
+  });
+
+  Future<void> _openManagedRevision3Project() => _runProjectAction(() async {
+    if (!await _confirmDiscardIfDirty() || !mounted) return;
+    final l10n = AppLocalizations.of(context);
+    try {
+      final path = await ref.read(managedRevision3DirectoryPickerProvider)(
+        l10n.projectOpenManagedRevision3,
+      );
+      if (path == null || !mounted) return;
+      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+      final opened = await coordinator.openManagedRevision3(Directory(path));
+      if (!_showTransitionCleanupWarningIfAdded(
+        coordinator,
+        cleanupFailuresBefore,
+      )) {
+        _snack(l10n.projectManagedRevision3Opened(opened.projectId));
+      }
+    } catch (e) {
+      _snack(l10n.projectManagedRevision3OpenFailed('$e'));
+    }
+  });
+
+  bool _showTransitionCleanupWarningIfAdded(
+    CurrentProjectCoordinator coordinator,
+    int failuresBefore,
+  ) {
+    if (coordinator.terminalCleanupFailures.length <= failuresBefore) {
+      return false;
+    }
+    if (!mounted) return true;
+    _snack(AppLocalizations.of(context).projectTransitionCleanupWarning);
+    return true;
   }
 
   Future<void> _openStoryWorkspace(StoryWorkspaceFlowMode mode) async {
@@ -246,16 +370,25 @@ class _HomePageState extends ConsumerState<HomePage>
     // may change, so exporting old assignments could be wrong. Clear both when
     // the dump source changes.
     ref.listen(dumpPathProvider, (prev, next) {
-      if (prev != next) {
+      if (prev != next &&
+          ref.read(currentProjectCoordinatorProvider)
+              is LegacyCurrentProjectState) {
         ref.read(overridesProvider.notifier).clearAll();
         ref.read(selectedItemProvider.notifier).state = null;
       }
     });
 
-    // Keep the AppBar gate on the same all-domain definition as project
-    // save/discard handling. Duplicating the provider list here previously
-    // left newly added domains (notably dialog topics) unreachable.
-    final dirty = projectIsDirty(ref);
+    final currentProject = ref.watch(currentProjectCoordinatorProvider);
+    final legacyCurrent = currentProject is LegacyCurrentProjectState;
+    final managedCurrent =
+        currentProject is ManagedRevision3CurrentProjectState;
+    final managedVerificationBlocked =
+        currentProject is ManagedRevision3CurrentProjectState &&
+        currentProject.requiresReopen;
+    // Never read a hidden compatibility graph as build input while a managed
+    // project is authoritative. Short-circuiting also drops those provider
+    // subscriptions after the format switch.
+    final dirty = legacyCurrent && projectIsDirty(ref);
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
     final gameConfigured =
@@ -300,6 +433,8 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _newProject();
                 case 'open':
                   await _openProject();
+                case 'openManagedRevision3':
+                  await _openManagedRevision3Project();
                 case 'save':
                   await _saveProject();
                 case 'saveAs':
@@ -310,37 +445,72 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _openStoryWorkspace(StoryWorkspaceFlowMode.open);
               }
             },
-            itemBuilder: (_) => const <PopupMenuEntry<String>>[
-              PopupMenuItem(value: 'new', child: Text('New project')),
-              PopupMenuItem(value: 'open', child: Text('Open project…')),
-              PopupMenuItem(value: 'save', child: Text('Save project')),
-              PopupMenuItem(value: 'saveAs', child: Text('Save project as…')),
-              PopupMenuDivider(),
+            itemBuilder: (_) => <PopupMenuEntry<String>>[
               PopupMenuItem(
-                key: Key('project-create-story-workspace'),
-                value: 'storyCreate',
-                child: Text('Create Story workspace (drafts)...'),
+                value: 'new',
+                enabled: !_projectActionBusy,
+                child: const Text('New project'),
               ),
               PopupMenuItem(
-                key: Key('project-open-story-workspace'),
+                value: 'open',
+                enabled: !_projectActionBusy,
+                child: Text(l10n.projectOpenLegacy),
+              ),
+              PopupMenuItem(
+                key: const Key('project-open-managed-revision3'),
+                value: 'openManagedRevision3',
+                enabled: !_projectActionBusy,
+                child: Text(l10n.projectOpenManagedRevision3),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                key: const Key('project-save'),
+                value: 'save',
+                enabled:
+                    !_projectActionBusy &&
+                    currentProject is! NoCurrentProjectState &&
+                    !managedVerificationBlocked,
+                child: Text(
+                  managedCurrent
+                      ? l10n.projectVerifyCurrentHead
+                      : 'Save project',
+                ),
+              ),
+              PopupMenuItem(
+                key: const Key('project-save-as'),
+                value: 'saveAs',
+                enabled: !_projectActionBusy && legacyCurrent,
+                child: const Text('Save project as…'),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem(
+                key: const Key('project-create-story-workspace'),
+                value: 'storyCreate',
+                enabled: !_projectActionBusy && legacyCurrent,
+                child: const Text('Create Story workspace (drafts)...'),
+              ),
+              PopupMenuItem(
+                key: const Key('project-open-story-workspace'),
                 value: 'storyOpen',
-                child: Text('Open Story workspace (drafts)...'),
+                enabled: !_projectActionBusy && legacyCurrent,
+                child: const Text('Open Story workspace (drafts)...'),
               ),
             ],
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: FilledButton.icon(
-              icon: const Icon(Icons.rocket_launch_outlined, size: 18),
-              label: const Text('Build / Deploy'),
-              onPressed: (dirty || gameConfigured)
-                  ? () => showDialog(
-                      context: context,
-                      builder: (_) => const BuildDeployDialog(),
-                    )
-                  : null,
+          if (legacyCurrent)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: FilledButton.icon(
+                icon: const Icon(Icons.rocket_launch_outlined, size: 18),
+                label: const Text('Build / Deploy'),
+                onPressed: !_projectActionBusy && (dirty || gameConfigured)
+                    ? () => showDialog(
+                        context: context,
+                        builder: (_) => const BuildDeployDialog(),
+                      )
+                    : null,
+              ),
             ),
-          ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             tooltip: l10n.about,
@@ -353,113 +523,250 @@ class _HomePageState extends ConsumerState<HomePage>
           const SizedBox(width: 8),
         ],
       ),
-      body: DefaultTabController(
-        length: 8,
-        // KeepAliveTab keeps every tab (and its autoDispose providers)
-        // mounted across switches, so the texture index / script module list
-        // would go stale after a deploy, undeploy, or game patch. Entering
-        // those tabs refetches (tracker-gated: only an asset kind's very
-        // first display anywhere builds fresh instead) — the pre-keep-alive
-        // freshness semantics — while the tabs' UI state survives.
-        child: TabEntryListener(
-          onTabEntered: (index) => handleMainTabEntered(ref, index),
-          child: Column(
-            children: [
-              Container(
-                color: scheme.surfaceContainerLowest,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TabBar(
-                        isScrollable: true,
-                        // Material 3 defaults scrollable tab bars to a 52px
-                        // leading inset (TabAlignment.startOffset); start flush
-                        // with just a small gap instead.
-                        tabAlignment: TabAlignment.start,
-                        padding: const EdgeInsetsDirectional.only(start: 4),
-                        tabs: [
-                          Tab(
-                            icon: const Icon(Icons.inventory_2_outlined),
-                            text: l10n.tabItems,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.forum_outlined),
-                            text: l10n.tabDialogs,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.audiotrack_outlined),
-                            text: l10n.tabAudio,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.texture),
-                            text: l10n.tabTextures,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.code),
-                            text: l10n.tabScripts,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.edit_note_outlined),
-                            text: l10n.tabOverrides,
-                          ),
-                          Tab(
-                            icon: const Icon(Icons.settings_outlined),
-                            text: l10n.tabSettings,
-                          ),
-                          const Tab(
-                            icon: Icon(Icons.data_object_outlined),
-                            text: 'DataAsset Lab',
-                          ),
-                        ],
+      body: switch (currentProject) {
+        ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
+          project: currentProject,
+        ),
+        NoCurrentProjectState() => const _NoCurrentProjectView(),
+        LegacyCurrentProjectState() => DefaultTabController(
+          length: 8,
+          // KeepAliveTab keeps every tab (and its autoDispose providers)
+          // mounted across switches, so the texture index / script module list
+          // would go stale after a deploy, undeploy, or game patch. Entering
+          // those tabs refetches (tracker-gated: only an asset kind's very
+          // first display anywhere builds fresh instead) — the pre-keep-alive
+          // freshness semantics — while the tabs' UI state survives.
+          child: TabEntryListener(
+            onTabEntered: (index) => handleMainTabEntered(ref, index),
+            child: Column(
+              children: [
+                Container(
+                  color: scheme.surfaceContainerLowest,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TabBar(
+                          isScrollable: true,
+                          // Material 3 defaults scrollable tab bars to a 52px
+                          // leading inset (TabAlignment.startOffset); start flush
+                          // with just a small gap instead.
+                          tabAlignment: TabAlignment.start,
+                          padding: const EdgeInsetsDirectional.only(start: 4),
+                          tabs: [
+                            Tab(
+                              icon: const Icon(Icons.inventory_2_outlined),
+                              text: l10n.tabItems,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.forum_outlined),
+                              text: l10n.tabDialogs,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.audiotrack_outlined),
+                              text: l10n.tabAudio,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.texture),
+                              text: l10n.tabTextures,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.code),
+                              text: l10n.tabScripts,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.edit_note_outlined),
+                              text: l10n.tabOverrides,
+                            ),
+                            Tab(
+                              icon: const Icon(Icons.settings_outlined),
+                              text: l10n.tabSettings,
+                            ),
+                            const Tab(
+                              icon: Icon(Icons.data_object_outlined),
+                              text: 'DataAsset Lab',
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [
-                    // Items: catalog browser + field editor.
-                    const KeepAliveTab(child: ItemsTab()),
-                    // Dialoge: localized dialog/bark line editor.
-                    const KeepAliveTab(child: DialogeTab()),
-                    // Audio: FMOD bank sample browser + replacement.
-                    // (GamePathScope: these three tabs' kept UI state is
-                    // bound to the configured install and resets when the
-                    // game path changes.)
-                    const KeepAliveTab(child: GamePathScope(child: AudioTab())),
-                    // Textures: texture asset browser + replacement.
-                    const KeepAliveTab(
-                      child: GamePathScope(child: TextureTab()),
-                    ),
-                    // AngelScript: stage .as mods, compile, splice.
-                    const KeepAliveTab(
-                      child: GamePathScope(child: ScriptTab()),
-                    ),
-                    // Changes: per-domain sidebar over all staged changes
-                    // ("All" = the flat OverridesPanel list, other sections =
-                    // the main-tab views filtered to staged entries).
-                    const KeepAliveTab(child: ChangesTab()),
-                    // Settings.
-                    const KeepAliveTab(child: SettingsTab()),
-                    // Bounded offline DataAsset evidence (never stages edits).
-                    const KeepAliveTab(child: DataAssetLab()),
-                  ],
+                Expanded(
+                  child: TabBarView(
+                    children: [
+                      // Items: catalog browser + field editor.
+                      const KeepAliveTab(child: ItemsTab()),
+                      // Dialoge: localized dialog/bark line editor.
+                      const KeepAliveTab(child: DialogeTab()),
+                      // Audio: FMOD bank sample browser + replacement.
+                      // (GamePathScope: these three tabs' kept UI state is
+                      // bound to the configured install and resets when the
+                      // game path changes.)
+                      const KeepAliveTab(
+                        child: GamePathScope(child: AudioTab()),
+                      ),
+                      // Textures: texture asset browser + replacement.
+                      const KeepAliveTab(
+                        child: GamePathScope(child: TextureTab()),
+                      ),
+                      // AngelScript: stage .as mods, compile, splice.
+                      const KeepAliveTab(
+                        child: GamePathScope(child: ScriptTab()),
+                      ),
+                      // Changes: per-domain sidebar over all staged changes
+                      // ("All" = the flat OverridesPanel list, other sections =
+                      // the main-tab views filtered to staged entries).
+                      const KeepAliveTab(child: ChangesTab()),
+                      // Settings.
+                      const KeepAliveTab(child: SettingsTab()),
+                      // Bounded offline DataAsset evidence (never stages edits).
+                      const KeepAliveTab(child: DataAssetLab()),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
+      },
     );
 
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): () {
-          _saveProject();
+          unawaited(_saveProject());
         },
       },
-      child: scaffold,
+      child: Focus(
+        autofocus: true,
+        debugLabel: 'GORE Mod Studio project shortcuts',
+        child: scaffold,
+      ),
     );
   }
+}
+
+class _ManagedRevision3ProjectView extends StatelessWidget {
+  const _ManagedRevision3ProjectView({required this.project});
+
+  final ManagedRevision3CurrentProjectState project;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 860),
+        child: Card(
+          margin: const EdgeInsets.all(32),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              key: const Key('managed-revision3-project-view'),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.projectManagedRevision3Title,
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 8),
+                Text(l10n.projectManagedRevision3IdentityOnly),
+                if (project.requiresReopen) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    key: const Key('managed-project-requires-reopen-warning'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            l10n.projectManagedRevision3RequiresReopen,
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 24),
+                _ProjectFact(
+                  label: l10n.projectRoot,
+                  value: project.root.path,
+                  valueKey: const Key('managed-project-root'),
+                ),
+                _ProjectFact(
+                  label: l10n.projectId,
+                  value: project.projectId,
+                  valueKey: const Key('managed-project-id'),
+                ),
+                _ProjectFact(
+                  label: l10n.projectRevision,
+                  value: '${project.projectRevision}',
+                  valueKey: const Key('managed-project-revision'),
+                ),
+                _ProjectFact(
+                  label: l10n.projectHeadSha256,
+                  value: project.head.snapshotSha256,
+                  valueKey: const Key('managed-project-head'),
+                ),
+                _ProjectFact(
+                  label: l10n.projectSnapshotBytes,
+                  value: '${project.head.snapshotByteLength}',
+                  valueKey: const Key('managed-project-head-bytes'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ProjectFact extends StatelessWidget {
+  const _ProjectFact({
+    required this.label,
+    required this.value,
+    required this.valueKey,
+  });
+
+  final String label;
+  final String value;
+  final Key valueKey;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 14),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 2),
+        SelectableText(value, key: valueKey),
+      ],
+    ),
+  );
+}
+
+class _NoCurrentProjectView extends StatelessWidget {
+  const _NoCurrentProjectView();
+
+  @override
+  Widget build(BuildContext context) =>
+      Center(child: Text(AppLocalizations.of(context).projectNoCurrent));
 }

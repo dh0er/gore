@@ -364,6 +364,72 @@ class AppLocalizationsPt extends AppLocalizations {
   @override
   String get managerDeployActive =>
       'Um loadout do mod-manager está ativo. Faça primeiro o undeploy no gore-manager.';
+
+  @override
+  String get projectOpenLegacy => 'Open legacy project…';
+
+  @override
+  String get projectOpenManagedRevision3 => 'Open managed revision-3 project…';
+
+  @override
+  String get projectVerifyCurrentHead => 'Verify current head';
+
+  @override
+  String get projectManagedRevision3Title => 'Managed revision-3 project';
+
+  @override
+  String get projectManagedRevision3IdentityOnly =>
+      'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
+
+  @override
+  String get projectRoot => 'Root';
+
+  @override
+  String get projectId => 'Project ID';
+
+  @override
+  String get projectRevision => 'Project revision';
+
+  @override
+  String get projectHeadSha256 => 'Head SHA-256';
+
+  @override
+  String get projectSnapshotBytes => 'Snapshot bytes';
+
+  @override
+  String get projectNoCurrent => 'No current project';
+
+  @override
+  String projectManagedRevision3Opened(String projectId) {
+    return 'Opened managed revision-3 project $projectId';
+  }
+
+  @override
+  String projectManagedRevision3OpenFailed(String error) {
+    return 'Managed revision-3 project open failed: $error';
+  }
+
+  @override
+  String projectManagedRevision3Verified(String headSha256) {
+    return 'Verified revision-3 head $headSha256';
+  }
+
+  @override
+  String projectManagedRevision3VerifyFailed(String error) {
+    return 'Revision-3 head verification failed: $error';
+  }
+
+  @override
+  String get projectManagedRevision3RequiresReopen =>
+      'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.';
+
+  @override
+  String get projectManagedRevision3VerifyBlocked =>
+      'Verification is blocked until the managed project is reopened.';
+
+  @override
+  String get projectTransitionCleanupWarning =>
+      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).

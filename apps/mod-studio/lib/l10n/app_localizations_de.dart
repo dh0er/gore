@@ -367,4 +367,71 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managerDeployActive =>
       'Ein mod-manager-Loadout ist aktiv. Bitte zuerst in gore-manager undeployen.';
+
+  @override
+  String get projectOpenLegacy => 'Legacy-Projekt öffnen…';
+
+  @override
+  String get projectOpenManagedRevision3 =>
+      'Verwaltetes Revision-3-Projekt öffnen…';
+
+  @override
+  String get projectVerifyCurrentHead => 'Aktuellen Head verifizieren';
+
+  @override
+  String get projectManagedRevision3Title => 'Verwaltetes Revision-3-Projekt';
+
+  @override
+  String get projectManagedRevision3IdentityOnly =>
+      'Diese Oberfläche zeigt derzeit ausschließlich die verifizierte Projektidentität. Strg+S öffnet den exakten aktuellen Head erneut und verifiziert ihn; Legacy-Editoren, Build/Deploy und Speichern unter sind nicht verfügbar.';
+
+  @override
+  String get projectRoot => 'Projektordner';
+
+  @override
+  String get projectId => 'Projekt-ID';
+
+  @override
+  String get projectRevision => 'Projektrevision';
+
+  @override
+  String get projectHeadSha256 => 'Head-SHA-256';
+
+  @override
+  String get projectSnapshotBytes => 'Snapshot-Bytes';
+
+  @override
+  String get projectNoCurrent => 'Kein aktuelles Projekt';
+
+  @override
+  String projectManagedRevision3Opened(String projectId) {
+    return 'Verwaltetes Revision-3-Projekt $projectId geöffnet';
+  }
+
+  @override
+  String projectManagedRevision3OpenFailed(String error) {
+    return 'Verwaltetes Revision-3-Projekt konnte nicht geöffnet werden: $error';
+  }
+
+  @override
+  String projectManagedRevision3Verified(String headSha256) {
+    return 'Revision-3-Head $headSha256 verifiziert';
+  }
+
+  @override
+  String projectManagedRevision3VerifyFailed(String error) {
+    return 'Verifizierung des Revision-3-Heads fehlgeschlagen: $error';
+  }
+
+  @override
+  String get projectManagedRevision3RequiresReopen =>
+      'Die Verifizierung des exakten Heads konnte nicht sicher abgeschlossen werden. Diese Sitzung muss jetzt wiederhergestellt werden; weitere Verifizierungen sind gesperrt. Schließe Mod Studio und öffne dieses Projekt danach erneut.';
+
+  @override
+  String get projectManagedRevision3VerifyBlocked =>
+      'Die Verifizierung ist gesperrt, bis das verwaltete Projekt erneut geöffnet wurde.';
+
+  @override
+  String get projectTransitionCleanupWarning =>
+      'Das neue Projekt ist geöffnet, aber die vorherige Projektsitzung konnte nicht vollständig bereinigt werden. Es wird kein erneuter Bereinigungsversuch durchgeführt. Starte Mod Studio neu, bevor du das vorherige Projekt erneut öffnest.';
 }

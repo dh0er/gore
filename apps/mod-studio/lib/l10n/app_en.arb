@@ -188,5 +188,51 @@
       }
     }
   },
-  "managerDeployActive": "A mod-manager loadout is active. Undeploy it in gore-manager first."
+  "managerDeployActive": "A mod-manager loadout is active. Undeploy it in gore-manager first.",
+  "projectOpenLegacy": "Open legacy project…",
+  "projectOpenManagedRevision3": "Open managed revision-3 project…",
+  "projectVerifyCurrentHead": "Verify current head",
+  "projectManagedRevision3Title": "Managed revision-3 project",
+  "projectManagedRevision3IdentityOnly": "This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.",
+  "projectRoot": "Root",
+  "projectId": "Project ID",
+  "projectRevision": "Project revision",
+  "projectHeadSha256": "Head SHA-256",
+  "projectSnapshotBytes": "Snapshot bytes",
+  "projectNoCurrent": "No current project",
+  "projectManagedRevision3Opened": "Opened managed revision-3 project {projectId}",
+  "@projectManagedRevision3Opened": {
+    "placeholders": {
+      "projectId": {
+        "type": "String"
+      }
+    }
+  },
+  "projectManagedRevision3OpenFailed": "Managed revision-3 project open failed: {error}",
+  "@projectManagedRevision3OpenFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "projectManagedRevision3Verified": "Verified revision-3 head {headSha256}",
+  "@projectManagedRevision3Verified": {
+    "placeholders": {
+      "headSha256": {
+        "type": "String"
+      }
+    }
+  },
+  "projectManagedRevision3VerifyFailed": "Revision-3 head verification failed: {error}",
+  "@projectManagedRevision3VerifyFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "projectManagedRevision3RequiresReopen": "Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.",
+  "projectManagedRevision3VerifyBlocked": "Verification is blocked until the managed project is reopened.",
+  "projectTransitionCleanupWarning": "The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project."
 }

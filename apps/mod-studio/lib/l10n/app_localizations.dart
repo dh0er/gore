@@ -775,6 +775,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A mod-manager loadout is active. Undeploy it in gore-manager first.'**
   String get managerDeployActive;
+
+  /// No description provided for @projectOpenLegacy.
+  ///
+  /// In en, this message translates to:
+  /// **'Open legacy project…'**
+  String get projectOpenLegacy;
+
+  /// No description provided for @projectOpenManagedRevision3.
+  ///
+  /// In en, this message translates to:
+  /// **'Open managed revision-3 project…'**
+  String get projectOpenManagedRevision3;
+
+  /// No description provided for @projectVerifyCurrentHead.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify current head'**
+  String get projectVerifyCurrentHead;
+
+  /// No description provided for @projectManagedRevision3Title.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed revision-3 project'**
+  String get projectManagedRevision3Title;
+
+  /// No description provided for @projectManagedRevision3IdentityOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.'**
+  String get projectManagedRevision3IdentityOnly;
+
+  /// No description provided for @projectRoot.
+  ///
+  /// In en, this message translates to:
+  /// **'Root'**
+  String get projectRoot;
+
+  /// No description provided for @projectId.
+  ///
+  /// In en, this message translates to:
+  /// **'Project ID'**
+  String get projectId;
+
+  /// No description provided for @projectRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Project revision'**
+  String get projectRevision;
+
+  /// No description provided for @projectHeadSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Head SHA-256'**
+  String get projectHeadSha256;
+
+  /// No description provided for @projectSnapshotBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Snapshot bytes'**
+  String get projectSnapshotBytes;
+
+  /// No description provided for @projectNoCurrent.
+  ///
+  /// In en, this message translates to:
+  /// **'No current project'**
+  String get projectNoCurrent;
+
+  /// No description provided for @projectManagedRevision3Opened.
+  ///
+  /// In en, this message translates to:
+  /// **'Opened managed revision-3 project {projectId}'**
+  String projectManagedRevision3Opened(String projectId);
+
+  /// No description provided for @projectManagedRevision3OpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed revision-3 project open failed: {error}'**
+  String projectManagedRevision3OpenFailed(String error);
+
+  /// No description provided for @projectManagedRevision3Verified.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified revision-3 head {headSha256}'**
+  String projectManagedRevision3Verified(String headSha256);
+
+  /// No description provided for @projectManagedRevision3VerifyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Revision-3 head verification failed: {error}'**
+  String projectManagedRevision3VerifyFailed(String error);
+
+  /// No description provided for @projectManagedRevision3RequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.'**
+  String get projectManagedRevision3RequiresReopen;
+
+  /// No description provided for @projectManagedRevision3VerifyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Verification is blocked until the managed project is reopened.'**
+  String get projectManagedRevision3VerifyBlocked;
+
+  /// No description provided for @projectTransitionCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.'**
+  String get projectTransitionCleanupWarning;
 }
 
 class _AppLocalizationsDelegate

@@ -113,6 +113,9 @@ abstract interface class LegacyCurrentProjectLease {
   bool get hasUnsavedChanges;
 
   Future<void> saveCurrent();
+  Future<void> saveToPath(String path);
+  Future<void> openFromPath(String path);
+  Future<void> newProject();
   Future<void> close();
 }
 
@@ -159,6 +162,24 @@ final class ProjectSessionLegacyCurrentProjectLease
   Future<void> saveCurrent() async {
     _requireOpen();
     await _session.saveToCurrentPath();
+  }
+
+  @override
+  Future<void> saveToPath(String path) async {
+    _requireOpen();
+    await _session.saveToPath(path);
+  }
+
+  @override
+  Future<void> openFromPath(String path) async {
+    _requireOpen();
+    await _session.openFromPath(path);
+  }
+
+  @override
+  Future<void> newProject() async {
+    _requireOpen();
+    await _session.newProject();
   }
 
   @override
@@ -231,8 +252,10 @@ final currentProjectCoordinatorProvider =
     StateNotifierProvider<CurrentProjectCoordinator, CurrentProjectState>((
       ref,
     ) {
+      final createLegacy = ref.read(legacyCurrentProjectLeaseFactoryProvider);
       return CurrentProjectCoordinator(
-        initialLegacy: ref.read(legacyCurrentProjectLeaseFactoryProvider)(),
+        initialLegacy: createLegacy(),
+        createLegacy: createLegacy,
         openManagedRevision3: ref.read(
           managedRevision3CurrentProjectOpenerProvider,
         ),
@@ -251,6 +274,7 @@ final class CurrentProjectCoordinator
     extends StateNotifier<CurrentProjectState> {
   factory CurrentProjectCoordinator({
     LegacyCurrentProjectLease? initialLegacy,
+    LegacyCurrentProjectLeaseFactory? createLegacy,
     required ManagedRevision3CurrentProjectOpener openManagedRevision3,
   }) {
     final initial = initialLegacy == null
@@ -261,6 +285,7 @@ final class CurrentProjectCoordinator
       initialState: initial == null
           ? const NoCurrentProjectState()
           : _stateOf(initial),
+      createLegacy: createLegacy,
       openManagedRevision3: openManagedRevision3,
     );
   }
@@ -268,9 +293,11 @@ final class CurrentProjectCoordinator
   CurrentProjectCoordinator._({
     required this._current,
     required CurrentProjectState initialState,
+    required this._createLegacy,
     required this._openManagedRevision3,
   }) : super(initialState);
 
+  final LegacyCurrentProjectLeaseFactory? _createLegacy;
   final ManagedRevision3CurrentProjectOpener _openManagedRevision3;
   _OwnedCurrentProject? _current;
   final List<CurrentProjectCleanupFailure> _terminalCleanupFailures =
@@ -337,6 +364,37 @@ final class CurrentProjectCoordinator
     }
   });
 
+  /// Start a clean compatibility project inside the same cross-format lane.
+  ///
+  /// When a managed project is current, the fresh compatibility lease remains
+  /// a candidate until its provider graph has been reset successfully. A
+  /// failure therefore leaves the managed lease authoritative.
+  Future<LegacyCurrentProjectState> newLegacyProject() =>
+      _operateOnLegacy((lease) => lease.newProject());
+
+  /// Fully load a compatibility archive before adopting it as current.
+  ///
+  /// Candidate cleanup is terminal and best-effort, matching managed-open
+  /// semantics. A failed load never displaces the current managed lease.
+  Future<LegacyCurrentProjectState> openLegacyFromPath(String path) =>
+      _operateOnLegacy((lease) => lease.openFromPath(path));
+
+  /// Save the current compatibility project to [path] and refresh its exact
+  /// path/dirty snapshot. Managed projects intentionally have no Save As path
+  /// until a native clone/fork transaction exists.
+  Future<LegacyCurrentProjectState> saveLegacyToPath(String path) =>
+      _enqueue(() async {
+        final current = _current;
+        if (current == null) throw const NoCurrentProjectException();
+        if (current is! _OwnedLegacyCurrentProject) {
+          throw const CurrentProjectOperationUnsupportedException(
+            'Save As is unavailable for managed revision-3 projects',
+          );
+        }
+        await current.lease.saveToPath(path);
+        return _refreshCurrentIfUnchanged(current) as LegacyCurrentProjectState;
+      });
+
   /// Ctrl+S-sized durability action for the active backend.
   ///
   /// Compatibility projects write their captured provider snapshot. Managed
@@ -351,6 +409,11 @@ final class CurrentProjectCoordinator
         case _OwnedLegacyCurrentProject(:final lease):
           await lease.saveCurrent();
         case _OwnedManagedRevision3CurrentProject(:final lease):
+          if (lease.requiresReopen) {
+            throw const CurrentProjectOperationUnsupportedException(
+              'managed revision-3 verification is blocked until the project is reopened',
+            );
+          }
           await lease.verifyCurrentHead();
       }
     } finally {
@@ -368,6 +431,11 @@ final class CurrentProjectCoordinator
     if (current is! _OwnedManagedRevision3CurrentProject) {
       throw const CurrentProjectOperationUnsupportedException(
         'exact current-head verification is available only for managed revision-3 projects',
+      );
+    }
+    if (current.lease.requiresReopen) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'managed revision-3 verification is blocked until the project is reopened',
       );
     }
     late ManagedRevision3CurrentProjectState refreshed;
@@ -488,6 +556,40 @@ final class CurrentProjectCoordinator
     _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
     return result;
   }
+
+  Future<LegacyCurrentProjectState> _operateOnLegacy(
+    Future<void> Function(LegacyCurrentProjectLease lease) operation,
+  ) => _enqueue(() async {
+    final current = _current;
+    if (current case _OwnedLegacyCurrentProject(:final lease)) {
+      await operation(lease);
+      return _refreshCurrentIfUnchanged(current) as LegacyCurrentProjectState;
+    }
+
+    final createLegacy = _createLegacy;
+    if (createLegacy == null) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this coordinator cannot create a compatibility project lease',
+      );
+    }
+
+    LegacyCurrentProjectLease? candidateLease;
+    var adopted = false;
+    try {
+      candidateLease = createLegacy();
+      await operation(candidateLease);
+      final candidate = _OwnedLegacyCurrentProject(candidateLease);
+      final candidateState = _stateOf(candidate) as LegacyCurrentProjectState;
+      await _adopt(candidate, candidateState);
+      adopted = true;
+      return candidateState;
+    } catch (error, stackTrace) {
+      if (candidateLease != null && !adopted) {
+        await _closeUnadopted(_OwnedLegacyCurrentProject(candidateLease));
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  });
 
   @override
   void dispose() {

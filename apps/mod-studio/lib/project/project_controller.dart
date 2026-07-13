@@ -344,8 +344,11 @@ Future<String?> saveProjectInteractive(WidgetRef ref) async {
   return saveProjectAsInteractive(ref);
 }
 
-/// Always prompt for a new path and save there.
-Future<String?> saveProjectAsInteractive(WidgetRef ref) async {
+/// Pick a compatibility-project destination without performing any I/O.
+///
+/// The app-wide current-project coordinator uses this boundary so the actual
+/// save remains inside its serialized Legacy/R3 operation lane.
+Future<String?> pickProjectSavePath(WidgetRef ref) async {
   final name = ref.read(modNameProvider).trim();
   final location = await getSaveLocation(
     suggestedName: '${name.isEmpty ? 'mod' : name}$kProjectExtension',
@@ -353,17 +356,32 @@ Future<String?> saveProjectAsInteractive(WidgetRef ref) async {
       XTypeGroup(label: 'gore-mod project', extensions: ['goremod']),
     ],
   );
-  if (location == null) return null;
-  return ref.read(projectSessionProvider).saveToPath(location.path);
+  return location?.path;
 }
 
-/// Prompt for a project file and load it into the editor. Returns the path, or null.
-Future<String?> openProjectInteractive(WidgetRef ref) async {
+/// Always prompt for a new path and save there.
+Future<String?> saveProjectAsInteractive(WidgetRef ref) async {
+  final path = await pickProjectSavePath(ref);
+  if (path == null) return null;
+  return ref.read(projectSessionProvider).saveToPath(path);
+}
+
+/// Pick a compatibility project archive without loading it.
+///
+/// Keeping selection separate lets the global coordinator validate and adopt
+/// the candidate within the same cross-format lane.
+Future<String?> pickProjectOpenPath() async {
   final file = await openFile(
     acceptedTypeGroups: const [
       XTypeGroup(label: 'gore-mod project', extensions: ['goremod']),
     ],
   );
-  if (file == null) return null;
-  return ref.read(projectSessionProvider).openFromPath(file.path);
+  return file?.path;
+}
+
+/// Prompt for a project file and load it into the editor. Returns the path, or null.
+Future<String?> openProjectInteractive(WidgetRef ref) async {
+  final path = await pickProjectOpenPath();
+  if (path == null) return null;
+  return ref.read(projectSessionProvider).openFromPath(path);
 }
