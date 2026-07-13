@@ -731,6 +731,14 @@ class _ManagedProjectSessionCore {
     } on AtomicSwapException {
       _requiresReopen = true;
       rethrow;
+    } catch (_) {
+      // Publication has entered the crash-recoverable replacement lane. Even an exception that
+      // is not normalized by AtomicByteReplacement (for example a raw filesystem failure from a
+      // journal write, rename, delete, or phase hook) can leave the fixed head and its repair
+      // journal between generations. Do not permit another edit until open() repairs and fully
+      // verifies the authoritative generation.
+      _requiresReopen = true;
+      rethrow;
     }
 
     try {

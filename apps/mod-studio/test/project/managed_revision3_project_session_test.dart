@@ -297,6 +297,72 @@ void main() {
   );
 
   test(
+    'raw filesystem publication failure poisons and repairs on reopen',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '74000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.targetBackedUp) {
+            throw FileSystemException('injected raw publication failure');
+          }
+        },
+      );
+      final original = _projectJson(revision: 0, name: 'Original');
+      final saved = _projectJson(revision: 1, name: 'Recovered raw failure');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        replacement: replacement,
+      );
+      final originalHead = session.head.canonicalJson;
+      armed = true;
+
+      await expectLater(
+        session.save(saved),
+        throwsA(isA<FileSystemException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(session.projectJson, original);
+      expect(session.head.canonicalJson, originalHead);
+      expect(await session.headFile.exists(), isFalse);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+
+      final preparesAfterFailure = store.prepareCalls;
+      await expectLater(
+        session.save(_projectJson(revision: 2, name: 'Must not prepare')),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.prepareCalls, preparesAfterFailure);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, saved);
+      expect(reopened.projectRevision, 1);
+      expect(reopened.requiresReopen, isFalse);
+      expect(
+        await reopened.headFile.readAsString(),
+        reopened.head.canonicalJson,
+      );
+      expect(await journal.exists(), isFalse);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await reopened.close();
+    },
+  );
+
+  test(
     'post-publication mismatch poisons session but reopen recovers',
     () async {
       final root = await _projectRoot(fixture);
