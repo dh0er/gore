@@ -7,34 +7,33 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
+use gore_asset::dataasset_workflow::{
+    asset_package_limits, generation_mismatch_reason, read_chained_extract_receipt,
+    read_extract_receipt_v2, read_patch_receipt_v2, read_verified_file_bounded,
+    validate_extract_receipt_components, validate_extract_receipt_envelope,
+    validate_patch_output_against_carrier, validate_patch_receipt_envelope,
+    validate_patched_sidecars, validate_sidecar_generation_mapping, AssetGenerationReceipt,
+    ComponentDigestProof, ExtractCompositeStoreAnchor, ExtractReceiptEnvelope,
+    ExtractReceiptOutput, ExtractReceiptSource, ExtractUsmapProof, GenerationChunkAnchor,
+    GenerationFileAnchor, GlobalScriptStoreProof, HeldIdentityReceipt, PatchOperationProof,
+    PatchReceiptEnvelope, PatchReceiptOutput, PatchReceiptProvenance, ReceiptComponent,
+    ReceiptFileSeal, ReceiptVerifiedChunk, SidecarReceipt, SidecarRole, SourceFileReceipt,
+    COMPOSITE_UCAS_ROLE, COPIED_USMAP_NAME, EXTRACT_CONTENT_BINDING, EXTRACT_RECEIPT_NAME,
+    HELD_IDENTITY_LIMITATION, HELD_IDENTITY_VERIFICATION, MAX_CONTAINER_COMPONENT_BYTES,
+    MAX_COOKED_PACKAGE_BYTES, MAX_GAME_ASSET_SEGMENTS, MAX_MOUNT_UCAS_BYTES, MAX_MOUNT_UTOC_BYTES,
+    MAX_OPTIONAL_SIDECAR_BYTES, MAX_SELECTOR_BYTES, MAX_USMAP_BYTES, PATCH_RECEIPT_SUFFIX,
+};
 use gore_asset::{
     describe_fixed_leaves, FixedLeafDescriptor, FixedLeafPatch, FixedLeafSelector,
-    FixedLeafSelectorStep, FixedWireKind, LegacyPackageEnvelope, PackageCarrier, PackageComponent,
-    PackageLimits, PackagePairSeal, PropertySpanWalker, SchemaDb, FIXED_LEAF_SELECTOR_FORMAT,
+    FixedLeafSelectorStep, LegacyPackageEnvelope, PackageCarrier, PackageComponent,
+    PackagePairSeal, PropertySpanWalker, SchemaDb, FIXED_LEAF_SELECTOR_FORMAT,
     FIXED_LEAF_SELECTOR_PROFILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const MAX_USMAP_BYTES: u64 = 128 * 1024 * 1024;
-const MAX_SELECTOR_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_RECEIPT_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_OPTIONAL_SIDECAR_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_COOKED_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
-const MAX_CONTAINER_COMPONENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-const MAX_MOUNT_UTOC_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_MOUNT_UCAS_BYTES: u64 = 128 * 1024 * 1024 * 1024;
-const EXTRACT_RECEIPT_NAME: &str = "gore-asset-extract.json";
-const COPIED_USMAP_NAME: &str = "gore-generation.usmap";
-const PATCH_RECEIPT_SUFFIX: &str = ".gore-asset-patch.json";
 const PACK_RECEIPT_NAME: &str = "gore-asset-pack.json";
-const EXTRACT_CONTENT_BINDING: &str = "each consumed decompressed chunk was verified against its winning container's TOC BLAKE3 hash and cached for all conversion reads";
-const COMPOSITE_UCAS_ROLE: &str =
-    "environment anchor only; consumed_chunks is the authoritative content binding";
-const HELD_IDENTITY_VERIFICATION: &str = "identity_length_mtime_point_check";
-const HELD_IDENTITY_LIMITATION: &str = "the large UCAS payload is not content-hashed; file identity, length, and modification stamp are held and point-rechecked before publication";
-const MAX_GAME_ASSET_SEGMENTS: usize = 32;
 // `pack` adds `cooked/G1R/Content` above the accepted virtual path. Keep cleanup
 // comfortably above that maximum while still refusing adversarial deep trees.
 const MAX_STAGING_TREE_DEPTH: usize = MAX_GAME_ASSET_SEGMENTS + 32;
@@ -42,14 +41,6 @@ const MAX_STAGING_TREE_ENTRIES: usize = MAX_GAME_ASSET_SEGMENTS + 32;
 const MAX_PAKS_SCAN_DEPTH: usize = 16;
 const MAX_PAKS_SCAN_ENTRIES: usize = 4096;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-
-fn asset_package_limits() -> PackageLimits {
-    PackageLimits {
-        max_uasset_bytes: 64 * 1024 * 1024,
-        max_uexp_bytes: 256 * 1024 * 1024,
-        max_total_bytes: 320 * 1024 * 1024,
-    }
-}
 
 #[derive(Debug, Subcommand)]
 pub enum AssetAction {
@@ -162,305 +153,6 @@ struct FileSeal {
     path: PathBuf,
     length: u64,
     sha256: [u8; 32],
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct GenerationFileAnchor {
-    file_name: String,
-    length: u64,
-    sha256: String,
-}
-
-impl GenerationFileAnchor {
-    fn from_seal(seal: &FileSeal) -> Result<Self> {
-        Ok(Self {
-            file_name: seal
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .context("generation anchor has a non-UTF-8 filename")?
-                .to_owned(),
-            length: seal.length,
-            sha256: encode_hex(&seal.sha256),
-        })
-    }
-
-    fn matches(&self, seal: &FileSeal) -> bool {
-        self.length == seal.length && self.sha256 == encode_hex(&seal.sha256)
-    }
-
-    fn same_content(&self, other: &Self) -> bool {
-        self.length == other.length && self.sha256 == other.sha256
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct GenerationChunkAnchor {
-    chunk_id: String,
-    chunk_type: String,
-    winner_utoc: GenerationFileAnchor,
-    length: u64,
-    blake3: String,
-    toc_hash: String,
-    toc_hash_bytes: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct AssetGenerationReceipt {
-    format: String,
-    asset: String,
-    usmap: GenerationFileAnchor,
-    main_utoc: GenerationFileAnchor,
-    global_utoc: GenerationFileAnchor,
-    global_ucas: GenerationFileAnchor,
-    container_set: Vec<GenerationFileAnchor>,
-    target_chunks: Vec<GenerationChunkAnchor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ReceiptComponent {
-    relative_path: String,
-    length: u64,
-    sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct SourceFileReceipt {
-    path: String,
-    length: u64,
-    sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct HeldIdentityReceipt {
-    path: String,
-    length: u64,
-    modified_stamp: String,
-    platform_identity: String,
-    sha256: Option<String>,
-    verification: String,
-    content_hash_omitted: bool,
-    limitation: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ExtractCompositeStoreAnchor {
-    utoc: SourceFileReceipt,
-    ucas: HeldIdentityReceipt,
-    role: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ReceiptVerifiedChunk {
-    chunk_id: String,
-    chunk_type: String,
-    source_utoc: PathBuf,
-    length: u64,
-    blake3: String,
-    toc_hash: String,
-    toc_hash_bytes: usize,
-}
-
-impl From<&gore_tex::container::VerifiedChunkReceipt> for ReceiptVerifiedChunk {
-    fn from(value: &gore_tex::container::VerifiedChunkReceipt) -> Self {
-        Self {
-            chunk_id: value.chunk_id.clone(),
-            chunk_type: value.chunk_type.clone(),
-            source_utoc: value.source_utoc.clone(),
-            length: value.length,
-            blake3: value.blake3.clone(),
-            toc_hash: value.toc_hash.clone(),
-            toc_hash_bytes: value.toc_hash_bytes,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ExtractUsmapProof {
-    source: SourceFileReceipt,
-    copied_relative_path: String,
-    copy: ReceiptComponent,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct GlobalScriptStoreProof {
-    utoc: SourceFileReceipt,
-    ucas: SourceFileReceipt,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ExtractReceiptSource {
-    game_root: String,
-    composite_store_anchor: ExtractCompositeStoreAnchor,
-    consumed_chunks: Vec<ReceiptVerifiedChunk>,
-    source_container_tocs: Vec<SourceFileReceipt>,
-    content_binding: String,
-    usmap: ExtractUsmapProof,
-    global_script_store: GlobalScriptStoreProof,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExtractReceiptOutput {
-    root: String,
-    receipt: String,
-    components: Vec<ReceiptComponent>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ExtractReceiptEnvelope {
-    format: String,
-    status: String,
-    asset: String,
-    generation: AssetGenerationReceipt,
-    source: ExtractReceiptSource,
-    package_seal: PackagePairSeal,
-    output: ExtractReceiptOutput,
-    deployed: bool,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-enum SidecarRole {
-    #[serde(rename = "BulkData")]
-    Bulk,
-    #[serde(rename = "OptionalBulkData")]
-    Optional,
-    #[serde(rename = "MemoryMappedBulkData")]
-    MemoryMapped,
-}
-
-impl SidecarRole {
-    const ALL: [Self; 3] = [Self::Bulk, Self::Optional, Self::MemoryMapped];
-
-    fn suffix(self) -> &'static str {
-        match self {
-            Self::Bulk => "ubulk",
-            Self::Optional => "uptnl",
-            Self::MemoryMapped => "m.ubulk",
-        }
-    }
-
-    fn chunk_type(self) -> &'static str {
-        match self {
-            Self::Bulk => "BulkData",
-            Self::Optional => "OptionalBulkData",
-            Self::MemoryMapped => "MemoryMappedBulkData",
-        }
-    }
-
-    fn from_chunk_type(value: &str) -> Option<Self> {
-        match value {
-            "BulkData" => Some(Self::Bulk),
-            "OptionalBulkData" => Some(Self::Optional),
-            "MemoryMappedBulkData" => Some(Self::MemoryMapped),
-            _ => None,
-        }
-    }
-
-    fn index(self) -> usize {
-        match self {
-            Self::Bulk => 0,
-            Self::Optional => 1,
-            Self::MemoryMapped => 2,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct SidecarReceipt {
-    role: SidecarRole,
-    file_name: String,
-    length: u64,
-    sha256: String,
-}
-
-#[derive(Debug, Clone)]
-struct ValidatedExtractBinding {
-    output_root: PathBuf,
-    uasset: ReceiptComponent,
-    uexp: ReceiptComponent,
-    copied_usmap: ReceiptComponent,
-    components: Vec<ReceiptComponent>,
-    sidecars: Vec<SidecarReceipt>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PatchReceiptProvenance {
-    extract_receipt: ReceiptFileSeal,
-    generation: AssetGenerationReceipt,
-    usmap: GenerationFileAnchor,
-    extract_components: Vec<ReceiptComponent>,
-    extracted_sidecars: Vec<SidecarReceipt>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct PatchOperationProof {
-    before: PackagePairSeal,
-    after: PackagePairSeal,
-    export_index: usize,
-    component: PackageComponent,
-    absolute_offset: usize,
-    length: usize,
-    kind: FixedWireKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct ComponentDigestProof {
-    path: String,
-    length: u64,
-    sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-struct PatchReceiptOutput {
-    uasset: ComponentDigestProof,
-    uexp: ComponentDigestProof,
-    sidecars: Vec<SidecarReceipt>,
-    receipt: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PatchReceiptEnvelope {
-    format: String,
-    status: String,
-    asset: String,
-    generation_bound: bool,
-    provenance: PatchReceiptProvenance,
-    input_package_seal: PackagePairSeal,
-    output_package_seal: PackagePairSeal,
-    output_sidecars: Vec<SidecarReceipt>,
-    input_selector: FixedLeafSelector,
-    output_requires_reinspect: bool,
-    expected_hex: String,
-    replacement_hex: String,
-    patch: PatchOperationProof,
-    output: PatchReceiptOutput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ReceiptFileSeal {
-    path: String,
-    length: u64,
-    sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -827,7 +519,7 @@ fn extract(args: ExtractArgs) -> Result<()> {
             consumed_chunks: unpacked
                 .consumed_chunks
                 .iter()
-                .map(ReceiptVerifiedChunk::from)
+                .map(receipt_verified_chunk)
                 .collect(),
             source_container_tocs: consumed_utoc_receipts,
             content_binding: EXTRACT_CONTENT_BINDING.to_owned(),
@@ -954,41 +646,37 @@ fn pack(args: PackArgs) -> Result<()> {
     let out = prepare_absent_output_directory(&args.out, &game, "ASSET_PACK_OUTPUT")?;
     let mount_inventory = capture_game_mount_inventory(&game, "ASSET_PACK_GAME")?;
     let (global_utoc_seal, global_ucas_seal) = seal_global_script_store(&game, "ASSET_PACK_GAME")?;
-    let patch_receipt_input = read_verified_bounded(
-        &args.patch_receipt,
-        MAX_RECEIPT_BYTES,
-        "ASSET_PATCH_RECEIPT",
-    )?;
-    let patch_receipt: PatchReceiptEnvelope = serde_json::from_slice(&patch_receipt_input.bytes)
-        .context("ASSET_PATCH_RECEIPT: invalid receipt JSON")?;
-    validate_patch_receipt_envelope(&patch_receipt, &patch_receipt_input.path)?;
+    let verified_patch = read_patch_receipt_v2(&args.patch_receipt)?;
+    let patch_receipt_input = verified_patch.input();
+    let patch_receipt = verified_patch.receipt();
     if patch_receipt.asset != args.asset || patch_receipt.provenance.generation.asset != args.asset
     {
         bail!("ASSET_GENERATION_MISMATCH: patch receipt targets a different asset");
     }
-    let (extract_receipt, extract_binding) =
-        read_chained_extract_receipt(&patch_receipt.provenance.extract_receipt)?;
+    let verified_extract = read_chained_extract_receipt(&verified_patch)?;
+    let extract_receipt = verified_extract.receipt();
+    let extract_binding = verified_extract.binding();
     if extract_receipt.asset != patch_receipt.asset
         || extract_receipt.generation != patch_receipt.provenance.generation
         || extract_receipt.package_seal != patch_receipt.input_package_seal
-        || extract_binding.components != patch_receipt.provenance.extract_components
-        || extract_binding.sidecars != patch_receipt.provenance.extracted_sidecars
+        || extract_binding.components() != patch_receipt.provenance.extract_components
+        || extract_binding.sidecars() != patch_receipt.provenance.extracted_sidecars
     {
         bail!(
             "ASSET_PATCH_RECEIPT: chained extract asset, generation, package, or component provenance mismatch"
         );
     }
-    if patch_receipt.provenance.usmap.file_name != extract_binding.copied_usmap.relative_path
-        || patch_receipt.provenance.usmap.length != extract_binding.copied_usmap.length
-        || patch_receipt.provenance.usmap.sha256 != extract_binding.copied_usmap.sha256
+    if patch_receipt.provenance.usmap.file_name != extract_binding.copied_usmap().relative_path
+        || patch_receipt.provenance.usmap.length != extract_binding.copied_usmap().length
+        || patch_receipt.provenance.usmap.sha256 != extract_binding.copied_usmap().sha256
     {
         bail!("ASSET_PATCH_RECEIPT: copied USMAP provenance mismatch");
     }
-    if patch_receipt.output_sidecars.len() != extract_binding.sidecars.len()
+    if patch_receipt.output_sidecars.len() != extract_binding.sidecars().len()
         || patch_receipt
             .output_sidecars
             .iter()
-            .zip(&extract_binding.sidecars)
+            .zip(extract_binding.sidecars())
             .any(|(output, extracted)| {
                 output.role != extracted.role
                     || output.length != extracted.length
@@ -1021,12 +709,12 @@ fn pack(args: PackArgs) -> Result<()> {
     if source_seal != patch_receipt.output_package_seal {
         bail!("ASSET_GENERATION_MISMATCH: input package pair differs from patch receipt");
     }
-    validate_patch_output_against_carrier(&patch_receipt, &source_uasset, &source_uexp, &carrier)?;
+    validate_patch_output_against_carrier(&verified_patch, &source_uasset, &source_uexp, &carrier)?;
     let pair_bytes = u64::try_from(carrier.len(PackageComponent::Uasset))?
         .checked_add(u64::try_from(carrier.len(PackageComponent::Uexp))?)
         .context("ASSET_PACK_INPUT: cooked size overflowed")?;
     let validated_sidecar_seals =
-        validate_patched_sidecars(&source_uasset, &patch_receipt.output_sidecars, pair_bytes)?;
+        validate_patched_sidecars(&verified_patch, &source_uasset, pair_bytes)?;
 
     // Resolve and hash the live target generation before any output staging is
     // created. This catches hotfixes and newly winning sibling containers even
@@ -1159,7 +847,7 @@ fn pack(args: PackArgs) -> Result<()> {
             ..
         } = copied;
         ownership.disarm();
-        if seal.length != validated.length || seal.sha256 != validated.sha256 {
+        if seal.length != validated.length() || &seal.sha256 != validated.sha256() {
             bail!("ASSET_PACK_SIDECAR: sidecar changed after pre-staging validation");
         }
         cooked_total = cooked_total
@@ -1276,14 +964,14 @@ fn pack(args: PackArgs) -> Result<()> {
         "generation_bound": true,
         "provenance": {
             "patch_receipt": ReceiptFileSeal {
-                path: patch_receipt_input.path.display().to_string(),
-                length: u64::try_from(patch_receipt_input.bytes.len())?,
-                sha256: encode_hex(&patch_receipt_input.sha256),
+                path: patch_receipt_input.path().display().to_string(),
+                length: patch_receipt_input.length(),
+                sha256: encode_hex(patch_receipt_input.sha256()),
             },
-            "extract_receipt": patch_receipt.provenance.extract_receipt,
+            "extract_receipt": patch_receipt.provenance.extract_receipt.clone(),
             "generation": current_generation.clone(),
-            "input_package_seal": patch_receipt.input_package_seal,
-            "patched_package_seal": patch_receipt.output_package_seal,
+            "input_package_seal": patch_receipt.input_package_seal.clone(),
+            "patched_package_seal": patch_receipt.output_package_seal.clone(),
         },
         "source": {
             "game_root": game.display().to_string(),
@@ -1348,7 +1036,7 @@ fn pack(args: PackArgs) -> Result<()> {
         bail!("ASSET_PACK_INPUT: source package changed during pack");
     }
     for seal in &sidecar_source_seals {
-        reverify_file_seal(seal, MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_SIDECAR")?;
+        seal.reverify(MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_SIDECAR")?;
     }
     for seal in &triplet_seals {
         reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
@@ -1700,19 +1388,6 @@ fn absolute_without_parent_components(path: &Path, code: &'static str) -> Result
     } else {
         Ok(std::env::current_dir().context(code)?.join(path))
     }
-}
-
-fn canonical_leaf_path(path: &Path, code: &'static str) -> Result<PathBuf> {
-    let absolute = absolute_without_parent_components(path, code)?;
-    let file_name = absolute
-        .file_name()
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("{code}: path requires a final component"))?;
-    let parent = absolute
-        .parent()
-        .with_context(|| format!("{code}: path has no parent"))?;
-    let canonical_parent = validate_existing_path_no_reparse(parent, true, code)?;
-    Ok(canonical_parent.join(file_name))
 }
 
 fn validate_existing_path_no_reparse(
@@ -2510,31 +2185,31 @@ fn source_file_receipt(seal: &FileSeal) -> SourceFileReceipt {
     }
 }
 
-fn read_chained_extract_receipt(
-    expected: &ReceiptFileSeal,
-) -> Result<(ExtractReceiptEnvelope, ValidatedExtractBinding)> {
-    let code = "ASSET_EXTRACT_RECEIPT";
-    if expected.path.is_empty()
-        || expected.length > MAX_RECEIPT_BYTES
-        || expected.sha256.len() != 64
-        || !expected.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || expected.sha256 != expected.sha256.to_ascii_lowercase()
-    {
-        bail!("{code}: invalid chained receipt seal");
+fn generation_file_anchor(seal: &FileSeal) -> Result<GenerationFileAnchor> {
+    Ok(GenerationFileAnchor {
+        file_name: seal
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("generation anchor has a non-UTF-8 filename")?
+            .to_owned(),
+        length: seal.length,
+        sha256: encode_hex(&seal.sha256),
+    })
+}
+
+fn receipt_verified_chunk(
+    value: &gore_tex::container::VerifiedChunkReceipt,
+) -> ReceiptVerifiedChunk {
+    ReceiptVerifiedChunk {
+        chunk_id: value.chunk_id.clone(),
+        chunk_type: value.chunk_type.clone(),
+        source_utoc: value.source_utoc.clone(),
+        length: value.length,
+        blake3: value.blake3.clone(),
+        toc_hash: value.toc_hash.clone(),
+        toc_hash_bytes: value.toc_hash_bytes,
     }
-    let actual = read_verified_bounded(Path::new(&expected.path), MAX_RECEIPT_BYTES, code)?;
-    if u64::try_from(actual.bytes.len())? != expected.length
-        || encode_hex(&actual.sha256) != expected.sha256
-    {
-        bail!("{code}: chained receipt changed or does not match its patch receipt seal");
-    }
-    let receipt: ExtractReceiptEnvelope = serde_json::from_slice(&actual.bytes)
-        .context("ASSET_EXTRACT_RECEIPT: invalid chained extract receipt JSON")?;
-    let binding = validate_extract_receipt_envelope(&receipt, code)?;
-    if actual.path != canonical_leaf_path(&binding.output_root.join(EXTRACT_RECEIPT_NAME), code)? {
-        bail!("{code}: chained receipt path disagrees with extract output proof");
-    }
-    Ok((receipt, binding))
 }
 
 fn build_generation_receipt(
@@ -2550,7 +2225,7 @@ fn build_generation_receipt(
     let mut container_set = Vec::with_capacity(source_utocs.len());
     for seal in source_utocs {
         by_path.insert(seal.path.clone(), seal);
-        container_set.push(GenerationFileAnchor::from_seal(seal)?);
+        container_set.push(generation_file_anchor(seal)?);
     }
     container_set.sort_by(|left, right| {
         left.file_name
@@ -2585,7 +2260,7 @@ fn build_generation_receipt(
         target_chunks.push(GenerationChunkAnchor {
             chunk_id: chunk.chunk_id.clone(),
             chunk_type: chunk.chunk_type.clone(),
-            winner_utoc: GenerationFileAnchor::from_seal(winner)?,
+            winner_utoc: generation_file_anchor(winner)?,
             length: chunk.length,
             blake3: chunk.blake3.clone(),
             toc_hash: chunk.toc_hash.clone(),
@@ -2614,36 +2289,13 @@ fn build_generation_receipt(
     Ok(AssetGenerationReceipt {
         format: "gore.asset.generation.v1".to_owned(),
         asset: asset.to_owned(),
-        usmap: GenerationFileAnchor::from_seal(usmap)?,
-        main_utoc: GenerationFileAnchor::from_seal(main_utoc)?,
-        global_utoc: GenerationFileAnchor::from_seal(global_utoc)?,
-        global_ucas: GenerationFileAnchor::from_seal(global_ucas)?,
+        usmap: generation_file_anchor(usmap)?,
+        main_utoc: generation_file_anchor(main_utoc)?,
+        global_utoc: generation_file_anchor(global_utoc)?,
+        global_ucas: generation_file_anchor(global_ucas)?,
         container_set,
         target_chunks,
     })
-}
-
-fn generation_mismatch_reason(
-    expected: &AssetGenerationReceipt,
-    current: &AssetGenerationReceipt,
-) -> &'static str {
-    if expected.format != current.format || expected.asset != current.asset {
-        "generation envelope"
-    } else if expected.usmap != current.usmap {
-        "USMAP anchor"
-    } else if expected.main_utoc != current.main_utoc {
-        "main UTOC anchor"
-    } else if expected.global_utoc != current.global_utoc {
-        "global UTOC anchor"
-    } else if expected.global_ucas != current.global_ucas {
-        "global UCAS anchor"
-    } else if expected.container_set != current.container_set {
-        "participating UTOC set"
-    } else if expected.target_chunks != current.target_chunks {
-        "target or ContainerHeader chunk winners"
-    } else {
-        "unknown field"
-    }
 }
 
 fn probe_current_generation_receipt(
@@ -2704,697 +2356,6 @@ fn run_final_publish_gate<T>(
     Ok(result)
 }
 
-fn validate_generation_receipt(
-    generation: &AssetGenerationReceipt,
-    code: &'static str,
-) -> Result<()> {
-    fn valid_hex(value: &str, bytes: usize) -> bool {
-        value.len() == bytes.saturating_mul(2)
-            && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && value == value.to_ascii_lowercase()
-    }
-
-    fn validate_file(anchor: &GenerationFileAnchor, code: &'static str) -> Result<()> {
-        if anchor.file_name.is_empty()
-            || anchor.file_name.contains('/')
-            || anchor.file_name.contains('\\')
-            || anchor.length == 0
-            || !valid_hex(&anchor.sha256, 32)
-        {
-            bail!("{code}: malformed generation file anchor");
-        }
-        Ok(())
-    }
-
-    if generation.format != "gore.asset.generation.v1"
-        || generation.asset.is_empty()
-        || generation.container_set.is_empty()
-        || generation.container_set.len() > 256
-        || generation.target_chunks.is_empty()
-        || generation.target_chunks.len() > 4096
-    {
-        bail!("{code}: malformed generation envelope");
-    }
-    for anchor in [
-        &generation.usmap,
-        &generation.main_utoc,
-        &generation.global_utoc,
-        &generation.global_ucas,
-    ] {
-        validate_file(anchor, code)?;
-    }
-    for anchor in &generation.container_set {
-        validate_file(anchor, code)?;
-    }
-    if !generation.container_set.contains(&generation.main_utoc)
-        || !generation.container_set.contains(&generation.global_utoc)
-    {
-        bail!("{code}: main/global UTOC anchors are absent from container set");
-    }
-    let mut unique_containers = generation.container_set.clone();
-    unique_containers.sort_by(|left, right| {
-        left.file_name
-            .cmp(&right.file_name)
-            .then(left.sha256.cmp(&right.sha256))
-    });
-    unique_containers.dedup();
-    if unique_containers.len() != generation.container_set.len() {
-        bail!("{code}: duplicate generation container anchors");
-    }
-
-    let mut ids = std::collections::BTreeSet::new();
-    let mut has_export = false;
-    let mut has_header = false;
-    for chunk in &generation.target_chunks {
-        validate_file(&chunk.winner_utoc, code)?;
-        let length_is_valid = match chunk.chunk_type.as_str() {
-            "ContainerHeader" | "ExportBundleData" => chunk.length > 0,
-            "BulkData" | "OptionalBulkData" | "MemoryMappedBulkData" => true,
-            _ => false,
-        };
-        if !generation.container_set.contains(&chunk.winner_utoc)
-            || !valid_hex(&chunk.chunk_id, 12)
-            || !valid_hex(&chunk.blake3, 32)
-            || !matches!(chunk.toc_hash_bytes, 20 | 32)
-            || !valid_hex(&chunk.toc_hash, chunk.toc_hash_bytes)
-            || !length_is_valid
-            || chunk.length > 512 * 1024 * 1024
-            || !ids.insert(chunk.chunk_id.clone())
-        {
-            bail!("{code}: malformed or duplicate generation chunk anchor");
-        }
-        match chunk.chunk_type.as_str() {
-            "ContainerHeader" => has_header = true,
-            "ExportBundleData" => has_export = true,
-            "BulkData" | "OptionalBulkData" | "MemoryMappedBulkData" => {}
-            _ => bail!("{code}: unsupported generation chunk type"),
-        }
-    }
-    if !has_export || !has_header {
-        bail!("{code}: generation must contain export and ContainerHeader chunks");
-    }
-    Ok(())
-}
-
-fn is_canonical_hex(value: &str, bytes: usize) -> bool {
-    value.len() == bytes.saturating_mul(2)
-        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && value == value.to_ascii_lowercase()
-}
-
-fn is_canonical_sha256(value: &str) -> bool {
-    is_canonical_hex(value, 32)
-}
-
-fn validate_sidecar_receipts(
-    sidecars: &[SidecarReceipt],
-    stem: &str,
-    code: &'static str,
-) -> Result<()> {
-    if sidecars.len() > SidecarRole::ALL.len() {
-        bail!("{code}: more than three optional sidecars are refused");
-    }
-    let mut previous_role = None;
-    for sidecar in sidecars {
-        if previous_role.is_some_and(|previous| previous >= sidecar.role)
-            || sidecar.file_name != format!("{stem}.{}", sidecar.role.suffix())
-            || sidecar.length > MAX_OPTIONAL_SIDECAR_BYTES
-            || !is_canonical_sha256(&sidecar.sha256)
-        {
-            bail!("{code}: malformed, duplicate, or noncanonical sidecar receipt");
-        }
-        previous_role = Some(sidecar.role);
-    }
-    Ok(())
-}
-
-fn validate_sidecar_generation_mapping(
-    sidecars: &[SidecarReceipt],
-    generation: &AssetGenerationReceipt,
-    code: &'static str,
-) -> Result<()> {
-    let expected: Vec<_> = sidecars.iter().map(|sidecar| sidecar.role).collect();
-    let mut actual: Vec<_> = generation
-        .target_chunks
-        .iter()
-        .filter(|chunk| {
-            gore_tex::container::chunk_id_matches_asset_path(&chunk.chunk_id, &generation.asset)
-        })
-        .filter_map(|chunk| SidecarRole::from_chunk_type(&chunk.chunk_type))
-        .collect();
-    actual.sort();
-    if actual.windows(2).any(|pair| pair[0] == pair[1]) {
-        bail!("{code}: original generation exposes duplicate target bulk chunk roles");
-    }
-    if actual != expected {
-        let expected: Vec<_> = expected.iter().map(|role| role.chunk_type()).collect();
-        let actual: Vec<_> = actual.iter().map(|role| role.chunk_type()).collect();
-        bail!(
-            "{code}: sidecar roles do not match original target bulk chunks; expected {expected:?}, generation has {actual:?}"
-        );
-    }
-    Ok(())
-}
-
-fn validate_component_digest_proof(
-    proof: &ComponentDigestProof,
-    expected_extension: &str,
-    limit: u64,
-    code: &'static str,
-) -> Result<()> {
-    let path = Path::new(&proof.path);
-    if !path.is_absolute()
-        || path.extension().and_then(|value| value.to_str()) != Some(expected_extension)
-        || proof.length == 0
-        || proof.length > limit
-        || !is_canonical_sha256(&proof.sha256)
-    {
-        bail!("{code}: malformed patch output component proof");
-    }
-    Ok(())
-}
-
-fn validate_patch_receipt_envelope(
-    receipt: &PatchReceiptEnvelope,
-    receipt_path: &Path,
-) -> Result<()> {
-    let code = "ASSET_PATCH_RECEIPT";
-    if receipt.format != "gore.asset.patch-fixed.v2"
-        || receipt.status != "patched"
-        || !receipt.generation_bound
-        || receipt.provenance.generation.format != "gore.asset.generation.v1"
-        || receipt.asset != receipt.provenance.generation.asset
-        || !receipt.output_requires_reinspect
-    {
-        bail!("{code}: unsupported, contradictory, or unbound patch-v2 envelope");
-    }
-    validate_game_asset_path(&receipt.asset, code)?;
-    validate_generation_receipt(&receipt.provenance.generation, code)?;
-    if !receipt
-        .provenance
-        .usmap
-        .same_content(&receipt.provenance.generation.usmap)
-        || receipt.input_selector.package_seal != receipt.input_package_seal
-        || receipt.input_selector.usmap_sha256 != receipt.provenance.usmap.sha256
-        || receipt.input_selector.expected_hex != receipt.expected_hex
-        || receipt.patch.before != receipt.input_package_seal
-        || receipt.patch.after != receipt.output_package_seal
-        || receipt.patch.export_index != receipt.input_selector.export_index
-        || receipt.patch.component != receipt.input_selector.component
-        || receipt.patch.kind != receipt.input_selector.kind
-        || receipt.patch.length != receipt.input_selector.kind.width()
-    {
-        bail!("{code}: duplicated selector, USMAP, package, or patch proofs disagree");
-    }
-    let width = receipt.input_selector.kind.width();
-    if !is_canonical_hex(&receipt.expected_hex, width)
-        || !is_canonical_hex(&receipt.replacement_hex, width)
-    {
-        bail!("{code}: expected/replacement wire proofs are noncanonical");
-    }
-    validate_component_digest_proof(
-        &receipt.output.uasset,
-        "uasset",
-        asset_package_limits().max_uasset_bytes,
-        code,
-    )?;
-    validate_component_digest_proof(
-        &receipt.output.uexp,
-        "uexp",
-        asset_package_limits().max_uexp_bytes,
-        code,
-    )?;
-    let canonical_receipt_path = canonical_leaf_path(receipt_path, code)?;
-    let canonical_proof_receipt = canonical_leaf_path(Path::new(&receipt.output.receipt), code)?;
-    if receipt.output.uasset.sha256 != encode_hex(&receipt.output_package_seal.uasset_sha256)
-        || receipt.output.uexp.sha256 != encode_hex(&receipt.output_package_seal.uexp_sha256)
-        || receipt
-            .output
-            .uasset
-            .length
-            .checked_add(receipt.output.uexp.length)
-            .is_none_or(|total| total > asset_package_limits().max_total_bytes)
-        || receipt.output.sidecars != receipt.output_sidecars
-        || canonical_proof_receipt != canonical_receipt_path
-    {
-        bail!("{code}: duplicated output package, sidecar, or receipt proofs disagree");
-    }
-    let output_uasset = Path::new(&receipt.output.uasset.path);
-    let output_uexp = Path::new(&receipt.output.uexp.path);
-    if output_uasset.with_extension("uexp") != output_uexp {
-        bail!("{code}: output uasset/uexp proof paths are not a pair");
-    }
-    let stem = output_uasset
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .context("ASSET_PATCH_RECEIPT: output package has no UTF-8 stem")?;
-    let expected_receipt = output_uasset.with_file_name(format!("{stem}{PATCH_RECEIPT_SUFFIX}"));
-    if canonical_proof_receipt != canonical_leaf_path(&expected_receipt, code)? {
-        bail!("{code}: output receipt path does not match output package stem");
-    }
-    validate_sidecar_receipts(&receipt.output_sidecars, stem, code)?;
-    validate_sidecar_generation_mapping(
-        &receipt.output_sidecars,
-        &receipt.provenance.generation,
-        code,
-    )?;
-    let component_length = if receipt.patch.component == PackageComponent::Uasset {
-        receipt.output.uasset.length
-    } else {
-        receipt.output.uexp.length
-    };
-    let patch_end = u64::try_from(receipt.patch.absolute_offset)?
-        .checked_add(u64::try_from(receipt.patch.length)?)
-        .context("ASSET_PATCH_RECEIPT: patch range overflowed")?;
-    if patch_end > component_length {
-        bail!("{code}: patch range exceeds sealed output component");
-    }
-    Ok(())
-}
-
-fn generation_anchor_from_source(
-    proof: &SourceFileReceipt,
-    limit: u64,
-    code: &'static str,
-) -> Result<GenerationFileAnchor> {
-    let path = Path::new(&proof.path);
-    validate_lexical_receipt_path(path, code)?;
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("{code}: source proof has no UTF-8 filename"))?;
-    if proof.length == 0 || proof.length > limit || !is_canonical_sha256(&proof.sha256) {
-        bail!("{code}: malformed source file proof");
-    }
-    Ok(GenerationFileAnchor {
-        file_name: file_name.to_owned(),
-        length: proof.length,
-        sha256: proof.sha256.clone(),
-    })
-}
-
-fn validate_lexical_receipt_path(path: &Path, code: &'static str) -> Result<PathBuf> {
-    if !path.is_absolute() {
-        bail!(
-            "{code}: source proof path is not absolute: {}",
-            path.display()
-        );
-    }
-
-    // Do not touch the historical source path on disk here. Rebuild it from its
-    // lexical components instead, then require byte-for-byte native spelling.
-    // This rejects `.`/`..`, repeated or alternate separators, and unsafe
-    // Windows component aliases while preserving canonical verbatim/UNC
-    // prefixes emitted by `fs::canonicalize`. Exact comparisons below also
-    // reject casing differences between duplicated receipt fields.
-    let mut rebuilt = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(value) => {
-                let value = value.to_str().with_context(|| {
-                    format!("{code}: source proof path contains a non-UTF-8 component")
-                })?;
-                if value.ends_with(['.', ' '])
-                    || value.chars().any(|ch| {
-                        ch.is_control()
-                            || matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\\')
-                    })
-                    || windows_reserved_name(value)
-                {
-                    bail!(
-                        "{code}: source proof path contains an unsafe component: {}",
-                        path.display()
-                    );
-                }
-                rebuilt.push(component.as_os_str());
-            }
-            Component::Prefix(prefix) => {
-                #[cfg(windows)]
-                if !matches!(
-                    prefix.kind(),
-                    std::path::Prefix::Disk(_)
-                        | std::path::Prefix::UNC(_, _)
-                        | std::path::Prefix::VerbatimDisk(_)
-                        | std::path::Prefix::VerbatimUNC(_, _)
-                ) {
-                    bail!(
-                        "{code}: source proof path uses a non-filesystem Windows prefix: {}",
-                        path.display()
-                    );
-                }
-                let _ = prefix;
-                rebuilt.push(component.as_os_str());
-            }
-            Component::RootDir => rebuilt.push(component.as_os_str()),
-            Component::CurDir | Component::ParentDir => {
-                bail!(
-                    "{code}: source proof path contains a noncanonical component: {}",
-                    path.display()
-                );
-            }
-        }
-    }
-    if rebuilt.as_os_str() != path.as_os_str() {
-        bail!(
-            "{code}: source proof path is not in canonical lexical form: {}",
-            path.display()
-        );
-    }
-    Ok(rebuilt)
-}
-
-fn require_receipt_path(
-    actual: &Path,
-    expected: &Path,
-    role: &str,
-    code: &'static str,
-) -> Result<()> {
-    if actual.as_os_str() != expected.as_os_str() {
-        bail!(
-            "{code}: {role} is outside its canonical game-root location; expected '{}'",
-            expected.display()
-        );
-    }
-    Ok(())
-}
-
-fn require_direct_receipt_child(
-    path: &Path,
-    directory: &Path,
-    extension: &str,
-    role: &str,
-    code: &'static str,
-) -> Result<()> {
-    let parent_matches = path
-        .parent()
-        .is_some_and(|parent| parent.as_os_str() == directory.as_os_str());
-    if !parent_matches || path.extension().and_then(|value| value.to_str()) != Some(extension) {
-        bail!(
-            "{code}: {role} is not a canonical direct .{extension} child of '{}'",
-            directory.display()
-        );
-    }
-    Ok(())
-}
-
-fn validate_extract_source_proofs(
-    receipt: &ExtractReceiptEnvelope,
-    copied_usmap: &ReceiptComponent,
-    code: &'static str,
-) -> Result<()> {
-    let source = &receipt.source;
-    let game_root = validate_lexical_receipt_path(Path::new(&source.game_root), code)?;
-    let paks = game_root.join("G1R").join("Content").join("Paks");
-    let ue4ss = game_root
-        .join("G1R")
-        .join("Binaries")
-        .join("Win64")
-        .join("ue4ss");
-    if source.game_root.is_empty()
-        || source.content_binding != EXTRACT_CONTENT_BINDING
-        || source.composite_store_anchor.role != COMPOSITE_UCAS_ROLE
-        || source.usmap.copied_relative_path != COPIED_USMAP_NAME
-        || source.usmap.copy != *copied_usmap
-    {
-        bail!("{code}: contradictory extract source envelope");
-    }
-    let held = &source.composite_store_anchor.ucas;
-    let held_path = validate_lexical_receipt_path(Path::new(&held.path), code)?;
-    if held.length == 0
-        || held.length > MAX_MOUNT_UCAS_BYTES
-        || held.modified_stamp.is_empty()
-        || held.platform_identity.is_empty()
-        || held.sha256.is_some()
-        || held.verification != HELD_IDENTITY_VERIFICATION
-        || !held.content_hash_omitted
-        || held.limitation != HELD_IDENTITY_LIMITATION
-    {
-        bail!("{code}: malformed main UCAS identity proof");
-    }
-
-    let main_anchor = generation_anchor_from_source(
-        &source.composite_store_anchor.utoc,
-        MAX_MOUNT_UTOC_BYTES,
-        code,
-    )?;
-    let usmap_anchor = generation_anchor_from_source(&source.usmap.source, MAX_USMAP_BYTES, code)?;
-    let global_utoc_anchor = generation_anchor_from_source(
-        &source.global_script_store.utoc,
-        MAX_MOUNT_UTOC_BYTES,
-        code,
-    )?;
-    let global_ucas_anchor = generation_anchor_from_source(
-        &source.global_script_store.ucas,
-        MAX_CONTAINER_COMPONENT_BYTES,
-        code,
-    )?;
-    let main_utoc_path =
-        validate_lexical_receipt_path(Path::new(&source.composite_store_anchor.utoc.path), code)?;
-    let usmap_path = validate_lexical_receipt_path(Path::new(&source.usmap.source.path), code)?;
-    let global_utoc_path =
-        validate_lexical_receipt_path(Path::new(&source.global_script_store.utoc.path), code)?;
-    let global_ucas_path =
-        validate_lexical_receipt_path(Path::new(&source.global_script_store.ucas.path), code)?;
-    if main_anchor != receipt.generation.main_utoc
-        || usmap_anchor != receipt.generation.usmap
-        || global_utoc_anchor != receipt.generation.global_utoc
-        || global_ucas_anchor != receipt.generation.global_ucas
-    {
-        bail!("{code}: duplicated generation file anchors disagree");
-    }
-    require_receipt_path(
-        &main_utoc_path,
-        &paks.join("G1R-Windows.utoc"),
-        "main UTOC proof",
-        code,
-    )?;
-    require_receipt_path(
-        &held_path,
-        &paks.join("G1R-Windows.ucas"),
-        "main UCAS proof",
-        code,
-    )?;
-    require_receipt_path(
-        &global_utoc_path,
-        &paks.join("global.utoc"),
-        "global UTOC proof",
-        code,
-    )?;
-    require_receipt_path(
-        &global_ucas_path,
-        &paks.join("global.ucas"),
-        "global UCAS proof",
-        code,
-    )?;
-    require_direct_receipt_child(&usmap_path, &ue4ss, "usmap", "USMAP proof", code)?;
-    let main_ucas_name = held_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .context(format!("{code}: main UCAS filename is non-UTF-8"))?;
-    if Path::new(&main_anchor.file_name).with_extension("ucas") != Path::new(main_ucas_name) {
-        bail!("{code}: main UTOC and UCAS proofs are not a matching pair");
-    }
-
-    let mut toc_by_path = std::collections::BTreeMap::new();
-    let mut container_set = Vec::with_capacity(source.source_container_tocs.len());
-    for proof in &source.source_container_tocs {
-        let anchor = generation_anchor_from_source(proof, MAX_MOUNT_UTOC_BYTES, code)?;
-        let path = validate_lexical_receipt_path(Path::new(&proof.path), code)?;
-        require_direct_receipt_child(&path, &paks, "utoc", "source container TOC proof", code)?;
-        if toc_by_path.insert(path, anchor.clone()).is_some() {
-            bail!("{code}: duplicate source container TOC proof");
-        }
-        container_set.push(anchor);
-    }
-    container_set.sort_by(|left, right| {
-        left.file_name
-            .cmp(&right.file_name)
-            .then(left.sha256.cmp(&right.sha256))
-    });
-    if container_set != receipt.generation.container_set {
-        bail!("{code}: source container TOCs disagree with generation container set");
-    }
-    if toc_by_path.get(&main_utoc_path) != Some(&main_anchor) {
-        bail!("{code}: main UTOC proof is absent from source container TOCs");
-    }
-    if toc_by_path.get(&global_utoc_path) != Some(&global_utoc_anchor) {
-        bail!("{code}: global UTOC proof is absent from source container TOCs");
-    }
-
-    let mut chunk_ids = std::collections::BTreeSet::new();
-    let mut target_chunks = Vec::new();
-    for chunk in &source.consumed_chunks {
-        if !is_canonical_hex(&chunk.chunk_id, 12)
-            || chunk.chunk_type.is_empty()
-            || !chunk
-                .chunk_type
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric())
-            || chunk.length > 512 * 1024 * 1024
-            || !is_canonical_hex(&chunk.blake3, 32)
-            || !matches!(chunk.toc_hash_bytes, 20 | 32)
-            || !is_canonical_hex(&chunk.toc_hash, chunk.toc_hash_bytes)
-            || !chunk_ids.insert(chunk.chunk_id.clone())
-        {
-            bail!("{code}: malformed or duplicate consumed chunk proof");
-        }
-        let source_utoc = validate_lexical_receipt_path(&chunk.source_utoc, code)?;
-        let winner = toc_by_path.get(&source_utoc).with_context(|| {
-            format!("{code}: consumed chunk winner is absent from source TOC proofs")
-        })?;
-        if matches!(
-            chunk.chunk_type.as_str(),
-            "ContainerHeader"
-                | "ExportBundleData"
-                | "BulkData"
-                | "OptionalBulkData"
-                | "MemoryMappedBulkData"
-        ) {
-            target_chunks.push(GenerationChunkAnchor {
-                chunk_id: chunk.chunk_id.clone(),
-                chunk_type: chunk.chunk_type.clone(),
-                winner_utoc: winner.clone(),
-                length: chunk.length,
-                blake3: chunk.blake3.clone(),
-                toc_hash: chunk.toc_hash.clone(),
-                toc_hash_bytes: chunk.toc_hash_bytes,
-            });
-        }
-    }
-    target_chunks.sort_by(|left, right| {
-        left.chunk_id
-            .cmp(&right.chunk_id)
-            .then(left.chunk_type.cmp(&right.chunk_type))
-            .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
-    });
-    if target_chunks != receipt.generation.target_chunks {
-        bail!("{code}: consumed chunk proofs disagree with generation target chunks");
-    }
-    Ok(())
-}
-
-fn validate_extract_receipt_envelope(
-    receipt: &ExtractReceiptEnvelope,
-    code: &'static str,
-) -> Result<ValidatedExtractBinding> {
-    if receipt.format != "gore.asset.extract.v2"
-        || receipt.status != "extracted"
-        || receipt.deployed
-        || receipt.output.root.is_empty()
-        || !Path::new(&receipt.output.root).is_absolute()
-        || receipt.output.receipt != EXTRACT_RECEIPT_NAME
-    {
-        bail!("{code}: malformed or unsupported extract-v2 envelope");
-    }
-    validate_game_asset_path(&receipt.asset, code)?;
-    if receipt.generation.asset != receipt.asset {
-        bail!("{code}: generation targets a different asset");
-    }
-    validate_generation_receipt(&receipt.generation, code)?;
-
-    let output_root = canonical_leaf_path(Path::new(&receipt.output.root), code)?;
-    let components = &receipt.output.components;
-    if !(3..=6).contains(&components.len()) {
-        bail!("{code}: invalid output component count");
-    }
-    let mut names = std::collections::BTreeSet::new();
-    for component in components {
-        if component.relative_path.is_empty()
-            || component.relative_path.contains('/')
-            || component.relative_path.contains('\\')
-            || !is_canonical_sha256(&component.sha256)
-            || !names.insert(component.relative_path.clone())
-        {
-            bail!("{code}: malformed or duplicate output component");
-        }
-        validate_output_component(&component.relative_path, code)?;
-    }
-
-    let uasset = components
-        .first()
-        .context("ASSET_EXTRACT_RECEIPT: missing uasset component")?;
-    let stem = uasset
-        .relative_path
-        .strip_suffix(".uasset")
-        .filter(|value| !value.is_empty())
-        .context("ASSET_EXTRACT_RECEIPT: first component must be lowercase .uasset")?;
-    if windows_reserved_name(stem)
-        || !stem
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        bail!("{code}: extracted package stem is noncanonical");
-    }
-    let uexp = components
-        .get(1)
-        .context("ASSET_EXTRACT_RECEIPT: missing uexp component")?;
-    let copied_usmap = components
-        .get(2)
-        .context("ASSET_EXTRACT_RECEIPT: missing copied USMAP component")?;
-    if uexp.relative_path != format!("{stem}.uexp")
-        || copied_usmap.relative_path != COPIED_USMAP_NAME
-        || uasset.length == 0
-        || uasset.length > asset_package_limits().max_uasset_bytes
-        || uexp.length == 0
-        || uexp.length > asset_package_limits().max_uexp_bytes
-        || copied_usmap.length == 0
-        || copied_usmap.length > MAX_USMAP_BYTES
-    {
-        bail!("{code}: required extract component names or lengths are invalid");
-    }
-    let pair_total = uasset
-        .length
-        .checked_add(uexp.length)
-        .context("ASSET_EXTRACT_RECEIPT: package size overflowed")?;
-    if pair_total > asset_package_limits().max_total_bytes {
-        bail!("{code}: extracted package pair exceeds aggregate limit");
-    }
-    if uasset.sha256 != encode_hex(&receipt.package_seal.uasset_sha256)
-        || uexp.sha256 != encode_hex(&receipt.package_seal.uexp_sha256)
-    {
-        bail!("{code}: package component hashes disagree with package seal");
-    }
-    if copied_usmap.length != receipt.generation.usmap.length
-        || copied_usmap.sha256 != receipt.generation.usmap.sha256
-    {
-        bail!("{code}: copied USMAP component disagrees with generation anchor");
-    }
-
-    let mut sidecars = Vec::new();
-    let mut cooked_total = pair_total;
-    for component in &components[3..] {
-        let role = SidecarRole::ALL
-            .into_iter()
-            .find(|role| component.relative_path == format!("{stem}.{}", role.suffix()))
-            .with_context(|| format!("{code}: unexpected extract output component"))?;
-        cooked_total = cooked_total
-            .checked_add(component.length)
-            .context("ASSET_EXTRACT_RECEIPT: cooked size overflowed")?;
-        sidecars.push(SidecarReceipt {
-            role,
-            file_name: component.relative_path.clone(),
-            length: component.length,
-            sha256: component.sha256.clone(),
-        });
-    }
-    if cooked_total > MAX_COOKED_PACKAGE_BYTES {
-        bail!("{code}: extracted cooked package exceeds aggregate limit");
-    }
-    validate_sidecar_receipts(&sidecars, stem, code)?;
-    validate_sidecar_generation_mapping(&sidecars, &receipt.generation, code)?;
-    validate_extract_source_proofs(receipt, copied_usmap, code)?;
-
-    Ok(ValidatedExtractBinding {
-        output_root,
-        uasset: uasset.clone(),
-        uexp: uexp.clone(),
-        copied_usmap: copied_usmap.clone(),
-        components: components.clone(),
-        sidecars,
-    })
-}
-
 fn component_receipt(relative_path: &str, length: u64, sha256: &[u8; 32]) -> ReceiptComponent {
     ReceiptComponent {
         relative_path: relative_path.to_owned(),
@@ -3415,13 +2376,6 @@ fn packed_input_receipt(
         "length": length,
         "sha256": encode_hex(sha256),
     })
-}
-
-#[derive(Debug)]
-struct VerifiedInput {
-    path: PathBuf,
-    bytes: Vec<u8>,
-    sha256: [u8; 32],
 }
 
 #[derive(Debug, Serialize)]
@@ -3659,24 +2613,10 @@ fn print_inspect_text(document: &serde_json::Value) -> Result<()> {
 }
 
 fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
-    let extract_receipt_input = read_verified_bounded(
-        &args.extract_receipt,
-        MAX_RECEIPT_BYTES,
-        "ASSET_EXTRACT_RECEIPT",
-    )?;
-    let extract_receipt: ExtractReceiptEnvelope =
-        serde_json::from_slice(&extract_receipt_input.bytes)
-            .context("ASSET_EXTRACT_RECEIPT: invalid receipt JSON")?;
-    let extract_binding =
-        validate_extract_receipt_envelope(&extract_receipt, "ASSET_EXTRACT_RECEIPT")?;
-    if extract_receipt_input.path
-        != canonical_leaf_path(
-            &extract_binding.output_root.join(EXTRACT_RECEIPT_NAME),
-            "ASSET_EXTRACT_RECEIPT",
-        )?
-    {
-        bail!("ASSET_EXTRACT_RECEIPT: receipt path disagrees with extract output proof");
-    }
+    let verified_extract = read_extract_receipt_v2(&args.extract_receipt)?;
+    let extract_receipt_input = verified_extract.input();
+    let extract_receipt = verified_extract.receipt();
+    let extract_binding = verified_extract.binding();
 
     let selector_input =
         read_verified_bounded(&args.selector, MAX_SELECTOR_BYTES, "ASSET_SELECTOR")?;
@@ -3695,16 +2635,15 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
         );
     }
 
-    let usmap = read_verified_bounded(&args.usmap, MAX_USMAP_BYTES, "ASSET_USMAP")?;
-    let usmap_seal = FileSeal {
-        path: usmap.path.clone(),
-        length: u64::try_from(usmap.bytes.len())?,
-        sha256: usmap.sha256,
-    };
-    if !extract_receipt.generation.usmap.matches(&usmap_seal) {
+    let usmap = read_verified_file_bounded(&args.usmap, MAX_USMAP_BYTES, "ASSET_USMAP")?;
+    if !extract_receipt
+        .generation
+        .usmap
+        .matches_verified_input(&usmap)
+    {
         bail!("ASSET_GENERATION_MISMATCH: supplied USMAP differs from extract generation");
     }
-    let schemas = SchemaDb::from_usmap(&usmap.bytes).context("ASSET_USMAP")?;
+    let schemas = SchemaDb::from_usmap(usmap.bytes()).context("ASSET_USMAP")?;
     let mut carrier =
         PackageCarrier::load(&args.uasset, asset_package_limits()).context("ASSET_INPUT")?;
     let input_package_seal = PackagePairSeal::capture(&carrier);
@@ -3712,7 +2651,7 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
         bail!("ASSET_GENERATION_MISMATCH: input package pair differs from extract receipt");
     }
     let input_sidecar_seals =
-        validate_extract_receipt_components(&extract_binding, &carrier, &usmap_seal)?;
+        validate_extract_receipt_components(&verified_extract, &carrier, &usmap)?;
 
     let patch_receipt_path = patch_receipt_path(&args.out)?;
     ensure_path_absent(&patch_receipt_path, "ASSET_PATCH_RECEIPT")?;
@@ -3761,7 +2700,7 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
         .iter()
         .filter(|(role, _)| {
             extract_binding
-                .sidecars
+                .sidecars()
                 .iter()
                 .any(|item| item.role == *role)
         })
@@ -3781,7 +2720,8 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
             ownership,
         } = copied;
         output_guard.adopt(ownership);
-        if copied_source.length != source_seal.length || copied_source.sha256 != source_seal.sha256
+        if copied_source.length != source_seal.length()
+            || &copied_source.sha256 != source_seal.sha256()
         {
             bail!("ASSET_OUTPUT: extracted sidecar changed after provenance validation");
         }
@@ -3814,27 +2754,27 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
     output_guard.own(write_receipt.uexp.path.clone());
     output_guard.own(write_receipt.uasset.path.clone());
     let copied_usmap_anchor = GenerationFileAnchor {
-        file_name: extract_binding.copied_usmap.relative_path.clone(),
-        length: extract_binding.copied_usmap.length,
-        sha256: extract_binding.copied_usmap.sha256.clone(),
+        file_name: extract_binding.copied_usmap().relative_path.clone(),
+        length: extract_binding.copied_usmap().length,
+        sha256: extract_binding.copied_usmap().sha256.clone(),
     };
 
     let replacement_hex = encode_hex(&replacement);
     let result = PatchReceiptEnvelope {
         format: "gore.asset.patch-fixed.v2".to_owned(),
         status: "patched".to_owned(),
-        asset: extract_receipt.asset,
+        asset: extract_receipt.asset.clone(),
         generation_bound: true,
         provenance: PatchReceiptProvenance {
             extract_receipt: ReceiptFileSeal {
-                path: extract_receipt_input.path.display().to_string(),
-                length: u64::try_from(extract_receipt_input.bytes.len())?,
-                sha256: encode_hex(&extract_receipt_input.sha256),
+                path: extract_receipt_input.path().display().to_string(),
+                length: extract_receipt_input.length(),
+                sha256: encode_hex(extract_receipt_input.sha256()),
             },
-            generation: extract_receipt.generation,
+            generation: extract_receipt.generation.clone(),
             usmap: copied_usmap_anchor,
-            extract_components: extract_binding.components,
-            extracted_sidecars: extract_binding.sidecars,
+            extract_components: extract_binding.components().to_vec(),
+            extracted_sidecars: extract_binding.sidecars().to_vec(),
         },
         input_package_seal,
         output_package_seal,
@@ -3923,167 +2863,6 @@ fn patch_receipt_path(output_uasset: &Path) -> Result<PathBuf> {
     let name = format!("{stem}{PATCH_RECEIPT_SUFFIX}");
     validate_output_component(&name, "ASSET_PATCH_RECEIPT")?;
     Ok(parent.join(name))
-}
-
-fn validate_extract_receipt_components(
-    binding: &ValidatedExtractBinding,
-    carrier: &PackageCarrier,
-    usmap: &FileSeal,
-) -> Result<Vec<FileSeal>> {
-    let source = carrier
-        .source_paths()
-        .context("ASSET_EXTRACT_RECEIPT: input package has no source paths")?;
-    let source_uasset_name = source
-        .uasset()
-        .file_name()
-        .and_then(|value| value.to_str())
-        .context("ASSET_EXTRACT_RECEIPT: input uasset has a non-UTF-8 filename")?;
-    let source_uexp_name = source
-        .uexp()
-        .file_name()
-        .and_then(|value| value.to_str())
-        .context("ASSET_EXTRACT_RECEIPT: input uexp has a non-UTF-8 filename")?;
-    if source_uasset_name != binding.uasset.relative_path
-        || source_uexp_name != binding.uexp.relative_path
-        || source.uasset().parent() != Some(binding.output_root.as_path())
-        || source.uexp().parent() != Some(binding.output_root.as_path())
-    {
-        bail!("ASSET_EXTRACT_RECEIPT: input package filenames differ from extract manifest");
-    }
-    let seal = PackagePairSeal::capture(carrier);
-    if binding.uasset.length != u64::try_from(carrier.len(PackageComponent::Uasset))?
-        || binding.uasset.sha256 != encode_hex(&seal.uasset_sha256)
-        || binding.uexp.length != u64::try_from(carrier.len(PackageComponent::Uexp))?
-        || binding.uexp.sha256 != encode_hex(&seal.uexp_sha256)
-    {
-        bail!("ASSET_EXTRACT_RECEIPT: package component list disagrees with sealed input pair");
-    }
-    if binding.copied_usmap.length != usmap.length
-        || binding.copied_usmap.sha256 != encode_hex(&usmap.sha256)
-    {
-        bail!("ASSET_EXTRACT_RECEIPT: copied USMAP component disagrees with supplied USMAP");
-    }
-
-    let mut actual_sidecars = Vec::new();
-    for role in SidecarRole::ALL {
-        let (file_name, path) = sidecar_path(source.uasset(), role, "ASSET_EXTRACT_RECEIPT")?;
-        let expected = binding.sidecars.iter().find(|sidecar| sidecar.role == role);
-        let actual = digest_optional_regular_file_bounded(
-            &path,
-            MAX_OPTIONAL_SIDECAR_BYTES,
-            "ASSET_EXTRACT_RECEIPT",
-        )?;
-        match (expected, actual) {
-            (None, None) => {}
-            (Some(expected), Some(actual))
-                if expected.file_name == file_name
-                    && expected.length == actual.length
-                    && expected.sha256 == encode_hex(&actual.sha256) =>
-            {
-                actual_sidecars.push(actual);
-            }
-            _ => bail!(
-                "ASSET_GENERATION_MISMATCH: input optional sidecar set or content differs from extract receipt"
-            ),
-        }
-    }
-    Ok(actual_sidecars)
-}
-
-fn validate_patched_sidecars(
-    uasset: &Path,
-    expected_sidecars: &[SidecarReceipt],
-    pair_bytes: u64,
-) -> Result<Vec<FileSeal>> {
-    let stem = uasset
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .filter(|value| !value.is_empty())
-        .context("ASSET_PACK_SIDECAR: patched package requires a UTF-8 stem")?;
-    validate_sidecar_receipts(expected_sidecars, stem, "ASSET_PATCH_RECEIPT")?;
-    let mut actual_sidecars = Vec::new();
-    let mut cooked_total = pair_bytes;
-    for role in SidecarRole::ALL {
-        let (_, path) = sidecar_path(uasset, role, "ASSET_PACK_SIDECAR")?;
-        let expected = expected_sidecars
-            .iter()
-            .find(|sidecar| sidecar.role == role);
-        let actual = digest_optional_regular_file_bounded(
-            &path,
-            MAX_OPTIONAL_SIDECAR_BYTES,
-            "ASSET_PACK_SIDECAR",
-        )?;
-        match (expected, actual) {
-            (None, None) => {}
-            (Some(expected), Some(actual))
-                if expected.length == actual.length
-                    && expected.sha256 == encode_hex(&actual.sha256) =>
-            {
-                cooked_total = cooked_total
-                    .checked_add(actual.length)
-                    .context("ASSET_PACK_SIDECAR: cooked size overflowed")?;
-                actual_sidecars.push(actual);
-            }
-            (None, Some(_)) => bail!(
-                "ASSET_PACK_SIDECAR: unexpected optional sidecar exists; patched sidecar set must exactly match PatchReceipt v2"
-            ),
-            (Some(_), None) => bail!(
-                "ASSET_PACK_SIDECAR: required optional sidecar is missing; re-run patch-fixed"
-            ),
-            (Some(_), Some(_)) => bail!(
-                "ASSET_PACK_SIDECAR: optional sidecar content differs from PatchReceipt v2"
-            ),
-        }
-    }
-    if cooked_total > MAX_COOKED_PACKAGE_BYTES {
-        bail!(
-            "ASSET_PACK_SIDECAR: cooked package is {cooked_total} bytes; aggregate limit is {MAX_COOKED_PACKAGE_BYTES}"
-        );
-    }
-    Ok(actual_sidecars)
-}
-
-fn validate_patch_output_against_carrier(
-    receipt: &PatchReceiptEnvelope,
-    source_uasset: &Path,
-    source_uexp: &Path,
-    carrier: &PackageCarrier,
-) -> Result<()> {
-    let proof_uasset = canonical_leaf_path(
-        Path::new(&receipt.output.uasset.path),
-        "ASSET_PATCH_RECEIPT",
-    )?;
-    let proof_uexp =
-        canonical_leaf_path(Path::new(&receipt.output.uexp.path), "ASSET_PATCH_RECEIPT")?;
-    if source_uasset != proof_uasset
-        || source_uexp != proof_uexp
-        || receipt.output.uasset.length != u64::try_from(carrier.len(PackageComponent::Uasset))?
-        || receipt.output.uexp.length != u64::try_from(carrier.len(PackageComponent::Uexp))?
-    {
-        bail!("ASSET_PATCH_RECEIPT: supplied patched pair differs from output path/length proofs");
-    }
-    let seal = PackagePairSeal::capture(carrier);
-    if receipt.output.uasset.sha256 != encode_hex(&seal.uasset_sha256)
-        || receipt.output.uexp.sha256 != encode_hex(&seal.uexp_sha256)
-    {
-        bail!("ASSET_PATCH_RECEIPT: supplied patched pair differs from output hash proofs");
-    }
-    let replacement = decode_cli_hex(
-        &receipt.replacement_hex,
-        receipt.patch.length,
-        "ASSET_PATCH_RECEIPT",
-    )?;
-    let patched_range = carrier
-        .slice(
-            receipt.patch.component,
-            receipt.patch.absolute_offset,
-            receipt.patch.length,
-        )
-        .context("ASSET_PATCH_RECEIPT: reading sealed output patch range")?;
-    if patched_range != replacement {
-        bail!("ASSET_PATCH_RECEIPT: replacement proof differs from sealed output patch range");
-    }
-    Ok(())
 }
 
 fn parse_selector_document(bytes: &[u8]) -> Result<FixedLeafSelector> {
@@ -4190,6 +2969,13 @@ fn kind_name(kind: gore_asset::FixedWireKind) -> &'static str {
         gore_asset::FixedWireKind::LinearColorF32x4 => "linear_color_f32x4",
         gore_asset::FixedWireKind::Vector4F64x4 => "vector4_f64x4",
     }
+}
+
+#[derive(Debug)]
+struct VerifiedInput {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    sha256: [u8; 32],
 }
 
 fn read_verified_bounded(path: &Path, limit: u64, code: &'static str) -> Result<VerifiedInput> {
@@ -4358,8 +3144,10 @@ mod tests {
                 .join("/")
         );
         assert!(validate_game_asset_path(&too_deep, "TEST_ASSET").is_err());
-        assert!(MAX_STAGING_TREE_DEPTH > MAX_GAME_ASSET_SEGMENTS + 3);
-        assert!(MAX_STAGING_TREE_ENTRIES > MAX_GAME_ASSET_SEGMENTS + 8);
+        const {
+            assert!(MAX_STAGING_TREE_DEPTH > MAX_GAME_ASSET_SEGMENTS + 3);
+            assert!(MAX_STAGING_TREE_ENTRIES > MAX_GAME_ASSET_SEGMENTS + 8);
+        }
     }
 
     #[test]

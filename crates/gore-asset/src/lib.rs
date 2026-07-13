@@ -4,6 +4,7 @@
 //! USMAP, cooked-package carrier, and unversioned-property layers shared by
 //! generic DataAsset editors.
 
+pub mod dataasset_workflow;
 pub mod envelope;
 mod legacy_preflight;
 pub mod package;

@@ -904,6 +904,7 @@ dependencies = [
 name = "gore-asset"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "libc",
  "retoc",
  "serde",
