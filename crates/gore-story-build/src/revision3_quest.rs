@@ -7,22 +7,20 @@
 //! `verify_artifact_exact` before any source is regenerated. The result remains inspection-only:
 //! it grants no compilation, build, deployment, runtime, or publication authority.
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use gore_authoring::{
-    migrate_revision2_to_revision3, AssetVerification, ContentSeal, DraftQuestCollisionCatalog,
-    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonV1, EntityId, FormatV2,
-    OpenedRevision3Checkpoint, ProjectDocument, ProjectDocumentError, ProjectId, ProjectRevision2,
-    ProjectRevision3, Revision2Entity, Revision2EntityPayload, Revision3Entity,
+    migrate_revision2_to_revision3, project_revision3_quest_free_basis_to_revision2,
+    regenerate_revision3_quest_module_v2, revision3_quest_input_fingerprint_v2, AssetVerification,
+    ContentSeal, DraftQuestSkeletonError, EntityId, OpenedRevision3Checkpoint, ProjectDocument,
+    ProjectDocumentError, ProjectId, ProjectRevision2, ProjectRevision3, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV2,
-    ScriptModuleStatus, Sha256Digest, WorkingProjectStore, WorkingStoreError,
-    MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_PROJECT_JSON_BYTES,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    Revision3QuestDraftInput, Revision3QuestFreeBasisError, Revision3QuestGenerationError,
+    Revision3ScriptModule, Revision3TypedRef, ScriptModuleStatus, Sha256Digest,
+    WorkingProjectStore, WorkingStoreError, MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES,
+    MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
     MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
-use gore_authoring::{CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver};
 use gore_story_inventory::{
     reopen_quest_collision_capability_artifact_v1, QuestCollisionCapabilityArtifactError,
     QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactVerificationError,
@@ -34,9 +32,6 @@ use sha2::{Digest as _, Sha256};
 
 const PLAN_FORMAT: &str = "revision3_quest_source_inspection_plan";
 const PLAN_SCHEMA_REVISION: u32 = 2;
-const PLAN_INPUT_FINGERPRINT_DOMAIN: &[u8] =
-    b"gore-story-build.revision3-quest-v2.input-fingerprint\0";
-
 /// The revision-3 project parser and the resulting plan share the frozen project envelope.
 pub const MAX_REVISION3_QUEST_PROJECT_JSON_BYTES: usize = MAX_PROJECT_JSON_BYTES;
 /// A one-Quest plan repeats at most one bounded entity's source and provenance.
@@ -652,83 +647,17 @@ pub fn prepare_revision3_quest_source_inspection(
 pub(crate) fn project_revision3_basis_to_revision2(
     opened: &OpenedRevision3Checkpoint,
 ) -> Result<ProjectRevision2, Revision3QuestInspectionError> {
-    let source = &opened.project;
-    let mut entities = BTreeMap::new();
-    for (id, entity) in &source.entities {
-        reject_recursive_basis_state(*id, entity)?;
-        let payload = match &entity.payload {
-            Revision3EntityPayload::LocalizationEntry(value) => {
-                Revision2EntityPayload::LocalizationEntry(value.clone())
-            }
-            Revision3EntityPayload::DialogLine(value) => {
-                Revision2EntityPayload::DialogLine(value.clone())
-            }
-            Revision3EntityPayload::VoiceSlot(value) => {
-                Revision2EntityPayload::VoiceSlot(value.clone())
-            }
-            Revision3EntityPayload::VoiceTake(value) => {
-                Revision2EntityPayload::VoiceTake(value.clone())
-            }
-            Revision3EntityPayload::NpcDraft(value) => {
-                Revision2EntityPayload::NpcDraft(value.clone())
-            }
-            Revision3EntityPayload::ScriptModule(value) => {
-                Revision2EntityPayload::ScriptModule(value.clone())
-            }
-            Revision3EntityPayload::QuestDraft(_) => {
-                return Err(Revision3QuestInspectionError::RecursiveQuestBasis { entity: *id });
-            }
-        };
-        entities.insert(
-            *id,
-            Revision2Entity {
-                id: entity.id,
-                display_name: entity.display_name.clone(),
-                origin: entity.origin.clone(),
-                revision: entity.revision,
-                payload,
-            },
-        );
-    }
-    Ok(ProjectRevision2 {
-        format: FormatV2,
-        schema_revision: SchemaRevisionV2,
-        project_id: source.project_id,
-        revision: source.revision,
-        meta: source.meta.clone(),
-        target: source.target.clone(),
-        authoring_locales: source.authoring_locales.clone(),
-        entities,
-        asset_store: source.asset_store.clone(),
-    })
-}
-
-fn reject_recursive_basis_state(
-    id: EntityId,
-    entity: &Revision3Entity,
-) -> Result<(), Revision3QuestInspectionError> {
-    if matches!(entity.payload, Revision3EntityPayload::QuestDraft(_)) {
-        return Err(Revision3QuestInspectionError::RecursiveQuestBasis { entity: id });
-    }
-    if let Revision3EntityPayload::ScriptModule(module) = &entity.payload {
-        if module.owner.expected_kind == Revision3EntityKind::QuestDraft
-            || module.generator_id == REVISION3_QUEST_GENERATOR_ID
-        {
-            return Err(Revision3QuestInspectionError::ResidualQuestBasis { entity: id });
+    project_revision3_quest_free_basis_to_revision2(&opened.project).map_err(|error| match error {
+        Revision3QuestFreeBasisError::InvalidProject { reason } => {
+            Revision3QuestInspectionError::InvalidBasisProject(reason)
         }
-    }
-    if matches!(
-        &entity.origin,
-        Revision3OriginRef::Generated {
-            generator_id,
-            owner,
-            ..
-        } if generator_id == REVISION3_QUEST_GENERATOR_ID
-            || owner.expected_kind == Revision3EntityKind::QuestDraft
-    ) {
-        return Err(Revision3QuestInspectionError::ResidualQuestBasis { entity: id });
-    }
-    Ok(())
+        Revision3QuestFreeBasisError::RecursiveQuest { entity } => {
+            Revision3QuestInspectionError::RecursiveQuestBasis { entity }
+        }
+        Revision3QuestFreeBasisError::ResidualQuestState { entity } => {
+            Revision3QuestInspectionError::ResidualQuestBasis { entity }
+        }
+    })
 }
 
 fn validate_current_quest(
@@ -816,61 +745,7 @@ pub(crate) fn regenerate_revision3_quest_module(
     quest: &Revision3QuestDraft,
     collision: gore_authoring::QuestCollisionCatalogInput,
 ) -> Result<Revision3ScriptModule, Revision3QuestInspectionError> {
-    let parent = CatalogQualifiedParentQuest::new(
-        quest.input.parent_quest.generation.clone(),
-        quest.input.parent_quest.source_seal.clone(),
-        quest.input.parent_quest.catalog_layer.clone(),
-        quest.input.parent_quest.canonical_selector.clone(),
-        quest.input.parent_quest.runtime_class.clone(),
-    )
-    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
-    let giver = CatalogQualifiedQuestGiver::new(
-        quest.input.giver.generation.clone(),
-        quest.input.giver.source_seal.clone(),
-        quest.input.giver.catalog_layer.clone(),
-        quest.input.giver.canonical_selector.clone(),
-        quest.input.giver.runtime_unique_name.clone(),
-    )
-    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
-    let collision_catalog = DraftQuestCollisionCatalog::new(
-        collision.generation,
-        collision.source_seal,
-        collision.catalog_layer,
-        collision.modules.into_iter().collect(),
-        collision.relative_paths.into_iter().collect(),
-        collision.symbols.into_iter().collect(),
-    )
-    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
-    let generated = DraftQuestSkeletonV1::new(DraftQuestSkeletonInput {
-        target: quest.input.target.clone(),
-        quest_id: quest.input.quest_id,
-        module_namespace: quest.input.module_namespace.clone(),
-        technical_id: quest.input.technical_id.clone(),
-        text_helper: quest.input.text_helper.clone(),
-        parent_quest: parent,
-        giver,
-        title: quest.input.title.clone(),
-        description: quest.input.description.clone(),
-        objective_title: quest.input.objective_title.clone(),
-        collision_catalog,
-    })
-    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?
-    .generate();
-    Ok(Revision3ScriptModule {
-        generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
-        owner: Revision3TypedRef::new(
-            quest.script_module.project_id,
-            quest.input.quest_id,
-            Revision3EntityKind::QuestDraft,
-        ),
-        module_namespace: generated.technical_names.module_namespace,
-        module_relative_path: generated.technical_names.module_relative_path,
-        source: generated.source,
-        source_sha256: generated.source_sha256,
-        input_fingerprint: revision3_quest_input_fingerprint(&quest.input)?,
-        status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
-    })
+    regenerate_revision3_quest_module_v2(quest, collision).map_err(map_quest_generation_error)
 }
 
 /// Stable v2 fingerprint of the bounded revision-3 Quest intent, including raw, semantic, and
@@ -878,13 +753,21 @@ pub(crate) fn regenerate_revision3_quest_module(
 pub fn revision3_quest_input_fingerprint(
     input: &Revision3QuestDraftInput,
 ) -> Result<Sha256Digest, Revision3QuestInspectionError> {
-    let canonical =
-        serde_json::to_vec(input).map_err(Revision3QuestInspectionError::SerializeQuestInput)?;
-    let mut hasher = Sha256::new();
-    hasher.update(PLAN_INPUT_FINGERPRINT_DOMAIN);
-    hasher.update((canonical.len() as u64).to_be_bytes());
-    hasher.update(&canonical);
-    Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
+    revision3_quest_input_fingerprint_v2(input).map_err(map_quest_generation_error)
+}
+
+fn map_quest_generation_error(
+    error: Revision3QuestGenerationError,
+) -> Revision3QuestInspectionError {
+    match error {
+        Revision3QuestGenerationError::InvalidQuestIntent(error) => {
+            Revision3QuestInspectionError::InvalidQuestIntent(error)
+        }
+        Revision3QuestGenerationError::SerializeQuestInput(error) => {
+            Revision3QuestInspectionError::SerializeQuestInput(error)
+        }
+        error => Revision3QuestInspectionError::SharedQuestGeneration(error),
+    }
 }
 
 fn seal_authoring_bytes(bytes: &[u8]) -> ContentSeal {
@@ -978,6 +861,8 @@ pub enum Revision3QuestInspectionError {
     RecursiveQuestBasis { entity: EntityId },
     #[error("revision-3 basis contains residual Quest generator state at {entity}")]
     ResidualQuestBasis { entity: EntityId },
+    #[error("revision-3 Quest-free basis is not a closed valid project: {0}")]
+    InvalidBasisProject(String),
     #[error("revision-3 basis could not roundtrip through its Quest-free revision-2 source: {0}")]
     BasisForwardProjection(#[source] gore_authoring::Revision2ToRevision3Error),
     #[error("revision-3 basis changed during the exact Quest-free revision-2 roundtrip")]
@@ -998,6 +883,8 @@ pub enum Revision3QuestInspectionError {
     InvalidQuestIntent(#[source] DraftQuestSkeletonError),
     #[error("could not serialize revision-3 Quest input: {0}")]
     SerializeQuestInput(#[source] serde_json::Error),
+    #[error("shared revision-3 Quest generator rejected a validated persisted draft: {0}")]
+    SharedQuestGeneration(#[source] Revision3QuestGenerationError),
     #[error("revision-3 Quest {quest} ScriptModule {module} source seal mismatch")]
     PersistedSourceSealMismatch { quest: EntityId, module: EntityId },
     #[error(

@@ -14,8 +14,10 @@ pub mod model_revision2;
 pub mod model_revision3;
 mod npc;
 mod quest;
+mod revision3_quest;
 mod story_collision;
 mod story_transaction;
+mod story_transaction_revision3;
 mod strict_json;
 mod validate;
 mod validate_revision2;
@@ -87,6 +89,11 @@ pub use quest::{
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
     MAX_DRAFT_QUEST_TITLE_BYTES,
 };
+pub use revision3_quest::{
+    project_revision3_quest_free_basis_to_revision2, regenerate_revision3_quest_module_v2,
+    revision3_quest_input_fingerprint_v2, Revision3QuestFreeBasisError,
+    Revision3QuestGenerationError,
+};
 pub use story_collision::{
     collect_project_story_collision_identities, ProjectStoryCollisionIdentities,
     StoryCollisionCollectionError,
@@ -96,6 +103,16 @@ pub use story_transaction::{
     StoryDraftCreate, StoryDraftInsertError, StoryDraftInsertEvaluation, StoryDraftInsertJsonError,
     StoryDraftInsertOutcome, StoryDraftInsertRejection, StoryDraftInsertRequest,
     MAX_STORY_DRAFT_DISPLAY_NAME_BYTES, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
+};
+pub use story_transaction_revision3::{
+    apply_revision3_quest_draft_transaction_v2, Revision3QuestArtifactAuthorityV2,
+    Revision3QuestDraftBuildStatusV2, Revision3QuestDraftInsertConflictV2,
+    Revision3QuestDraftInsertErrorV2, Revision3QuestDraftInsertEvaluationV2,
+    Revision3QuestDraftInsertOutcomeV2, Revision3QuestDraftInsertRejectionV2,
+    Revision3QuestDraftInsertRequestJsonErrorV2, Revision3QuestDraftInsertRequestV2,
+    Revision3QuestDraftIntentV2, Revision3QuestDraftRuntimeStatusV2, Revision3QuestEntityRoleV2,
+    Revision3QuestSourceInspectionStatusV2, Revision3StoryIdentityKindV2,
+    MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_QUEST_DRAFT_REQUEST_JSON_BYTES,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{

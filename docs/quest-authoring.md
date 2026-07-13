@@ -145,6 +145,25 @@ collision evidence, or return a partial candidate. A more compact committed
 collision-capability representation is required before this exact real-game
 Quest can be inserted through the managed store.
 
+### Revision-3 offline Draft transaction
+
+Schema revision 3 replaces the oversized embedded collision inventory with a
+content-addressed `QuestCollisionArtifactRef`. The filesystem-free
+`apply_revision3_quest_draft_transaction_v2` transaction accepts only exact
+canonical revision-3 project and request JSON, checks the project CAS fields,
+the referenced AssetStore metadata, the closed parent/giver provenance, and all
+existing Story identities, then atomically inserts one Quest Draft and its
+deterministic ScriptModule. Every rejection leaves the input project unchanged.
+
+The plain collision catalog passed by the caller is consumed only as generation
+input and must match the artifact reference's generation, source seal, and
+catalog layer exactly. It is not artifact authority. A successful result is
+permanently labelled build-blocked and runtime-unqualified; inspecting its
+source through the revision-3 planner still requires reopening the exact
+artifact and basis snapshot with a fresh verified capability. The transaction
+has no native command or Mod Studio wizard yet and performs no filesystem write,
+compile, package, deploy, launch, or save operation.
+
 ## Safe qualification order
 
 1. Build the new module offline and reopen the mini-cache.

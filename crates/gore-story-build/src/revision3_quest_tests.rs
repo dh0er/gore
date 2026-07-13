@@ -5,10 +5,10 @@ use gore_authoring::{
     EntityId, FormatV2, GameGenerationAnchor, OpenedRevision3Checkpoint, ProjectId, ProjectMeta,
     ProjectRevision3, QuestCollisionArtifactRef, QuestCollisionCatalogInput, Revision3Entity,
     Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
-    Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestParentInput,
-    Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, Sha256Digest, WorkingHead,
-    WorkingStoreFormat, QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    Revision3QuestDraftInput, Revision3QuestGenerationError, Revision3QuestGiverInput,
+    Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
+    Sha256Digest, WorkingHead, WorkingStoreFormat, QUEST_COLLISION_CATALOG_LAYER,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use gore_story_inventory::{QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability};
 use sha2::{Digest as _, Sha256};
@@ -216,6 +216,40 @@ fn v2_lowering_is_deterministic_and_checks_the_moved_collision_set() {
         regenerate_revision3_quest_module(&draft, collision),
         Err(Revision3QuestInspectionError::InvalidQuestIntent(
             DraftQuestSkeletonError::GeneratedNameCollision { .. }
+        ))
+    ));
+}
+
+#[test]
+fn s3_lowering_propagates_all_shared_collision_reference_mismatches() {
+    let draft = quest(project_id(8));
+
+    let mut wrong_generation = collision_input();
+    wrong_generation.generation = GameGenerationAnchor {
+        executable: seal(0x71, 171_698_176),
+    };
+    assert!(matches!(
+        regenerate_revision3_quest_module(&draft, wrong_generation),
+        Err(Revision3QuestInspectionError::SharedQuestGeneration(
+            Revision3QuestGenerationError::CollisionGenerationMismatch
+        ))
+    ));
+
+    let mut wrong_source = collision_input();
+    wrong_source.source_seal.sha256 = Sha256Digest::from_bytes([0x72; 32]);
+    assert!(matches!(
+        regenerate_revision3_quest_module(&draft, wrong_source),
+        Err(Revision3QuestInspectionError::SharedQuestGeneration(
+            Revision3QuestGenerationError::CollisionSourceSealMismatch
+        ))
+    ));
+
+    let mut wrong_layer = collision_input();
+    wrong_layer.catalog_layer = "foreign.story-collisions.v1".to_owned();
+    assert!(matches!(
+        regenerate_revision3_quest_module(&draft, wrong_layer),
+        Err(Revision3QuestInspectionError::SharedQuestGeneration(
+            Revision3QuestGenerationError::CollisionCatalogLayerMismatch
         ))
     ));
 }
