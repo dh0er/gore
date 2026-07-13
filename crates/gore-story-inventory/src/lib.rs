@@ -39,7 +39,8 @@ extern crate self as gore_story_inventory;
 mod revision3_quest_s3_test_subject;
 
 pub use quest_capability::{
-    reopen_quest_collision_capability_artifact_v1, QuestCollisionBuildStatus,
+    reopen_quest_collision_capability_artifact_v1, PreparedQuestCollisionArtifactFinalizeError,
+    PreparedQuestCollisionArtifactV1, QuestCollisionBuildStatus,
     QuestCollisionCapabilityArtifactError, QuestCollisionCapabilityArtifactV1,
     QuestCollisionCapabilityArtifactVerificationError, QuestCollisionCapabilityError,
     QuestCollisionCoverage, QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
@@ -1538,6 +1539,76 @@ mod tests {
         assert!(!input.modules.is_empty());
         assert!(!input.relative_paths.is_empty());
         assert!(!input.symbols.is_empty());
+    }
+
+    #[test]
+    fn prepared_capsule_is_byte_exact_with_the_legacy_api_and_finalizes_once() {
+        let catalog = trusted_catalog();
+        let project = empty_authoring_project();
+        let legacy = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
+            .unwrap()
+            .into_artifact()
+            .unwrap();
+        let prepared = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
+            .unwrap()
+            .prepare_artifact()
+            .unwrap();
+
+        assert_eq!(prepared.artifact(), &legacy);
+        assert_eq!(
+            prepared.artifact().canonical_json(),
+            legacy.canonical_json()
+        );
+        let (materialized, input) = prepared.finalize(&project).unwrap();
+
+        assert_eq!(materialized, legacy);
+        assert_eq!(
+            input.catalog_layer,
+            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
+        );
+        assert_eq!(
+            input.source_seal.byte_len,
+            materialized.source_seal().byte_len
+        );
+        assert!(!input.modules.is_empty());
+        assert!(!input.relative_paths.is_empty());
+        assert!(!input.symbols.is_empty());
+    }
+
+    #[test]
+    fn prepared_finalize_consumes_and_rejects_every_exact_project_head_drift_gate() {
+        let catalog = trusted_catalog();
+        let project = empty_authoring_project();
+
+        let mut changed_id = project.clone();
+        changed_id.project_id = authoring_project_id(2);
+        let mut changed_revision = project.clone();
+        changed_revision.revision += 1;
+        let mut changed_target = project.clone();
+        changed_target.target.executable.sha256 = AuthoringSha256Digest::from_bytes([0xa3; 32]);
+        let mut changed_canonical_snapshot = project.clone();
+        changed_canonical_snapshot.meta.name.push_str(" drift");
+
+        for changed_head in [
+            changed_id,
+            changed_revision,
+            changed_target,
+            changed_canonical_snapshot,
+        ] {
+            let prepared = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
+                .unwrap()
+                .prepare_artifact()
+                .unwrap();
+            let error = prepared.finalize(&changed_head).unwrap_err();
+            assert!(matches!(
+                error,
+                PreparedQuestCollisionArtifactFinalizeError::Project(
+                    QuestCollisionCapabilityError::ProjectDrift
+                )
+            ));
+            // `finalize` takes the capsule by value, so this failure path cannot be retried or
+            // converted back into authority with the now-rejected prepared value.
+        }
     }
 
     struct S3Fixture {

@@ -87,6 +87,21 @@ pub struct QuestCollisionCapabilityArtifactV1 {
     canonical_project: AuthoringContentSeal,
 }
 
+/// Linear bridge between one freshly source-bound collision capability and its exact structural
+/// artifact.
+///
+/// This capsule is opaque and deliberately does not implement [`Clone`]. It retains the original
+/// capability (including its one owned collision-set representation) next to one canonical JSON
+/// byte vector bounded by [`MAX_INVENTORY_JSON_BYTES`]. Preparing it never creates a second copy
+/// of the module, relative-path, or symbol sets. The borrowed [`Self::artifact`] view is
+/// structural evidence only. The capsule can be consumed solely through [`Self::finalize`] into
+/// freshly source-bound generation input; that plain result type does not itself grant artifact,
+/// build, runtime, or publication authority.
+pub struct PreparedQuestCollisionArtifactV1 {
+    capability: VerifiedQuestCollisionCapability,
+    artifact: QuestCollisionCapabilityArtifactV1,
+}
+
 impl fmt::Debug for QuestCollisionCapabilityArtifactV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -182,6 +197,44 @@ impl QuestCollisionCapabilityArtifactV1 {
 
     pub const fn publication_status(&self) -> QuestCollisionPublicationStatus {
         QuestCollisionPublicationStatus::NotSupported
+    }
+}
+
+impl PreparedQuestCollisionArtifactV1 {
+    /// Borrow the exact structural artifact without exposing or duplicating the retained
+    /// source-bound capability.
+    pub const fn artifact(&self) -> &QuestCollisionCapabilityArtifactV1 {
+        &self.artifact
+    }
+
+    /// Re-verify the retained capability against its own exact artifact, then consume that
+    /// capability against the supplied exact project head.
+    ///
+    /// Both success and failure consume the capsule. The returned artifact remains structural.
+    /// The separately returned collision input was derived from the retained fresh capability,
+    /// but its plain public type is not authority evidence and grants no build, runtime, artifact,
+    /// or publication claim.
+    pub fn finalize(
+        self,
+        exact_project: &ProjectRevision2,
+    ) -> Result<
+        (
+            QuestCollisionCapabilityArtifactV1,
+            QuestCollisionCatalogInput,
+        ),
+        PreparedQuestCollisionArtifactFinalizeError,
+    > {
+        let Self {
+            capability,
+            artifact,
+        } = self;
+        let capability = capability
+            .verify_artifact_exact(&artifact)
+            .map_err(PreparedQuestCollisionArtifactFinalizeError::ArtifactOrCapabilityDrift)?;
+        let collision_input = capability
+            .into_quest_collision_input(exact_project)
+            .map_err(PreparedQuestCollisionArtifactFinalizeError::Project)?;
+        Ok((artifact, collision_input))
     }
 }
 
@@ -467,11 +520,28 @@ impl VerifiedQuestCollisionCapability {
         Ok(self)
     }
 
+    /// Materialize the exact legacy artifact while retaining this original source-bound
+    /// capability in one linear, non-clone capsule.
+    ///
+    /// Peak retained data is one collision-set representation plus one canonical byte vector of
+    /// at most [`MAX_INVENTORY_JSON_BYTES`]. No collision set and no artifact byte vector is
+    /// cloned. [`Self::into_artifact`] remains the artifact-only compatibility API.
+    pub fn prepare_artifact(
+        self,
+    ) -> Result<PreparedQuestCollisionArtifactV1, QuestCollisionCapabilityArtifactError> {
+        let artifact = self.materialize_structural_artifact()?;
+        Ok(PreparedQuestCollisionArtifactV1 {
+            capability: self,
+            artifact,
+        })
+    }
+
     /// Consume this verified capability into one immutable, content-addressable artifact.
     ///
-    /// The large collision strings move through the serializer and are then dropped; they are
-    /// never cloned into a second retained collection. The returned value keeps only canonical
-    /// JSON bytes and bounded provenance metadata.
+    /// The large collision strings remain in their single owned collection while the serializer
+    /// writes the canonical bytes and are then dropped; they are never cloned into a second
+    /// retained collection. The returned value keeps only canonical JSON bytes and bounded
+    /// provenance metadata.
     pub fn into_artifact(
         self,
     ) -> Result<QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactError> {
@@ -508,6 +578,31 @@ impl VerifiedQuestCollisionCapability {
             project_revision,
             project_target,
             canonical_project,
+        })
+    }
+
+    fn materialize_structural_artifact(
+        &self,
+    ) -> Result<QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactError> {
+        let canonical_json = self.materialize_canonical_payload()?;
+        let actual_source_seal = seal_combined_payload_bytes(&canonical_json);
+        if actual_source_seal != self.combined_source_seal {
+            return Err(QuestCollisionCapabilityArtifactError::Invariant(
+                "verified capability semantic seal changed while materializing its artifact"
+                    .to_owned(),
+            ));
+        }
+        let artifact_seal = raw_artifact_seal(&canonical_json);
+        Ok(QuestCollisionCapabilityArtifactV1 {
+            canonical_json,
+            artifact_seal,
+            source_seal: self.combined_source_seal.clone(),
+            base_inventory_payload_seal: self.base_inventory_payload_seal.clone(),
+            story_catalog_seal: self.story_catalog_seal.clone(),
+            project_id: self.project_id,
+            project_revision: self.project_revision,
+            project_target: self.project_target.clone(),
+            canonical_project: self.canonical_project.clone(),
         })
     }
 
@@ -665,6 +760,17 @@ pub enum QuestCollisionCapabilityArtifactVerificationError {
     Limit { actual: usize, max: usize },
     #[error("could not serialize source-bound Quest collision artifact identity: {0}")]
     Serialize(#[source] serde_json::Error),
+}
+
+/// Stable failure boundary for consuming a prepared Quest collision capsule.
+#[derive(Debug, thiserror::Error)]
+pub enum PreparedQuestCollisionArtifactFinalizeError {
+    #[error(
+        "prepared Quest collision artifact and retained source capability no longer match exactly"
+    )]
+    ArtifactOrCapabilityDrift(#[source] QuestCollisionCapabilityArtifactVerificationError),
+    #[error("prepared Quest collision capability no longer matches the supplied exact project")]
+    Project(#[source] QuestCollisionCapabilityError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1550,6 +1656,7 @@ fn authoring_seal(seal: &ContentSeal) -> AuthoringContentSeal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gore_authoring::{AssetStoreIndex, FormatV2, ProjectMeta, SchemaRevisionV2};
 
     trait AmbiguousIfClone<Marker> {
         fn marker() {}
@@ -1618,6 +1725,37 @@ mod tests {
         }
     }
 
+    fn unrelated_test_project() -> ProjectRevision2 {
+        let capability = test_capability();
+        ProjectRevision2 {
+            format: FormatV2,
+            schema_revision: SchemaRevisionV2,
+            project_id: capability.project_id,
+            revision: capability.project_revision,
+            meta: ProjectMeta {
+                name: "prepared collision capsule".to_owned(),
+                version: "0.1.0".to_owned(),
+                author: "test".to_owned(),
+            },
+            target: capability.project_target,
+            authoring_locales: BTreeSet::new(),
+            entities: BTreeMap::new(),
+            asset_store: AssetStoreIndex::default(),
+        }
+    }
+
+    fn finalized_verification_error(
+        prepared: PreparedQuestCollisionArtifactV1,
+    ) -> QuestCollisionCapabilityArtifactVerificationError {
+        match prepared.finalize(&unrelated_test_project()) {
+            Err(PreparedQuestCollisionArtifactFinalizeError::ArtifactOrCapabilityDrift(error)) => {
+                error
+            }
+            Err(other) => panic!("unexpected prepared capsule error: {other}"),
+            Ok(_) => panic!("drifted prepared capsule unexpectedly finalized"),
+        }
+    }
+
     fn reopen_with_actual_seals(
         bytes: &[u8],
     ) -> Result<QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactError> {
@@ -1632,6 +1770,7 @@ mod tests {
     fn capability_is_not_clone_and_bind_consumes_the_base_inventory() {
         let _ = <VerifiedQuestCollisionCapability as AmbiguousIfClone<_>>::marker as fn();
         let _ = <QuestCollisionCapabilityArtifactV1 as AmbiguousIfClone<_>>::marker as fn();
+        let _ = <PreparedQuestCollisionArtifactV1 as AmbiguousIfClone<_>>::marker as fn();
         let _bind: fn(
             BaseGameCollisionInventory,
             &StoryCatalogFile,
@@ -1646,6 +1785,214 @@ mod tests {
             VerifiedQuestCollisionCapability,
             QuestCollisionCapabilityArtifactVerificationError,
         > = VerifiedQuestCollisionCapability::verify_artifact_exact;
+        let _prepare: fn(
+            VerifiedQuestCollisionCapability,
+        ) -> Result<
+            PreparedQuestCollisionArtifactV1,
+            QuestCollisionCapabilityArtifactError,
+        > = VerifiedQuestCollisionCapability::prepare_artifact;
+        let _borrow: for<'a> fn(
+            &'a PreparedQuestCollisionArtifactV1,
+        ) -> &'a QuestCollisionCapabilityArtifactV1 = PreparedQuestCollisionArtifactV1::artifact;
+        type FinalizeResult = Result<
+            (
+                QuestCollisionCapabilityArtifactV1,
+                QuestCollisionCatalogInput,
+            ),
+            PreparedQuestCollisionArtifactFinalizeError,
+        >;
+        let _finalize: fn(PreparedQuestCollisionArtifactV1, &ProjectRevision2) -> FinalizeResult =
+            PreparedQuestCollisionArtifactV1::finalize;
+    }
+
+    #[test]
+    fn preparing_moves_each_collision_set_once_and_retains_one_bounded_byte_vector() {
+        let capability = test_capability();
+        let module_bytes = capability.modules.first().unwrap().as_ptr();
+        let path_bytes = capability.relative_paths.first().unwrap().as_ptr();
+        let symbol_bytes = capability.symbols.first().unwrap().as_ptr();
+
+        let prepared = capability.prepare_artifact().unwrap();
+
+        assert_eq!(
+            prepared.capability.modules.first().unwrap().as_ptr(),
+            module_bytes
+        );
+        assert_eq!(
+            prepared.capability.relative_paths.first().unwrap().as_ptr(),
+            path_bytes
+        );
+        assert_eq!(
+            prepared.capability.symbols.first().unwrap().as_ptr(),
+            symbol_bytes
+        );
+        assert!(!prepared.artifact().canonical_json().is_empty());
+        assert!(prepared.artifact().canonical_json().len() <= MAX_INVENTORY_JSON_BYTES);
+    }
+
+    #[test]
+    fn prepared_finalize_rechecks_every_artifact_and_capability_identity_gate() {
+        macro_rules! artifact_drift {
+            ($mutation:expr, $pattern:pat) => {{
+                let mut prepared = test_capability().prepare_artifact().unwrap();
+                ($mutation)(&mut prepared.artifact);
+                assert!(matches!(finalized_verification_error(prepared), $pattern));
+            }};
+        }
+
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.artifact_seal.sha256 = crate::Sha256Digest::from_bytes([0x81; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::RawArtifactSealMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.source_seal.sha256 = crate::Sha256Digest::from_bytes([0x82; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.base_inventory_payload_seal.sha256 =
+                    crate::Sha256Digest::from_bytes([0x83; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::BaseInventoryPayloadSealMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.story_catalog_seal.sha256 = crate::Sha256Digest::from_bytes([0x84; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::StoryCatalogSealMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.project_id = ProjectId::from_bytes([0x85; 16]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectIdMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.project_revision += 1;
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectRevisionMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.project_target.executable.sha256 =
+                    AuthoringSha256Digest::from_bytes([0x86; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectTargetMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                artifact.canonical_project.sha256 = AuthoringSha256Digest::from_bytes([0x87; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::CanonicalProjectMismatch
+        );
+        artifact_drift!(
+            |artifact: &mut QuestCollisionCapabilityArtifactV1| {
+                let index = artifact
+                    .canonical_json
+                    .iter()
+                    .position(|byte| *byte == b'p')
+                    .unwrap();
+                artifact.canonical_json[index] = b'q';
+            },
+            QuestCollisionCapabilityArtifactVerificationError::CanonicalIdentityMismatch
+        );
+
+        macro_rules! capability_drift {
+            ($mutation:expr, $pattern:pat) => {{
+                let mut prepared = test_capability().prepare_artifact().unwrap();
+                ($mutation)(&mut prepared.capability);
+                assert!(matches!(finalized_verification_error(prepared), $pattern));
+            }};
+        }
+
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.base_inventory_payload_seal.sha256 =
+                    crate::Sha256Digest::from_bytes([0x91; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::BaseInventoryPayloadSealMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.story_catalog_seal.sha256 = crate::Sha256Digest::from_bytes([0x92; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::StoryCatalogSealMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.project_id = ProjectId::from_bytes([0x93; 16]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectIdMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.project_revision += 1;
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectRevisionMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.project_target.executable.sha256 =
+                    AuthoringSha256Digest::from_bytes([0x94; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::ProjectTargetMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.canonical_project.sha256 = AuthoringSha256Digest::from_bytes([0x95; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::CanonicalProjectMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.modules.insert("unexpected.module".to_owned());
+            },
+            QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch
+        );
+        capability_drift!(
+            |capability: &mut VerifiedQuestCollisionCapability| {
+                capability.combined_source_seal.sha256 =
+                    crate::Sha256Digest::from_bytes([0x96; 32]);
+            },
+            QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch
+        );
+    }
+
+    fn canonical_limit_capability() -> VerifiedQuestCollisionCapability {
+        let mut capability = test_capability();
+        let escaped_suffix = "\\".repeat(MAX_COLLISION_ENTRY_BYTES - 12);
+        capability.modules = (0..(MAX_COLLISION_TOTAL_BYTES / MAX_COLLISION_ENTRY_BYTES))
+            .map(|index| format!("{index:012}{escaped_suffix}"))
+            .collect();
+        capability.relative_paths.clear();
+        capability.symbols.clear();
+        capability
+    }
+
+    #[test]
+    fn prepared_capsule_inherits_the_legacy_canonical_artifact_limit() {
+        let prepared_error = match canonical_limit_capability().prepare_artifact() {
+            Err(error) => error,
+            Ok(_) => panic!("oversized prepared artifact unexpectedly succeeded"),
+        };
+        for error in [
+            canonical_limit_capability().into_artifact().unwrap_err(),
+            prepared_error,
+        ] {
+            assert!(matches!(
+                error,
+                QuestCollisionCapabilityArtifactError::Limit {
+                    kind: "canonical artifact JSON bytes",
+                    max: MAX_INVENTORY_JSON_BYTES,
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]
