@@ -423,6 +423,11 @@ impl ProjectDocument {
                 "schema_revision",
                 "story Draft insertion requires schema revision 2; revision 1 is never migrated implicitly",
             )])),
+            Self::Revision3(_) => Ok(rejected(vec![Diagnostic::project_error(
+                DiagnosticCode::InvalidStoryMutation,
+                "schema_revision",
+                "story Draft insertion requires schema revision 2; revision 3 is never mutated implicitly",
+            )])),
         }
     }
 }

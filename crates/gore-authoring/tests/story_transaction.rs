@@ -3,14 +3,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use gore_authoring::{
     story_draft_insert_request_binding_sha256, AssetMeta, AssetStoreIndex, ContentSeal,
     DiagnosticCode, EntityId, FormatV2, GameGenerationAnchor, NpcDraftCreateInput, ProjectDocument,
-    ProjectId, ProjectMeta, ProjectRevision2, ProjectV2, QuestCollisionCatalogInput,
-    QuestDraftCreateInput, Revision2Entity as Entity, Revision2EntityKind as EntityKind,
-    Revision2EntityPayload as EntityPayload, Revision2LocalizationEntry as LocalizationEntry,
+    ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3, ProjectV2,
+    QuestCollisionCatalogInput, QuestDraftCreateInput, Revision2Entity as Entity,
+    Revision2EntityKind as EntityKind, Revision2EntityPayload as EntityPayload,
+    Revision2LocalizationEntry as LocalizationEntry,
     Revision2NpcParentClassInput as NpcParentClassInput, Revision2OriginRef as OriginRef,
     Revision2QuestGiverInput as QuestGiverInput, Revision2QuestParentInput as QuestParentInput,
-    SchemaRevisionV1, SchemaRevisionV2, StoryDraftCreate, StoryDraftInsertEvaluation,
-    StoryDraftInsertOutcome, StoryDraftInsertRequest, ValidationProfile, WorkingStoreLimits,
-    MAX_STORY_DRAFT_INSERT_JSON_BYTES,
+    SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3, StoryDraftCreate,
+    StoryDraftInsertEvaluation, StoryDraftInsertOutcome, StoryDraftInsertRequest,
+    ValidationProfile, WorkingStoreLimits, MAX_STORY_DRAFT_INSERT_JSON_BYTES,
 };
 
 #[test]
@@ -71,6 +72,24 @@ fn empty_project() -> ProjectRevision2 {
         revision: 7,
         meta: ProjectMeta {
             name: "Story transaction".into(),
+            version: "0.1".into(),
+            author: "test".into(),
+        },
+        target: generation(1),
+        authoring_locales: BTreeSet::new(),
+        entities: BTreeMap::new(),
+        asset_store: AssetStoreIndex::default(),
+    }
+}
+
+fn empty_revision3() -> ProjectRevision3 {
+    ProjectRevision3 {
+        format: FormatV2,
+        schema_revision: SchemaRevisionV3,
+        project_id: project_id(3),
+        revision: 7,
+        meta: ProjectMeta {
+            name: "Frozen revision 3".into(),
             version: "0.1".into(),
             author: "test".into(),
         },
@@ -742,6 +761,21 @@ fn project_document_never_implicitly_mutates_or_migrates_revision1() {
         asset_store: AssetStoreIndex::default(),
     };
     let document = ProjectDocument::Revision1(revision1);
+    let original = document.to_canonical_json().unwrap();
+    let request = npc_request(&empty_project(), 10, 11, "GoreMods.Npcs.Guard", "GoreGuard");
+    let codes = rejection_codes(
+        document
+            .clone()
+            .insert_story_draft(request, ValidationProfile::Experimental)
+            .unwrap(),
+    );
+    assert!(codes.contains(&DiagnosticCode::InvalidStoryMutation));
+    assert_eq!(document.to_canonical_json().unwrap(), original);
+}
+
+#[test]
+fn project_document_dispatch_never_authorizes_revision3_mutation() {
+    let document = ProjectDocument::Revision3(empty_revision3());
     let original = document.to_canonical_json().unwrap();
     let request = npc_request(&empty_project(), 10, 11, "GoreMods.Npcs.Guard", "GoreGuard");
     let codes = rejection_codes(

@@ -588,11 +588,12 @@ impl WorkingProjectStore {
         })
     }
 
-    /// Prepare an immutable checkpoint for either closed authoring schema revision.
+    /// Prepare an immutable checkpoint through the frozen revision-1/2 document paths.
     ///
     /// Revision 1 dispatches directly to [`Self::prepare_checkpoint`], preserving its exact bytes
-    /// and behavior. Revision 2 uses its own snapshot and entity parsers. Neither branch publishes
-    /// the fixed head; callers retain the same strict head CAS contract.
+    /// and behavior. Revision 2 uses its own snapshot and entity parsers. Revision 3 is rejected:
+    /// document parsing alone does not authorize its dedicated Store path. Neither accepted branch
+    /// publishes the fixed head; callers retain the same strict head CAS contract.
     pub fn prepare_document_checkpoint(
         &self,
         expected_head: Option<&WorkingHead>,
@@ -606,6 +607,10 @@ impl WorkingProjectStore {
             ProjectDocument::Revision2(project) => {
                 self.prepare_revision2_checkpoint(expected_head, project, profile)
             }
+            ProjectDocument::Revision3(_) => Err(WorkingStoreError::Invariant(
+                "generic document checkpoints do not authorize schema revision 3; use the dedicated revision-3 checkpoint API"
+                    .to_owned(),
+            )),
         }
     }
 

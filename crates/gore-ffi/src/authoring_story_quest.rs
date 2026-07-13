@@ -419,7 +419,7 @@ fn parse_exact_revision2_project(project_json: &str) -> Result<ProjectRevision2,
     }
     match document {
         ProjectDocument::Revision2(project) => Ok(project),
-        ProjectDocument::Revision1(_) => Err(Failure::new(
+        ProjectDocument::Revision1(_) | ProjectDocument::Revision3(_) => Err(Failure::new(
             "AUTHORING_STORY_QUEST_PROJECT_REVISION_REQUIRED",
             "Quest Draft insertion requires schema revision 2",
         )),
@@ -787,6 +787,17 @@ mod tests {
             .unwrap()
             .to_canonical_json()
             .unwrap()
+    }
+
+    #[test]
+    fn revision3_project_remains_revision_required() {
+        let revision3 =
+            project_json().replacen("\"schema_revision\":2", "\"schema_revision\":3", 1);
+        let error = parse_exact_revision2_project(&revision3).unwrap_err();
+        assert_eq!(
+            error.code,
+            "AUTHORING_STORY_QUEST_PROJECT_REVISION_REQUIRED"
+        );
     }
 
     fn intent_value() -> Value {

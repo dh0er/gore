@@ -110,7 +110,7 @@ fn insert_story_draft_v1_inner(
     }
     let (base_project_id, base_revision) = match &document {
         ProjectDocument::Revision2(project) => (project.project_id, project.revision),
-        ProjectDocument::Revision1(_) => {
+        ProjectDocument::Revision1(_) | ProjectDocument::Revision3(_) => {
             return Err(StoryFailure::new(
                 "AUTHORING_STORY_PROJECT_REVISION_REQUIRED",
                 "story Draft insertion requires schema revision 2",

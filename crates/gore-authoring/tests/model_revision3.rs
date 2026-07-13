@@ -8,14 +8,14 @@ use gore_authoring::model_revision2::{
 };
 use gore_authoring::{
     migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
-    GameGenerationAnchor, ProjectDocument, ProjectId, ProjectMeta, ProjectRevision3,
-    ProjectRevision3JsonError, ProjectRevision3ValidationError, QuestCollisionArtifactRef,
-    Revision2QuestGiverInput, Revision2QuestParentInput, Revision2ToRevision3Error,
-    Revision3Entity, Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef,
-    Revision3QuestDraft, Revision3QuestDraftInput, Revision3ScriptModule, Revision3TypedRef,
-    SchemaRevisionV3, ScriptModuleStatus, Sha256Digest, DRAFT_QUEST_GENERATOR_ID,
-    DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID, MAX_PROJECT_JSON_BYTES,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    GameGenerationAnchor, ProjectDocument, ProjectDocumentError, ProjectId, ProjectMeta,
+    ProjectRevision3, ProjectRevision3JsonError, ProjectRevision3ValidationError,
+    QuestCollisionArtifactRef, Revision2QuestGiverInput, Revision2QuestParentInput,
+    Revision2ToRevision3Error, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
+    Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput, Revision3ScriptModule,
+    Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest,
+    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
@@ -195,8 +195,38 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
         Err(ProjectRevision3JsonError::InvalidJson(_))
     ));
 
-    // Dispatcher integration is intentionally deferred until the Store/FFI slice.
-    assert!(ProjectDocument::from_json(&canonical).is_err());
+    let document = ProjectDocument::from_json(&canonical).unwrap();
+    let ProjectDocument::Revision3(reopened) = &document else {
+        panic!("revision-3 marker dispatched to the wrong model")
+    };
+    assert_eq!(reopened, &project);
+    assert_eq!(document.to_canonical_json().unwrap(), canonical);
+    assert_eq!(serde_json::to_string(&document).unwrap(), canonical);
+
+    assert!(matches!(
+        ProjectDocument::from_json(&duplicate),
+        Err(ProjectDocumentError::InvalidProbeJson(_))
+    ));
+    assert!(matches!(
+        ProjectDocument::from_json(&unknown),
+        Err(ProjectDocumentError::InvalidRevision3(_))
+    ));
+    assert!(matches!(
+        ProjectDocument::from_json(&whitespace),
+        Err(ProjectDocumentError::InvalidRevision3(
+            ProjectRevision3JsonError::NonCanonicalJson
+        ))
+    ));
+
+    let invalid = canonical.replacen(
+        &format!("\"project_id\":\"{}\"", project.project_id),
+        &format!("\"project_id\":\"{}\"", ProjectId::from_bytes([0; 16])),
+        1,
+    );
+    assert!(matches!(
+        ProjectDocument::from_json(&invalid),
+        Err(ProjectDocumentError::InvalidRevision3(_))
+    ));
 }
 
 #[test]

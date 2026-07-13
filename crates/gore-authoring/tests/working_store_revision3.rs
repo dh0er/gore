@@ -254,6 +254,15 @@ fn external_artifact_roundtrip_is_deterministic_and_old_basis_survives_head_adva
     let root = TestRoot::new("roundtrip-basis");
     let store = store(&root);
     let basis_project = empty_revision3();
+    assert!(matches!(
+        store.prepare_document_checkpoint(
+            None,
+            &ProjectDocument::Revision3(basis_project.clone()),
+            ValidationProfile::Experimental,
+        ),
+        Err(WorkingStoreError::Invariant(message))
+            if message.contains("do not authorize schema revision 3")
+    ));
     let basis_first = store
         .prepare_revision3_checkpoint(None, &basis_project)
         .unwrap();
@@ -317,7 +326,7 @@ fn external_artifact_roundtrip_is_deterministic_and_old_basis_survives_head_adva
     assert_eq!(old_basis.project, basis_project);
     assert_eq!(old_basis.head, basis_first.head);
 
-    // The frozen ProjectDocument dispatcher remains revision-1/2-only.
+    // The generic Store head dispatcher remains revision-1/2-only.
     assert!(matches!(
         store.open_head_bytes_document(
             &first.head_bytes,
@@ -327,7 +336,6 @@ fn external_artifact_roundtrip_is_deterministic_and_old_basis_survives_head_adva
         Err(WorkingStoreError::Invariant(message))
             if message.contains("expected 1 or 2")
     ));
-    let _frozen_type_check: Option<ProjectDocument> = None;
 }
 
 #[test]

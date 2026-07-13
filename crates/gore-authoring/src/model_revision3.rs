@@ -4,9 +4,9 @@
 //! Draft is separate and retains only a bounded reference to an immutable collision artifact;
 //! multi-megabyte collision arrays are not representable in this schema.
 //!
-//! This foundation is parsed through [`ProjectRevision3::from_json`] directly. The existing
-//! [`crate::ProjectDocument`] dispatcher intentionally remains revision-1/2-only until the later
-//! Working Store and FFI integration slice can add revision 3 without breaking exhaustive callers.
+//! This foundation is also available through [`crate::ProjectDocument`] for bounded parsing and
+//! canonical serialization. Dispatch alone grants no Store, build, deployment, or runtime
+//! authority.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;

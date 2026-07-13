@@ -1,18 +1,22 @@
 //! Bounded raw-JSON dispatch across the closed schemas carried by authoring format 2.
 
-use std::fmt;
+use std::{fmt, io};
 
 use serde::de::{MapAccess, Visitor};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::strict_json::reject_duplicate_object_keys;
-use crate::{ProjectJsonError, ProjectRevision2, ProjectV2, MAX_PROJECT_JSON_BYTES};
+use crate::{
+    ProjectJsonError, ProjectRevision2, ProjectRevision3, ProjectRevision3JsonError, ProjectV2,
+    MAX_PROJECT_JSON_BYTES,
+};
 
 /// One parsed authoring document, dispatched by its format and schema revision markers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectDocument {
     Revision1(ProjectV2),
     Revision2(ProjectRevision2),
+    Revision3(ProjectRevision3),
 }
 
 impl ProjectDocument {
@@ -42,6 +46,9 @@ impl ProjectDocument {
             2 => ProjectRevision2::from_json(json)
                 .map(Self::Revision2)
                 .map_err(ProjectDocumentError::InvalidRevision2),
+            3 => ProjectRevision3::from_json(json)
+                .map(Self::Revision3)
+                .map_err(ProjectDocumentError::InvalidRevision3),
             found => Err(ProjectDocumentError::UnsupportedSchemaRevision { found }),
         }
     }
@@ -50,6 +57,9 @@ impl ProjectDocument {
         match self {
             Self::Revision1(project) => project.to_canonical_json(),
             Self::Revision2(project) => project.to_canonical_json(),
+            Self::Revision3(project) => project
+                .to_canonical_json()
+                .map_err(|error| serde_json::Error::io(io::Error::other(error))),
         }
     }
 }
@@ -62,6 +72,7 @@ impl Serialize for ProjectDocument {
         match self {
             Self::Revision1(project) => project.serialize(serializer),
             Self::Revision2(project) => project.serialize(serializer),
+            Self::Revision3(project) => project.serialize(serializer),
         }
     }
 }
@@ -74,12 +85,14 @@ pub enum ProjectDocumentError {
     InvalidProbeJson(#[source] serde_json::Error),
     #[error("unsupported authoring project format {found}; expected 2")]
     UnsupportedFormat { found: u32 },
-    #[error("unsupported authoring schema revision {found}; expected 1 or 2")]
+    #[error("unsupported authoring schema revision {found}; expected 1, 2, or 3")]
     UnsupportedSchemaRevision { found: u32 },
     #[error("invalid schema-revision-1 authoring project: {0}")]
     InvalidRevision1(#[source] ProjectJsonError),
     #[error("invalid schema-revision-2 authoring project: {0}")]
     InvalidRevision2(#[source] ProjectJsonError),
+    #[error("invalid schema-revision-3 authoring project: {0}")]
+    InvalidRevision3(#[source] ProjectRevision3JsonError),
 }
 
 struct ProjectProbe {

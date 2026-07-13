@@ -121,9 +121,11 @@ fn dispatcher_rejects_unknown_format_revision_and_payload_fail_closed() {
 
     let unknown_revision =
         canonical.replacen("\"schema_revision\":2", "\"schema_revision\":4294967295", 1);
+    let error = ProjectDocument::from_json(&unknown_revision).unwrap_err();
+    assert!(error.to_string().contains("expected 1, 2, or 3"));
     assert!(matches!(
-        ProjectDocument::from_json(&unknown_revision),
-        Err(ProjectDocumentError::UnsupportedSchemaRevision { found: u32::MAX })
+        error,
+        ProjectDocumentError::UnsupportedSchemaRevision { found: u32::MAX }
     ));
 
     let unknown_kind = canonical.replacen("\"kind\":\"localization_entry\"", "\"kind\":\"npc\"", 1);
