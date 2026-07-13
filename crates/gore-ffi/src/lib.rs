@@ -22,6 +22,9 @@
 //! - `authoring_project_story_draft_insert_v1` atomically evaluates one raw, duplicate-safe Story
 //!   Draft mutation against one exact canonical schema-revision-2 project. Rejections never carry
 //!   candidate project JSON.
+//! - `authoring_project_story_quest_draft_insert_v1` accepts friendly Quest intent plus one game
+//!   root, then rebuilds all catalog/collision provenance natively and runs the existing atomic
+//!   transaction. It never accepts provenance from clients or compiles, writes, or publishes.
 //! - `authoring_story_build_plan_v1_generate` derives one deterministic, sealed source-inspection
 //!   plan from exact canonical revision-2 project bytes. It always remains runtime-unqualified,
 //!   build-blocked, and non-publishable and never compiles, writes, deploys, or launches the game.
@@ -65,6 +68,7 @@ mod authoring_story;
 mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_inventory;
+mod authoring_story_quest;
 mod transport;
 mod voice;
 
@@ -95,6 +99,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_logical_npc_clone_draft_v1_generate",
     "authoring_project_check",
     "authoring_project_story_draft_insert_v1",
+    "authoring_project_story_quest_draft_insert_v1",
     "authoring_store_import_ogg",
     "authoring_store_open",
     "authoring_store_open_document",
@@ -192,6 +197,9 @@ fn dispatch(input: &str) -> Value {
         "authoring_project_check" => authoring::project_check(payload),
         "authoring_project_story_draft_insert_v1" => {
             authoring_story::insert_story_draft_v1(payload)
+        }
+        "authoring_project_story_quest_draft_insert_v1" => {
+            authoring_story_quest::insert_quest_draft_v1(payload)
         }
         "authoring_story_build_plan_v1_generate" => {
             authoring_story_build::generate_story_build_plan_v1(payload)
@@ -1071,6 +1079,7 @@ mod tests {
                     "authoring_logical_npc_clone_draft_v1_generate",
                     "authoring_project_check",
                     "authoring_project_story_draft_insert_v1",
+                    "authoring_project_story_quest_draft_insert_v1",
                     "authoring_store_import_ogg",
                     "authoring_store_open",
                     "authoring_store_open_document",
