@@ -420,6 +420,10 @@ class ManagedAuthoringProjectSession {
   Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
       _core.deriveAndSave(derive);
 
+  /// Reopen the exact currently-published checkpoint with full asset
+  /// verification without preparing or publishing a new checkpoint.
+  Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
+
   Future<void> close() => _core.close();
 }
 
@@ -474,6 +478,10 @@ class ManagedRevision3AuthoringProjectSession {
 
   Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
       _core.deriveAndSave(derive);
+
+  /// Reopen the exact currently-published checkpoint with full asset
+  /// verification without preparing or publishing a new checkpoint.
+  Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
 
   Future<void> close() => _core.close();
 }
@@ -665,6 +673,36 @@ class _ManagedProjectSessionCore {
         case ManagedProjectDerivedCandidate<T> candidate:
           await _saveCapturedInQueue(candidate.projectJson);
           return candidate.value;
+      }
+    });
+  }
+
+  /// Verify and fully reopen the exact head currently owned by this session.
+  ///
+  /// This is a durability check, not a save: it prepares no immutable objects
+  /// and never enters the publication lane. Any drift or reopen failure poisons
+  /// the session so callers must close and reopen before another edit.
+  Future<void> verifyCurrentHead() {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<void>('verifyCurrentHead');
+    }
+    return _enqueue(() async {
+      _requireWritableState();
+      final exactOpened = _opened;
+      final operations = _ManagedSessionOperations(
+        root: root,
+        store: _store,
+        replacement: _replacement,
+      );
+      await _requireExactPublishedHead(operations, exactOpened.head);
+      try {
+        _opened = await operations.openPublished(
+          expectedHead: exactOpened.head,
+          expectedProjectJson: exactOpened.projectJson,
+        );
+      } catch (_) {
+        _requiresReopen = true;
+        rethrow;
       }
     });
   }

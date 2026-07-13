@@ -71,6 +71,37 @@ void main() {
   });
 
   test(
+    'shared verifyCurrentHead fully reopens without preparing a checkpoint',
+    () async {
+      final root = Directory(p.join(fixture.path, 'verify_project'));
+      await root.create();
+      final store = _FakeManagedStore();
+      final project = _projectJson(revision: 0, name: 'Verify shared core');
+      final session = await ManagedAuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+        profile: AuthoringValidationProfile.production,
+      );
+      final prepareCalls = store.prepareCalls;
+      final openCalls = store.openVerifications.length;
+      final headOpenCalls = store.headVerifications.length;
+      final exactHead = session.head.canonicalJson;
+
+      await session.verifyCurrentHead();
+
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.openVerifications.length, openCalls + 1);
+      expect(store.openVerifications.last, AuthoringAssetVerification.full);
+      expect(store.headVerifications.length, headOpenCalls);
+      expect(session.projectJson, project);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
     'production adapter routes only through additive document commands',
     () async {
       final project = _revision2ProjectJson(revision: 1, name: 'Adapter');

@@ -176,6 +176,83 @@ void main() {
   );
 
   test(
+    'verifyCurrentHead performs one full reopen without prepare or publish',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final project = _projectJson(revision: 0, name: 'Verified');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+      );
+      final exactHead = session.head.canonicalJson;
+      final prepareCalls = store.prepareCalls;
+      final openCalls = store.openVerifications.length;
+      final headOpenCalls = store.headVerifications.length;
+      final headBytes = await session.headFile.readAsBytes();
+
+      await session.verifyCurrentHead();
+
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.openVerifications.length, openCalls + 1);
+      expect(store.openVerifications.last, AuthoringAssetVerification.full);
+      expect(store.headVerifications.length, headOpenCalls);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.projectJson, project);
+      expect(await session.headFile.readAsBytes(), headBytes);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'verifyCurrentHead drift or reopen mismatch poisons the session',
+    () async {
+      for (final mode in <String>['head-drift', 'reopen-mismatch']) {
+        final root = await _projectRoot(fixture, suffix: mode);
+        final store = _FakeRevision3Store();
+        final original = _projectJson(revision: 0, name: 'Original $mode');
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final prepareCalls = store.prepareCalls;
+        if (mode == 'head-drift') {
+          final external = store.register(
+            _projectJson(revision: 91, name: 'External'),
+          );
+          await session.headFile.writeAsString(
+            external.canonicalJson,
+            flush: true,
+          );
+        } else {
+          store.nextOpenProjectOverride = _projectJson(
+            revision: 92,
+            name: 'Wrong reopen',
+          );
+        }
+
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectSessionException>()),
+          reason: mode,
+        );
+        expect(store.prepareCalls, prepareCalls, reason: mode);
+        expect(session.projectJson, original, reason: mode);
+        expect(session.requiresReopen, isTrue, reason: mode);
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mode,
+        );
+        await session.close();
+      }
+    },
+  );
+
+  test(
     'derive rejection and callback throw prepare and publish nothing',
     () async {
       final root = await _projectRoot(fixture);
@@ -440,36 +517,43 @@ void main() {
     },
   );
 
-  test('derive callback cannot re-enter save, derive, or close', () async {
-    final root = await _projectRoot(fixture);
-    final store = _FakeRevision3Store();
-    final session = await ManagedRevision3AuthoringProjectSession.create(
-      root: root,
-      store: store,
-      projectJson: _projectJson(revision: 0, name: 'Original'),
-    );
+  test(
+    'derive callback cannot re-enter save, derive, verify, or close',
+    () async {
+      final root = await _projectRoot(fixture);
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'Original'),
+      );
 
-    final result = await session.deriveAndSave<String>((_) async {
-      await expectLater(
-        session.save(_projectJson(revision: 1, name: 'Nested')),
-        throwsA(isA<ManagedProjectReentrantOperationException>()),
-      );
-      await expectLater(
-        session.deriveAndSave<void>(
-          (_) => const ManagedProjectDerivedRejection<void>(null),
-        ),
-        throwsA(isA<ManagedProjectReentrantOperationException>()),
-      );
-      await expectLater(
-        session.close(),
-        throwsA(isA<ManagedProjectReentrantOperationException>()),
-      );
-      return const ManagedProjectDerivedRejection<String>('closed');
-    });
-    expect(result, 'closed');
-    expect(session.isClosed, isFalse);
-    await session.close();
-  });
+      final result = await session.deriveAndSave<String>((_) async {
+        await expectLater(
+          session.save(_projectJson(revision: 1, name: 'Nested')),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.deriveAndSave<void>(
+            (_) => const ManagedProjectDerivedRejection<void>(null),
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.close(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        return const ManagedProjectDerivedRejection<String>('closed');
+      });
+      expect(result, 'closed');
+      expect(session.isClosed, isFalse);
+      await session.close();
+    },
+  );
 
   test(
     'close waits for prior work, rejects new work, and releases lock',
