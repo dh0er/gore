@@ -176,7 +176,7 @@ struct HandleSnapshot {
 }
 
 #[derive(Debug)]
-enum SourceReadError {
+pub(super) enum SourceReadError {
     Missing,
     Unsafe,
     Limit,
@@ -184,7 +184,10 @@ enum SourceReadError {
     Io,
 }
 
-fn read_source_no_follow(path: &Path, max_bytes: u64) -> Result<Vec<u8>, SourceReadError> {
+pub(super) fn read_source_no_follow(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, SourceReadError> {
     let (mut file, initial) = open_regular_no_follow(path)?;
     if initial.byte_len == 0 || initial.byte_len > max_bytes {
         return Err(SourceReadError::Limit);

@@ -54,6 +54,10 @@
 //!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
 //!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
 //!   `gore-project.json`.
+//! - `authoring_store_prepare_revision3_quest_draft_v3` rebuilds fresh native game/catalog
+//!   collision authority, consumes the repeated-Quest transaction, imports its structural
+//!   artifact, and fully reopens a prepared revision-3 checkpoint. It returns only structural,
+//!   build-blocked/runtime-unqualified facts and never publishes the fixed project head.
 //! - `authoring_store_import_ogg` and `authoring_store_verify_asset` import or verify bounded
 //!   content-addressed Ogg assets. `expected_head_json` is a strict CAS token: null means the fixed
 //!   head must be absent; a canonical string means it must match exactly.
@@ -86,6 +90,7 @@ mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_inventory;
 mod authoring_story_quest;
+mod authoring_story_quest_revision3;
 mod dataasset;
 mod transport;
 mod voice;
@@ -129,6 +134,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_prepare_revision3_checkpoint",
+    "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -196,6 +202,9 @@ fn dispatch(input: &str) -> Value {
         "authoring_store_prepare_revision3_checkpoint" => {
             Some(authoring_store::prepare_revision3_checkpoint_raw)
         }
+        "authoring_store_prepare_revision3_quest_draft_v3" => Some(
+            authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw,
+        ),
         _ => None,
     };
     if let Some(route) = revision3_store_raw_route {
@@ -1137,6 +1146,7 @@ mod tests {
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_prepare_revision3_checkpoint",
+                    "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
@@ -1212,6 +1222,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_document_checkpoint"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_quest_draft_v3"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));
