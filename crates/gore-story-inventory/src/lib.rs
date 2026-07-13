@@ -29,9 +29,9 @@ mod quest_capability;
 pub use quest_capability::{
     reopen_quest_collision_capability_artifact_v1, QuestCollisionBuildStatus,
     QuestCollisionCapabilityArtifactError, QuestCollisionCapabilityArtifactV1,
-    QuestCollisionCapabilityError, QuestCollisionCoverage, QuestCollisionPublicationStatus,
-    QuestCollisionRuntimeQualification, VerifiedQuestCollisionCapability,
-    BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
+    QuestCollisionCapabilityArtifactVerificationError, QuestCollisionCapabilityError,
+    QuestCollisionCoverage, QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
+    VerifiedQuestCollisionCapability, BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
 };
 
 /// Exact identity of the only layer represented by revision 1.
@@ -1452,6 +1452,36 @@ mod tests {
     }
 
     #[test]
+    fn source_bound_bridge_returns_the_capability_needed_by_the_quest_generator() {
+        let catalog = trusted_catalog();
+        let project = empty_authoring_project();
+        let stored = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
+            .unwrap()
+            .into_artifact()
+            .unwrap();
+        let reopened = reopen_quest_collision_capability_artifact_v1(
+            stored.canonical_json(),
+            stored.artifact_seal(),
+            stored.source_seal(),
+        )
+        .unwrap();
+
+        let authoritative = VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &project)
+            .unwrap()
+            .verify_artifact_exact(&reopened)
+            .unwrap();
+        let input = authoritative.into_quest_collision_input(&project).unwrap();
+        assert_eq!(
+            input.catalog_layer,
+            BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER
+        );
+        assert_eq!(input.source_seal.byte_len, reopened.source_seal().byte_len);
+        assert!(!input.modules.is_empty());
+        assert!(!input.relative_paths.is_empty());
+        assert!(!input.symbols.is_empty());
+    }
+
+    #[test]
     #[ignore = "requires exact pinned executable, Shipping Cache, and Binds Cache paths"]
     fn configured_real_combined_artifact_golden() {
         let executable = std::env::var_os("GORE_STORY_INVENTORY_REAL_EXE")
@@ -1486,11 +1516,17 @@ mod tests {
             artifact.source_seal().sha256.to_string(),
             "945f60dd495fad5bb19864ba270566b64325751c82607309b99e7ec71ad2f8f9"
         );
-        reopen_quest_collision_capability_artifact_v1(
+        let reopened = reopen_quest_collision_capability_artifact_v1(
             artifact.canonical_json(),
             artifact.artifact_seal(),
             artifact.source_seal(),
         )
         .unwrap();
+        let fresh_base = build_base_game_inventory(&catalog, &shipping, &binds).unwrap();
+        let authoritative = VerifiedQuestCollisionCapability::bind(fresh_base, &catalog, &project)
+            .unwrap()
+            .verify_artifact_exact(&reopened)
+            .unwrap();
+        assert_eq!(authoritative.combined_source_seal(), artifact.source_seal());
     }
 }

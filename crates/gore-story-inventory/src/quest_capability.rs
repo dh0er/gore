@@ -397,6 +397,60 @@ impl VerifiedQuestCollisionCapability {
         })
     }
 
+    /// Consume this freshly source-bound capability while borrowing one opaque artifact and
+    /// return the still-authoritative capability only when every identity matches exactly.
+    ///
+    /// Canonical payload bytes are materialized directly from the capability's borrowed sets;
+    /// the multi-megabyte collision collections are never cloned. Failure consumes and drops the
+    /// capability, while the artifact remains merely structural. In particular, this is not an
+    /// artifact-to-capability conversion: callers must independently bind trusted sources first.
+    pub fn verify_artifact_exact(
+        self,
+        artifact: &QuestCollisionCapabilityArtifactV1,
+    ) -> Result<Self, QuestCollisionCapabilityArtifactVerificationError> {
+        let expected = self.materialize_artifact_identity(&artifact.canonical_json)?;
+        if artifact.base_inventory_payload_seal != self.base_inventory_payload_seal {
+            return Err(
+                QuestCollisionCapabilityArtifactVerificationError::BaseInventoryPayloadSealMismatch,
+            );
+        }
+        if artifact.story_catalog_seal != self.story_catalog_seal {
+            return Err(
+                QuestCollisionCapabilityArtifactVerificationError::StoryCatalogSealMismatch,
+            );
+        }
+        if artifact.project_id != self.project_id {
+            return Err(QuestCollisionCapabilityArtifactVerificationError::ProjectIdMismatch);
+        }
+        if artifact.project_revision != self.project_revision {
+            return Err(QuestCollisionCapabilityArtifactVerificationError::ProjectRevisionMismatch);
+        }
+        if artifact.project_target != self.project_target {
+            return Err(QuestCollisionCapabilityArtifactVerificationError::ProjectTargetMismatch);
+        }
+        if artifact.canonical_project != self.canonical_project {
+            return Err(
+                QuestCollisionCapabilityArtifactVerificationError::CanonicalProjectMismatch,
+            );
+        }
+        if expected.source_seal != self.combined_source_seal
+            || artifact.source_seal != expected.source_seal
+        {
+            return Err(
+                QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch,
+            );
+        }
+        if !expected.canonical_matches {
+            return Err(
+                QuestCollisionCapabilityArtifactVerificationError::CanonicalIdentityMismatch,
+            );
+        }
+        if artifact.artifact_seal != expected.artifact_seal {
+            return Err(QuestCollisionCapabilityArtifactVerificationError::RawArtifactSealMismatch);
+        }
+        Ok(self)
+    }
+
     /// Consume this verified capability into one immutable, content-addressable artifact.
     ///
     /// The large collision strings move through the serializer and are then dropped; they are
@@ -405,6 +459,7 @@ impl VerifiedQuestCollisionCapability {
     pub fn into_artifact(
         self,
     ) -> Result<QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactError> {
+        let canonical_json = self.materialize_canonical_payload()?;
         let Self {
             project_id,
             project_revision,
@@ -413,31 +468,12 @@ impl VerifiedQuestCollisionCapability {
             base_inventory_payload_seal,
             story_catalog_seal,
             combined_source_seal,
-            modules,
-            relative_paths,
-            symbols,
+            modules: _,
+            relative_paths: _,
+            symbols: _,
             parents: _,
             givers: _,
         } = self;
-        let payload = CombinedPayload {
-            format: COMBINED_FORMAT,
-            schema_revision: COMBINED_SCHEMA_REVISION,
-            coverage: QuestCollisionCoverage::BaseGameAndExactProjectOnly,
-            catalog_layer: BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
-            runtime_qualification: QuestCollisionRuntimeQualification::RuntimeUnqualified,
-            build_status: QuestCollisionBuildStatus::Blocked,
-            publication_status: QuestCollisionPublicationStatus::NotSupported,
-            base_inventory_payload_seal: &base_inventory_payload_seal,
-            story_catalog_seal: &story_catalog_seal,
-            project_id,
-            project_revision,
-            project_target: &project_target,
-            canonical_project: &canonical_project,
-            modules: &modules,
-            relative_paths: &relative_paths,
-            symbols: &symbols,
-        };
-        let canonical_json = canonical_combined_payload(&payload)?;
         let actual_source_seal = seal_combined_payload_bytes(&canonical_json);
         if actual_source_seal != combined_source_seal {
             return Err(QuestCollisionCapabilityArtifactError::Invariant(
@@ -457,6 +493,41 @@ impl VerifiedQuestCollisionCapability {
             project_target,
             canonical_project,
         })
+    }
+
+    fn materialize_canonical_payload(
+        &self,
+    ) -> Result<Vec<u8>, QuestCollisionCapabilityArtifactError> {
+        canonical_combined_payload(&self.combined_payload())
+    }
+
+    fn materialize_artifact_identity(
+        &self,
+        expected_canonical: &[u8],
+    ) -> Result<MaterializedArtifactIdentity, QuestCollisionCapabilityArtifactVerificationError>
+    {
+        materialize_artifact_identity(&self.combined_payload(), expected_canonical)
+    }
+
+    fn combined_payload(&self) -> CombinedPayload<'_> {
+        CombinedPayload {
+            format: COMBINED_FORMAT,
+            schema_revision: COMBINED_SCHEMA_REVISION,
+            coverage: QuestCollisionCoverage::BaseGameAndExactProjectOnly,
+            catalog_layer: BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
+            runtime_qualification: QuestCollisionRuntimeQualification::RuntimeUnqualified,
+            build_status: QuestCollisionBuildStatus::Blocked,
+            publication_status: QuestCollisionPublicationStatus::NotSupported,
+            base_inventory_payload_seal: &self.base_inventory_payload_seal,
+            story_catalog_seal: &self.story_catalog_seal,
+            project_id: self.project_id,
+            project_revision: self.project_revision,
+            project_target: &self.project_target,
+            canonical_project: &self.canonical_project,
+            modules: &self.modules,
+            relative_paths: &self.relative_paths,
+            symbols: &self.symbols,
+        }
     }
 }
 
@@ -549,6 +620,35 @@ pub enum QuestCollisionCapabilityError {
     Catalog(#[from] CatalogError),
     #[error(transparent)]
     Project(#[from] StoryCollisionCollectionError),
+}
+
+/// Fail-closed mismatch categories for capability-owned artifact verification.
+#[derive(Debug, thiserror::Error)]
+pub enum QuestCollisionCapabilityArtifactVerificationError {
+    #[error("Quest collision artifact raw content seal does not match exact canonical bytes")]
+    RawArtifactSealMismatch,
+    #[error("Quest collision artifact semantic source seal does not match exact canonical bytes")]
+    SemanticSourceSealMismatch,
+    #[error("Quest collision artifact base inventory payload seal mismatch")]
+    BaseInventoryPayloadSealMismatch,
+    #[error("Quest collision artifact Story catalog seal mismatch")]
+    StoryCatalogSealMismatch,
+    #[error("Quest collision artifact project id mismatch")]
+    ProjectIdMismatch,
+    #[error("Quest collision artifact project revision mismatch")]
+    ProjectRevisionMismatch,
+    #[error("Quest collision artifact project target mismatch")]
+    ProjectTargetMismatch,
+    #[error("Quest collision artifact canonical project seal mismatch")]
+    CanonicalProjectMismatch,
+    #[error(
+        "Quest collision artifact canonical identity differs from the source-bound capability"
+    )]
+    CanonicalIdentityMismatch,
+    #[error("source-bound Quest collision artifact identity exceeds bytes: {actual} > {max}")]
+    Limit { actual: usize, max: usize },
+    #[error("could not serialize source-bound Quest collision artifact identity: {0}")]
+    Serialize(#[source] serde_json::Error),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -893,6 +993,94 @@ struct ParsedCollisionEntries {
     values: Vec<String>,
     count: usize,
     bytes: usize,
+}
+
+struct MaterializedArtifactIdentity {
+    artifact_seal: ContentSeal,
+    source_seal: ContentSeal,
+    canonical_matches: bool,
+}
+
+fn materialize_artifact_identity(
+    payload: &CombinedPayload<'_>,
+    expected_canonical: &[u8],
+) -> Result<MaterializedArtifactIdentity, QuestCollisionCapabilityArtifactVerificationError> {
+    let mut writer =
+        ExactCanonicalIdentityWriter::new(expected_canonical, MAX_INVENTORY_JSON_BYTES);
+    let serialized = serde_json::to_writer(&mut writer, payload);
+    if let Some(actual) = writer.first_exceeded_size {
+        return Err(QuestCollisionCapabilityArtifactVerificationError::Limit {
+            actual,
+            max: MAX_INVENTORY_JSON_BYTES,
+        });
+    }
+    serialized.map_err(QuestCollisionCapabilityArtifactVerificationError::Serialize)?;
+    let payload_len = writer.bytes_written;
+    let canonical_matches = writer.canonical_matches && payload_len == expected_canonical.len();
+    let artifact_seal = ContentSeal {
+        byte_len: payload_len as u64,
+        sha256: super::Sha256Digest::from_bytes(writer.raw_hasher.finalize().into()),
+    };
+
+    let mut semantic_hasher = Sha256::new();
+    semantic_hasher.update(COMBINED_SEAL_DOMAIN);
+    semantic_hasher.update((payload_len as u64).to_be_bytes());
+    serde_json::to_writer(HashWriter(&mut semantic_hasher), payload)
+        .map_err(QuestCollisionCapabilityArtifactVerificationError::Serialize)?;
+    let source_seal = ContentSeal {
+        byte_len: payload_len as u64,
+        sha256: super::Sha256Digest::from_bytes(semantic_hasher.finalize().into()),
+    };
+    Ok(MaterializedArtifactIdentity {
+        artifact_seal,
+        source_seal,
+        canonical_matches,
+    })
+}
+
+struct ExactCanonicalIdentityWriter<'a> {
+    expected: &'a [u8],
+    bytes_written: usize,
+    limit: usize,
+    canonical_matches: bool,
+    first_exceeded_size: Option<usize>,
+    raw_hasher: Sha256,
+}
+
+impl<'a> ExactCanonicalIdentityWriter<'a> {
+    fn new(expected: &'a [u8], limit: usize) -> Self {
+        Self {
+            expected,
+            bytes_written: 0,
+            limit,
+            canonical_matches: true,
+            first_exceeded_size: None,
+            raw_hasher: Sha256::new(),
+        }
+    }
+}
+
+impl Write for ExactCanonicalIdentityWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let start = self.bytes_written;
+        let actual = start.saturating_add(bytes.len());
+        if actual > self.limit {
+            self.first_exceeded_size.get_or_insert(actual);
+            return Err(io::Error::other(
+                "source-bound canonical payload byte limit exceeded",
+            ));
+        }
+        if self.expected.get(start..actual) != Some(bytes) {
+            self.canonical_matches = false;
+        }
+        self.raw_hasher.update(bytes);
+        self.bytes_written = actual;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 impl<'de> de::DeserializeSeed<'de> for CollisionEntriesSeed {
@@ -1435,6 +1623,13 @@ mod tests {
         )
             -> Result<VerifiedQuestCollisionCapability, QuestCollisionCapabilityError> =
             VerifiedQuestCollisionCapability::bind;
+        let _verify: fn(
+            VerifiedQuestCollisionCapability,
+            &QuestCollisionCapabilityArtifactV1,
+        ) -> Result<
+            VerifiedQuestCollisionCapability,
+            QuestCollisionCapabilityArtifactVerificationError,
+        > = VerifiedQuestCollisionCapability::verify_artifact_exact;
     }
 
     #[test]
@@ -1471,6 +1666,144 @@ mod tests {
         .unwrap();
         assert_eq!(reopened, first);
         assert_eq!(reopened.into_canonical_json(), first.canonical_json());
+    }
+
+    #[test]
+    fn only_a_fresh_source_bound_capability_can_authorize_an_exact_reopened_artifact() {
+        let artifact = test_capability().into_artifact().unwrap();
+        let reopened = reopen_quest_collision_capability_artifact_v1(
+            artifact.canonical_json(),
+            artifact.artifact_seal(),
+            artifact.source_seal(),
+        )
+        .unwrap();
+
+        let authoritative = test_capability().verify_artifact_exact(&reopened).unwrap();
+        assert!(authoritative.contains_module("PROJECT.MODULE"));
+        assert!(authoritative.contains_relative_path("PROJECT/MODULE.AS"));
+        assert!(authoritative.contains_symbol("UPROJECT"));
+        assert_eq!(authoritative.combined_source_seal(), reopened.source_seal());
+        // Verification borrowed the opaque artifact; it remains structural and reusable only as
+        // an identity input to another independently source-bound capability.
+        assert_eq!(reopened, artifact);
+    }
+
+    #[test]
+    fn exact_bridge_distinguishes_raw_semantic_and_canonical_identity_mismatches() {
+        let mut wrong_raw = test_capability().into_artifact().unwrap();
+        wrong_raw.artifact_seal.sha256 = crate::Sha256Digest::from_bytes([0x81; 32]);
+        assert!(matches!(
+            test_capability().verify_artifact_exact(&wrong_raw),
+            Err(QuestCollisionCapabilityArtifactVerificationError::RawArtifactSealMismatch)
+        ));
+
+        let mut wrong_semantic = test_capability().into_artifact().unwrap();
+        wrong_semantic.source_seal.sha256 = crate::Sha256Digest::from_bytes([0x82; 32]);
+        assert!(matches!(
+            test_capability().verify_artifact_exact(&wrong_semantic),
+            Err(QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch)
+        ));
+
+        let mut wrong_canonical = test_capability().into_artifact().unwrap();
+        let canonical = String::from_utf8(wrong_canonical.canonical_json).unwrap();
+        let mutated = canonical.replacen("project.module", "project.modulf", 1);
+        assert_ne!(mutated, canonical);
+        wrong_canonical.canonical_json = mutated.into_bytes();
+        wrong_canonical.artifact_seal = raw_artifact_seal(&wrong_canonical.canonical_json);
+        assert!(matches!(
+            test_capability().verify_artifact_exact(&wrong_canonical),
+            Err(QuestCollisionCapabilityArtifactVerificationError::CanonicalIdentityMismatch)
+        ));
+
+        let mut changed_collision = test_capability().into_artifact().unwrap();
+        let canonical = String::from_utf8(changed_collision.canonical_json).unwrap();
+        changed_collision.canonical_json = canonical
+            .replacen("project.module", "project.modulf", 1)
+            .into_bytes();
+        changed_collision.artifact_seal = raw_artifact_seal(&changed_collision.canonical_json);
+        changed_collision.source_seal =
+            seal_combined_payload_bytes(&changed_collision.canonical_json);
+        assert!(matches!(
+            test_capability().verify_artifact_exact(&changed_collision),
+            Err(QuestCollisionCapabilityArtifactVerificationError::SemanticSourceSealMismatch)
+        ));
+    }
+
+    fn assert_provenance_mismatch(
+        mutate: impl FnOnce(&mut QuestCollisionCapabilityArtifactV1),
+        matches_expected: impl FnOnce(&QuestCollisionCapabilityArtifactVerificationError) -> bool,
+    ) {
+        let mut artifact = test_capability().into_artifact().unwrap();
+        mutate(&mut artifact);
+        let error = test_capability()
+            .verify_artifact_exact(&artifact)
+            .unwrap_err();
+        assert!(matches_expected(&error), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn exact_bridge_checks_every_retained_bounded_provenance_field() {
+        assert_provenance_mismatch(
+            |artifact| {
+                artifact.base_inventory_payload_seal.sha256 =
+                    crate::Sha256Digest::from_bytes([0x91; 32]);
+            },
+            |error| {
+                matches!(error, QuestCollisionCapabilityArtifactVerificationError::BaseInventoryPayloadSealMismatch)
+            },
+        );
+        assert_provenance_mismatch(
+            |artifact| {
+                artifact.story_catalog_seal.sha256 = crate::Sha256Digest::from_bytes([0x92; 32]);
+            },
+            |error| {
+                matches!(
+                    error,
+                    QuestCollisionCapabilityArtifactVerificationError::StoryCatalogSealMismatch
+                )
+            },
+        );
+        assert_provenance_mismatch(
+            |artifact| artifact.project_id = ProjectId::from_bytes([0x93; 16]),
+            |error| {
+                matches!(
+                    error,
+                    QuestCollisionCapabilityArtifactVerificationError::ProjectIdMismatch
+                )
+            },
+        );
+        assert_provenance_mismatch(
+            |artifact| artifact.project_revision += 1,
+            |error| {
+                matches!(
+                    error,
+                    QuestCollisionCapabilityArtifactVerificationError::ProjectRevisionMismatch
+                )
+            },
+        );
+        assert_provenance_mismatch(
+            |artifact| {
+                artifact.project_target.executable.sha256 =
+                    AuthoringSha256Digest::from_bytes([0x94; 32]);
+            },
+            |error| {
+                matches!(
+                    error,
+                    QuestCollisionCapabilityArtifactVerificationError::ProjectTargetMismatch
+                )
+            },
+        );
+        assert_provenance_mismatch(
+            |artifact| {
+                artifact.canonical_project.sha256 = AuthoringSha256Digest::from_bytes([0x95; 32]);
+            },
+            |error| {
+                matches!(
+                    error,
+                    QuestCollisionCapabilityArtifactVerificationError::CanonicalProjectMismatch
+                )
+            },
+        );
     }
 
     #[test]
@@ -1717,6 +2050,33 @@ mod tests {
             serde_json::to_value(streamed.sha256).unwrap(),
             serde_json::json!("4c6f8868c2dd31ac881d7afae79f544f3d1ccee8495286a76737b7bfc57efa3c")
         );
+    }
+
+    fn exact_writer_matches(expected: &[u8], chunks: &[&[u8]]) -> bool {
+        let mut writer = ExactCanonicalIdentityWriter::new(expected, MAX_INVENTORY_JSON_BYTES);
+        for chunk in chunks {
+            writer.write_all(chunk).unwrap();
+        }
+        writer.canonical_matches && writer.bytes_written == expected.len()
+    }
+
+    #[test]
+    fn exact_identity_writer_handles_chunk_boundaries_and_length_drift() {
+        let expected = b"0123456789abcdef";
+        assert!(exact_writer_matches(
+            expected,
+            &[b"0", b"12345", b"6789", b"abcdef"]
+        ));
+        assert!(!exact_writer_matches(expected, &[b"0123456789abcdee"]));
+        assert!(!exact_writer_matches(expected, &[b"0123456789abcde"]));
+        assert!(!exact_writer_matches(
+            expected,
+            &[b"01234567", b"89abcdef", b"x"]
+        ));
+        assert!(exact_writer_matches(
+            expected,
+            &[b"0123456", b"789abcde", b"f"]
+        ));
     }
 
     #[test]
