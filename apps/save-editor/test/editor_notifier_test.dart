@@ -5,6 +5,8 @@ import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
+import 'package:goresave/features/editor/domain/glossary_models.dart';
+import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 
@@ -163,7 +165,9 @@ void main() {
       expect(hard.activeResourcesLevel(), 'Hard');
 
       // Gothic preset ('_Standard') → 'Gothic'.
-      final gothic = await build({'difficultyPreset': 'DifficultyPreset_Standard'});
+      final gothic = await build({
+        'difficultyPreset': 'DifficultyPreset_Standard',
+      });
       expect(gothic.activeResourcesLevel(), 'Gothic');
 
       // Custom preset with an explicit Resources sub-level → the explicit level
@@ -185,32 +189,29 @@ void main() {
     },
   );
 
-  test(
-    'inspect sends no codec config and decodes all chunks',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-      );
+  test('inspect sends no codec config and decodes all chunks', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+    );
 
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      final inspect = core.requests.lastWhere(
-        (request) => request.command == 'inspect_save',
-      );
-      expect(inspect.payload.containsKey('privateChunkLimit'), isFalse);
-      expect(inspect.payload.containsKey('binaryHost'), isFalse);
-      expect(notifier.state.backups.single.fileName, 'G1R-001.sav.bak.200');
-      expect(notifier.state.backups.single.playerSaveName, 'Before edit');
-      expect(
-        notifier.state.companionBackups.single.fileName,
-        'PersistentDataList.sav.bak.250',
-      );
-      // Companion (PersistentDataList.sav) backups are restorable directly.
-      expect(notifier.state.companionBackups.single.canRestore, isTrue);
-    },
-  );
+    final inspect = core.requests.lastWhere(
+      (request) => request.command == 'inspect_save',
+    );
+    expect(inspect.payload.containsKey('privateChunkLimit'), isFalse);
+    expect(inspect.payload.containsKey('binaryHost'), isFalse);
+    expect(notifier.state.backups.single.fileName, 'G1R-001.sav.bak.200');
+    expect(notifier.state.backups.single.playerSaveName, 'Before edit');
+    expect(
+      notifier.state.companionBackups.single.fileName,
+      'PersistentDataList.sav.bak.250',
+    );
+    // Companion (PersistentDataList.sav) backups are restorable directly.
+    expect(notifier.state.companionBackups.single.canRestore, isTrue);
+  });
 
   test('restoreBackup sends backup path and refreshes selected save', () async {
     final core = _RecordingCoreService();
@@ -321,10 +322,7 @@ void main() {
     'saveAllPending issues ONE write_save with mixed edits in stable key order',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       // Register two pending edits with keys that sort: 'attr:Health' < 'transform'
@@ -506,7 +504,11 @@ void main() {
           edits: [
             {
               'path': 'private.inventory.setItemCount',
-              'value': {'id': 'ItMi_Orenugget', 'count': 5, 'actorId': 'Char_1'},
+              'value': {
+                'id': 'ItMi_Orenugget',
+                'count': 5,
+                'actorId': 'Char_1',
+              },
             },
           ],
         ),
@@ -596,7 +598,9 @@ void main() {
             {
               'path': savePath,
               'persistentProfileId': null, // not attached to any profile
-              'difficulty': {'preset': 'DifficultyPreset_Hard'}, // save's own = Hard
+              'difficulty': {
+                'preset': 'DifficultyPreset_Hard',
+              }, // save's own = Hard
             },
           ],
           // The folder HAS a profile and it is the scan-active one — but it is a
@@ -990,6 +994,240 @@ void main() {
   );
 
   test(
+    'saveAllPending refuses a typed edit to a glossary quest CurrentState path',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      const questStatePath = [
+        'QuestDataByClass',
+        '{/Script/Angelscript.Quest_CreaturesGlossary_Wolf_WolfUnlock}',
+        'CurrentState',
+      ];
+      notifier.setPendingGlossarySegment(
+        const GlossarySegmentEdit(
+          documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+          segmentClass:
+              '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+          unlocked: true,
+          questStatePath: questStatePath,
+        ),
+      );
+      notifier.setPendingEdit(
+        'typed:wolf-current-state',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': questStatePath,
+                'value': 'EQuestState::Succeeded',
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('same quest CurrentState'));
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.pendingEdits, hasLength(2));
+    },
+  );
+
+  test('saveAllPending refuses a typed value edit inside Hero MemorizedEvents '
+      'alongside a glossary segment change', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Unlock',
+        unlocked: false,
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:hero-memory-time',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'LongTermMemoryByGlobalId',
+                '{Hero}',
+                'MemorizedEvents',
+                '[17]',
+                'Time',
+                'TotalSeconds',
+              ],
+              'value': 42.0,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('Hero MemorizedEvents'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed array edit on Hero MemorizedEvents '
+      'alongside a glossary segment change', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: '/Script/Angelscript.Document_Glossary_Wolf',
+        segmentClass:
+            '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Entry2',
+        unlocked: true,
+      ),
+    );
+    notifier.setPendingEdit(
+      'typed:hero-memory-remove',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'],
+              'index': 17,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('Hero MemorizedEvents'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed relationship value edit for the same '
+      'NPC as a structured override', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.friend);
+    notifier.setPendingEdit(
+      'typed:asghan-relationship',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'm_GenericData',
+                '{Relationship}',
+                'RelationshipByGlobalId',
+                '{Asghan-1}',
+                'ActivePersonalRelationshipModifiers',
+                '[0]',
+                'Relationship',
+              ],
+              'value': 'ERelationship::Enemy',
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same NPC relationship entry'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+    expect(notifier.state.pendingEdits, hasLength(2));
+  });
+
+  test('saveAllPending refuses a typed modifier removal for the same NPC as '
+      'a structured relationship override', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.neutral);
+    notifier.setPendingEdit(
+      'typed:asghan-modifier-remove',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.arrayRemove',
+            'value': {
+              'path': [
+                'RelationshipByGlobalId',
+                '{ASGHAN-1}',
+                'ActivePersonalRelationshipModifiers',
+              ],
+              'index': 0,
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isFalse);
+    expect(notifier.state.error, contains('same NPC relationship entry'));
+    expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+  });
+
+  test('saveAllPending permits an All-data relationship edit for a different '
+      'NPC', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingNpcRelationship('Asghan-1', NpcRelationship.enemy);
+    notifier.setPendingEdit(
+      'typed:buster-relationship',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.typed.setValue',
+            'value': {
+              'path': [
+                'RelationshipByGlobalId',
+                '{Buster-1}',
+                'ActivePersonalRelationshipModifiers',
+                '[0]',
+                'Relationship',
+              ],
+              'value': 'ERelationship::Friend',
+            },
+          },
+        ],
+      ),
+    );
+
+    final ok = await notifier.saveAllPending();
+
+    expect(ok, isTrue);
+    final writes = core.requests
+        .where((request) => request.command == 'write_save')
+        .toList();
+    expect(writes, hasLength(2));
+  });
+
+  test(
     'saveAllPending splits a splicing edit and a typed edit into separate writes',
     () async {
       final core = _RecordingCoreService();
@@ -1056,94 +1294,82 @@ void main() {
     },
   );
 
-  test(
-    'saveAllPending splits a mixed batch: revive alone, addItem alone, '
-    'setValue batched — with backup only on the first write',
-    () async {
-      final core = _RecordingCoreService();
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test('saveAllPending splits a mixed batch: revive alone, addItem alone, '
+      'setValue batched — with backup only on the first write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-      notifier.setPendingEdit(
-        'npc.revive:Lizard-1',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.npc.revive',
-              'value': {'id': 'Lizard-1'},
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'inventory',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.inventory.addItem',
-              'value': {
-                'path': '/Script/Angelscript.ItMi_Orenugget',
-                'count': 1,
-              },
-            },
-          ],
-        ),
-      );
-      notifier.setPendingEdit(
-        'attr:Health',
-        const PendingSaveEdit(
-          edits: [
-            {
-              'path': 'private.player.setAttribute',
-              'value': {
-                'id': 'Health',
-                'baseValue': 77.0,
-                'currentValue': 66.0,
-              },
-            },
-          ],
-        ),
-      );
+    notifier.setPendingEdit(
+      'npc.revive:Lizard-1',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.revive',
+            'value': {'id': 'Lizard-1'},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'inventory',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.inventory.addItem',
+            'value': {'path': '/Script/Angelscript.ItMi_Orenugget', 'count': 1},
+          },
+        ],
+      ),
+    );
+    notifier.setPendingEdit(
+      'attr:Health',
+      const PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.player.setAttribute',
+            'value': {'id': 'Health', 'baseValue': 77.0, 'currentValue': 66.0},
+          },
+        ],
+      ),
+    );
 
-      final ok = await notifier.saveAllPending();
+    final ok = await notifier.saveAllPending();
 
-      expect(ok, isTrue);
-      expect(notifier.state.error, isNull);
-      final writes = core.requests
-          .where((r) => r.command == 'write_save')
-          .toList();
-      // revive alone + addItem alone + the fixed setValue batch = three writes.
-      expect(writes, hasLength(3));
+    expect(ok, isTrue);
+    expect(notifier.state.error, isNull);
+    final writes = core.requests
+        .where((r) => r.command == 'write_save')
+        .toList();
+    // revive alone + addItem alone + the fixed setValue batch = three writes.
+    expect(writes, hasLength(3));
 
-      bool writeHas(_RecordedRequest w, String path) =>
-          (w.payload['edits'] as List).any(
-            (e) => (e as Map)['path'] == path,
-          );
+    bool writeHas(_RecordedRequest w, String path) =>
+        (w.payload['edits'] as List).any((e) => (e as Map)['path'] == path);
 
-      final reviveWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.npc.revive'),
-      );
-      expect(reviveWrite.payload['edits'], hasLength(1));
-      final addItemWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.inventory.addItem'),
-      );
-      expect(addItemWrite.payload['edits'], hasLength(1));
-      final fixedWrite = writes.firstWhere(
-        (w) => writeHas(w, 'private.player.setAttribute'),
-      );
-      expect(fixedWrite.payload['edits'], hasLength(1));
+    final reviveWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.npc.revive'),
+    );
+    expect(reviveWrite.payload['edits'], hasLength(1));
+    final addItemWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.inventory.addItem'),
+    );
+    expect(addItemWrite.payload['edits'], hasLength(1));
+    final fixedWrite = writes.firstWhere(
+      (w) => writeHas(w, 'private.player.setAttribute'),
+    );
+    expect(fixedWrite.payload['edits'], hasLength(1));
 
-      // Backup-once: exactly one write carries backup:true (the first), the
-      // rest backup:false — one pristine snapshot per Save.
-      final backupTrue = writes.where((w) => w.payload['backup'] == true);
-      expect(backupTrue, hasLength(1));
-      expect(writes.first.payload['backup'], isTrue);
-      for (final w in writes.skip(1)) {
-        expect(w.payload['backup'], isFalse);
-      }
-      expect(notifier.state.pendingEdits, isEmpty);
-    },
-  );
+    // Backup-once: exactly one write carries backup:true (the first), the
+    // rest backup:false — one pristine snapshot per Save.
+    final backupTrue = writes.where((w) => w.payload['backup'] == true);
+    expect(backupTrue, hasLength(1));
+    expect(writes.first.payload['backup'], isTrue);
+    for (final w in writes.skip(1)) {
+      expect(w.payload['backup'], isFalse);
+    }
+    expect(notifier.state.pendingEdits, isEmpty);
+  });
 
   test(
     'saveAllPending issues two writes for two distinct splicing edits',
@@ -1189,6 +1415,84 @@ void main() {
       // Backup on the first write only.
       expect(writes.first.payload['backup'], isTrue);
       expect(writes.last.payload['backup'], isFalse);
+    },
+  );
+
+  test(
+    'saveAllPending orders glossary adds before removals without reordering other splices',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      const document = '/Script/Angelscript.Document_Glossary_Wolf';
+      notifier.setPendingEdit(
+        'a-glossary-remove',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.glossary.setSegment',
+              'value': {
+                'documentClass': document,
+                'segmentClass':
+                    '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Intro',
+                'unlocked': false,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'b-inventory-add',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.inventory.addItem',
+              'value': {
+                'path': '/Script/Angelscript.ItMi_Orenugget',
+                'count': 1,
+              },
+            },
+          ],
+        ),
+      );
+      notifier.setPendingNpcRevive('Lizard-1');
+      notifier.setPendingEdit(
+        'z-glossary-add',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.glossary.setSegment',
+              'value': {
+                'documentClass': document,
+                'segmentClass':
+                    '/Script/Angelscript.DocumentSegment_Glossary_Wolf_Dead',
+                'unlocked': true,
+              },
+            },
+          ],
+        ),
+      );
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(4));
+      final edits = [
+        for (final write in writes)
+          (write.payload['edits'] as List).single as Map,
+      ];
+      expect(edits.map((edit) => edit['path']), [
+        'private.glossary.setSegment',
+        'private.inventory.addItem',
+        'private.npc.revive',
+        'private.glossary.setSegment',
+      ]);
+      expect((edits.first['value'] as Map)['unlocked'], isTrue);
+      expect((edits.last['value'] as Map)['unlocked'], isFalse);
     },
   );
 
@@ -1292,10 +1596,7 @@ void main() {
       final ok = await notifier.saveAllPending();
       // Refused: no write at all, and an explanatory error is surfaced.
       expect(ok, isFalse);
-      expect(
-        core.requests.where((r) => r.command == 'write_save'),
-        isEmpty,
-      );
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
       expect(notifier.state.error, contains('EffectSpec'));
     },
   );
@@ -1401,10 +1702,7 @@ void main() {
       final ok = await notifier.saveAllPending();
       // Still a same-actor (Hero) collision → refused.
       expect(ok, isFalse);
-      expect(
-        core.requests.where((r) => r.command == 'write_save'),
-        isEmpty,
-      );
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
     },
   );
 
@@ -1452,23 +1750,26 @@ void main() {
   // Bug #1: a fresh inspection must reset the selected actor to the player so a
   // stale NPC GlobalId from the previous save can't drive the actor-aware tabs.
   // ---------------------------------------------------------------------------
-  test('inspecting a new save resets the selected actor to the player', () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+  test(
+    'inspecting a new save resets the selected actor to the player',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
-    // Select an NPC against the first save.
-    notifier.selectActor(
-      const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
-    );
-    expect(notifier.state.selectedActor.isPlayer, isFalse);
+      // Select an NPC against the first save.
+      notifier.selectActor(
+        const Actor.npc(id: 'Lizard-1', name: 'Lizard', uniqueName: 'Lizard'),
+      );
+      expect(notifier.state.selectedActor.isPlayer, isFalse);
 
-    // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
-    // selection must fall back to the always-valid player.
-    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      // Switch to a DIFFERENT save: the NPC id belongs to the old file, so the
+      // selection must fall back to the always-valid player.
+      await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
 
-    expect(notifier.state.selectedActor.isPlayer, isTrue);
-  });
+      expect(notifier.state.selectedActor.isPlayer, isTrue);
+    },
+  );
 
   // Codex follow-up: a SAME-save refresh (after a save/reset) must NOT reset the
   // selection — the NPC id is still valid, so NPC editing shouldn't jump to Player.
@@ -1626,30 +1927,33 @@ void main() {
 
   // Cursor (High): loadAllNpcActors must PIN the save path for the whole
   // multi-page fetch so a mid-fetch save switch can't merge pages from two files.
-  test('loadAllNpcActors pins the save path across a mid-fetch save switch', () async {
-    final core = _MidFetchSwitchNpcCoreService(total: 1484, pageSize: 1000);
-    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-    // After the first page returns, switch to a different save mid-fetch.
-    // Fire-and-forget: the switch is queued behind the in-flight fetch; pinning
-    // must keep page 2 on the save the fetch started against regardless.
-    core.onFirstListPage = () {
-      // ignore: unawaited_futures
-      notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
-    };
+  test(
+    'loadAllNpcActors pins the save path across a mid-fetch save switch',
+    () async {
+      final core = _MidFetchSwitchNpcCoreService(total: 1484, pageSize: 1000);
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      // After the first page returns, switch to a different save mid-fetch.
+      // Fire-and-forget: the switch is queued behind the in-flight fetch; pinning
+      // must keep page 2 on the save the fetch started against regardless.
+      core.onFirstListPage = () {
+        // ignore: unawaited_futures
+        notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+      };
 
-    final page = await notifier.loadAllNpcActors();
+      final page = await notifier.loadAllNpcActors();
 
-    expect(page.error, isNull);
-    expect(page.npcs, hasLength(1484));
-    final listCalls = core.requests
-        .where((r) => r.command == 'private.npc.list')
-        .toList();
-    expect(listCalls, hasLength(2));
-    // BOTH pages target the save the fetch STARTED against — never the new one.
-    expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
-    expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
-  });
+      expect(page.error, isNull);
+      expect(page.npcs, hasLength(1484));
+      final listCalls = core.requests
+          .where((r) => r.command == 'private.npc.list')
+          .toList();
+      expect(listCalls, hasLength(2));
+      // BOTH pages target the save the fetch STARTED against — never the new one.
+      expect(listCalls[0].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+      expect(listCalls[1].payload['path'], r'C:\tmp\saves\G1R-001.sav');
+    },
+  );
 
   // ---------------------------------------------------------------------------
   // Charaktere master list index (Task 10: Player/Hero de-duplication). The
@@ -1937,24 +2241,26 @@ void main() {
     expect(notifier.state.codecCompressReady, isTrue);
   });
 
-  test('validateCodecRoundtrip sends no codec config and reports success',
-      () async {
-    final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
-    );
-    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
-    await Future<void>.delayed(Duration.zero);
+  test(
+    'validateCodecRoundtrip sends no codec config and reports success',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\Users\Daniel\AppData\Local\G1R\Saved\SaveGames',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await Future<void>.delayed(Duration.zero);
 
-    await notifier.validateCodecRoundtrip();
+      await notifier.validateCodecRoundtrip();
 
-    final roundtrip = core.requests.lastWhere(
-      (request) => request.command == 'validate_codec_roundtrip',
-    );
-    expect(roundtrip.payload, {'path': r'C:\tmp\saves\G1R-001.sav'});
-    expect(notifier.state.lastWriteMessage, contains('roundtrip'));
-  });
+      final roundtrip = core.requests.lastWhere(
+        (request) => request.command == 'validate_codec_roundtrip',
+      );
+      expect(roundtrip.payload, {'path': r'C:\tmp\saves\G1R-001.sav'});
+      expect(notifier.state.lastWriteMessage, contains('roundtrip'));
+    },
+  );
 
   test('validateCodecRoundtrip surfaces failure as an error', () async {
     final core = _FailingVerifyCoreService();
@@ -2077,10 +2383,7 @@ void main() {
           },
         ],
       );
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       final result = await notifier.loadHeroAttributes();
@@ -2130,10 +2433,7 @@ void main() {
         ],
       },
     );
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     final page = await notifier.loadProgressionQuests(query: 'x');
@@ -2163,10 +2463,7 @@ void main() {
           'quests': <Object?>[],
         },
       );
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       await notifier.loadProgressionQuests(
@@ -2197,10 +2494,7 @@ void main() {
     // All progression loaders share _queryProgression; loadKnowledgeEntries is
     // the exercised representative.
     final core = _RecordingCoreService();
-    final notifier = EditorNotifier(
-      core,
-      saveDir: r'C:\tmp\saves',
-    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
     final page = await notifier.loadKnowledgeEntries('OC_STT_Diego');
@@ -2215,10 +2509,7 @@ void main() {
       // that a concurrent applyMemoryEventEdit sets a user-visible error.
       final gate = Completer<void>();
       final core = _SlowWriteCoreService(gate.future);
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
       notifier.setPendingEdit(
         'x',
@@ -2255,10 +2546,7 @@ void main() {
     'applyMemoryEventEdit is blocked and sets error when pendingEdits is non-empty',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       // Seed a pending edit (e.g. an unsaved quest-state change).
@@ -2301,10 +2589,7 @@ void main() {
     'applyAddKnowledgeCharacter issues one write_save with the addCharacter edit',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       // Whitespace is trimmed before it reaches the core.
@@ -2326,10 +2611,7 @@ void main() {
     'applyAddKnowledgeCharacter is blocked when pendingEdits is non-empty',
     () async {
       final core = _RecordingCoreService();
-      final notifier = EditorNotifier(
-        core,
-        saveDir: r'C:\tmp\saves',
-      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
       await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
 
       notifier.setPendingEdit(
@@ -2788,6 +3070,28 @@ void main() {
       expect(notifier.state.pendingEdits, isEmpty);
     },
   );
+
+  test('glossary segment target rehydrates from the pending registry', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    const document = '/Script/Angelscript.Document_Glossary_Meatbug';
+    const segment =
+        '/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2';
+
+    notifier.setPendingGlossarySegment(
+      const GlossarySegmentEdit(
+        documentClass: document,
+        segmentClass: segment,
+        unlocked: true,
+      ),
+    );
+
+    expect(notifier.pendingGlossarySegment(document, segment), isTrue);
+    notifier.clearPendingGlossarySegment(document, segment);
+    expect(notifier.pendingGlossarySegment(document, segment), isNull);
+  });
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
@@ -3258,8 +3562,7 @@ class _PagedNpcCoreService extends _RecordingCoreService {
       final start = offset.clamp(0, total);
       final end = (start + limit).clamp(0, total);
       final npcs = [
-        for (var i = start; i < end; i++)
-          {'id': 'Npc-$i', 'isDead': false},
+        for (var i = start; i < end; i++) {'id': 'Npc-$i', 'isDead': false},
       ];
       return {
         'ok': true,
@@ -3345,7 +3648,10 @@ class _CharactersListCoreService extends _RecordingCoreService {
 /// `private.npc.list` page is built (and recorded), letting a test switch saves
 /// mid-fetch to prove the paging loop pins its starting path.
 class _MidFetchSwitchNpcCoreService extends _PagedNpcCoreService {
-  _MidFetchSwitchNpcCoreService({required super.total, required super.pageSize});
+  _MidFetchSwitchNpcCoreService({
+    required super.total,
+    required super.pageSize,
+  });
 
   void Function()? onFirstListPage;
   bool _fired = false;

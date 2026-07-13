@@ -697,6 +697,37 @@ class AppLocalizationsRu extends AppLocalizations {
   String get npcStatusDead => 'мёртв';
 
   @override
+  String get npcRelationshipRowLabel => 'Relationship';
+
+  @override
+  String get npcRelationshipUnavailable => 'Relationship status unavailable';
+
+  @override
+  String get npcRelationshipAutomatic => 'Computed by game';
+
+  @override
+  String get npcRelationshipAutomaticHint =>
+      'No permanent override is stored. Guild, story, area, and crime rules are evaluated in game.';
+
+  @override
+  String get npcRelationshipStoredHint =>
+      'Stored as a permanent NPC-to-player override. Guild, story, area, and crime rules can still change the effective status in game.';
+
+  @override
+  String get npcRelationshipFriend => 'Friend';
+
+  @override
+  String get npcRelationshipNeutral => 'Neutral';
+
+  @override
+  String get npcRelationshipEnemy => 'Enemy';
+
+  @override
+  String npcRelationshipPending(String relationship) {
+    return 'Will be $relationship on save';
+  }
+
+  @override
   String npcStateHp(String hp, String maxHp) {
     return 'ОЗ $hp / $maxHp';
   }
@@ -1349,4 +1380,110 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get skillCircle6 => 'Шестой круг магии';
+
+  @override
+  String get sectionGlossary => 'Glossary';
+
+  @override
+  String get glossarySearch => 'Search glossary';
+
+  @override
+  String get glossaryOldCamp => 'Old Camp';
+
+  @override
+  String get glossaryNewCamp => 'New Camp';
+
+  @override
+  String get glossarySwampCamp => 'Swamp Camp';
+
+  @override
+  String get glossaryOutsiders => 'Outsiders';
+
+  @override
+  String get glossaryCreatures => 'Creatures';
+
+  @override
+  String get glossaryLocations => 'Locations';
+
+  @override
+  String get glossaryFilterLabel => 'Filter';
+
+  @override
+  String get glossaryFilterTraders => 'Traders';
+
+  @override
+  String get glossaryFilterTeachers => 'Teachers';
+
+  @override
+  String get glossaryFilterArmorers => 'Armorers';
+
+  @override
+  String get glossaryFilterHostile => 'Hostile';
+
+  @override
+  String get glossaryRelationshipFilterNote =>
+      'Shows permanent enemy overrides stored in the save. Dynamic guild, story, area, and crime relationships are computed only in game.';
+
+  @override
+  String get glossaryFilterDead => 'Dead';
+
+  @override
+  String get glossaryAddEntry => 'Add glossary entry';
+
+  @override
+  String get glossaryAddTitle => 'Add glossary entry';
+
+  @override
+  String get glossaryResetChanges => 'Reset glossary changes';
+
+  @override
+  String get glossaryNoVisibleEntries =>
+      'No visible glossary entries match this view.';
+
+  @override
+  String get glossaryNoHiddenEntries =>
+      'Every available entry is already visible.';
+
+  @override
+  String get glossaryNoMatch => 'No glossary entries match.';
+
+  @override
+  String get glossarySelectEntry =>
+      'Select a glossary entry to edit its entries.';
+
+  @override
+  String glossaryEntryCount(int count) {
+    return '$count entries';
+  }
+
+  @override
+  String glossarySegmentsCount(int unlocked, int total) {
+    return '$unlocked of $total entries';
+  }
+
+  @override
+  String get glossaryPortraitUnlocked => 'Portrait unlocked';
+
+  @override
+  String get glossaryPortraitSilhouette => 'Silhouette — portrait not unlocked';
+
+  @override
+  String get glossarySegments => 'Entries';
+
+  @override
+  String get glossaryPending => 'Unsaved change';
+
+  @override
+  String get glossaryShowFullText => 'Show full entry text';
+
+  @override
+  String get glossarySegmentIntroduction => 'Introduction / portrait';
+
+  @override
+  String get glossarySegmentUnlock => 'Discovery';
+
+  @override
+  String glossarySegmentEntry(int number) {
+    return 'Entry $number';
+  }
 }

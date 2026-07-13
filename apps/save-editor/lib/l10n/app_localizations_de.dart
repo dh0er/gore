@@ -699,6 +699,37 @@ class AppLocalizationsDe extends AppLocalizations {
   String get npcStatusDead => 'tot';
 
   @override
+  String get npcRelationshipRowLabel => 'Beziehung';
+
+  @override
+  String get npcRelationshipUnavailable => 'Beziehungsstatus nicht verfügbar';
+
+  @override
+  String get npcRelationshipAutomatic => 'Vom Spiel berechnet';
+
+  @override
+  String get npcRelationshipAutomaticHint =>
+      'Kein permanenter Override gespeichert. Gilden-, Story-, Gebiets- und Verbrechensregeln werden erst im Spiel ausgewertet.';
+
+  @override
+  String get npcRelationshipStoredHint =>
+      'Als permanenter NPC-zu-Spieler-Override gespeichert. Gilden-, Story-, Gebiets- und Verbrechensregeln können den effektiven Status im Spiel trotzdem verändern.';
+
+  @override
+  String get npcRelationshipFriend => 'Freund';
+
+  @override
+  String get npcRelationshipNeutral => 'Neutral';
+
+  @override
+  String get npcRelationshipEnemy => 'Feind';
+
+  @override
+  String npcRelationshipPending(String relationship) {
+    return 'Wird beim Speichern zu „$relationship“';
+  }
+
+  @override
   String npcStateHp(String hp, String maxHp) {
     return 'HP $hp / $maxHp';
   }
@@ -1343,4 +1374,111 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get skillCircle6 => 'Sechster Kreis der Magie';
+
+  @override
+  String get sectionGlossary => 'Glossar';
+
+  @override
+  String get glossarySearch => 'Glossar durchsuchen';
+
+  @override
+  String get glossaryOldCamp => 'Altes Lager';
+
+  @override
+  String get glossaryNewCamp => 'Neues Lager';
+
+  @override
+  String get glossarySwampCamp => 'Sumpflager';
+
+  @override
+  String get glossaryOutsiders => 'Außenseiter';
+
+  @override
+  String get glossaryCreatures => 'Kreaturen';
+
+  @override
+  String get glossaryLocations => 'Orte';
+
+  @override
+  String get glossaryFilterLabel => 'Filter';
+
+  @override
+  String get glossaryFilterTraders => 'Händler';
+
+  @override
+  String get glossaryFilterTeachers => 'Lehrer';
+
+  @override
+  String get glossaryFilterArmorers => 'Rüstungsbauer';
+
+  @override
+  String get glossaryFilterHostile => 'Feindlich';
+
+  @override
+  String get glossaryRelationshipFilterNote =>
+      'Zeigt permanente Feind-Overrides aus dem Spielstand. Dynamische Gilden-, Story-, Gebiets- und Verbrechensbeziehungen berechnet erst das Spiel.';
+
+  @override
+  String get glossaryFilterDead => 'Tot';
+
+  @override
+  String get glossaryAddEntry => 'Glossareintrag hinzufügen';
+
+  @override
+  String get glossaryAddTitle => 'Glossareintrag hinzufügen';
+
+  @override
+  String get glossaryResetChanges => 'Glossaränderungen zurücksetzen';
+
+  @override
+  String get glossaryNoVisibleEntries =>
+      'Für diese Ansicht sind keine passenden Glossareinträge sichtbar.';
+
+  @override
+  String get glossaryNoHiddenEntries =>
+      'Alle verfügbaren Einträge sind bereits sichtbar.';
+
+  @override
+  String get glossaryNoMatch => 'Keine passenden Glossareinträge.';
+
+  @override
+  String get glossarySelectEntry =>
+      'Wähle einen Glossareintrag aus, um seine Einträge zu bearbeiten.';
+
+  @override
+  String glossaryEntryCount(int count) {
+    return '$count Einträge';
+  }
+
+  @override
+  String glossarySegmentsCount(int unlocked, int total) {
+    return '$unlocked von $total Einträgen';
+  }
+
+  @override
+  String get glossaryPortraitUnlocked => 'Porträt freigeschaltet';
+
+  @override
+  String get glossaryPortraitSilhouette =>
+      'Silhouette — Porträt nicht freigeschaltet';
+
+  @override
+  String get glossarySegments => 'Einträge';
+
+  @override
+  String get glossaryPending => 'Ungespeicherte Änderung';
+
+  @override
+  String get glossaryShowFullText => 'Vollständigen Eintragstext anzeigen';
+
+  @override
+  String get glossarySegmentIntroduction => 'Begegnung / Porträt';
+
+  @override
+  String get glossarySegmentUnlock => 'Entdeckung';
+
+  @override
+  String glossarySegmentEntry(int number) {
+    return 'Eintrag $number';
+  }
 }

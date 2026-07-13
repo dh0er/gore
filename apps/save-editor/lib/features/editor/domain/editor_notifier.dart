@@ -7,6 +7,7 @@ import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
+import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/hero_attributes.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
@@ -204,7 +205,6 @@ class EditorState {
     // which would show another profile's name and counts.
     return null;
   }
-
 
   EditorState copyWith({
     String? saveDir,
@@ -441,7 +441,6 @@ class EditorNotifier extends StateNotifier<EditorState> {
       },
     );
   }
-
 
   /// Serializes all core calls. The native layer runs each command in its own
   /// isolate with no serialization, so overlapping write_save/restore_backup
@@ -707,12 +706,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // silently let sorted-key order pick the winner — refuse instead and let
     // the user resolve the conflict.
     final seenTypedPaths = <String>{};
+    final typedPaths = <List<Object?>>[];
     for (final keyed in allEdits) {
       final edit = keyed.edit;
       if (edit['path'] != 'private.typed.setValue') continue;
       final value = edit['value'];
       if (value is! Map) continue;
-      final path = (value['path'] as List?)?.join(' › ') ?? '';
+      final rawPath = value['path'];
+      if (rawPath is! List) continue;
+      final typedPath = List<Object?>.from(rawPath);
+      typedPaths.add(typedPath);
+      final path = typedPath.join(' › ');
       if (!seenTypedPaths.add(path)) {
         state = state.copyWith(
           error:
@@ -724,8 +728,110 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
-    // Splicing structural edits (addItem/removeItem, knowledge.addCharacter,
-    // npc.revive) insert or remove bytes mid-payload and shift every
+    // Glossary segment edits add/remove entries in the Hero's MemorizedEvents
+    // array. A queued raw typed edit to that array (or one of its descendants)
+    // cannot be sequenced safely with the structural glossary operation: the
+    // fixed typed batch runs first, after which a removal can discard that
+    // edited event, while editing OptionalClass1/2 can make the glossary lookup
+    // miss its target. Refuse the ambiguous combination instead of reporting
+    // success for two edits when only one intent survives.
+    final hasGlossarySegmentEdit = allEdits.any(
+      (keyed) => keyed.edit['path'] == 'private.glossary.setSegment',
+    );
+    if (hasGlossarySegmentEdit) {
+      for (final keyed in allEdits) {
+        final edit = keyed.edit;
+        final editPath = edit['path'];
+        if (editPath is! String || !editPath.startsWith('private.typed.')) {
+          continue;
+        }
+        final value = edit['value'];
+        if (value is! Map) continue;
+        final rawPath = value['path'];
+        if (rawPath is! List || !_addressesHeroMemorizedEvents(rawPath)) {
+          continue;
+        }
+        final path = rawPath.join(' › ');
+        state = state.copyWith(
+          error:
+              'A glossary segment change and another unsaved All-data edit '
+              'both target the Hero MemorizedEvents array ($path). Glossary '
+              'changes add or remove entries in that array, so the edits cannot '
+              'be saved together — reset or revert one of them, then save again.',
+        );
+        return false;
+      }
+    }
+
+    // A glossary segment operation with a questStatePath updates that
+    // CurrentState itself. Refuse a raw typed write to the exact same path;
+    // sequencing the two would silently make whichever sub-write runs last win.
+    for (final keyed in allEdits) {
+      final edit = keyed.edit;
+      if (edit['path'] != 'private.glossary.setSegment') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final rawQuestPath = value['questStatePath'];
+      if (rawQuestPath is! List) continue;
+      final questPath = List<Object?>.from(rawQuestPath);
+      if (!typedPaths.any((path) => _sameEditorPath(path, questPath))) continue;
+      final path = questPath.join(' › ');
+      state = state.copyWith(
+        error:
+            'A glossary segment change and another unsaved edit target the '
+            'same quest CurrentState property ($path). The glossary change '
+            'updates that state itself — reset or revert one of them, then '
+            'save again.',
+      );
+      return false;
+    }
+
+    // A structured relationship edit patches or appends an object below this
+    // NPC's RelationshipByGlobalId entry. A queued All-data edit below the same
+    // entry can therefore be overwritten by that later structural write (or an
+    // array removal can be undone when the structured write recreates the
+    // modifier). Block only the same-NPC collision; edits for different NPCs
+    // remain safely sequenced across their separate writes.
+    final relationshipNpcIds = <String>{};
+    for (final keyed in allEdits) {
+      final edit = keyed.edit;
+      if (edit['path'] != 'private.npc.setRelationship') continue;
+      final value = edit['value'];
+      if (value is! Map) continue;
+      final id = value['id'];
+      if (id is String && id.trim().isNotEmpty) {
+        relationshipNpcIds.add(id.trim().toLowerCase());
+      }
+    }
+    if (relationshipNpcIds.isNotEmpty) {
+      for (final keyed in allEdits) {
+        final edit = keyed.edit;
+        final editPath = edit['path'];
+        if (editPath is! String || !editPath.startsWith('private.typed.')) {
+          continue;
+        }
+        final value = edit['value'];
+        if (value is! Map) continue;
+        final rawPath = value['path'];
+        if (rawPath is! List ||
+            !_addressesNpcRelationshipEntry(rawPath, relationshipNpcIds)) {
+          continue;
+        }
+        final path = rawPath.join(' › ');
+        state = state.copyWith(
+          error:
+              'A relationship override and another unsaved All-data edit '
+              'both target the same NPC relationship entry ($path). The '
+              'structured relationship change can replace modifiers in that '
+              'entry, so the edits cannot be saved together — reset or revert '
+              'one of them, then save again.',
+        );
+        return false;
+      }
+    }
+
+    // Splicing structural edits (inventory, knowledge, glossary segments,
+    // NPC revive/relationship) insert or remove bytes mid-payload and shift every
     // offset/index after the splice point; the core rejects a write that mixes
     // one with ANY peer edit. Mirror the core's list and give each splicing edit
     // its OWN write_save; everything else (fixed-size, in-place) batches into a
@@ -738,7 +844,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.inventory.removeItem',
       'private.inventory.reset',
       'private.knowledge.addCharacter',
+      'private.glossary.setSegment',
       'private.npc.revive',
+      'private.npc.setRelationship',
     };
     // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
     // and the core rejects a write that mixes it with an index-addressed edit
@@ -750,6 +858,30 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final splicing = allEdits
         .where((k) => splicingPaths.contains(k.edit['path']))
         .toList();
+    // Adding a segment needs an existing SegmentUnlocked event as its byte
+    // template. If the same Save removes its last unlock first, a later add can
+    // no longer be encoded. Stable-partition only the glossary slots so all
+    // adds precede all removals while every non-glossary splice keeps its
+    // original position relative to the other structural operations.
+    final glossarySplices = splicing
+        .where((k) => k.edit['path'] == 'private.glossary.setSegment')
+        .toList();
+    final orderedGlossarySplices = <_KeyedEdit>[
+      ...glossarySplices.where(
+        (k) => (k.edit['value'] as Map?)?['unlocked'] == true,
+      ),
+      ...glossarySplices.where(
+        (k) => (k.edit['value'] as Map?)?['unlocked'] != true,
+      ),
+    ];
+    var nextGlossarySplice = 0;
+    final orderedSplicing = <_KeyedEdit>[
+      for (final keyed in splicing)
+        if (keyed.edit['path'] == 'private.glossary.setSegment')
+          orderedGlossarySplices[nextGlossarySplice++]
+        else
+          keyed,
+    ];
     final skillEdits = allEdits
         .where((k) => k.edit['path'] == skillPath)
         .toList();
@@ -845,7 +977,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           // fixed-size batch.
           syncPersistentDataList: syncPersistent,
         ),
-      for (final keyed in splicing) _SubWrite(edits: [keyed.edit]),
+      for (final keyed in orderedSplicing) _SubWrite(edits: [keyed.edit]),
       // All skill edits together, in their own trailing write: they batch safely
       // among themselves but must not share a write with an index-addressed peer
       // (see skillPath above).
@@ -872,9 +1004,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // Seed the determinate progress bar (0 of N committed). Each sequential
       // write_save below bumps `done`, so a multi-write save (e.g. several
       // inventory adds) shows real progress instead of a stuck spinner.
-      state = state.copyWith(
-        saveProgress: (done: 0, total: worklist.length),
-      );
+      state = state.copyWith(saveProgress: (done: 0, total: worklist.length));
       try {
         for (var i = 0; i < worklist.length; i++) {
           final sub = worklist[i];
@@ -894,8 +1024,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
             break;
           }
           if (i == 0) {
-            firstData = (response['data'] as Map?)?.cast<String, Object?>() ??
-                const {};
+            firstData =
+                (response['data'] as Map?)?.cast<String, Object?>() ?? const {};
           }
           committedEdits.addAll(sub.edits);
           state = state.copyWith(
@@ -956,8 +1086,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // everything (this is then a no-op); on a partial/failed refresh this is the
     // safety net that stops committed edits from lingering as pending.
     if (committedEdits.isNotEmpty) {
-      for (final entry
-          in Map<String, PendingSaveEdit>.from(state.pendingEdits).entries) {
+      for (final entry in Map<String, PendingSaveEdit>.from(
+        state.pendingEdits,
+      ).entries) {
         final remaining = entry.value.edits
             .where((e) => !committedEdits.contains(e))
             .toList();
@@ -986,8 +1117,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   ) {
     final result = <String, PendingSaveEdit>{};
     for (final entry in state.pendingEdits.entries) {
-      final remaining =
-          entry.value.edits.where((e) => !committed.contains(e)).toList();
+      final remaining = entry.value.edits
+          .where((e) => !committed.contains(e))
+          .toList();
       if (remaining.isNotEmpty) {
         result[entry.key] = PendingSaveEdit(
           edits: remaining,
@@ -1162,10 +1294,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       heroGlobalIdSettled: switchingSlot ? false : null,
     );
     try {
-      final payload = <String, Object?>{
-        'path': path,
-        'includePrivate': true,
-      };
+      final payload = <String, Object?>{'path': path, 'includePrivate': true};
       final response = await _execute('inspect_save', payload: payload);
       // Only the latest load applies results. Core calls are serialized, so a
       // superseded load always finishes before the newer one; bailing here
@@ -1304,7 +1433,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // exists) and no separate companion — but this restore just replaced it,
       // so the warning would be misleading. Suppress it for PDL targets.
       final targetIsPdl = path.endsWith('PersistentDataList.sav');
-      final restoreMessage = companionPresent && !companionRestored && !targetIsPdl
+      final restoreMessage =
+          companionPresent && !companionRestored && !targetIsPdl
           ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
                 '— no matching companion backup; slot metadata may differ)'
           : 'Restored backup: $backupPath';
@@ -1512,7 +1642,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (response['ok'] != true) {
         return SkillsResult(error: _errorMessage(response));
       }
-      return SkillsResult.fromJson((response['data'] as Map).cast<String, Object?>());
+      return SkillsResult.fromJson(
+        (response['data'] as Map).cast<String, Object?>(),
+      );
     } catch (error) {
       return SkillsResult(error: 'Skills load failed: $error');
     }
@@ -1564,6 +1696,65 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
+  }
+
+  /// Load the complete save-backed glossary in one query. Creature and
+  /// location documents are returned as structured quest trees; the raw Hero
+  /// segment unlocks in the same response are joined to the bundled NPC
+  /// catalog by [GlossaryDetail].
+  Future<GlossaryPage> loadGlossary() async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'glossary',
+      // The current game catalog is comfortably below this limit. Keeping the
+      // glossary client-side makes category/search filters instant.
+      'offset': 0,
+      'limit': 1000,
+    }, onError: (message) => error = message);
+    if (data == null) return GlossaryPage(error: error);
+    return GlossaryPage.fromJson(data);
+  }
+
+  static String _glossaryPendingKey(
+    String documentClass,
+    String segmentClass,
+  ) => 'glossary.segment:$documentClass::$segmentClass';
+
+  /// Queue one atomic glossary segment toggle. Each segment deliberately owns
+  /// its own pending key because the core may splice the Hero memory array;
+  /// [saveAllPending] therefore writes every toggle in a separately reparsed
+  /// save round.
+  void setPendingGlossarySegment(GlossarySegmentEdit edit) {
+    setPendingEdit(
+      _glossaryPendingKey(edit.documentClass, edit.segmentClass),
+      PendingSaveEdit(edits: [edit.toEditJson()]),
+    );
+  }
+
+  /// Drop a queued segment toggle when the switch returns to its on-disk value.
+  void clearPendingGlossarySegment(String documentClass, String segmentClass) {
+    clearPendingEdit(_glossaryPendingKey(documentClass, segmentClass));
+  }
+
+  /// Return the queued target for one glossary segment. The glossary panel
+  /// uses this after an inspection refresh so a structural edit left pending
+  /// by a partially failed multi-write remains visible to the user.
+  bool? pendingGlossarySegment(String documentClass, String segmentClass) {
+    final pending = pendingEditFor(
+      _glossaryPendingKey(documentClass, segmentClass),
+    );
+    if (pending == null) return null;
+    for (final edit in pending.edits) {
+      if (edit['path'] != 'private.glossary.setSegment') continue;
+      final value = edit['value'];
+      if (value is! Map || value['unlocked'] is! bool) continue;
+      if (value['documentClass'] != documentClass ||
+          value['segmentClass'] != segmentClass) {
+        continue;
+      }
+      return value['unlocked'] as bool;
+    }
+    return null;
   }
 
   Future<KnowledgeEntriesPage> loadKnowledgeEntries(
@@ -1800,7 +1991,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<NpcAttributesResult> loadNpcAttributes(String id) {
     final path = state.selectedPath;
     if (path == null) {
-      return Future.value(const NpcAttributesResult(error: 'No save selected.'));
+      return Future.value(
+        const NpcAttributesResult(error: 'No save selected.'),
+      );
     }
     _guardNpcDetailCache(path);
     final cached = _npcAttributesCache[id];
@@ -1992,6 +2185,43 @@ class EditorNotifier extends StateNotifier<EditorState> {
     );
   }
 
+  static String _npcRelationshipPendingKey(String id) => 'npc.relationship:$id';
+
+  /// Register an explicit permanent NPC-to-Hero relationship override under
+  /// its own structural pending key. The game otherwise derives this value at
+  /// runtime from rules that are not persisted as one save field.
+  void setPendingNpcRelationship(String id, NpcRelationship relationship) {
+    setPendingEdit(
+      _npcRelationshipPendingKey(id),
+      PendingSaveEdit(
+        edits: [
+          {
+            'path': 'private.npc.setRelationship',
+            'value': {'id': id, 'relationship': relationship.wireValue},
+          },
+        ],
+      ),
+    );
+  }
+
+  void clearPendingNpcRelationship(String id) {
+    clearPendingEdit(_npcRelationshipPendingKey(id));
+  }
+
+  /// Rehydrate the optimistic dropdown value from the pending registry when a
+  /// user revisits this NPC before saving.
+  NpcRelationship? pendingNpcRelationship(String id) {
+    final pending = pendingEditFor(_npcRelationshipPendingKey(id));
+    if (pending == null) return null;
+    for (final edit in pending.edits) {
+      if (edit['path'] != 'private.npc.setRelationship') continue;
+      final value = edit['value'];
+      if (value is! Map || value['relationship'] is! String) continue;
+      return NpcRelationship.fromJson(value['relationship']);
+    }
+    return null;
+  }
+
   /// Load the player's per-guild crime tally from the core
   /// `private.factions.list` command for the currently selected save. Returns a
   /// page carrying an inline error instead of throwing, mirroring
@@ -2101,9 +2331,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required EditorSettingsStore settingsStore,
   }) {
     final stored = settingsStore.read();
-    return EditorState(
-      saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
-    );
+    return EditorState(saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot());
   }
 }
 
@@ -2124,6 +2352,54 @@ class _KeyedEdit {
 
   final String key;
   final Map<String, Object?> edit;
+}
+
+bool _sameEditorPath(List<Object?> left, List<Object?> right) {
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
+}
+
+bool _addressesHeroMemorizedEvents(List<Object?> path) {
+  const target = <String>[
+    'LongTermMemoryByGlobalId',
+    '{Hero}',
+    'MemorizedEvents',
+  ];
+  if (path.length < target.length) return false;
+  for (var start = 0; start <= path.length - target.length; start++) {
+    var matches = true;
+    for (var offset = 0; offset < target.length; offset++) {
+      if (path[start + offset] != target[offset]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return true;
+  }
+  return false;
+}
+
+/// Whether [path] targets the relationship map itself or an entry belonging to
+/// one of [npcIds] (already normalized to lower case). The generic All-data
+/// browser represents map keys as `{GlobalId}` path segments.
+bool _addressesNpcRelationshipEntry(List<Object?> path, Set<String> npcIds) {
+  for (var i = 0; i < path.length; i++) {
+    if (path[i] != 'RelationshipByGlobalId') continue;
+    // A hypothetical edit of the whole map collides with every structured
+    // relationship write, even though current UI operations normally descend
+    // to an individual entry first.
+    if (i + 1 >= path.length) return true;
+    final rawKey = path[i + 1];
+    if (rawKey is! String) return true;
+    final key = rawKey.startsWith('{') && rawKey.endsWith('}')
+        ? rawKey.substring(1, rawKey.length - 1)
+        : rawKey;
+    return npcIds.contains(key.trim().toLowerCase());
+  }
+  return false;
 }
 
 /// The actor a `private.skills.set` edit targets (`Hero` or an NPC GlobalId),
@@ -2181,10 +2457,7 @@ bool _isInventoryTypedEdit(Map<String, Object?> edit) {
 /// to submit. Post-write convergence is done per-edit (matched by identity)
 /// rather than per-key, so a sub-write no longer needs to carry its keys.
 class _SubWrite {
-  const _SubWrite({
-    required this.edits,
-    this.syncPersistentDataList = false,
-  });
+  const _SubWrite({required this.edits, this.syncPersistentDataList = false});
 
   final List<Map<String, Object?>> edits;
   final bool syncPersistentDataList;

@@ -1370,6 +1370,60 @@ abstract class AppLocalizations {
   /// **'dead'**
   String get npcStatusDead;
 
+  /// No description provided for @npcRelationshipRowLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Relationship'**
+  String get npcRelationshipRowLabel;
+
+  /// No description provided for @npcRelationshipUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Relationship status unavailable'**
+  String get npcRelationshipUnavailable;
+
+  /// No description provided for @npcRelationshipAutomatic.
+  ///
+  /// In en, this message translates to:
+  /// **'Computed by game'**
+  String get npcRelationshipAutomatic;
+
+  /// No description provided for @npcRelationshipAutomaticHint.
+  ///
+  /// In en, this message translates to:
+  /// **'No permanent override is stored. Guild, story, area, and crime rules are evaluated in game.'**
+  String get npcRelationshipAutomaticHint;
+
+  /// No description provided for @npcRelationshipStoredHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Stored as a permanent NPC-to-player override. Guild, story, area, and crime rules can still change the effective status in game.'**
+  String get npcRelationshipStoredHint;
+
+  /// No description provided for @npcRelationshipFriend.
+  ///
+  /// In en, this message translates to:
+  /// **'Friend'**
+  String get npcRelationshipFriend;
+
+  /// No description provided for @npcRelationshipNeutral.
+  ///
+  /// In en, this message translates to:
+  /// **'Neutral'**
+  String get npcRelationshipNeutral;
+
+  /// No description provided for @npcRelationshipEnemy.
+  ///
+  /// In en, this message translates to:
+  /// **'Enemy'**
+  String get npcRelationshipEnemy;
+
+  /// No description provided for @npcRelationshipPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Will be {relationship} on save'**
+  String npcRelationshipPending(String relationship);
+
   /// No description provided for @npcStateHp.
   ///
   /// In en, this message translates to:
@@ -2425,6 +2479,198 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Sixth Circle of Magic'**
   String get skillCircle6;
+
+  /// No description provided for @sectionGlossary.
+  ///
+  /// In en, this message translates to:
+  /// **'Glossary'**
+  String get sectionGlossary;
+
+  /// No description provided for @glossarySearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Search glossary'**
+  String get glossarySearch;
+
+  /// No description provided for @glossaryOldCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Old Camp'**
+  String get glossaryOldCamp;
+
+  /// No description provided for @glossaryNewCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'New Camp'**
+  String get glossaryNewCamp;
+
+  /// No description provided for @glossarySwampCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Swamp Camp'**
+  String get glossarySwampCamp;
+
+  /// No description provided for @glossaryOutsiders.
+  ///
+  /// In en, this message translates to:
+  /// **'Outsiders'**
+  String get glossaryOutsiders;
+
+  /// No description provided for @glossaryCreatures.
+  ///
+  /// In en, this message translates to:
+  /// **'Creatures'**
+  String get glossaryCreatures;
+
+  /// No description provided for @glossaryLocations.
+  ///
+  /// In en, this message translates to:
+  /// **'Locations'**
+  String get glossaryLocations;
+
+  /// No description provided for @glossaryFilterLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Filter'**
+  String get glossaryFilterLabel;
+
+  /// No description provided for @glossaryFilterTraders.
+  ///
+  /// In en, this message translates to:
+  /// **'Traders'**
+  String get glossaryFilterTraders;
+
+  /// No description provided for @glossaryFilterTeachers.
+  ///
+  /// In en, this message translates to:
+  /// **'Teachers'**
+  String get glossaryFilterTeachers;
+
+  /// No description provided for @glossaryFilterArmorers.
+  ///
+  /// In en, this message translates to:
+  /// **'Armorers'**
+  String get glossaryFilterArmorers;
+
+  /// No description provided for @glossaryFilterHostile.
+  ///
+  /// In en, this message translates to:
+  /// **'Hostile'**
+  String get glossaryFilterHostile;
+
+  /// No description provided for @glossaryRelationshipFilterNote.
+  ///
+  /// In en, this message translates to:
+  /// **'Shows permanent enemy overrides stored in the save. Dynamic guild, story, area, and crime relationships are computed only in game.'**
+  String get glossaryRelationshipFilterNote;
+
+  /// No description provided for @glossaryFilterDead.
+  ///
+  /// In en, this message translates to:
+  /// **'Dead'**
+  String get glossaryFilterDead;
+
+  /// No description provided for @glossaryAddEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Add glossary entry'**
+  String get glossaryAddEntry;
+
+  /// No description provided for @glossaryAddTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add glossary entry'**
+  String get glossaryAddTitle;
+
+  /// No description provided for @glossaryResetChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset glossary changes'**
+  String get glossaryResetChanges;
+
+  /// No description provided for @glossaryNoVisibleEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'No visible glossary entries match this view.'**
+  String get glossaryNoVisibleEntries;
+
+  /// No description provided for @glossaryNoHiddenEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'Every available entry is already visible.'**
+  String get glossaryNoHiddenEntries;
+
+  /// No description provided for @glossaryNoMatch.
+  ///
+  /// In en, this message translates to:
+  /// **'No glossary entries match.'**
+  String get glossaryNoMatch;
+
+  /// No description provided for @glossarySelectEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a glossary entry to edit its entries.'**
+  String get glossarySelectEntry;
+
+  /// No description provided for @glossaryEntryCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} entries'**
+  String glossaryEntryCount(int count);
+
+  /// No description provided for @glossarySegmentsCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{unlocked} of {total} entries'**
+  String glossarySegmentsCount(int unlocked, int total);
+
+  /// No description provided for @glossaryPortraitUnlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Portrait unlocked'**
+  String get glossaryPortraitUnlocked;
+
+  /// No description provided for @glossaryPortraitSilhouette.
+  ///
+  /// In en, this message translates to:
+  /// **'Silhouette — portrait not unlocked'**
+  String get glossaryPortraitSilhouette;
+
+  /// No description provided for @glossarySegments.
+  ///
+  /// In en, this message translates to:
+  /// **'Entries'**
+  String get glossarySegments;
+
+  /// No description provided for @glossaryPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Unsaved change'**
+  String get glossaryPending;
+
+  /// No description provided for @glossaryShowFullText.
+  ///
+  /// In en, this message translates to:
+  /// **'Show full entry text'**
+  String get glossaryShowFullText;
+
+  /// No description provided for @glossarySegmentIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Introduction / portrait'**
+  String get glossarySegmentIntroduction;
+
+  /// No description provided for @glossarySegmentUnlock.
+  ///
+  /// In en, this message translates to:
+  /// **'Discovery'**
+  String get glossarySegmentUnlock;
+
+  /// No description provided for @glossarySegmentEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Entry {number}'**
+  String glossarySegmentEntry(int number);
 }
 
 class _AppLocalizationsDelegate

@@ -362,6 +362,22 @@
   "npcStatusRowLabel": "Status",
   "npcStatusAlive": "alive",
   "npcStatusDead": "dead",
+  "npcRelationshipRowLabel": "Relationship",
+  "npcRelationshipUnavailable": "Relationship status unavailable",
+  "npcRelationshipAutomatic": "Computed by game",
+  "npcRelationshipAutomaticHint": "No permanent override is stored. Guild, story, area, and crime rules are evaluated in game.",
+  "npcRelationshipStoredHint": "Stored as a permanent NPC-to-player override. Guild, story, area, and crime rules can still change the effective status in game.",
+  "npcRelationshipFriend": "Friend",
+  "npcRelationshipNeutral": "Neutral",
+  "npcRelationshipEnemy": "Enemy",
+  "npcRelationshipPending": "Will be {relationship} on save",
+  "@npcRelationshipPending": {
+    "placeholders": {
+      "relationship": {
+        "type": "String"
+      }
+    }
+  },
   "npcStateHp": "HP {hp} / {maxHp}",
   "@npcStateHp": {
     "placeholders": {
@@ -766,5 +782,61 @@
   "skillCircle3": "Third Circle of Magic",
   "skillCircle4": "Fourth Circle of Magic",
   "skillCircle5": "Fifth Circle of Magic",
-  "skillCircle6": "Sixth Circle of Magic"
+  "skillCircle6": "Sixth Circle of Magic",
+  "sectionGlossary": "Glossary",
+  "glossarySearch": "Search glossary",
+  "glossaryOldCamp": "Old Camp",
+  "glossaryNewCamp": "New Camp",
+  "glossarySwampCamp": "Swamp Camp",
+  "glossaryOutsiders": "Outsiders",
+  "glossaryCreatures": "Creatures",
+  "glossaryLocations": "Locations",
+  "glossaryFilterLabel": "Filter",
+  "glossaryFilterTraders": "Traders",
+  "glossaryFilterTeachers": "Teachers",
+  "glossaryFilterArmorers": "Armorers",
+  "glossaryFilterHostile": "Hostile",
+  "glossaryRelationshipFilterNote": "Shows permanent enemy overrides stored in the save. Dynamic guild, story, area, and crime relationships are computed only in game.",
+  "glossaryFilterDead": "Dead",
+  "glossaryAddEntry": "Add glossary entry",
+  "glossaryAddTitle": "Add glossary entry",
+  "glossaryResetChanges": "Reset glossary changes",
+  "glossaryNoVisibleEntries": "No visible glossary entries match this view.",
+  "glossaryNoHiddenEntries": "Every available entry is already visible.",
+  "glossaryNoMatch": "No glossary entries match.",
+  "glossarySelectEntry": "Select a glossary entry to edit its entries.",
+  "glossaryEntryCount": "{count} entries",
+  "@glossaryEntryCount": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "glossarySegmentsCount": "{unlocked} of {total} entries",
+  "@glossarySegmentsCount": {
+    "placeholders": {
+      "unlocked": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "glossaryPortraitUnlocked": "Portrait unlocked",
+  "glossaryPortraitSilhouette": "Silhouette — portrait not unlocked",
+  "glossarySegments": "Entries",
+  "glossaryPending": "Unsaved change",
+  "glossaryShowFullText": "Show full entry text",
+  "glossarySegmentIntroduction": "Introduction / portrait",
+  "glossarySegmentUnlock": "Discovery",
+  "glossarySegmentEntry": "Entry {number}",
+  "@glossarySegmentEntry": {
+    "placeholders": {
+      "number": {
+        "type": "int"
+      }
+    }
+  }
 }

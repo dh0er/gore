@@ -1,3 +1,26 @@
+/// The deliberately small NPC-to-player relationship vocabulary exposed by
+/// the core. Gothic's internal Angry/Hostile values are both normalized to
+/// [enemy].
+enum NpcRelationship {
+  friend('Friend'),
+  neutral('Neutral'),
+  enemy('Enemy');
+
+  const NpcRelationship(this.wireValue);
+
+  final String wireValue;
+
+  static NpcRelationship? fromJson(Object? value) {
+    final normalized = value?.toString().trim().toLowerCase();
+    return switch (normalized) {
+      'friend' => NpcRelationship.friend,
+      'neutral' => NpcRelationship.neutral,
+      'enemy' || 'hostile' || 'angry' => NpcRelationship.enemy,
+      _ => null,
+    };
+  }
+}
+
 /// A single NPC actor row from the core `private.npc.list` command. Carries the
 /// id (a GlobalId used to build an [Actor.npc]) plus a small status snapshot
 /// (dead / hp), e.g. driving the NPC status row's revive action.
@@ -7,6 +30,7 @@ class NpcActor {
     required this.isDead,
     this.hp,
     this.maxHp,
+    this.personalRelationship,
   });
 
   factory NpcActor.fromJson(Map<String, Object?> json) {
@@ -15,6 +39,9 @@ class NpcActor {
       isDead: json['isDead'] == true,
       hp: (json['hp'] as num?)?.toDouble(),
       maxHp: (json['maxHp'] as num?)?.toDouble(),
+      personalRelationship: NpcRelationship.fromJson(
+        json['personalRelationship'],
+      ),
     );
   }
 
@@ -28,6 +55,11 @@ class NpcActor {
   final bool isDead;
   final double? hp;
   final double? maxHp;
+
+  /// Explicit permanent NPC-to-Hero override stored for this NPC. `null`
+  /// means the game derives the relationship at runtime from guild, story,
+  /// area, and crime rules; that computed result is not persisted in the save.
+  final NpcRelationship? personalRelationship;
 }
 
 /// A paginated page of NPC actors, mirroring the shape of the other progression

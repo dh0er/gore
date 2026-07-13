@@ -18,12 +18,88 @@ use serde::Serialize;
 use crate::CoreError;
 use crate::properties::{
     ContainerEdit, Property, PropertyValue, RootObject, ScalarValue, StructValue,
-    find_property_by_name, map_key_to_string, parse_path, parse_private_root, patch_container,
-    patch_map_value_tag_container, patch_scalar, resolve_chain,
+    encode_fstring_value, find_property_by_name, map_key_to_string, parse_path, parse_private_root,
+    patch_container, patch_map_value_tag_container, patch_scalar, patch_string, patch_value_bytes,
+    resolve_chain,
 };
 
 const ATTRIBUTES_TYPE: &str = "CharacterStateSaveGameData_Attributes";
 const INVENTORY_TYPE: &str = "CharacterStateSaveGameData_Inventory";
+
+/// Per-character personal relationship records. Values are inline
+/// `CharacterStateSaveGameData_Relationship` structs whose
+/// `ActivePersonalRelationshipModifiers` object array can contain modifiers for
+/// several targets. Only permanent modifiers targeting `Hero` belong to the
+/// editable NPC-to-player relationship.
+const RELATIONSHIP_MAP: &str = "RelationshipByGlobalId";
+const ACTIVE_RELATIONSHIP_MODIFIERS: &str = "ActivePersonalRelationshipModifiers";
+/// Editor-created indefinite override. Unlike the unfortunately named
+/// `_Story_Permanent` class, `_Story` has a class-default Weight of 1000 that
+/// survives SaveGame reconstruction; it neither ticks nor expires.
+const RELATIONSHIP_OVERRIDE_CLASS: &str =
+    "/Script/Angelscript.ActivePersonalRelationshipModifier_Story";
+/// Vanilla/legacy saves use this class too. Its runtime constructor receives
+/// Weight 1000, but Weight is not a SaveGame field and the class has no CDO
+/// default, so it reloads at the native Weight 1. Keep reading and patching it,
+/// while adding the stronger `_Story` form on the next editor write.
+const LEGACY_RELATIONSHIP_OVERRIDE_CLASS: &str =
+    "/Script/Angelscript.ActivePersonalRelationshipModifier_Story_Permanent";
+const HERO_GLOBAL_ID: &str = "Hero";
+
+fn is_relationship_override_class(class: &str) -> bool {
+    matches!(
+        class,
+        RELATIONSHIP_OVERRIDE_CLASS | LEGACY_RELATIONSHIP_OVERRIDE_CLASS
+    )
+}
+
+/// The deliberately small relationship-override vocabulary exposed by the
+/// editor. Gothic's internal enum also has `Hostile` and `Angry`; those both
+/// collapse to `Enemy` when reading an explicit stored override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum PersonalRelationship {
+    Friend,
+    Neutral,
+    Enemy,
+}
+
+impl PersonalRelationship {
+    pub(crate) fn parse(value: &str) -> Result<Self, CoreError> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "friend" => Ok(Self::Friend),
+            "neutral" => Ok(Self::Neutral),
+            "enemy" => Ok(Self::Enemy),
+            _ => Err(CoreError::InvalidRequest(format!(
+                "relationship must be Friend, Neutral, or Enemy; got {value:?}"
+            ))),
+        }
+    }
+
+    fn enum_label(self) -> &'static str {
+        match self {
+            Self::Friend => "ERelationship::Friend",
+            Self::Neutral => "ERelationship::Neutral",
+            Self::Enemy => "ERelationship::Enemy",
+        }
+    }
+
+    fn severity(self) -> u8 {
+        match self {
+            Self::Friend => 0,
+            Self::Neutral => 1,
+            Self::Enemy => 2,
+        }
+    }
+
+    fn worse(self, other: Self) -> Self {
+        if self.severity() >= other.severity() {
+            self
+        } else {
+            other
+        }
+    }
+}
 
 /// The map (a `MapProperty` keyed by GlobalId, value = native `GameplayTagContainer`)
 /// holding each character's persisted GAS *loose* tag-state. Native RE pinned this
@@ -84,6 +160,10 @@ pub struct NpcSummary {
     /// AngelScript re-applies on load). A merely-defeated/knocked-out NPC carries no
     /// such tag and is NOT dead. Drives the dead avatar + the Revive action.
     pub is_dead: bool,
+    /// Explicit permanent NPC-to-Hero relationship override, with internal
+    /// Hostile/Angry values collapsed to Enemy. `None` means the save has no
+    /// such override; it does not imply a neutral runtime relationship.
+    pub personal_relationship: Option<PersonalRelationship>,
     pub hp: Option<f32>,
     pub max_hp: Option<f32>,
 }
@@ -102,6 +182,10 @@ pub struct CharacterSummary {
     /// GlobalId prefix (before the first `-`).
     pub unique_name: String,
     pub is_dead: bool,
+    /// Explicit permanent NPC-to-Hero relationship override, collapsed to the
+    /// editor's Friend/Neutral/Enemy vocabulary. `None` means no override is
+    /// stored; the runtime relationship depends on game data and other state.
+    pub personal_relationship: Option<PersonalRelationship>,
     pub has_inventory: bool,
     pub has_knowledge: bool,
     pub has_events: bool,
@@ -390,6 +474,9 @@ pub(crate) fn memory_has_tag(root: &RootObject, id: &str, tag: &str) -> bool {
 ///   AngelScript re-applies on load). HP is NOT the signal, and neither is kill
 ///   memory: a merely-defeated (HP 0, knocked-out) NPC carries no `State.Dead` and is
 ///   ALIVE.
+/// - `personal_relationship` = an explicit permanent NPC-to-Hero override when
+///   present. Absence is returned as `None`, never guessed as Neutral; the game's
+///   effective relationship also depends on static and active runtime modifiers.
 pub fn list_npcs(root: &RootObject) -> Result<Vec<NpcSummary>, CoreError> {
     let attributes = find_character_map(root, ATTRIBUTES_TYPE)
         .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
@@ -400,6 +487,7 @@ pub fn list_npcs(root: &RootObject) -> Result<Vec<NpcSummary>, CoreError> {
             PropertyValue::Map { entries, .. } => Some(entries.as_slice()),
             _ => None,
         });
+    let personal_relationships = personal_relationships_by_id(root);
 
     let mut out = Vec::with_capacity(attributes.len());
     for (key, value) in attributes {
@@ -410,7 +498,9 @@ pub fn list_npcs(root: &RootObject) -> Result<Vec<NpcSummary>, CoreError> {
         let is_dead = loose
             .and_then(|entries| lookup_entry(entries, &id))
             .is_some_and(|tags| value_has_tag(tags, DEAD_TAG_STATE));
+        let personal_relationship = personal_relationships.get(&id).copied();
         out.push(NpcSummary {
+            personal_relationship,
             id,
             is_dead,
             hp: hp.health_current.or(hp.health_base),
@@ -465,6 +555,82 @@ fn character_map_keys_lower(root: &RootObject, struct_type: &str) -> HashSet<Str
     }
 }
 
+fn relationship_member<'a>(props: &'a [Property], name: &str) -> Option<&'a Property> {
+    props.iter().find(|property| property.name == name)
+}
+
+/// Collapse Gothic's five-value relationship enum to the three values exposed
+/// by the editor. `Hostile` and `Angry` both collapse to Enemy from the user's point of
+/// view; unknown labels are ignored rather than misreported.
+fn relationship_from_enum(label: &str) -> Option<PersonalRelationship> {
+    match label.rsplit("::").next().unwrap_or(label) {
+        "Friend" => Some(PersonalRelationship::Friend),
+        "Neutral" => Some(PersonalRelationship::Neutral),
+        "Hostile" | "Angry" | "Enemy" => Some(PersonalRelationship::Enemy),
+        _ => None,
+    }
+}
+
+/// Index every explicit permanent NPC-to-Hero relationship by actor GlobalId.
+/// If malformed or legacy data contains multiple such modifiers, expose their
+/// most restrictive explicit value deterministically. This remains a stored
+/// override only; it is not the relationship computed by the running game.
+fn personal_relationships_by_id(root: &RootObject) -> HashMap<String, PersonalRelationship> {
+    let Some((_path, map_property)) = find_property_by_name(root, RELATIONSHIP_MAP) else {
+        return HashMap::new();
+    };
+    let PropertyValue::Map { entries, .. } = &map_property.value else {
+        return HashMap::new();
+    };
+
+    let mut relationships = HashMap::new();
+    for (key, entry_value) in entries {
+        let Some(id) = map_key_to_string(key) else {
+            continue;
+        };
+        let Some(entry_properties) = entry_props(entry_value) else {
+            continue;
+        };
+        let Some(PropertyValue::ObjectInstances(modifiers)) =
+            relationship_member(entry_properties, ACTIVE_RELATIONSHIP_MODIFIERS)
+                .map(|property| &property.value)
+        else {
+            continue;
+        };
+
+        let mut stored: Option<PersonalRelationship> = None;
+        for modifier in modifiers {
+            if !is_relationship_override_class(&modifier.class) {
+                continue;
+            }
+            let targets_hero = relationship_member(&modifier.properties, "TargetCharacterGlobalID")
+                .is_some_and(|property| {
+                    matches!(
+                        &property.value,
+                        PropertyValue::Name(value) | PropertyValue::Str(value)
+                            if value == HERO_GLOBAL_ID
+                    )
+                });
+            if !targets_hero {
+                continue;
+            }
+            let Some(relationship) = relationship_member(&modifier.properties, "Relationship")
+                .and_then(|property| match &property.value {
+                    PropertyValue::Enum(value) => relationship_from_enum(value),
+                    _ => None,
+                })
+            else {
+                continue;
+            };
+            stored = Some(stored.map_or(relationship, |old| old.worse(relationship)));
+        }
+        if let Some(stored) = stored {
+            relationships.insert(id, stored);
+        }
+    }
+    relationships
+}
+
 /// Build the unified character list: every spawned actor (from [`list_npcs`])
 /// annotated with availability flags, followed by knowledge-only orphan rows
 /// (a knowledge UniqueName with no matching actor charKey). The join is the
@@ -498,6 +664,7 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
             global_id: Some(npc.id.clone()),
             unique_name,
             is_dead: npc.is_dead,
+            personal_relationship: npc.personal_relationship,
             has_inventory: inventory.contains(&id_lower),
             has_knowledge,
             has_events: events.contains(&id_lower),
@@ -514,6 +681,7 @@ pub fn list_characters(root: &RootObject) -> Result<Vec<CharacterSummary>, CoreE
             global_id: None,
             unique_name: key,
             is_dead: false,
+            personal_relationship: None,
             has_inventory: false,
             has_knowledge: true,
             has_events: false,
@@ -1050,37 +1218,303 @@ fn restore_hp_to_max(payload: &mut [u8], id: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+fn relationship_name_property(name: &str, value: &str) -> Vec<u8> {
+    let body = encode_fstring_value(value);
+    let mut output = encode_fstring_value(name);
+    output.extend_from_slice(&encode_fstring_value("NameProperty"));
+    output.extend_from_slice(&0u32.to_le_bytes()); // array_index
+    output.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    output.push(0); // tag_flags
+    output.extend_from_slice(&body);
+    output
+}
+
+fn relationship_enum_property(value: PersonalRelationship) -> Vec<u8> {
+    let body = encode_fstring_value(value.enum_label());
+    let mut output = encode_fstring_value("Relationship");
+    output.extend_from_slice(&encode_fstring_value("EnumProperty"));
+    output.extend_from_slice(&1u32.to_le_bytes());
+    output.extend_from_slice(&encode_fstring_value("ERelationship"));
+    output.extend_from_slice(&1u32.to_le_bytes());
+    output.extend_from_slice(&encode_fstring_value("/Script/G1R"));
+    output.extend_from_slice(&1u32.to_le_bytes());
+    output.extend_from_slice(&encode_fstring_value("ByteProperty"));
+    output.extend_from_slice(&0u32.to_le_bytes()); // array_index
+    output.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    output.push(0); // tag_flags
+    output.extend_from_slice(&body);
+    output
+}
+
+/// A self-contained inline `_Story` relationship object. Only its two actual
+/// SaveGame fields are serialized; the inherited Weight comes from this
+/// class's 1000-valued CDO and is intentionally not an inert injected tag.
+fn relationship_override_modifier_bytes(value: PersonalRelationship) -> Vec<u8> {
+    relationship_modifier_bytes_for_class(RELATIONSHIP_OVERRIDE_CLASS, value)
+}
+
+fn relationship_modifier_bytes_for_class(class: &str, value: PersonalRelationship) -> Vec<u8> {
+    let mut output = encode_fstring_value(class);
+    output.push(0); // object flag
+    output.extend_from_slice(&relationship_enum_property(value));
+    output.extend_from_slice(&relationship_name_property(
+        "TargetCharacterGlobalID",
+        HERO_GLOBAL_ID,
+    ));
+    output.extend_from_slice(&encode_fstring_value("None"));
+    output.extend_from_slice(&0u32.to_le_bytes()); // object footer
+    output
+}
+
+fn active_relationship_modifiers_property(value: PersonalRelationship) -> Vec<u8> {
+    let modifier = relationship_override_modifier_bytes(value);
+    let mut body = 1u32.to_le_bytes().to_vec();
+    body.extend_from_slice(&modifier);
+
+    let mut output = encode_fstring_value(ACTIVE_RELATIONSHIP_MODIFIERS);
+    output.extend_from_slice(&encode_fstring_value("ArrayProperty"));
+    output.extend_from_slice(&1u32.to_le_bytes());
+    output.extend_from_slice(&encode_fstring_value("ObjectProperty"));
+    output.extend_from_slice(&0u32.to_le_bytes()); // array_index
+    output.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    output.push(0); // tag_flags
+    output.extend_from_slice(&body);
+    output
+}
+
+/// Inline value of one `RelationshipByGlobalId` map entry (a tagged struct
+/// property list, without a separate size prefix).
+fn relationship_entry_value_bytes(value: PersonalRelationship) -> Vec<u8> {
+    let mut output = active_relationship_modifiers_property(value);
+    output.extend_from_slice(&encode_fstring_value("None"));
+    output
+}
+
+fn modifier_targets_hero(properties: &[Property]) -> bool {
+    relationship_member(properties, "TargetCharacterGlobalID").is_some_and(|property| {
+        matches!(
+            &property.value,
+            PropertyValue::Name(value) | PropertyValue::Str(value) if value == HERO_GLOBAL_ID
+        )
+    })
+}
+
+/// Set one NPC's explicit permanent relationship override towards Hero. This
+/// edits only the dedicated relationship map and leaves death state and crime
+/// history untouched. The editor does not claim to reproduce the game's full
+/// runtime relationship evaluation. Handles an existing modifier, an
+/// empty/populated object array, and a completely empty relationship map.
+pub fn apply_relationship(
+    payload: &mut Vec<u8>,
+    id: &str,
+    relationship: PersonalRelationship,
+) -> Result<(), CoreError> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "private.npc.setRelationship requires a non-empty id".to_string(),
+        ));
+    }
+
+    // Refuse accidental map entries for non-characters/typos.
+    let root = parse_private_root(payload)?;
+    let attributes = find_character_map(&root, ATTRIBUTES_TYPE)
+        .ok_or_else(|| CoreError::Parse(format!("no {ATTRIBUTES_TYPE} map found in save")))?;
+    if lookup_entry(attributes, id).is_none() {
+        return Err(CoreError::InvalidRequest(format!(
+            "NPC {id:?} does not exist in the save"
+        )));
+    }
+
+    // Patch every recognized Hero override (including the weak legacy class),
+    // then ensure the entry also has the indefinite `_Story` class whose CDO
+    // retains Weight 1000 after SaveGame load. Reparse after every splice
+    // because Friend/Neutral/Enemy have different byte lengths.
+    let mut missing_entry = false;
+    loop {
+        let root = parse_private_root(payload)?;
+        let Some((map_path, map_property)) = find_property_by_name(&root, RELATIONSHIP_MAP) else {
+            return Err(CoreError::Parse(format!(
+                "{RELATIONSHIP_MAP} map not found in save"
+            )));
+        };
+        let PropertyValue::Map { entries, .. } = &map_property.value else {
+            return Err(CoreError::Parse(format!("{RELATIONSHIP_MAP} is not a map")));
+        };
+        let Some((_key, entry_value)) = entries
+            .iter()
+            .find(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
+        else {
+            missing_entry = true;
+            break;
+        };
+        let Some(entry_properties) = entry_props(entry_value) else {
+            return Err(CoreError::Parse(format!(
+                "{RELATIONSHIP_MAP}[{id:?}] is not a property-list struct"
+            )));
+        };
+        let Some(array_property) =
+            relationship_member(entry_properties, ACTIVE_RELATIONSHIP_MODIFIERS)
+        else {
+            return Err(CoreError::Parse(format!(
+                "{RELATIONSHIP_MAP}[{id:?}] has no {ACTIVE_RELATIONSHIP_MODIFIERS} array"
+            )));
+        };
+        let mut next_mismatch = None;
+        let mut found_strong_override = false;
+        match &array_property.value {
+            PropertyValue::ObjectInstances(modifiers) => {
+                for (index, modifier) in modifiers.iter().enumerate() {
+                    if !is_relationship_override_class(&modifier.class)
+                        || !modifier_targets_hero(&modifier.properties)
+                    {
+                        continue;
+                    }
+                    let Some(property) = relationship_member(&modifier.properties, "Relationship")
+                    else {
+                        continue;
+                    };
+                    let PropertyValue::Enum(current) = &property.value else {
+                        continue;
+                    };
+                    if modifier.class == RELATIONSHIP_OVERRIDE_CLASS {
+                        found_strong_override = true;
+                    }
+                    if current != relationship.enum_label() {
+                        next_mismatch = Some(index);
+                        break;
+                    }
+                }
+            }
+            PropertyValue::Array { elements } if elements.is_empty() => {}
+            _ => {
+                return Err(CoreError::Parse(format!(
+                    "{ACTIVE_RELATIONSHIP_MODIFIERS} has an unsupported array encoding"
+                )));
+            }
+        }
+
+        if let Some(index) = next_mismatch {
+            let mut path = map_path;
+            path.push(format!("{{{id}}}"));
+            path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
+            path.push(format!("[{index}]"));
+            path.push("Relationship".to_string());
+            let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
+            let target = chain.target.clone();
+            let enclosing = chain.enclosing_size_fields.clone();
+            patch_string(payload, &target, &enclosing, relationship.enum_label())?;
+            continue;
+        }
+
+        if found_strong_override {
+            break;
+        }
+
+        // The map entry exists but has only unrelated modifiers or a weak
+        // legacy `_Story_Permanent` override. Append the strong, indefinite
+        // `_Story` representation while preserving every existing object.
+        let mut path = map_path;
+        path.push(format!("{{{id}}}"));
+        path.push(ACTIVE_RELATIONSHIP_MODIFIERS.to_string());
+        let chain = resolve_chain(&root.properties, &parse_path(&path)?)?;
+        let target = chain.target.clone();
+        let enclosing = chain.enclosing_size_fields.clone();
+        let object_bytes = relationship_override_modifier_bytes(relationship);
+        match &target.value {
+            PropertyValue::Array { elements } if elements.is_empty() => {
+                patch_container(
+                    payload,
+                    &target,
+                    &enclosing,
+                    &ContainerEdit::ArrayInsertBytes(object_bytes),
+                )?;
+            }
+            PropertyValue::ObjectInstances(objects) => {
+                let end = target
+                    .value_offset
+                    .checked_add(target.value_size)
+                    .filter(|end| *end <= payload.len())
+                    .ok_or_else(|| {
+                        CoreError::Parse(
+                            "relationship modifier array points outside payload".to_string(),
+                        )
+                    })?;
+                if target.value_size < 4 {
+                    return Err(CoreError::Parse(
+                        "relationship modifier array is missing its count".to_string(),
+                    ));
+                }
+                let mut body = payload[target.value_offset..end].to_vec();
+                let new_count = u32::try_from(objects.len() + 1).map_err(|_| {
+                    CoreError::InvalidRequest(
+                        "too many personal relationship modifiers".to_string(),
+                    )
+                })?;
+                body[..4].copy_from_slice(&new_count.to_le_bytes());
+                body.extend_from_slice(&object_bytes);
+                patch_value_bytes(payload, &target, &enclosing, &body)?;
+            }
+            _ => unreachable!("array encoding validated above"),
+        }
+        // Reparse and verify the newly appended object before finishing.
+    }
+
+    if missing_entry {
+        // No entry existed: append a fully-formed inline map key/value pair.
+        let root = parse_private_root(payload)?;
+        let (map_path, map_property) = find_property_by_name(&root, RELATIONSHIP_MAP)
+            .ok_or_else(|| CoreError::Parse(format!("{RELATIONSHIP_MAP} map not found in save")))?;
+        let PropertyValue::Map { entries, .. } = &map_property.value else {
+            return Err(CoreError::Parse(format!("{RELATIONSHIP_MAP} is not a map")));
+        };
+        if entries
+            .iter()
+            .any(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
+        {
+            return Err(CoreError::Parse(format!(
+                "failed to create a permanent relationship modifier for {id:?}"
+            )));
+        }
+        let mut entry_bytes = encode_fstring_value(id);
+        entry_bytes.extend_from_slice(&relationship_entry_value_bytes(relationship));
+        let chain = resolve_chain(&root.properties, &parse_path(&map_path)?)?;
+        let target = chain.target.clone();
+        let enclosing = chain.enclosing_size_fields.clone();
+        patch_container(
+            payload,
+            &target,
+            &enclosing,
+            &ContainerEdit::MapInsert { entry_bytes },
+        )?;
+    }
+
+    let reparsed = parse_private_root(payload).map_err(|error| {
+        CoreError::Parse(format!(
+            "setRelationship produced an inconsistent payload: {error}"
+        ))
+    })?;
+    let stored = personal_relationships_by_id(&reparsed).get(id).copied();
+    if stored != Some(relationship) {
+        return Err(CoreError::Validation(format!(
+            "NPC {id:?} relationship override re-read as {stored:?}, expected {relationship:?}"
+        )));
+    }
+    Ok(())
+}
+
 /// REVIVE NPC `id` in a decoded private payload, in place — restore a KILLED NPC
-/// to its alive state by undoing ALL THREE things killing it added.
+/// to its alive state by undoing all persisted death state.
 ///
-/// Empirical 3-save diff (defeated vs killed) showed killing adds: (1) the NPC's
-/// own kill memory residue, (2) the killer's (Hero's) kill memory event ABOUT this
-/// NPC, and (3) a lootable-corpse entry in the global `m_SavedInventories` map. The
-/// previous revive undid only (1); this undoes all three:
+/// 1. Scan every `LongTermMemoryByGlobalId` owner and remove only defeat/kill
+///    events that refer to this NPC.
+/// 2. Strip the authoritative `State.Dead`, kill-bounty, and execution-bounty
+///    loose tags while preserving unrelated tags.
+/// 3. Remove the NPC's lootable corpse entry from `m_SavedInventories`.
+/// 4. Restore Health to MaxHealth.
 ///
-/// 1. **Cross-owner kill-memory removal.** Scan EVERY `LongTermMemoryByGlobalId`
-///    owner. In the NPC's OWN entry remove a [`REVIVE_EVENT_TAGS`] event only when
-///    its `AffectedCharacterGlobalId` is absent or the NPC itself (its own
-///    defeat/kill residue) — a kill the NPC committed against ANOTHER character
-///    survives; in every OTHER owner (Hero etc.) remove only events that are
-///    kill-tagged ([`KILL_EVENT_TAGS`]) AND `AffectedCharacterGlobalId == id`
-///    (unrelated memories of that owner survive). Each removal is a
-///    length-changing array splice, so the payload is re-parsed and the NEXT event
-///    re-located against the fresh tree every iteration — re-scanning from scratch
-///    avoids the index-shift bug. Enclosing size cascade fixed up by [`patch_container`].
-/// 2. **Loose-tag removal (the CRITICAL native fix).** Strip [`DEAD_LOOSE_TAGS`]
-///    (`State.Dead`, `State.KillBountyGranted`, `State.ExecutedBountyGranted`) from
-///    `LooseTagsByGlobalId[<id>]` ([`remove_dead_loose_tags`]). `State.Dead` here is
-///    the AUTHORITATIVE on-load death gate AngelScript re-applies — leaving it makes
-///    a revived NPC revert to a corpse on load. Unrelated loose tags survive.
-/// 3. **Corpse removal.** Drop the `m_SavedInventories["Character_" + id]` map
-///    entry ([`remove_corpse_inventory`]) — a separate single map-entry splice.
-/// 4. **Restore HP** to `MaxHealth` (a defeated NPC sits at HP 0; a killed NPC may
-///    keep positive HP, in which case [`restore_hp_to_max`] is a no-op).
-///
-/// Each step is its own re-parse/splice so byte offsets never go stale across them.
-/// A clean no-op (Ok) if the NPC has no dead tags, no kill residue, no corpse, and
-/// full HP.
+/// Each structural step reparses before continuing, so shifted offsets and
+/// indices are never reused. An already-alive NPC with full HP is a clean no-op.
 pub fn apply_revive(payload: &mut Vec<u8>, id: &str) -> Result<(), CoreError> {
     // ── Phase 1: strip every kill/defeat memory event across ALL owners ──────
     // Re-parse/re-scan/splice loop: each removal shifts later indices and offsets,
@@ -1197,13 +1631,42 @@ mod tests {
     // `CharacterStateSaveGameData_Attributes` map (Health/MaxHealth) keyed by NPC
     // id, and a `LongTermMemoryByGlobalId` map of MemorizedEvents carrying EventTags.
 
-    use crate::properties::TAG_FLAG_NATIVE_SERIALIZE;
+    use crate::properties::{TAG_FLAG_BOOL_TRUE, TAG_FLAG_NATIVE_SERIALIZE};
 
     fn fstring(value: &str) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(&((value.len() + 1) as i32).to_le_bytes());
         out.extend_from_slice(value.as_bytes());
         out.push(0);
+        out
+    }
+
+    fn property_tag(name: &str, type_name: &str) -> Vec<u8> {
+        let mut out = fstring(name);
+        out.extend_from_slice(&fstring(type_name));
+        out
+    }
+
+    fn property_header(size: u32, flags: u8) -> Vec<u8> {
+        let mut out = 0u32.to_le_bytes().to_vec();
+        out.extend_from_slice(&size.to_le_bytes());
+        out.push(flags);
+        out
+    }
+
+    fn int_property(name: &str, value: i32) -> Vec<u8> {
+        let mut out = property_tag(name, "IntProperty");
+        out.extend_from_slice(&property_header(4, 0));
+        out.extend_from_slice(&value.to_le_bytes());
+        out
+    }
+
+    fn bool_property(name: &str, value: bool) -> Vec<u8> {
+        let mut out = property_tag(name, "BoolProperty");
+        out.extend_from_slice(&property_header(
+            0,
+            if value { TAG_FLAG_BOOL_TRUE } else { 0 },
+        ));
         out
     }
 
@@ -1437,6 +1900,365 @@ mod tests {
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes()); // footer
         payload
+    }
+
+    /// A real-shaped `CrimeMemoryPersistentData` entry in `m_GenericData`.
+    /// It contains both an unsuppressed Hero crime and an already-suppressed
+    /// non-Hero crime for `witness`, so the relationship writer's non-interference
+    /// guarantee covers the complete persisted crime subtree.
+    fn crime_memory_property(witness: &str) -> Vec<u8> {
+        fn struct_array(name: &str, struct_type: &str, entries: &[Vec<u8>]) -> Vec<u8> {
+            let mut descriptor = 1u32.to_le_bytes().to_vec();
+            descriptor.extend_from_slice(&fstring("StructProperty"));
+            descriptor.extend_from_slice(&1u32.to_le_bytes());
+            descriptor.extend_from_slice(&fstring(struct_type));
+            descriptor.extend_from_slice(&1u32.to_le_bytes());
+            descriptor.extend_from_slice(&fstring("/Script/G1R"));
+
+            let mut body = (entries.len() as u32).to_le_bytes().to_vec();
+            for entry in entries {
+                body.extend_from_slice(entry);
+                body.extend_from_slice(&fstring("None"));
+            }
+
+            let mut out = property_tag(name, "ArrayProperty");
+            out.extend_from_slice(&descriptor);
+            out.extend_from_slice(&property_header(body.len() as u32, 0));
+            out.extend_from_slice(&body);
+            out
+        }
+
+        let global_entry = |id, forgiven, criminal: &str| {
+            let mut out = int_property("ID", id);
+            out.extend_from_slice(&bool_property("bIsForgiven", forgiven));
+            out.extend_from_slice(&name_property("CriminalGlobalID", criminal));
+            out
+        };
+        let globals = struct_array(
+            "GlobalCrimeDataEntries",
+            "FGlobalCrimeDataEntry",
+            &[
+                global_entry(100, false, "Hero"),
+                global_entry(200, true, "OC_GRD_Other"),
+            ],
+        );
+
+        let relative_entry = |id, suppressed| {
+            let mut out = int_property("ID", id);
+            out.extend_from_slice(&bool_property("bIsSuppressed", suppressed));
+            out
+        };
+        let relative_crimes = struct_array(
+            "RelativeCrimes",
+            "FRelativeCrimeDataEntry",
+            &[relative_entry(100, false), relative_entry(200, true)],
+        );
+
+        let mut witness_value = relative_crimes;
+        witness_value.extend_from_slice(&fstring("None"));
+        let mut relative_descriptor = 2u32.to_le_bytes().to_vec();
+        relative_descriptor.extend_from_slice(&fstring("NameProperty"));
+        relative_descriptor.extend_from_slice(&0u32.to_le_bytes());
+        relative_descriptor.extend_from_slice(&fstring("StructProperty"));
+        relative_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        relative_descriptor.extend_from_slice(&fstring("FRelativeCrimesContainer"));
+        relative_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        relative_descriptor.extend_from_slice(&fstring("/Script/G1R"));
+        let mut relative_body = 0u32.to_le_bytes().to_vec();
+        relative_body.extend_from_slice(&1u32.to_le_bytes());
+        relative_body.extend_from_slice(&fstring(witness));
+        relative_body.extend_from_slice(&witness_value);
+        let mut relatives = property_tag("RelativeCrimeDataEntries", "MapProperty");
+        relatives.extend_from_slice(&relative_descriptor);
+        relatives.extend_from_slice(&property_header(relative_body.len() as u32, 0));
+        relatives.extend_from_slice(&relative_body);
+
+        let mut crime_body = globals;
+        crime_body.extend_from_slice(&relatives);
+        crime_body.extend_from_slice(&fstring("None"));
+        let mut crime_instance = fstring("/Script/G1R.GothicCrimeMemorySaveGameData");
+        crime_instance.extend_from_slice(&(crime_body.len() as u32).to_le_bytes());
+        crime_instance.extend_from_slice(&crime_body);
+
+        let mut generic_body = 0u32.to_le_bytes().to_vec();
+        generic_body.extend_from_slice(&1u32.to_le_bytes());
+        generic_body.extend_from_slice(&fstring("CrimeMemoryPersistentData"));
+        generic_body.extend_from_slice(&crime_instance);
+        let mut generic_descriptor = 2u32.to_le_bytes().to_vec();
+        generic_descriptor.extend_from_slice(&fstring("NameProperty"));
+        generic_descriptor.extend_from_slice(&0u32.to_le_bytes());
+        generic_descriptor.extend_from_slice(&fstring("StructProperty"));
+        generic_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        generic_descriptor.extend_from_slice(&fstring("InstancedStruct"));
+        generic_descriptor.extend_from_slice(&1u32.to_le_bytes());
+        generic_descriptor.extend_from_slice(&fstring("/Script/StructUtils"));
+        let mut generic = property_tag("m_GenericData", "MapProperty");
+        generic.extend_from_slice(&generic_descriptor);
+        generic.extend_from_slice(&property_header(generic_body.len() as u32, 0));
+        generic.extend_from_slice(&generic_body);
+        generic
+    }
+
+    fn empty_relationship_entry_value() -> Vec<u8> {
+        let body = 0u32.to_le_bytes();
+        let mut out = fstring(ACTIVE_RELATIONSHIP_MODIFIERS);
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    fn relationship_entry_value_for_class(class: &str, value: PersonalRelationship) -> Vec<u8> {
+        let modifier = relationship_modifier_bytes_for_class(class, value);
+        let mut body = 1u32.to_le_bytes().to_vec();
+        body.extend_from_slice(&modifier);
+
+        let mut out = fstring(ACTIVE_RELATIONSHIP_MODIFIERS);
+        out.extend_from_slice(&fstring("ArrayProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes()); // array_index
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(0); // tag_flags
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&fstring("None"));
+        out
+    }
+
+    fn relationship_payload(id: &str, relationship_entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        private_root(&[
+            character_state_map(
+                "AttributesMap",
+                ATTRIBUTES_TYPE,
+                &[(id, attributes_entry_value(100.0, 100.0))],
+            ),
+            character_state_map(
+                RELATIONSHIP_MAP,
+                "CharacterStateSaveGameData_Relationship",
+                relationship_entries,
+            ),
+        ])
+    }
+
+    fn relationship_payload_with_crimes(
+        id: &str,
+        relationship_entries: &[(&str, Vec<u8>)],
+    ) -> Vec<u8> {
+        // Keep the crime property first. Relationship edits can change byte
+        // lengths later in the root without changing any crime subtree offsets,
+        // so a full parsed-property equality check is exact and meaningful.
+        private_root(&[
+            crime_memory_property(id),
+            character_state_map(
+                "AttributesMap",
+                ATTRIBUTES_TYPE,
+                &[(id, attributes_entry_value(100.0, 100.0))],
+            ),
+            character_state_map(
+                RELATIONSHIP_MAP,
+                "CharacterStateSaveGameData_Relationship",
+                relationship_entries,
+            ),
+        ])
+    }
+
+    fn crime_property_snapshot(payload: &[u8]) -> Property {
+        let root = parse_private_root(payload).expect("strict crime payload parse");
+        assert_eq!(root.consumed, payload.len());
+        find_property_by_name(&root, "m_GenericData")
+            .expect("m_GenericData crime property")
+            .1
+            .clone()
+    }
+
+    fn assert_relationship_summary(
+        payload: &[u8],
+        id: &str,
+        expected: Option<PersonalRelationship>,
+    ) {
+        let root = parse_private_root(payload).expect("strict relationship payload parse");
+        assert_eq!(root.consumed, payload.len());
+        let row = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == id)
+            .expect("NPC summary row");
+        assert_eq!(row.personal_relationship, expected);
+    }
+
+    #[test]
+    fn relationship_summary_serializes_absent_override_as_null_without_effective_field() {
+        let id = "NC_ORG_Buster_780-WorldPointActor_Buster";
+        let payload = relationship_payload(id, &[]);
+        let root = parse_private_root(&payload).unwrap();
+        let row = list_npcs(&root)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == id)
+            .unwrap();
+        let value = serde_json::to_value(row).unwrap();
+        assert_eq!(value["personalRelationship"], serde_json::Value::Null);
+        assert!(value.get("effectiveRelationship").is_none());
+    }
+
+    #[test]
+    fn set_relationship_patches_existing_permanent_modifier() {
+        let id = "OM_GRD_Asghan_263-WorldPointActor_Asghan";
+        let existing = relationship_entry_value_bytes(PersonalRelationship::Friend);
+        let mut payload = relationship_payload(id, &[(id, existing)]);
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Friend));
+
+        apply_relationship(&mut payload, id, PersonalRelationship::Enemy).unwrap();
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Enemy));
+
+        // A second length-changing enum rewrite remains byte-clean.
+        apply_relationship(&mut payload, id, PersonalRelationship::Neutral).unwrap();
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Neutral));
+    }
+
+    #[test]
+    fn set_relationship_migrates_legacy_weak_modifier_to_story_override() {
+        let id = "OM_GRD_Asghan_263-WorldPointActor_Asghan";
+        let legacy = relationship_entry_value_for_class(
+            LEGACY_RELATIONSHIP_OVERRIDE_CLASS,
+            PersonalRelationship::Friend,
+        );
+        let mut payload = relationship_payload(id, &[(id, legacy)]);
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Friend));
+
+        // Even selecting the already stored value must add the stronger
+        // `_Story` class; merely patching `_Story_Permanent` would reload at
+        // native Weight 1 and lose ties to static relationships.
+        apply_relationship(&mut payload, id, PersonalRelationship::Friend).unwrap();
+
+        let root = parse_private_root(&payload).unwrap();
+        let (_path, map) = find_property_by_name(&root, RELATIONSHIP_MAP).unwrap();
+        let PropertyValue::Map { entries, .. } = &map.value else {
+            panic!("relationship map expected");
+        };
+        let (_key, entry) = entries
+            .iter()
+            .find(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
+            .unwrap();
+        let props = entry_props(entry).unwrap();
+        let array = relationship_member(props, ACTIVE_RELATIONSHIP_MODIFIERS).unwrap();
+        let PropertyValue::ObjectInstances(modifiers) = &array.value else {
+            panic!("modifier object array expected");
+        };
+        assert!(
+            modifiers
+                .iter()
+                .any(|modifier| modifier.class == LEGACY_RELATIONSHIP_OVERRIDE_CLASS)
+        );
+        assert!(modifiers.iter().any(|modifier| {
+            modifier.class == RELATIONSHIP_OVERRIDE_CLASS
+                && modifier_targets_hero(&modifier.properties)
+        }));
+
+        // A later edit keeps legacy and strong representations coherent, so
+        // the reader never reports a stale stricter value from the old object.
+        apply_relationship(&mut payload, id, PersonalRelationship::Enemy).unwrap();
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Enemy));
+        let root = parse_private_root(&payload).unwrap();
+        let (_path, map) = find_property_by_name(&root, RELATIONSHIP_MAP).unwrap();
+        let PropertyValue::Map { entries, .. } = &map.value else {
+            panic!("relationship map expected");
+        };
+        let (_key, entry) = entries
+            .iter()
+            .find(|(key, _)| map_key_to_string(key).as_deref() == Some(id))
+            .unwrap();
+        let props = entry_props(entry).unwrap();
+        let array = relationship_member(props, ACTIVE_RELATIONSHIP_MODIFIERS).unwrap();
+        let PropertyValue::ObjectInstances(modifiers) = &array.value else {
+            panic!("modifier object array expected");
+        };
+        for modifier in modifiers.iter().filter(|modifier| {
+            is_relationship_override_class(&modifier.class)
+                && modifier_targets_hero(&modifier.properties)
+        }) {
+            assert_eq!(
+                relationship_member(&modifier.properties, "Relationship")
+                    .map(|property| &property.value),
+                Some(&PropertyValue::Enum(
+                    PersonalRelationship::Enemy.enum_label().to_string()
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn set_relationship_preserves_all_crime_entries_and_flags() {
+        let id = "OC_STT_Diego";
+
+        for desired in [
+            PersonalRelationship::Friend,
+            PersonalRelationship::Neutral,
+            PersonalRelationship::Enemy,
+        ] {
+            let empty = empty_relationship_entry_value();
+            let mut payload = relationship_payload_with_crimes(id, &[(id, empty)]);
+            let crime_before = crime_property_snapshot(&payload);
+
+            apply_relationship(&mut payload, id, desired).unwrap();
+
+            let reparsed = parse_private_root(&payload).expect("strict post-edit reparse");
+            assert_eq!(reparsed.consumed, payload.len());
+            assert_eq!(
+                personal_relationships_by_id(&reparsed).get(id),
+                Some(&desired),
+                "{desired:?} permanent override must be stored"
+            );
+            assert_eq!(
+                crime_property_snapshot(&payload),
+                crime_before,
+                "{desired:?} must leave the entire persisted crime subtree byte-semantically unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn set_relationship_appends_to_empty_modifier_array() {
+        let id = "PC_THF_Diego_100-WorldPointActor_Diego";
+        let empty = empty_relationship_entry_value();
+        let mut payload = relationship_payload(id, &[(id, empty)]);
+        assert_relationship_summary(&payload, id, None);
+
+        apply_relationship(&mut payload, id, PersonalRelationship::Friend).unwrap();
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Friend));
+        let root = parse_private_root(&payload).unwrap();
+        let relationships = personal_relationships_by_id(&root);
+        assert_eq!(relationships.get(id), Some(&PersonalRelationship::Friend));
+    }
+
+    #[test]
+    fn set_relationship_inserts_into_empty_map() {
+        let id = "NC_ORG_Buster_780-WorldPointActor_Buster";
+        let mut payload = relationship_payload(id, &[]);
+        assert_relationship_summary(&payload, id, None);
+
+        apply_relationship(&mut payload, id, PersonalRelationship::Neutral).unwrap();
+        assert_relationship_summary(&payload, id, Some(PersonalRelationship::Neutral));
+
+        let root = parse_private_root(&payload).unwrap();
+        let (_path, map) = find_property_by_name(&root, RELATIONSHIP_MAP).unwrap();
+        let PropertyValue::Map { entries, .. } = &map.value else {
+            panic!("relationship map expected");
+        };
+        assert!(
+            entries
+                .iter()
+                .any(|(key, _)| { map_key_to_string(key).as_deref() == Some(id) })
+        );
+        assert_eq!(
+            personal_relationships_by_id(&root).get(id),
+            Some(&PersonalRelationship::Neutral)
+        );
     }
 
     /// Like `attributes_entry_value` but with a distinct Health `CurrentValue`

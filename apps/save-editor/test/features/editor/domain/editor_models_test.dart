@@ -342,7 +342,10 @@ void main() {
       'count': 1,
       'equipped': true,
       'upgrades': [
-        {'key': 'm_CurrentUpperBodyUpgrade', 'value': 'm_UpperBody_Heavy02_ArmorUpgrade'},
+        {
+          'key': 'm_CurrentUpperBodyUpgrade',
+          'value': 'm_UpperBody_Heavy02_ArmorUpgrade',
+        },
       ],
     });
     expect(item.upgrades.length, 1);
@@ -389,6 +392,40 @@ void main() {
     );
   });
 
+  test('SaveInspection reads per-save NPC relationship capability', () {
+    final supported = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-001.sav',
+      'size': 1024,
+      'sha1': 'abc',
+      'private': {
+        'status': 'decoded',
+        'npc': {
+          'hasNpcs': true,
+          'writable': ['private.npc.revive', 'private.npc.setRelationship'],
+        },
+      },
+    });
+    final unsupported = SaveInspection.fromJson({
+      'format': 'GSAV',
+      'path': r'C:\saves\G1R-002.sav',
+      'size': 1024,
+      'sha1': 'def',
+      'private': {
+        'status': 'decoded',
+        'npc': {
+          'hasNpcs': true,
+          'writable': ['private.npc.revive'],
+        },
+      },
+    });
+
+    expect(supported.privateNpc.hasNpcs, isTrue);
+    expect(supported.privateNpc.canSetRelationship, isTrue);
+    expect(unsupported.privateNpc.hasNpcs, isTrue);
+    expect(unsupported.privateNpc.canSetRelationship, isFalse);
+  });
+
   test('SaveInspection treats decoded preview as usable private data', () {
     final inspection = SaveInspection.fromJson({
       'format': 'GSAV',
@@ -410,20 +447,26 @@ void main() {
     expect(inspection.privateTotalChunkCount, 541);
   });
 
-  test('SaveInspection treats decoded_preview status as preview without flag', () {
-    final inspection = SaveInspection.fromJson({
-      'format': 'GSAV',
-      'path': r'C:\saves\G1R-001.sav',
-      'size': 1024,
-      'sha1': 'abc',
-      // status says preview but the explicit preview flag is absent.
-      'private': {'status': 'decoded_preview', 'strings': ['Hero']},
-    });
+  test(
+    'SaveInspection treats decoded_preview status as preview without flag',
+    () {
+      final inspection = SaveInspection.fromJson({
+        'format': 'GSAV',
+        'path': r'C:\saves\G1R-001.sav',
+        'size': 1024,
+        'sha1': 'abc',
+        // status says preview but the explicit preview flag is absent.
+        'private': {
+          'status': 'decoded_preview',
+          'strings': ['Hero'],
+        },
+      });
 
-    expect(inspection.privateDecoded, isTrue);
-    expect(inspection.privatePreview, isTrue);
-    expect(inspection.privateEditable, isFalse);
-  });
+      expect(inspection.privateDecoded, isTrue);
+      expect(inspection.privatePreview, isTrue);
+      expect(inspection.privateEditable, isFalse);
+    },
+  );
 
   test('CodecStatus exposes the in-process adapter from details', () {
     final codec = CodecStatus.fromJson({
@@ -485,12 +528,15 @@ void main() {
   });
 
   test('InventoryReset.toEditJson emits path + level, omits null actorId', () {
+    expect(const InventoryReset(resourcesLevel: 'Gothic').toEditJson(), {
+      'path': 'private.inventory.reset',
+      'value': {'resourcesLevel': 'Gothic'},
+    });
     expect(
-      const InventoryReset(resourcesLevel: 'Gothic').toEditJson(),
-      {'path': 'private.inventory.reset', 'value': {'resourcesLevel': 'Gothic'}},
-    );
-    expect(
-      const InventoryReset(resourcesLevel: 'Hard', actorId: 'Char_1').toEditJson(),
+      const InventoryReset(
+        resourcesLevel: 'Hard',
+        actorId: 'Char_1',
+      ).toEditJson(),
       {
         'path': 'private.inventory.reset',
         'value': {'resourcesLevel': 'Hard', 'actorId': 'Char_1'},

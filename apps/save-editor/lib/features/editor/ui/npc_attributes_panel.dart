@@ -206,6 +206,7 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
 
   Future<void> _reloadStatus() async {
     final status = widget.status;
+    final epoch = ++_statusEpoch;
     if (status == null) {
       setState(() {
         _statusActor = null;
@@ -213,14 +214,25 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
       });
       return;
     }
-    final epoch = ++_statusEpoch;
-    setState(() => _statusLoading = true);
-    final page = await status.load();
-    if (!mounted || epoch != _statusEpoch) return;
     setState(() {
-      _statusLoading = false;
-      _statusActor = _matchStatusSelf(page, status.npcId);
+      _statusLoading = true;
     });
+    try {
+      final page = await status.load();
+      if (!mounted || epoch != _statusEpoch) return;
+      setState(() {
+        _statusLoading = false;
+        _statusActor = page.error == null
+            ? _matchStatusSelf(page, status.npcId)
+            : null;
+      });
+    } catch (_) {
+      if (!mounted || epoch != _statusEpoch) return;
+      setState(() {
+        _statusLoading = false;
+        _statusActor = null;
+      });
+    }
   }
 
   Future<void> _reload() async {
@@ -348,11 +360,10 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
     final hasSkills = widget.skillsSection != null;
     final groups = HeroAttributeGroup.values
         .where(
-          (g) =>
-              g == HeroAttributeGroup.thieving
-                  ? hasSkills
-                  : byGroup[g]?.isNotEmpty == true ||
-                        (hasStatus && g == HeroAttributeGroup.core),
+          (g) => g == HeroAttributeGroup.thieving
+              ? hasSkills
+              : byGroup[g]?.isNotEmpty == true ||
+                    (hasStatus && g == HeroAttributeGroup.core),
         )
         .toList();
 
@@ -380,7 +391,8 @@ class _NpcAttributesPanelState extends State<NpcAttributesPanel> {
         );
       }
       final attributes = byGroup[group] ?? const [];
-      // The Status row is the FIRST entry of the core group detail (NPC-only).
+      // Status is a separate, authoritative NPC row at the start of the core
+      // group detail. Relationship editing lives in the Events sub-tab.
       final statusRow = (hasStatus && group == HeroAttributeGroup.core)
           ? _buildStatusRow(context)
           : null;

@@ -15,7 +15,9 @@ class TypedPropertyHit {
   factory TypedPropertyHit.fromJson(Map<String, Object?> json) {
     return TypedPropertyHit(
       path:
-          (json['path'] as List?)?.whereType<String>().toList(growable: false) ??
+          (json['path'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
           const [],
       display: json['display'] as String? ?? '',
       type: json['type'] as String? ?? '',
@@ -208,8 +210,9 @@ class DifficultySettings {
     );
   }
 
-  static DifficultySettings? maybeFromJson(Object? json) =>
-      json is Map ? DifficultySettings.fromJson(json.cast<String, Object?>()) : null;
+  static DifficultySettings? maybeFromJson(Object? json) => json is Map
+      ? DifficultySettings.fromJson(json.cast<String, Object?>())
+      : null;
 
   final String? preset;
   final String? combat;
@@ -346,6 +349,7 @@ class SaveInspection {
     this.privateTotalChunkCount,
     this.privatePlayer = const PrivatePlayerSummary(),
     this.privateInventory = const PrivateInventorySummary(),
+    this.privateNpc = const PrivateNpcSummary(),
     this.privateProgression = const ProgressionOverview(),
     this.privateTypedParseStatus,
     this.privateTypedPropertyCount,
@@ -360,10 +364,12 @@ class SaveInspection {
     final privatePlayer = (private?['player'] as Map?)?.cast<String, Object?>();
     final privateInventory = (private?['inventory'] as Map?)
         ?.cast<String, Object?>();
+    final privateNpc = (private?['npc'] as Map?)?.cast<String, Object?>();
     final privateProgression = (private?['progression'] as Map?)
         ?.cast<String, Object?>();
     final privateStatus = private?['status'] as String?;
-    final typedParse = (private?['typedParse'] as Map?)?.cast<String, Object?>();
+    final typedParse = (private?['typedParse'] as Map?)
+        ?.cast<String, Object?>();
     return SaveInspection(
       format: json['format'] as String? ?? 'UNKNOWN',
       path: json['path'] as String?,
@@ -405,6 +411,7 @@ class SaveInspection {
       privateTotalChunkCount: (private?['totalChunkCount'] as num?)?.toInt(),
       privatePlayer: PrivatePlayerSummary.fromJson(privatePlayer),
       privateInventory: PrivateInventorySummary.fromJson(privateInventory),
+      privateNpc: PrivateNpcSummary.fromJson(privateNpc),
       privateProgression: ProgressionOverview.fromJson(privateProgression),
       privateTypedParseStatus: typedParse?['status'] as String?,
       privateTypedPropertyCount: (typedParse?['propertyCount'] as num?)
@@ -450,6 +457,7 @@ class SaveInspection {
 
   final PrivatePlayerSummary privatePlayer;
   final PrivateInventorySummary privateInventory;
+  final PrivateNpcSummary privateNpc;
   final ProgressionOverview privateProgression;
 
   /// Status of the strict typed property parse of the decoded private payload
@@ -468,6 +476,31 @@ class SaveInspection {
     const encoder = JsonEncoder.withIndent('  ');
     return encoder.convert(raw);
   }
+}
+
+/// NPC capabilities emitted by `inspect_save` under `private.npc`.
+///
+/// Relationship persistence needs a compatible `RelationshipByGlobalId` map;
+/// having a typed NPC attribute map alone is not enough. The UI therefore uses
+/// this per-save capability instead of assuming every decoded save can accept
+/// `private.npc.setRelationship`.
+class PrivateNpcSummary {
+  const PrivateNpcSummary({this.hasNpcs = false, this.writable = const []});
+
+  factory PrivateNpcSummary.fromJson(Map<String, Object?>? json) {
+    return PrivateNpcSummary(
+      hasNpcs: json?['hasNpcs'] == true,
+      writable:
+          (json?['writable'] as List?)?.whereType<String>().toList() ??
+          const [],
+    );
+  }
+
+  final bool hasNpcs;
+  final List<String> writable;
+
+  bool get canSetRelationship =>
+      writable.contains('private.npc.setRelationship');
 }
 
 class PrivatePlayerSummary {
@@ -727,12 +760,15 @@ class PrivateInventoryItem {
       count: (json['count'] as num?)?.toInt(),
       removable: json['removable'] as bool? ?? false,
       equipped: json['equipped'] as bool? ?? false,
-      upgrades: (json['upgrades'] as List?)
+      upgrades:
+          (json['upgrades'] as List?)
               ?.whereType<Map<Object?, Object?>>()
-              .map((u) => ArmorUpgrade(
-                    key: u['key'] as String? ?? '',
-                    value: u['value'] as String? ?? '',
-                  ))
+              .map(
+                (u) => ArmorUpgrade(
+                  key: u['key'] as String? ?? '',
+                  value: u['value'] as String? ?? '',
+                ),
+              )
               .toList() ??
           const [],
       slotId: (json['slotId'] as num?)?.toInt(),

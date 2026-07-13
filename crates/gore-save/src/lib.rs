@@ -2896,6 +2896,11 @@ fn inspect_private_payload(
                 .and_then(|r| r.as_ref().ok())
                 .map(|r| skills::actor_has_active_effects(r, "Hero"))
                 .unwrap_or(false);
+            let glossary_writable = typed_result
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .map(|r| glossary_set_segment_writable(r))
+                .unwrap_or(false);
             let progression = summarize_private_progression_overview(
                 typed_result
                     .as_ref()
@@ -2945,6 +2950,9 @@ fn inspect_private_payload(
                 // array exists, else apply_skill_set would reject the write.
                 if hero_has_effects {
                     writable.push("private.skills.set");
+                }
+                if glossary_writable {
+                    writable.push("private.glossary.setSegment");
                 }
                 if any_unforgiven {
                     writable.push("private.factions.forgive");
@@ -3216,15 +3224,46 @@ fn summarize_private_npc_payload(root: Option<&properties::RootObject>) -> Value
     let has_npcs = root
         .and_then(|r| npc::list_npcs(r).ok())
         .is_some_and(|npcs| !npcs.is_empty());
-    let writable: &[&str] = if has_npcs {
-        &["private.npc.revive"]
-    } else {
-        &[]
-    };
+    let mut writable = Vec::new();
+    if has_npcs {
+        // Revive operates on the NPC/death-state structures independently of
+        // relationship persistence and therefore stays available even in saves
+        // that do not carry a relationship map.
+        writable.push("private.npc.revive");
+        if root.is_some_and(npc_relationship_set_writable) {
+            writable.push("private.npc.setRelationship");
+        }
+    }
     json!({
         "hasNpcs": has_npcs,
         "writable": writable,
     })
+}
+
+/// Whether `npc::apply_relationship` has the map schema it needs for both
+/// updating an existing record and inserting a new one. Merely having NPCs is
+/// insufficient: some synthetic/early payloads have `_Attributes` but no
+/// `RelationshipByGlobalId`, and advertising the operation there guarantees a
+/// write-time failure.
+fn npc_relationship_set_writable(root: &properties::RootObject) -> bool {
+    let Some((_, property)) = properties::find_property_by_name(root, "RelationshipByGlobalId")
+    else {
+        return false;
+    };
+    let Some(descriptor) = property.descriptor.map.as_deref() else {
+        return false;
+    };
+    let (key, value) = descriptor;
+    let supported_key = matches!(key.type_name.as_str(), "StrProperty" | "NameProperty");
+    let supported_value = value.type_name == "StructProperty"
+        && value
+            .struct_type
+            .as_ref()
+            .is_some_and(|(kind, _)| kind == "CharacterStateSaveGameData_Relationship");
+    property.type_name == "MapProperty"
+        && supported_key
+        && supported_value
+        && matches!(property.value, properties::PropertyValue::Map { .. })
 }
 
 /// Attempt a strict typed parse of the full decompressed payload and report a
@@ -3390,9 +3429,10 @@ fn search_typed_properties(
 
 /// Structured progression queries over the decoded private payload. Sections:
 /// "quests" (QuestDataByClass entries with setValue-addressable state paths),
-/// "knowledge" (per-NPC dialog knowledge sets), "events" (per-character
-/// memorized event arrays). Uses the shared decode cache like the typed
-/// property search.
+/// "glossary" (the creature/location quest trees joined with the Hero's
+/// document-segment unlock events), "knowledge" (per-NPC dialog knowledge
+/// sets), "events" (per-character memorized event arrays). Uses the shared
+/// decode cache like the typed property search.
 /// `private.skills.list`: the hero's learned skills plus the full learnable
 /// roster, with per-skill tier options. Decodes through the same cached path as
 /// [`query_progression`]. Payload: `{ path, actor?: string (default "Hero") }`.
@@ -3462,6 +3502,12 @@ fn query_progression(
         .and_then(Value::as_str)
         .map(|s| s.trim().to_ascii_lowercase())
         .filter(|s| !s.is_empty());
+    let glossary_category_filter = payload
+        .get("category")
+        .and_then(Value::as_str)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .or_else(|| group_filter.clone());
 
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
@@ -3479,6 +3525,13 @@ fn query_progression(
             &query,
             state_filter.as_deref(),
             group_filter.as_deref(),
+            offset,
+            limit,
+        ),
+        "glossary" => progression_glossary(
+            &root,
+            &query,
+            glossary_category_filter.as_deref(),
             offset,
             limit,
         ),
@@ -3882,6 +3935,569 @@ fn quest_id_group_name(class_path: &str) -> (String, String, String) {
     (id, group, name)
 }
 
+/// Quest groups that are persistence plumbing for the in-game glossary rather
+/// than journal quests. Keep this list shared by the dedicated glossary query,
+/// the quest query, and the inspect overview so the same rows cannot leak back
+/// into quest counts through a different code path.
+const GLOSSARY_QUEST_CATEGORIES: [(&str, &str); 2] = [
+    ("creatures", "CreaturesGlossary"),
+    ("locations", "Locations"),
+];
+
+/// Return the canonical document and document-segment assets for one glossary
+/// quest leaf. Most quest and document classes share the same article/suffix,
+/// but the shipped game catalog contains eight deliberate legacy-name
+/// exceptions. Keep the complete mapping in this one direction: readers use it
+/// while building rows, and the writer applies the same function to real quest
+/// leaves when resolving a document pair back to its `CurrentState` path.
+///
+/// These spellings come from the dumped Angelscript classes (for example,
+/// `UQuest_CreaturesGlossary_OrcdogGlossary_OrcdogUnlock` targets
+/// `UDocumentSegment_Glossary_OrcDog_Unlock`). They are asset names and are
+/// therefore case-sensitive even though the corresponding quest spelling is
+/// not always consistent.
+fn canonical_glossary_assets_for_quest_leaf(
+    quest_article: &str,
+    quest_segment: &str,
+) -> (String, String) {
+    let (document_article, document_segment) = match (quest_article, quest_segment) {
+        ("DemonFire", "Unlock") => ("FireDemon", "Unlock"),
+        ("Orcdog", "Unlock") => ("OrcDog", "Unlock"),
+        ("Orcdog", "Entry2") => ("OrcDog", "Entry2"),
+        ("Orcdog", "Entry3") => ("OrcDog", "Entry3"),
+        ("Zombie", "Unlock") => ("Zombie", "Unlock1"),
+        ("Zombie", "Entry2") => ("Zombie", "Unlock2"),
+        ("Zombie", "Entry3") => ("Zombie", "Unlock3"),
+        ("MonasteryRuins", "Entry2") => ("MonasteryRuins", "Entry1"),
+        _ => (quest_article, quest_segment),
+    };
+    (
+        format!("Document_Glossary_{document_article}"),
+        format!("DocumentSegment_Glossary_{document_article}_{document_segment}"),
+    )
+}
+
+fn glossary_category_for_group(group: &str) -> Option<&'static str> {
+    GLOSSARY_QUEST_CATEGORIES
+        .iter()
+        .find_map(|(category, candidate)| (*candidate == group).then_some(*category))
+}
+
+fn is_glossary_quest_group(group: &str) -> bool {
+    glossary_category_for_group(group).is_some()
+}
+
+/// Render an Unreal soft-class reference without losing its asset/class name.
+/// In real saves these glossary references are stored as the pair
+/// (`/Script/Angelscript`, `Document_Glossary_...`). Returning only the package
+/// makes every Angelscript class indistinguishable.
+fn soft_object_class_path(path: &properties::SoftObjectPath) -> Option<String> {
+    let package = path.package_name.trim();
+    let asset = path.asset_name.trim();
+    if (package.is_empty() || package == "None") && (asset.is_empty() || asset == "None") {
+        return None;
+    }
+    if asset.is_empty() || asset == "None" {
+        return Some(package.to_string());
+    }
+    if package.is_empty() || package == "None" {
+        return Some(asset.to_string());
+    }
+    Some(format!("{}.{}", package.trim_end_matches('.'), asset))
+}
+
+fn glossary_set_segment_writable(root: &properties::RootObject) -> bool {
+    let Some((_, memory_prop)) =
+        properties::find_property_by_name(root, "LongTermMemoryByGlobalId")
+    else {
+        return false;
+    };
+    let properties::PropertyValue::Map { entries, .. } = &memory_prop.value else {
+        return false;
+    };
+    let Some(hero_memory) = entries
+        .iter()
+        .find(|(key, _)| map_key_string(key) == Some("Hero"))
+        .map(|(_, value)| value)
+    else {
+        return false;
+    };
+    let Some(properties::PropertyValue::Array { elements }) =
+        struct_member(hero_memory, "MemorizedEvents")
+    else {
+        return false;
+    };
+    elements.iter().any(|element| {
+        let is_template = match struct_member(element, "EventTags") {
+            Some(properties::PropertyValue::Struct(
+                properties::StructValue::GameplayTagContainer(tags),
+            )) => tags
+                .iter()
+                .any(|tag| tag == "Memory.Document.SegmentUnlocked"),
+            _ => false,
+        };
+        is_template
+            && matches!(
+                struct_member(element, "OptionalClass1"),
+                Some(properties::PropertyValue::SoftObject(_))
+            )
+            && matches!(
+                struct_member(element, "OptionalClass2"),
+                Some(properties::PropertyValue::SoftObject(_))
+            )
+    })
+}
+
+/// Creature and location glossary data is encoded as two quest subtrees:
+///
+/// `Quest_<group>_<Article>Glossary_<Article>{Unlock|EntryN}`.
+///
+/// The quest state alone is not authoritative for visibility. The game also
+/// records a `Memory.Document.SegmentUnlocked` event in the Hero's long-term
+/// memory, whose OptionalClass2 is the matching
+/// `DocumentSegment_Glossary_<Article>_<segment>`. This query returns every
+/// segment (locked and unlocked), joins that event metadata, and retains the
+/// typed state path needed by the writer.
+fn progression_glossary(
+    root: &properties::RootObject,
+    query: &str,
+    category_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let (quest_base_path, map_prop) = properties::find_property_by_name(root, "QuestDataByClass")
+        .ok_or_else(|| {
+        CoreError::Parse("QuestDataByClass not found in the decoded payload".to_string())
+    })?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "QuestDataByClass is not a map".to_string(),
+        ));
+    };
+    let set_segment_writable = glossary_set_segment_writable(root);
+
+    #[derive(Clone)]
+    struct RawQuest {
+        class_path: String,
+        category: &'static str,
+        group: &'static str,
+        relative: String,
+        state: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct GlossarySegment {
+        id: String,
+        name: String,
+        class_path: String,
+        state: Option<String>,
+        segment_class: String,
+    }
+
+    #[derive(Clone)]
+    struct GlossaryArticle {
+        id: String,
+        name: String,
+        category: &'static str,
+        group: &'static str,
+        class_path: String,
+        state: Option<String>,
+        document_class: String,
+        segments: Vec<GlossarySegment>,
+    }
+
+    let mut raw = Vec::<RawQuest>::new();
+    for (key, value) in entries {
+        let Some(class_path) = map_key_string(key) else {
+            continue;
+        };
+        let id = class_path.rsplit('.').next().unwrap_or(class_path);
+        for (category, group) in GLOSSARY_QUEST_CATEGORIES {
+            let prefix = format!("Quest_{group}_");
+            let Some(relative) = id.strip_prefix(&prefix) else {
+                continue;
+            };
+            let state = struct_member(value, "CurrentState").and_then(|v| match v {
+                properties::PropertyValue::Enum(s) => Some(s.clone()),
+                _ => None,
+            });
+            raw.push(RawQuest {
+                class_path: class_path.to_string(),
+                category,
+                group,
+                relative: relative.to_string(),
+                state,
+            });
+            break;
+        }
+    }
+
+    // First discover the direct article/container quests. Children are joined
+    // in a second pass so map ordering is irrelevant.
+    let mut articles = std::collections::BTreeMap::<(String, String), GlossaryArticle>::new();
+    for quest in &raw {
+        if quest.relative.contains('_') || !quest.relative.ends_with("Glossary") {
+            continue;
+        }
+        let name = quest
+            .relative
+            .strip_suffix("Glossary")
+            .unwrap_or(&quest.relative)
+            .to_string();
+        let document_class = format!("/Script/Angelscript.Document_Glossary_{name}");
+        articles.insert(
+            (quest.group.to_string(), quest.relative.clone()),
+            GlossaryArticle {
+                id: quest.relative.clone(),
+                name,
+                category: quest.category,
+                group: quest.group,
+                class_path: quest.class_path.clone(),
+                state: quest.state.clone(),
+                document_class,
+                segments: Vec::new(),
+            },
+        );
+    }
+
+    for quest in &raw {
+        let article_key = articles
+            .keys()
+            .filter(|(group, article)| {
+                group == quest.group
+                    && quest
+                        .relative
+                        .strip_prefix(article.as_str())
+                        .is_some_and(|tail| tail.starts_with('_'))
+            })
+            // Longest-prefix matching also handles a future article id that is
+            // itself a prefix of another article id.
+            .max_by_key(|(_, article)| article.len())
+            .cloned();
+        let Some(article_key) = article_key else {
+            continue;
+        };
+        let article = articles
+            .get_mut(&article_key)
+            .expect("key selected from glossary article map");
+        let child_id = quest
+            .relative
+            .strip_prefix(&format!("{}_", article.id))
+            .unwrap_or(&quest.relative)
+            .to_string();
+        let segment_name = child_id
+            .strip_prefix(&article.name)
+            .unwrap_or(&child_id)
+            .trim_start_matches('_')
+            .to_string();
+        if segment_name.is_empty() {
+            continue;
+        }
+        let (document_asset, segment_asset) =
+            canonical_glossary_assets_for_quest_leaf(&article.name, &segment_name);
+        let document_class = format!("/Script/Angelscript.{document_asset}");
+        let segment_class = format!("/Script/Angelscript.{segment_asset}");
+        // The first child establishes the canonical article document. Every
+        // shipped child of an article maps to the same document; reject a
+        // future inconsistent catalog rather than making the result depend on
+        // QuestDataByClass map order.
+        if article.segments.is_empty() {
+            article.document_class = document_class;
+        } else if article.document_class != document_class {
+            return Err(CoreError::Validation(format!(
+                "glossary article {:?} maps its quest leaves to different documents ({:?} and \
+                 {:?})",
+                article.name, article.document_class, document_class
+            )));
+        }
+        article.segments.push(GlossarySegment {
+            id: child_id,
+            name: segment_name,
+            class_path: quest.class_path.clone(),
+            state: quest.state.clone(),
+            segment_class,
+        });
+    }
+
+    // Join the Hero's authoritative document-segment unlock events. Missing
+    // Hero memory is a valid early-save state: all quest-derived segments are
+    // still returned, simply locked and without event paths.
+    #[derive(Default)]
+    struct SegmentMemoryEvents {
+        unlocked: Vec<usize>,
+        viewed: Vec<usize>,
+    }
+    let mut hero_memory_array_path: Option<Vec<String>> = None;
+    let mut segment_memory_events =
+        std::collections::BTreeMap::<(String, String), SegmentMemoryEvents>::new();
+    if let Some((memory_base_path, memory_prop)) =
+        properties::find_property_by_name(root, "LongTermMemoryByGlobalId")
+    {
+        if let properties::PropertyValue::Map {
+            entries: memory_entries,
+            ..
+        } = &memory_prop.value
+        {
+            if let Some((_, hero_memory)) = memory_entries
+                .iter()
+                .find(|(key, _)| map_key_string(key) == Some("Hero"))
+            {
+                if let Some(properties::PropertyValue::Array { elements }) =
+                    struct_member(hero_memory, "MemorizedEvents")
+                {
+                    let mut path = memory_base_path.clone();
+                    path.push("{Hero}".to_string());
+                    path.push("MemorizedEvents".to_string());
+                    hero_memory_array_path = Some(path);
+                    for (index, element) in elements.iter().enumerate() {
+                        let (is_segment_unlock, is_segment_viewed) =
+                            match struct_member(element, "EventTags") {
+                                Some(properties::PropertyValue::Struct(
+                                    properties::StructValue::GameplayTagContainer(tags),
+                                )) => (
+                                    tags.iter()
+                                        .any(|tag| tag == "Memory.Document.SegmentUnlocked"),
+                                    tags.iter()
+                                        .any(|tag| tag == "Memory.Document.SegmentViewed"),
+                                ),
+                                _ => (false, false),
+                            };
+                        if !is_segment_unlock && !is_segment_viewed {
+                            continue;
+                        }
+                        let document_class = match struct_member(element, "OptionalClass1") {
+                            Some(properties::PropertyValue::SoftObject(path)) => {
+                                soft_object_class_path(path)
+                            }
+                            _ => None,
+                        };
+                        let segment_class = match struct_member(element, "OptionalClass2") {
+                            Some(properties::PropertyValue::SoftObject(path)) => {
+                                soft_object_class_path(path)
+                            }
+                            _ => None,
+                        };
+                        if let (Some(document_class), Some(segment_class)) =
+                            (document_class, segment_class)
+                        {
+                            if !document_class.contains(".Document_Glossary_")
+                                || !segment_class.contains(".DocumentSegment_Glossary_")
+                            {
+                                continue;
+                            }
+                            let memory_events = segment_memory_events
+                                .entry((document_class, segment_class))
+                                .or_default();
+                            if is_segment_unlock {
+                                memory_events.unlocked.push(index);
+                            }
+                            if is_segment_viewed {
+                                memory_events.viewed.push(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // The first segment is called `Unlock`; the remaining ones are Entry2,
+    // Entry3, ... . Sort them in the same semantic order instead of plain ASCII
+    // order (which would put Entry2 before Unlock).
+    let segment_sort_key = |name: &str| -> (u32, String) {
+        if name.eq_ignore_ascii_case("Unlock") {
+            return (1, String::new());
+        }
+        if let Some(number) = name
+            .strip_prefix("Entry")
+            .and_then(|tail| tail.parse::<u32>().ok())
+        {
+            return (number, String::new());
+        }
+        (u32::MAX, name.to_ascii_lowercase())
+    };
+    for article in articles.values_mut() {
+        article
+            .segments
+            .sort_by_key(|segment| segment_sort_key(&segment.name));
+    }
+
+    let article_matches_query = |article: &GlossaryArticle| -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        article.name.to_ascii_lowercase().contains(query)
+            || article.id.to_ascii_lowercase().contains(query)
+            || article.class_path.to_ascii_lowercase().contains(query)
+            || article.document_class.to_ascii_lowercase().contains(query)
+            || article.segments.iter().any(|segment| {
+                segment.name.to_ascii_lowercase().contains(query)
+                    || segment.id.to_ascii_lowercase().contains(query)
+                    || segment.class_path.to_ascii_lowercase().contains(query)
+                    || segment.segment_class.to_ascii_lowercase().contains(query)
+            })
+    };
+    let category_matches = |article: &GlossaryArticle| -> bool {
+        let Some(filter) = category_filter else {
+            return true;
+        };
+        article.category == filter
+            || article.group.to_ascii_lowercase() == filter
+            || (article.category == "creatures" && filter == "creature")
+            || (article.category == "locations" && filter == "location")
+    };
+
+    // categoryCounts is a facet over the query but not the category filter,
+    // mirroring progression_quests' groupCounts behavior.
+    let mut category_counts = std::collections::BTreeMap::<String, usize>::new();
+    for article in articles.values().filter(|a| article_matches_query(a)) {
+        *category_counts
+            .entry(article.category.to_string())
+            .or_default() += 1;
+    }
+    let mut matches = articles
+        .values()
+        .filter(|article| article_matches_query(article) && category_matches(article))
+        .collect::<Vec<_>>();
+    matches.sort_by(|a, b| {
+        let category_rank = |category: &str| {
+            GLOSSARY_QUEST_CATEGORIES
+                .iter()
+                .position(|(candidate, _)| *candidate == category)
+                .unwrap_or(usize::MAX)
+        };
+        category_rank(a.category)
+            .cmp(&category_rank(b.category))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let total = matches.len();
+    let page = matches
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .collect::<Vec<_>>();
+
+    let state_path_for = |class_path: &str| -> Vec<String> {
+        let mut path = quest_base_path.clone();
+        path.push(format!("{{{class_path}}}"));
+        path.push("CurrentState".to_string());
+        path
+    };
+    let article_json = |article: &GlossaryArticle| -> Value {
+        let segments = article
+            .segments
+            .iter()
+            .map(|segment| {
+                let (indices, viewed_indices) = segment_memory_events
+                    .get(&(
+                        article.document_class.clone(),
+                        segment.segment_class.clone(),
+                    ))
+                    .map(|events| (events.unlocked.clone(), events.viewed.clone()))
+                    .unwrap_or_default();
+                let event_paths = hero_memory_array_path
+                    .as_ref()
+                    .map(|base| {
+                        indices
+                            .iter()
+                            .map(|index| {
+                                let mut path = base.clone();
+                                path.push(format!("[{index}]"));
+                                path
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                json!({
+                    "id": segment.id,
+                    "name": segment.name,
+                    "questClass": segment.class_path,
+                    "segmentClass": segment.segment_class,
+                    "currentState": segment.state,
+                    "statePath": state_path_for(&segment.class_path),
+                    "writable": segment.state.is_some() && set_segment_writable,
+                    "unlocked": !indices.is_empty(),
+                    "eventIndex": indices.first(),
+                    "eventIndices": indices,
+                    "eventPath": event_paths.first(),
+                    "eventPaths": event_paths,
+                    "viewedEventIndices": viewed_indices,
+                })
+            })
+            .collect::<Vec<_>>();
+        let unlocked_segment_count = segments
+            .iter()
+            .filter(|segment| segment["unlocked"] == json!(true))
+            .count();
+        json!({
+            "id": article.id,
+            "name": article.name,
+            "category": article.category,
+            "group": article.group,
+            "questClass": article.class_path,
+            "documentClass": article.document_class,
+            "currentState": article.state,
+            "statePath": state_path_for(&article.class_path),
+            "writable": article.state.is_some(),
+            "unlocked": unlocked_segment_count > 0,
+            "segmentCount": segments.len(),
+            "unlockedSegmentCount": unlocked_segment_count,
+            "segments": segments,
+        })
+    };
+
+    let mut categories = Vec::new();
+    for (category, group) in GLOSSARY_QUEST_CATEGORIES {
+        let category_entries = page
+            .iter()
+            .filter(|article| article.category == category)
+            .map(|article| article_json(article))
+            .collect::<Vec<_>>();
+        categories.push(json!({
+            "id": category,
+            "group": group,
+            "total": category_counts.get(category).copied().unwrap_or(0),
+            "entries": category_entries,
+        }));
+    }
+
+    // Raw join for NPC glossary documents, which do not live in the two quest
+    // groups above. This intentionally includes every Hero segment event, so a
+    // caller can join NPC `Document_Glossary_*` classes without another full
+    // progression-events query.
+    let segment_unlocks = segment_memory_events
+        .iter()
+        .map(|((document_class, segment_class), events)| {
+            json!({
+                "documentClass": document_class,
+                "segmentClass": segment_class,
+                "unlocked": !events.unlocked.is_empty(),
+                "unlockedEventIndex": events.unlocked.first(),
+                "unlockedEventIndices": events.unlocked,
+                "viewedEventIndices": events.viewed,
+                "writable": set_segment_writable,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "section": "glossary",
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "count": page.len(),
+        "categoryCounts": category_counts,
+        "heroMemoryArrayPath": hero_memory_array_path,
+        "writable": if set_segment_writable {
+            vec!["private.glossary.setSegment"]
+        } else {
+            Vec::<&str>::new()
+        },
+        "segmentUnlocks": segment_unlocks,
+        "categories": categories,
+    }))
+}
+
 fn progression_quests(
     root: &properties::RootObject,
     query: &str,
@@ -3925,6 +4541,9 @@ fn progression_quests(
             .unwrap_or("unknown")
             .to_string();
         let (id, group, name) = quest_id_group_name(class_path);
+        if is_glossary_quest_group(&group) {
+            continue;
+        }
         all.push(Entry {
             class_path: class_path.to_string(),
             id,
@@ -4233,11 +4852,7 @@ fn progression_events(
                 };
                 let soft_member = |name: &str| -> Option<String> {
                     match struct_member(element, name) {
-                        Some(properties::PropertyValue::SoftObject(p))
-                            if !p.package_name.is_empty() && p.package_name != "None" =>
-                        {
-                            Some(p.package_name.clone())
-                        }
+                        Some(properties::PropertyValue::SoftObject(p)) => soft_object_class_path(p),
                         _ => None,
                     }
                 };
@@ -4308,8 +4923,14 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
     let mut quest_states = std::collections::BTreeMap::<String, usize>::new();
     if let Some((_, prop)) = properties::find_property_by_name(root, "QuestDataByClass") {
         if let properties::PropertyValue::Map { entries, .. } = &prop.value {
-            quest_total = entries.len();
-            for (_, value) in entries {
+            for (key, value) in entries {
+                let is_glossary = map_key_string(key)
+                    .map(quest_id_group_name)
+                    .is_some_and(|(_, group, _)| is_glossary_quest_group(&group));
+                if is_glossary {
+                    continue;
+                }
+                quest_total += 1;
                 let label = match struct_member(value, "CurrentState") {
                     Some(properties::PropertyValue::Enum(s)) => short_enum_label(s).to_string(),
                     _ => "unknown".to_string(),
@@ -4348,6 +4969,17 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
             }
         }
     }
+    let mut writable = vec![
+        "private.typed.setValue",
+        "private.typed.setAdd",
+        "private.typed.setRemove",
+        "private.typed.arrayRemove",
+        "private.typed.arrayDuplicate",
+        "private.knowledge.addCharacter",
+    ];
+    if glossary_set_segment_writable(root) {
+        writable.push("private.glossary.setSegment");
+    }
     json!({
         "status": "ok",
         "questTotal": quest_total,
@@ -4360,17 +4992,10 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
         // they are not progression edits, and their availability is gated per
         // save (clean template / removable item). The inventory summary computes
         // the correctly gated writable list for those.
-        "writable": [
-            "private.typed.setValue",
-            "private.typed.setAdd",
-            "private.typed.setRemove",
-            "private.typed.arrayRemove",
-            "private.typed.arrayDuplicate",
-            // Knowledge add-character is a progression edit on the
-            // CharacterKnowledgeByUniqueName map summarized above; it requires
-            // only the typed parse (guaranteed here since `root` is Some).
-            "private.knowledge.addCharacter",
-        ],
+        // Knowledge add-character and the atomic glossary toggle are
+        // progression edits. The latter is gated on a Hero unlock-event
+        // template, which its add path needs for a schema-preserving clone.
+        "writable": writable,
     })
 }
 
@@ -5143,6 +5768,12 @@ fn apply_private_edits(
                     .map(PrivateEdit::TypedContainer)
             }
             "private.npc.revive" => parse_private_npc_revive_edit(edit).map(PrivateEdit::NpcRevive),
+            "private.npc.setRelationship" => {
+                parse_private_npc_relationship_edit(edit).map(PrivateEdit::NpcRelationship)
+            }
+            "private.glossary.setSegment" => {
+                parse_private_glossary_set_segment_edit(edit).map(PrivateEdit::GlossarySetSegment)
+            }
             "private.factions.forgive" => {
                 parse_private_factions_forgive_edit(edit).map(PrivateEdit::FactionsForgive)
             }
@@ -5187,6 +5818,7 @@ fn apply_private_edits(
                 }) | PrivateEdit::InventoryAddItem(_)
                     | PrivateEdit::InventoryRemoveItem(_)
                     | PrivateEdit::InventoryReset(_)
+                    | PrivateEdit::GlossarySetSegment(_)
             )
         })
         .count();
@@ -5223,13 +5855,16 @@ fn apply_private_edits(
                     | PrivateEdit::InventoryReset(_)
                     | PrivateEdit::KnowledgeAddCharacter(_)
                     | PrivateEdit::NpcRevive(_)
+                    | PrivateEdit::NpcRelationship(_)
+                    | PrivateEdit::GlossarySetSegment(_)
             )
         })
         .count();
     if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
             "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             private.inventory.reset, private.knowledge.addCharacter, or private.npc.revive \
+             private.inventory.reset, private.knowledge.addCharacter, private.npc.revive, \
+             private.npc.setRelationship, or private.glossary.setSegment \
              must contain no other edits — the structural splice (slot-array, map insert, or \
              memory-event removal) shifts the byte offsets and array indices later edits \
              resolve against; submit them as separate writes"
@@ -5399,6 +6034,8 @@ enum PrivateEdit {
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
     NpcRevive(PrivateNpcReviveEdit),
+    NpcRelationship(PrivateNpcRelationshipEdit),
+    GlossarySetSegment(PrivateGlossarySetSegmentEdit),
     KnowledgeAddCharacter(String),
     FactionsForgive(PrivateFactionsForgiveEdit),
     SkillSet(skills::SkillSetEdit),
@@ -5427,6 +6064,27 @@ struct PrivateTypedContainerEdit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PrivateNpcReviveEdit {
     id: String,
+}
+
+/// Persistent NPC-to-Hero relationship. Friend/Neutral also suppress this exact
+/// NPC's relative crime entries so the requested value is effective; Enemy is
+/// established by the permanent personal modifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateNpcRelationshipEdit {
+    id: String,
+    relationship: npc::PersonalRelationship,
+}
+
+/// Atomic glossary-segment toggle. The Hero memory event is the authoritative
+/// visibility bit; creature/location callers also provide the leaf quest state
+/// path so both pieces of persistence move together in one standalone edit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateGlossarySetSegmentEdit {
+    package: String,
+    document_asset: String,
+    segment_asset: String,
+    unlocked: bool,
+    quest_state_path: Option<Vec<properties::PathSeg>>,
 }
 
 fn parse_typed_edit_path(
@@ -5541,6 +6199,150 @@ fn parse_private_npc_revive_edit(edit: &Edit) -> Result<PrivateNpcReviveEdit, Co
         })?
         .to_string();
     Ok(PrivateNpcReviveEdit { id })
+}
+
+/// Parse `private.npc.setRelationship`:
+/// `value = { id: String, relationship: Friend|Neutral|Enemy }`.
+fn parse_private_npc_relationship_edit(
+    edit: &Edit,
+) -> Result<PrivateNpcRelationshipEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.npc.setRelationship value must be an object".to_string())
+    })?;
+    let id = value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.npc.setRelationship requires a non-empty string value.id".to_string(),
+            )
+        })?
+        .to_string();
+    let relationship = value
+        .get("relationship")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.npc.setRelationship requires string value.relationship".to_string(),
+            )
+        })
+        .and_then(npc::PersonalRelationship::parse)?;
+    Ok(PrivateNpcRelationshipEdit { id, relationship })
+}
+
+fn parse_angelscript_glossary_class(
+    value: &serde_json::Map<String, Value>,
+    field: &str,
+    asset_prefix: &str,
+) -> Result<(String, String), CoreError> {
+    let class = value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|class| !class.trim().is_empty())
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "private.glossary.setSegment requires a non-empty string value.{field}"
+            ))
+        })?;
+    let (package, asset) = class.rsplit_once('.').ok_or_else(|| {
+        CoreError::InvalidRequest(format!(
+            "private.glossary.setSegment value.{field} must be a full class reference"
+        ))
+    })?;
+    if package != "/Script/Angelscript" || !asset.starts_with(asset_prefix) {
+        return Err(CoreError::InvalidRequest(format!(
+            "private.glossary.setSegment value.{field} must be \
+             /Script/Angelscript.{asset_prefix}..."
+        )));
+    }
+    Ok((package.to_string(), asset.to_string()))
+}
+
+fn parse_private_glossary_set_segment_edit(
+    edit: &Edit,
+) -> Result<PrivateGlossarySetSegmentEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.glossary.setSegment value must be an object".to_string())
+    })?;
+    let (package, document_asset) =
+        parse_angelscript_glossary_class(value, "documentClass", "Document_Glossary_")?;
+    let (segment_package, segment_asset) =
+        parse_angelscript_glossary_class(value, "segmentClass", "DocumentSegment_Glossary_")?;
+    if segment_package != package {
+        return Err(CoreError::InvalidRequest(
+            "private.glossary.setSegment documentClass and segmentClass packages differ"
+                .to_string(),
+        ));
+    }
+    let document_id = document_asset
+        .strip_prefix("Document_Glossary_")
+        .expect("prefix validated above");
+    let segment_id = segment_asset
+        .strip_prefix("DocumentSegment_Glossary_")
+        .expect("prefix validated above");
+    let Some(_segment_suffix) = segment_id
+        .strip_prefix(document_id)
+        .filter(|suffix| suffix.starts_with('_') && suffix.len() > 1)
+    else {
+        return Err(CoreError::InvalidRequest(format!(
+            "private.glossary.setSegment segmentClass {segment_asset:?} does not belong to \
+             documentClass {document_asset:?}"
+        )));
+    };
+    let unlocked = value
+        .get("unlocked")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.glossary.setSegment requires boolean value.unlocked".to_string(),
+            )
+        })?;
+
+    let quest_state_path = value
+        .get("questStatePath")
+        .or_else(|| value.get("statePath"))
+        .filter(|path| !path.is_null())
+        .map(|path| {
+            let raw = path.as_array().ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "private.glossary.setSegment questStatePath must be an array of strings"
+                        .to_string(),
+                )
+            })?;
+            let segments = raw
+                .iter()
+                .map(|segment| {
+                    segment.as_str().map(str::to_string).ok_or_else(|| {
+                        CoreError::InvalidRequest(
+                            "private.glossary.setSegment questStatePath segments must be strings"
+                                .to_string(),
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            // Exact ownership cannot be decided from the static class strings:
+            // NPC documents use the same Document_Glossary naming convention.
+            // Keep only the basic path shape here; apply-time validation derives
+            // the matching creature/location leaf from the current save root and
+            // compares the complete typed path before any mutation.
+            if segments.last().is_none_or(|last| last != "CurrentState") {
+                return Err(CoreError::InvalidRequest(
+                    "private.glossary.setSegment questStatePath must end in CurrentState"
+                        .to_string(),
+                ));
+            }
+            properties::parse_path(&segments)
+        })
+        .transpose()?;
+
+    Ok(PrivateGlossarySetSegmentEdit {
+        package,
+        document_asset,
+        segment_asset,
+        unlocked,
+        quest_state_path,
+    })
 }
 
 /// Parse a `private.factions.forgive` edit: `value = { guild: String }`. The
@@ -6190,6 +6992,12 @@ fn apply_private_edit_to_payload(
         }
         PrivateEdit::SkillSet(edit) => skills::apply_skill_set(payload, edit),
         PrivateEdit::NpcRevive(edit) => npc::apply_revive(payload, &edit.id),
+        PrivateEdit::NpcRelationship(edit) => {
+            npc::apply_relationship(payload, &edit.id, edit.relationship)
+        }
+        PrivateEdit::GlossarySetSegment(edit) => {
+            apply_private_glossary_set_segment_to_payload(payload, edit)
+        }
         PrivateEdit::KnowledgeAddCharacter(name) => {
             apply_private_knowledge_add_character_to_payload(payload, name)
         }
@@ -6217,6 +7025,363 @@ fn apply_private_typed_container_edit_to_payload(
     properties::parse_private_root(&patched).map_err(|err| {
         CoreError::Parse(format!(
             "container patch produced an inconsistent payload: {err}"
+        ))
+    })?;
+    *payload = patched;
+    Ok(())
+}
+
+struct GlossaryMemoryScan {
+    array_path: Vec<properties::PathSeg>,
+    matching_indices: Vec<usize>,
+    unlocked_indices: Vec<usize>,
+    template_index: Option<usize>,
+}
+
+fn glossary_memory_scan(
+    payload: &[u8],
+    edit: &PrivateGlossarySetSegmentEdit,
+) -> Result<GlossaryMemoryScan, CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let (base_path, memory_prop) =
+        properties::find_property_by_name(&root, "LongTermMemoryByGlobalId").ok_or_else(|| {
+            CoreError::Parse(
+                "LongTermMemoryByGlobalId not found in the decoded payload".to_string(),
+            )
+        })?;
+    let properties::PropertyValue::Map { entries, .. } = &memory_prop.value else {
+        return Err(CoreError::Parse(
+            "LongTermMemoryByGlobalId is not a map".to_string(),
+        ));
+    };
+    let hero_memory = entries
+        .iter()
+        .find(|(key, _)| map_key_string(key) == Some("Hero"))
+        .map(|(_, value)| value)
+        .ok_or_else(|| CoreError::Parse("Hero has no long-term memory entry".to_string()))?;
+    let Some(properties::PropertyValue::Array { elements }) =
+        struct_member(hero_memory, "MemorizedEvents")
+    else {
+        return Err(CoreError::Parse(
+            "Hero MemorizedEvents missing or not an array".to_string(),
+        ));
+    };
+    let mut raw_array_path = base_path.clone();
+    raw_array_path.push("{Hero}".to_string());
+    raw_array_path.push("MemorizedEvents".to_string());
+    let array_path = properties::parse_path(&raw_array_path)?;
+
+    let has_tag = |element: &properties::PropertyValue, wanted: &str| -> bool {
+        match struct_member(element, "EventTags") {
+            Some(properties::PropertyValue::Struct(
+                properties::StructValue::GameplayTagContainer(tags),
+            )) => tags.iter().any(|tag| tag == wanted),
+            _ => false,
+        }
+    };
+    let soft_matches = |element: &properties::PropertyValue, member: &str, asset: &str| -> bool {
+        match struct_member(element, member) {
+            Some(properties::PropertyValue::SoftObject(path)) => {
+                path.package_name == edit.package && path.asset_name == asset
+            }
+            _ => false,
+        }
+    };
+
+    let mut matching_indices = Vec::new();
+    let mut unlocked_indices = Vec::new();
+    let mut template_index = None;
+    for (index, element) in elements.iter().enumerate() {
+        let is_unlocked = has_tag(element, "Memory.Document.SegmentUnlocked");
+        let is_viewed = has_tag(element, "Memory.Document.SegmentViewed");
+        if is_unlocked
+            && template_index.is_none()
+            && matches!(
+                struct_member(element, "OptionalClass1"),
+                Some(properties::PropertyValue::SoftObject(_))
+            )
+            && matches!(
+                struct_member(element, "OptionalClass2"),
+                Some(properties::PropertyValue::SoftObject(_))
+            )
+        {
+            template_index = Some(index);
+        }
+        if !(is_unlocked || is_viewed)
+            || !soft_matches(element, "OptionalClass1", &edit.document_asset)
+            || !soft_matches(element, "OptionalClass2", &edit.segment_asset)
+        {
+            continue;
+        }
+        matching_indices.push(index);
+        if is_unlocked {
+            unlocked_indices.push(index);
+        }
+    }
+    Ok(GlossaryMemoryScan {
+        array_path,
+        matching_indices,
+        unlocked_indices,
+        template_index,
+    })
+}
+
+fn patch_glossary_soft_object(
+    payload: &mut Vec<u8>,
+    path: &[properties::PathSeg],
+    package: &str,
+    asset: &str,
+) -> Result<(), CoreError> {
+    let (target, enclosing) = {
+        let root = properties::parse_private_root(payload)?;
+        let resolved = properties::resolve_chain(&root.properties, path)?;
+        if !matches!(
+            resolved.target.value,
+            properties::PropertyValue::SoftObject(_)
+        ) {
+            return Err(CoreError::Parse(format!(
+                "glossary event target {:?} is not a SoftObjectProperty",
+                resolved.target.name
+            )));
+        }
+        (
+            resolved.target.clone(),
+            resolved.enclosing_size_fields.clone(),
+        )
+    };
+    let mut value = properties::encode_fstring_value(package);
+    value.extend_from_slice(&properties::encode_fstring_value(asset));
+    value.extend_from_slice(&properties::encode_fstring_value(""));
+    let mut patched = payload.clone();
+    properties::patch_value_bytes(&mut patched, &target, &enclosing, &value)?;
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "glossary SoftObject patch produced an inconsistent payload: {err}"
+        ))
+    })?;
+    *payload = patched;
+    Ok(())
+}
+
+/// Resolve the optional quest half of a glossary toggle from the *current save
+/// root*. NPC documents and creature/location documents share the same static
+/// class naming convention, so class strings alone cannot decide whether a
+/// quest write is required. An exact leaf present in `QuestDataByClass` does:
+/// zero matches means an NPC-style memory-only document, one match is the
+/// authoritative state path, and more than one match is ambiguous and rejected.
+///
+/// A caller-supplied path is only a consistency assertion. It never selects the
+/// target and must equal the root-derived path byte-for-byte at the typed-path
+/// level, preventing a crafted request from toggling one memory event and a
+/// different glossary quest.
+fn resolve_glossary_quest_state_path(
+    root: &properties::RootObject,
+    edit: &PrivateGlossarySetSegmentEdit,
+) -> Result<Option<Vec<properties::PathSeg>>, CoreError> {
+    let Some((quest_base_path, map_property)) =
+        properties::find_property_by_name(root, "QuestDataByClass")
+    else {
+        if edit.quest_state_path.is_some() {
+            return Err(CoreError::InvalidRequest(
+                "private.glossary.setSegment questStatePath was supplied, but the save has no \
+                 QuestDataByClass map"
+                    .to_string(),
+            ));
+        }
+        return Ok(None);
+    };
+    let properties::PropertyValue::Map { entries, .. } = &map_property.value else {
+        return Err(CoreError::Parse(
+            "QuestDataByClass is not a map while resolving a glossary segment".to_string(),
+        ));
+    };
+
+    let mut matches = Vec::new();
+    for (key, value) in entries {
+        let Some(class_path) = map_key_string(key) else {
+            continue;
+        };
+        // Resolve in the safe direction: parse each *actual* glossary quest
+        // leaf from this save, map it through the same canonical catalog table
+        // the reader uses, then compare the exact asset pair. This handles the
+        // game's Orcdog/OrcDog, DemonFire/FireDemon, Zombie UnlockN, and
+        // MonasteryRuins Entry1 naming without letting a supplied path select a
+        // different leaf.
+        let canonical_assets = GLOSSARY_QUEST_CATEGORIES.iter().find_map(|(_, group)| {
+            let prefix = format!("/Script/Angelscript.Quest_{group}_");
+            let relative = class_path.strip_prefix(&prefix)?;
+            let (quest_article, child) = relative.split_once("Glossary_")?;
+            let quest_segment = child
+                .strip_prefix(quest_article)
+                .filter(|segment| !segment.is_empty())?;
+            Some(canonical_glossary_assets_for_quest_leaf(
+                quest_article,
+                quest_segment,
+            ))
+        });
+        if !canonical_assets
+            .as_ref()
+            .is_some_and(|(document, segment)| {
+                document == &edit.document_asset && segment == &edit.segment_asset
+            })
+        {
+            continue;
+        }
+        if !matches!(
+            struct_member(value, "CurrentState"),
+            Some(properties::PropertyValue::Enum(_))
+        ) {
+            return Err(CoreError::Parse(format!(
+                "matching glossary quest {class_path:?} has no enum CurrentState"
+            )));
+        }
+        let mut path = quest_base_path.clone();
+        path.push(format!("{{{class_path}}}"));
+        path.push("CurrentState".to_string());
+        matches.push(properties::parse_path(&path)?);
+    }
+
+    let derived = match matches.len() {
+        0 => None,
+        1 => matches.pop(),
+        count => {
+            return Err(CoreError::Validation(format!(
+                "glossary document/segment pair {:?} / {:?} matches {count} quest leaves; \
+                 refusing an ambiguous write",
+                edit.document_asset, edit.segment_asset
+            )));
+        }
+    };
+
+    match (&derived, &edit.quest_state_path) {
+        (Some(derived), Some(supplied)) if supplied != derived => Err(CoreError::InvalidRequest(
+            "private.glossary.setSegment questStatePath does not match the exact glossary \
+                 quest leaf derived from this save"
+                .to_string(),
+        )),
+        (None, Some(_)) => Err(CoreError::InvalidRequest(
+            "private.glossary.setSegment questStatePath was supplied, but no matching glossary \
+             quest leaf exists in this save"
+                .to_string(),
+        )),
+        _ => Ok(derived),
+    }
+}
+
+/// Toggle one glossary segment atomically across the two persistence signals
+/// used by the game. The work happens on a scratch payload and is committed
+/// only after a strict parse and semantic postcondition check.
+fn apply_private_glossary_set_segment_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateGlossarySetSegmentEdit,
+) -> Result<(), CoreError> {
+    // Resolve and validate the quest half before touching the scratch buffer.
+    // Missing input paths are deliberately inferred for creature/location
+    // leaves; only an exact root lookup can distinguish those from NPC entries.
+    let root = properties::parse_private_root(payload)?;
+    let quest_state_path = resolve_glossary_quest_state_path(&root, edit)?;
+    let mut patched = payload.clone();
+    if edit.unlocked {
+        let scan = glossary_memory_scan(&patched, edit)?;
+        if scan.unlocked_indices.is_empty() {
+            let template_index = scan.template_index.ok_or_else(|| {
+                CoreError::UnsupportedEdit(
+                    "cannot unlock a glossary segment: Hero MemorizedEvents has no \
+                     Memory.Document.SegmentUnlocked template"
+                        .to_string(),
+                )
+            })?;
+            apply_private_typed_container_edit_to_payload(
+                &mut patched,
+                &PrivateTypedContainerEdit {
+                    path: scan.array_path.clone(),
+                    edit: properties::ContainerEdit::ArrayDuplicate(template_index),
+                },
+            )?;
+            let new_index = template_index + 1;
+            let mut document_path = scan.array_path.clone();
+            document_path.push(properties::PathSeg::Index(new_index));
+            document_path.push(properties::PathSeg::Name("OptionalClass1".to_string()));
+            patch_glossary_soft_object(
+                &mut patched,
+                &document_path,
+                &edit.package,
+                &edit.document_asset,
+            )?;
+            let mut segment_path = scan.array_path;
+            segment_path.push(properties::PathSeg::Index(new_index));
+            segment_path.push(properties::PathSeg::Name("OptionalClass2".to_string()));
+            patch_glossary_soft_object(
+                &mut patched,
+                &segment_path,
+                &edit.package,
+                &edit.segment_asset,
+            )?;
+        }
+    } else {
+        // Remove in descending index order. Each splice is followed by a fresh
+        // parse/resolution, so lower indices stay valid and stale byte offsets
+        // are never reused.
+        loop {
+            let scan = glossary_memory_scan(&patched, edit)?;
+            let Some(index) = scan.matching_indices.last().copied() else {
+                break;
+            };
+            apply_private_typed_container_edit_to_payload(
+                &mut patched,
+                &PrivateTypedContainerEdit {
+                    path: scan.array_path,
+                    edit: properties::ContainerEdit::ArrayRemove(index),
+                },
+            )?;
+        }
+    }
+
+    if let Some(path) = &quest_state_path {
+        apply_private_typed_set_value_edit_to_payload(
+            &mut patched,
+            &PrivateTypedSetValueEdit {
+                path: path.clone(),
+                value: json!(if edit.unlocked {
+                    "EQuestState::Succeeded"
+                } else {
+                    "EQuestState::Available"
+                }),
+            },
+        )?;
+    }
+
+    // Semantic postcondition: visibility matches the requested value. This is
+    // stricter than parse success and catches a template retargeting mistake.
+    let final_scan = glossary_memory_scan(&patched, edit)?;
+    if edit.unlocked != !final_scan.unlocked_indices.is_empty() {
+        return Err(CoreError::Validation(
+            "glossary segment event postcondition was not met".to_string(),
+        ));
+    }
+    if !edit.unlocked && !final_scan.matching_indices.is_empty() {
+        return Err(CoreError::Validation(
+            "glossary segment removal left matching unlock/viewed events".to_string(),
+        ));
+    }
+    if let Some(path) = &quest_state_path {
+        let root = properties::parse_private_root(&patched)?;
+        let property = properties::resolve(&root.properties, path)?;
+        let expected = if edit.unlocked {
+            "EQuestState::Succeeded"
+        } else {
+            "EQuestState::Available"
+        };
+        if !matches!(&property.value, properties::PropertyValue::Enum(actual) if actual == expected)
+        {
+            return Err(CoreError::Validation(format!(
+                "glossary quest state postcondition expected {expected}"
+            )));
+        }
+    }
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "glossary segment edit produced an inconsistent payload: {err}"
         ))
     })?;
     *payload = patched;
@@ -12722,9 +13887,7 @@ mod tests {
         attr_map
     }
 
-    /// A private-root payload with a single `CharacterStateSaveGameData_Attributes`
-    /// map keyed by NPC id. Each `(id, health, max_health)` triple becomes one NPC.
-    fn npc_attributes_map_payload(npcs: &[(&str, f32, f32)]) -> Vec<u8> {
+    fn npc_attributes_map_property(npcs: &[(&str, f32, f32)]) -> Vec<u8> {
         let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
         map_body.extend_from_slice(&(npcs.len() as u32).to_le_bytes()); // count
         for (id, health, max_health) in npcs {
@@ -12746,10 +13909,44 @@ mod tests {
         prop.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
         prop.push(0); // tag_flags
         prop.extend_from_slice(&map_body);
+        prop
+    }
 
+    fn empty_relationship_map_property() -> Vec<u8> {
+        let map_body = [0u32.to_le_bytes(), 0u32.to_le_bytes()].concat();
+        let mut prop = fstring("RelationshipByGlobalId");
+        prop.extend_from_slice(&fstring("MapProperty"));
+        prop.extend_from_slice(&2u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StrProperty"));
+        prop.extend_from_slice(&0u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("StructProperty"));
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("CharacterStateSaveGameData_Relationship"));
+        prop.extend_from_slice(&1u32.to_le_bytes());
+        prop.extend_from_slice(&fstring("/Script/G1R"));
+        prop.extend_from_slice(&0u32.to_le_bytes());
+        prop.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        prop.push(0);
+        prop.extend_from_slice(&map_body);
+        prop
+    }
+
+    /// A private-root payload with a single `CharacterStateSaveGameData_Attributes`
+    /// map keyed by NPC id. Each `(id, health, max_health)` triple becomes one NPC.
+    fn npc_attributes_map_payload(npcs: &[(&str, f32, f32)]) -> Vec<u8> {
         let mut payload = fstring("/Script/Test.Save");
         payload.push(0);
-        payload.extend_from_slice(&prop);
+        payload.extend_from_slice(&npc_attributes_map_property(npcs));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    fn npc_attributes_with_relationship_map_payload(npcs: &[(&str, f32, f32)]) -> Vec<u8> {
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&npc_attributes_map_property(npcs));
+        payload.extend_from_slice(&empty_relationship_map_property());
         payload.extend_from_slice(&fstring("None"));
         payload.extend_from_slice(&0u32.to_le_bytes());
         payload
@@ -12833,7 +14030,7 @@ mod tests {
     }
 
     #[test]
-    fn inspect_save_advertises_npc_edits() {
+    fn inspect_save_gates_relationship_edit_on_supported_map() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-npc-caps.sav");
         let private_payload = npc_attributes_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
@@ -12854,6 +14051,15 @@ mod tests {
         assert_eq!(npc["hasNpcs"], true);
         let writable = npc["writable"].as_array().unwrap();
         assert!(writable.contains(&json!("private.npc.revive")));
+        assert!(!writable.contains(&json!("private.npc.setRelationship")));
+
+        let supported =
+            npc_attributes_with_relationship_map_payload(&[("OC_VLK_Herek_511", 100.0, 120.0)]);
+        let root = properties::parse_private_root(&supported).unwrap();
+        let summary = summarize_private_npc_payload(Some(&root));
+        let writable = summary["writable"].as_array().unwrap();
+        assert!(writable.contains(&json!("private.npc.revive")));
+        assert!(writable.contains(&json!("private.npc.setRelationship")));
     }
 
     #[test]
@@ -13167,6 +14373,810 @@ mod tests {
         p.extend_from_slice(&fstring("None"));
         p.extend_from_slice(&0u32.to_le_bytes());
         p
+    }
+
+    fn quest_map_property(entries: &[(&str, &str)]) -> Vec<u8> {
+        let quest_value = |state: &str| {
+            let mut value = private_enum_property("CurrentState", "EQuestState", state);
+            value.extend_from_slice(&fstring("None"));
+            value
+        };
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (class_path, state) in entries {
+            map_body.extend_from_slice(&fstring(class_path));
+            map_body.extend_from_slice(&quest_value(state));
+        }
+        let mut property = fstring("QuestDataByClass");
+        property.extend_from_slice(&fstring("MapProperty"));
+        property.extend_from_slice(&2u32.to_le_bytes());
+        property.extend_from_slice(&fstring("ObjectProperty"));
+        property.extend_from_slice(&0u32.to_le_bytes());
+        property.extend_from_slice(&fstring("StructProperty"));
+        property.extend_from_slice(&1u32.to_le_bytes());
+        property.extend_from_slice(&fstring("SingleQuestSaveGameData"));
+        property.extend_from_slice(&1u32.to_le_bytes());
+        property.extend_from_slice(&fstring("/Script/G1R"));
+        property.extend_from_slice(&0u32.to_le_bytes());
+        property.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        property.push(0);
+        property.extend_from_slice(&map_body);
+        property
+    }
+
+    fn private_soft_object_property(name: &str, asset_name: &str) -> Vec<u8> {
+        let mut body = fstring("/Script/Angelscript");
+        body.extend_from_slice(&fstring(asset_name));
+        body.extend_from_slice(&fstring(""));
+        let mut property = fstring(name);
+        property.extend_from_slice(&fstring("SoftObjectProperty"));
+        property.extend_from_slice(&0u32.to_le_bytes());
+        property.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        property.push(0);
+        property.extend_from_slice(&body);
+        property
+    }
+
+    fn glossary_memory_property(events: &[(&str, &str, &str)]) -> Vec<u8> {
+        let mut body = (events.len() as u32).to_le_bytes().to_vec();
+        for (tag, document, segment) in events {
+            let mut tags_body = 1u32.to_le_bytes().to_vec();
+            tags_body.extend_from_slice(&fstring(tag));
+            let mut event = private_struct_property(
+                "EventTags",
+                "GameplayTagContainer",
+                &tags_body,
+                properties::TAG_FLAG_NATIVE_SERIALIZE,
+            );
+            event.extend_from_slice(&private_soft_object_property("OptionalClass1", document));
+            event.extend_from_slice(&private_soft_object_property("OptionalClass2", segment));
+            event.extend_from_slice(&fstring("None"));
+            body.extend_from_slice(&event);
+        }
+        let mut property = fstring("MemorizedEvents");
+        property.extend_from_slice(&fstring("ArrayProperty"));
+        property.extend_from_slice(&1u32.to_le_bytes());
+        property.extend_from_slice(&fstring("StructProperty"));
+        property.extend_from_slice(&1u32.to_le_bytes());
+        property.extend_from_slice(&fstring("MemoryEvent"));
+        property.extend_from_slice(&1u32.to_le_bytes());
+        property.extend_from_slice(&fstring("/Script/G1R"));
+        property.extend_from_slice(&0u32.to_le_bytes());
+        property.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        property.push(0);
+        property.extend_from_slice(&body);
+        property
+    }
+
+    fn glossary_progression_payload() -> Vec<u8> {
+        let quest_map = quest_map_property(&[
+            (
+                "/Script/Angelscript.Quest_OldCamp_SLEEPER",
+                "EQuestState::Running",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugUnlock",
+                "EQuestState::Succeeded",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2",
+                "EQuestState::Running",
+            ),
+            (
+                "/Script/Angelscript.Quest_Locations",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_Locations_OldCampGlossary",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_Locations_OldCampGlossary_OldCampUnlock",
+                "EQuestState::Available",
+            ),
+        ]);
+        let memory = glossary_memory_property(&[
+            (
+                "Memory.Document.SegmentUnlocked",
+                "Document_Glossary_Meatbug",
+                "DocumentSegment_Glossary_Meatbug_Unlock",
+            ),
+            (
+                "Memory.Document.SegmentViewed",
+                "Document_Glossary_Meatbug",
+                "DocumentSegment_Glossary_Meatbug_Unlock",
+            ),
+            (
+                "Memory.Document.SegmentUnlocked",
+                "Document_Glossary_OC_STT_DIEGO",
+                "DocumentSegment_Glossary_OC_STT_DIEGO_Introduction",
+            ),
+        ]);
+        let memory_map = name_keyed_struct_map("LongTermMemoryByGlobalId", &[("Hero", memory)]);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&memory_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    fn progression_fixture(
+        file_name: &str,
+        private_payload: Vec<u8>,
+    ) -> (tempfile::TempDir, PathBuf, PrefixCodecBackend) {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join(file_name);
+        let seed_compressed = b"seed".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+        (dir, path, backend)
+    }
+
+    #[test]
+    fn query_progression_glossary_joins_all_segments_with_hero_memory() {
+        let (_dir, path, backend) =
+            progression_fixture("G1R-glossary.sav", glossary_progression_payload());
+
+        let value =
+            query_progression(&path, &json!({ "section": "glossary" }), Some(&backend)).unwrap();
+        assert_eq!(value["section"], "glossary");
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["categoryCounts"]["creatures"], 1);
+        assert_eq!(value["categoryCounts"]["locations"], 1);
+        assert_eq!(
+            value["heroMemoryArrayPath"],
+            json!(["LongTermMemoryByGlobalId", "{Hero}", "MemorizedEvents"])
+        );
+
+        let creature = &value["categories"][0]["entries"][0];
+        assert_eq!(creature["id"], "MeatbugGlossary");
+        assert_eq!(creature["name"], "Meatbug");
+        assert_eq!(creature["segmentCount"], 2);
+        assert_eq!(creature["unlockedSegmentCount"], 1);
+        // Semantic sort: the first-page Unlock segment precedes Entry2.
+        let unlock = &creature["segments"][0];
+        assert_eq!(unlock["name"], "Unlock");
+        assert_eq!(unlock["unlocked"], true);
+        assert_eq!(unlock["eventIndex"], 0);
+        assert_eq!(unlock["viewedEventIndices"], json!([1]));
+        assert_eq!(
+            unlock["segmentClass"],
+            "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Unlock"
+        );
+        assert_eq!(
+            unlock["statePath"],
+            json!([
+                "QuestDataByClass",
+                "{/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugUnlock}",
+                "CurrentState"
+            ])
+        );
+        assert_eq!(unlock["writable"], true);
+        assert_eq!(creature["segments"][1]["name"], "Entry2");
+        assert_eq!(creature["segments"][1]["unlocked"], false);
+
+        let location = &value["categories"][1]["entries"][0];
+        assert_eq!(location["name"], "OldCamp");
+        assert_eq!(location["segments"][0]["unlocked"], false);
+
+        // The raw join also retains an NPC document without a QuestDataByClass
+        // row and folds Viewed into the matching creature segment.
+        let raw = value["segmentUnlocks"].as_array().unwrap();
+        assert_eq!(raw.len(), 2);
+        let npc = raw
+            .iter()
+            .find(|entry| entry["documentClass"].as_str().unwrap().contains("DIEGO"))
+            .unwrap();
+        assert_eq!(npc["unlockedEventIndex"], 2);
+
+        // The generic events section now preserves the SoftObject asset name,
+        // so class-name queries and the frontend's raw-event view both work.
+        let events = query_progression(
+            &path,
+            &json!({ "section": "events", "character": "Hero", "query": "meatbug" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(events["total"], 2);
+        assert_eq!(
+            events["events"][0]["optionalClass1"],
+            "/Script/Angelscript.Document_Glossary_Meatbug"
+        );
+    }
+
+    #[test]
+    fn glossary_leaf_catalog_preserves_all_dumped_game_class_exceptions() {
+        // Quest leaf -> document leaf spellings from Angelscript.hpp. Keep this
+        // exhaustive so an innocent-looking "simplification" cannot recreate
+        // non-existent SoftObject class references.
+        let cases = [
+            (
+                "DemonFire",
+                "Unlock",
+                "Document_Glossary_FireDemon",
+                "DocumentSegment_Glossary_FireDemon_Unlock",
+            ),
+            (
+                "Orcdog",
+                "Unlock",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Unlock",
+            ),
+            (
+                "Orcdog",
+                "Entry2",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry2",
+            ),
+            (
+                "Orcdog",
+                "Entry3",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry3",
+            ),
+            (
+                "Zombie",
+                "Unlock",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock1",
+            ),
+            (
+                "Zombie",
+                "Entry2",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock2",
+            ),
+            (
+                "Zombie",
+                "Entry3",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock3",
+            ),
+            (
+                "MonasteryRuins",
+                "Entry2",
+                "Document_Glossary_MonasteryRuins",
+                "DocumentSegment_Glossary_MonasteryRuins_Entry1",
+            ),
+        ];
+        for (quest_article, quest_segment, document, segment) in cases {
+            assert_eq!(
+                canonical_glossary_assets_for_quest_leaf(quest_article, quest_segment),
+                (document.to_string(), segment.to_string()),
+                "{quest_article}/{quest_segment}"
+            );
+        }
+        assert_eq!(
+            canonical_glossary_assets_for_quest_leaf("Meatbug", "Entry2"),
+            (
+                "Document_Glossary_Meatbug".to_string(),
+                "DocumentSegment_Glossary_Meatbug_Entry2".to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn glossary_query_and_writer_join_real_save_orcdog_class_casing() {
+        // G1R-035 carries these exact OrcDog memory assets while its quest
+        // classes spell the same creature Orcdog. The old synthesized join
+        // reported all three rows locked and could only add bogus `Orcdog`
+        // SoftObjects.
+        let quest_map = quest_map_property(&[
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogUnlock",
+                "EQuestState::Succeeded",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogEntry2",
+                "EQuestState::Succeeded",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogEntry3",
+                "EQuestState::Succeeded",
+            ),
+        ]);
+        let memory = glossary_memory_property(&[
+            (
+                "Memory.Document.SegmentUnlocked",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Unlock",
+            ),
+            (
+                "Memory.Document.SegmentUnlocked",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry2",
+            ),
+            (
+                "Memory.Document.SegmentUnlocked",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry3",
+            ),
+            (
+                "Memory.Document.SegmentViewed",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry2",
+            ),
+        ]);
+        let memory_map = name_keyed_struct_map("LongTermMemoryByGlobalId", &[("Hero", memory)]);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&memory_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        let glossary = progression_glossary(&root, "", None, 0, 100).unwrap();
+        let orcdog = glossary_creature(&glossary, "Orcdog");
+        assert_eq!(
+            orcdog["documentClass"],
+            "/Script/Angelscript.Document_Glossary_OrcDog"
+        );
+        assert_eq!(orcdog["unlockedSegmentCount"], 3);
+        assert!(
+            orcdog["segments"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|segment| segment["unlocked"] == true)
+        );
+        assert_eq!(
+            orcdog["segments"][1]["segmentClass"],
+            "/Script/Angelscript.DocumentSegment_Glossary_OrcDog_Entry2"
+        );
+        assert_eq!(orcdog["segments"][1]["viewedEventIndices"], json!([3]));
+
+        let edit = PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_OrcDog".to_string(),
+            segment_asset: "DocumentSegment_Glossary_OrcDog_Entry2".to_string(),
+            unlocked: false,
+            quest_state_path: Some(
+                properties::parse_path(&[
+                    "QuestDataByClass".to_string(),
+                    "{/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogEntry2}"
+                        .to_string(),
+                    "CurrentState".to_string(),
+                ])
+                .unwrap(),
+            ),
+        };
+        apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let glossary = progression_glossary(&root, "", None, 0, 100).unwrap();
+        let orcdog = glossary_creature(&glossary, "Orcdog");
+        assert_eq!(orcdog["unlockedSegmentCount"], 2);
+        assert_eq!(orcdog["segments"][1]["unlocked"], false);
+        assert_eq!(orcdog["segments"][1]["viewedEventIndices"], json!([]));
+        assert_eq!(
+            orcdog["segments"][1]["currentState"],
+            "EQuestState::Available"
+        );
+    }
+
+    #[test]
+    fn glossary_reverse_resolver_uses_canonical_classes_for_all_special_leaves() {
+        let cases = [
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_DemonFireGlossary_DemonFireUnlock",
+                "Document_Glossary_FireDemon",
+                "DocumentSegment_Glossary_FireDemon_Unlock",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogUnlock",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Unlock",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogEntry2",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry2",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_OrcdogGlossary_OrcdogEntry3",
+                "Document_Glossary_OrcDog",
+                "DocumentSegment_Glossary_OrcDog_Entry3",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_ZombieGlossary_ZombieUnlock",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock1",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_ZombieGlossary_ZombieEntry2",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock2",
+            ),
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_ZombieGlossary_ZombieEntry3",
+                "Document_Glossary_Zombie",
+                "DocumentSegment_Glossary_Zombie_Unlock3",
+            ),
+            (
+                "/Script/Angelscript.Quest_Locations_MonasteryRuinsGlossary_MonasteryRuinsEntry2",
+                "Document_Glossary_MonasteryRuins",
+                "DocumentSegment_Glossary_MonasteryRuins_Entry1",
+            ),
+        ];
+        let quest_entries = cases
+            .iter()
+            .map(|(quest, _, _)| (*quest, "EQuestState::Available"))
+            .collect::<Vec<_>>();
+        let quest_map = quest_map_property(&quest_entries);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        let root = properties::parse_private_root(&payload).unwrap();
+
+        for (quest, document, segment) in cases {
+            let edit = PrivateGlossarySetSegmentEdit {
+                package: "/Script/Angelscript".to_string(),
+                document_asset: document.to_string(),
+                segment_asset: segment.to_string(),
+                unlocked: true,
+                quest_state_path: None,
+            };
+            let actual = resolve_glossary_quest_state_path(&root, &edit)
+                .unwrap()
+                .unwrap();
+            let expected = properties::parse_path(&[
+                "QuestDataByClass".to_string(),
+                format!("{{{quest}}}"),
+                "CurrentState".to_string(),
+            ])
+            .unwrap();
+            assert_eq!(actual, expected, "{quest}");
+        }
+    }
+
+    #[test]
+    fn glossary_groups_are_fully_excluded_from_quest_results_and_counts() {
+        let private_payload = glossary_progression_payload();
+        let root = properties::parse_private_root(&private_payload).unwrap();
+        let (_dir, path, backend) = progression_fixture("G1R-quest-filter.sav", private_payload);
+
+        let quests =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
+        assert_eq!(quests["total"], 1);
+        assert_eq!(quests["quests"][0]["group"], "OldCamp");
+        assert_eq!(quests["groupCounts"], json!({ "OldCamp": 1 }));
+        assert_eq!(quests["stateCounts"], json!({ "Running": 1 }));
+
+        // Querying a glossary class cannot make the excluded rows reappear in
+        // either the result list or either facet.
+        let filtered = query_progression(
+            &path,
+            &json!({ "section": "quests", "query": "glossary" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 0);
+        assert_eq!(filtered["stateCounts"], json!({}));
+        assert_eq!(filtered["groupCounts"], json!({}));
+
+        let overview = summarize_private_progression_overview(Some(&root));
+        assert_eq!(overview["questTotal"], 1);
+        assert_eq!(overview["questStates"], json!({ "Running": 1 }));
+    }
+
+    fn glossary_segment_edit(
+        segment: &str,
+        quest_class: &str,
+        unlocked: bool,
+    ) -> PrivateGlossarySetSegmentEdit {
+        PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_Meatbug".to_string(),
+            segment_asset: format!("DocumentSegment_Glossary_Meatbug_{segment}"),
+            unlocked,
+            quest_state_path: Some(
+                properties::parse_path(&[
+                    "QuestDataByClass".to_string(),
+                    format!("{{{quest_class}}}"),
+                    "CurrentState".to_string(),
+                ])
+                .unwrap(),
+            ),
+        }
+    }
+
+    fn glossary_creature<'a>(value: &'a Value, name: &str) -> &'a Value {
+        value["categories"][0]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == name)
+            .unwrap()
+    }
+
+    #[test]
+    fn glossary_set_segment_adds_event_and_succeeded_state_atomically() {
+        let mut payload = glossary_progression_payload();
+        let quest_class =
+            "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2";
+        let edit = glossary_segment_edit("Entry2", quest_class, true);
+
+        apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let glossary = progression_glossary(&root, "", None, 0, 100).unwrap();
+        let entry2 = &glossary_creature(&glossary, "Meatbug")["segments"][1];
+        assert_eq!(entry2["unlocked"], true);
+        assert_eq!(entry2["currentState"], "EQuestState::Succeeded");
+        assert_eq!(entry2["eventIndices"].as_array().unwrap().len(), 1);
+
+        // Reapplying an already-unlocked toggle is idempotent: it repairs the
+        // state if needed but never duplicates the authoritative event.
+        let once = payload.clone();
+        apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap();
+        assert_eq!(payload, once);
+
+        // If the second (quest-state) half fails, the duplicated event remains
+        // confined to the scratch buffer and the caller's payload is unchanged.
+        let mut bad = glossary_segment_edit("Entry3", "missing", true);
+        bad.segment_asset = "DocumentSegment_Glossary_Meatbug_Entry3".to_string();
+        let before = payload.clone();
+        assert!(apply_private_glossary_set_segment_to_payload(&mut payload, &bad).is_err());
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn glossary_set_segment_removes_unlock_and_viewed_events_and_sets_available() {
+        let mut payload = glossary_progression_payload();
+        let quest_class =
+            "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugUnlock";
+        let edit = glossary_segment_edit("Unlock", quest_class, false);
+
+        apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let glossary = progression_glossary(&root, "", None, 0, 100).unwrap();
+        let unlock = &glossary_creature(&glossary, "Meatbug")["segments"][0];
+        assert_eq!(unlock["unlocked"], false);
+        assert_eq!(unlock["eventIndices"], json!([]));
+        assert_eq!(unlock["viewedEventIndices"], json!([]));
+        assert_eq!(unlock["currentState"], "EQuestState::Available");
+        // The unrelated NPC unlock event survives exact-pair removal.
+        assert_eq!(glossary["segmentUnlocks"].as_array().unwrap().len(), 1);
+        assert!(
+            glossary["segmentUnlocks"][0]["documentClass"]
+                .as_str()
+                .unwrap()
+                .contains("DIEGO")
+        );
+    }
+
+    #[test]
+    fn glossary_set_segment_parser_validates_class_pair_and_path_shape() {
+        let edit = Edit {
+            path: "private.glossary.setSegment".to_string(),
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Meatbug",
+                "segmentClass": "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+                "unlocked": true,
+                "questStatePath": [
+                    "QuestDataByClass",
+                    "{/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2}",
+                    "CurrentState"
+                ]
+            }),
+        };
+        let parsed = parse_private_glossary_set_segment_edit(&edit).unwrap();
+        assert!(parsed.unlocked);
+        assert!(parsed.quest_state_path.is_some());
+
+        let mismatched = Edit {
+            path: edit.path.clone(),
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Wolf",
+                "segmentClass": "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+                "unlocked": true
+            }),
+        };
+        assert!(parse_private_glossary_set_segment_edit(&mismatched).is_err());
+
+        // A different but well-formed CurrentState path cannot be rejected
+        // without the save root. Apply-time resolution performs the exact-leaf
+        // comparison before mutating the payload.
+        let different_quest_path = Edit {
+            path: edit.path,
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Meatbug",
+                "segmentClass": "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+                "unlocked": true,
+                "questStatePath": [
+                    "QuestDataByClass",
+                    "{/Script/Angelscript.Quest_CreaturesGlossary_WolfGlossary_WolfEntry2}",
+                    "CurrentState"
+                ]
+            }),
+        };
+        assert!(parse_private_glossary_set_segment_edit(&different_quest_path).is_ok());
+
+        let wrong_shape = Edit {
+            path: "private.glossary.setSegment".to_string(),
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Meatbug",
+                "segmentClass": "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+                "unlocked": true,
+                "questStatePath": ["QuestDataByClass"]
+            }),
+        };
+        assert!(parse_private_glossary_set_segment_edit(&wrong_shape).is_err());
+    }
+
+    #[test]
+    fn glossary_set_segment_infers_missing_creature_and_location_state_paths() {
+        let mut payload = glossary_progression_payload();
+
+        let mut creature = glossary_segment_edit(
+            "Entry2",
+            "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2",
+            true,
+        );
+        creature.quest_state_path = None;
+        apply_private_glossary_set_segment_to_payload(&mut payload, &creature).unwrap();
+
+        let location = PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_OldCamp".to_string(),
+            segment_asset: "DocumentSegment_Glossary_OldCamp_Unlock".to_string(),
+            unlocked: true,
+            quest_state_path: None,
+        };
+        apply_private_glossary_set_segment_to_payload(&mut payload, &location).unwrap();
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        let glossary = progression_glossary(&root, "", None, 0, 100).unwrap();
+        assert_eq!(
+            glossary_creature(&glossary, "Meatbug")["segments"][1]["currentState"],
+            "EQuestState::Succeeded"
+        );
+        let old_camp = glossary["categories"][1]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["name"] == "OldCamp")
+            .unwrap();
+        assert_eq!(old_camp["segments"][0]["unlocked"], true);
+        assert_eq!(
+            old_camp["segments"][0]["currentState"],
+            "EQuestState::Succeeded"
+        );
+    }
+
+    #[test]
+    fn glossary_set_segment_allows_npc_memory_only_when_no_quest_leaf_exists() {
+        let mut payload = glossary_progression_payload();
+        let edit = PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_NC_ORG_Caine".to_string(),
+            segment_asset: "DocumentSegment_Glossary_NC_ORG_Caine_Introduction".to_string(),
+            unlocked: true,
+            quest_state_path: None,
+        };
+
+        apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap();
+        let scan = glossary_memory_scan(&payload, &edit).unwrap();
+        assert_eq!(scan.unlocked_indices.len(), 1);
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(
+            resolve_glossary_quest_state_path(&root, &edit).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn glossary_set_segment_rejects_mismatched_existing_quest_path_without_mutation() {
+        let mut payload = glossary_progression_payload();
+        let mut edit = glossary_segment_edit(
+            "Entry2",
+            "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugEntry2",
+            true,
+        );
+        edit.quest_state_path = Some(
+            properties::parse_path(&[
+                "QuestDataByClass".to_string(),
+                "{/Script/Angelscript.Quest_Locations_OldCampGlossary_OldCampUnlock}".to_string(),
+                "CurrentState".to_string(),
+            ])
+            .unwrap(),
+        );
+
+        let before = payload.clone();
+        let error = apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(matches!(error, CoreError::InvalidRequest(_)));
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn glossary_set_segment_rejects_ambiguous_root_matches_without_mutation() {
+        let quest_map = quest_map_property(&[
+            (
+                "/Script/Angelscript.Quest_CreaturesGlossary_MeatbugGlossary_MeatbugUnlock",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_Locations_MeatbugGlossary_MeatbugUnlock",
+                "EQuestState::Available",
+            ),
+        ]);
+        let memory = glossary_memory_property(&[(
+            "Memory.Document.SegmentUnlocked",
+            "Document_Glossary_OC_STT_DIEGO",
+            "DocumentSegment_Glossary_OC_STT_DIEGO_Introduction",
+        )]);
+        let memory_map = name_keyed_struct_map("LongTermMemoryByGlobalId", &[("Hero", memory)]);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&memory_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let edit = PrivateGlossarySetSegmentEdit {
+            package: "/Script/Angelscript".to_string(),
+            document_asset: "Document_Glossary_Meatbug".to_string(),
+            segment_asset: "DocumentSegment_Glossary_Meatbug_Unlock".to_string(),
+            unlocked: true,
+            quest_state_path: None,
+        };
+        let before = payload.clone();
+        let error = apply_private_glossary_set_segment_to_payload(&mut payload, &edit).unwrap_err();
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert_eq!(payload, before);
+    }
+
+    #[test]
+    fn glossary_set_segment_must_be_the_only_edit_in_a_write() {
+        let (_dir, path, backend) = progression_fixture(
+            "G1R-glossary-standalone.sav",
+            glossary_progression_payload(),
+        );
+        let data = fs::read(path).unwrap();
+        let glossary = Edit {
+            path: "private.glossary.setSegment".to_string(),
+            value: json!({
+                "documentClass": "/Script/Angelscript.Document_Glossary_Meatbug",
+                "segmentClass": "/Script/Angelscript.DocumentSegment_Glossary_Meatbug_Entry2",
+                "unlocked": true
+            }),
+        };
+        let peer = Edit {
+            path: "private.typed.setValue".to_string(),
+            value: json!({
+                "path": [
+                    "QuestDataByClass",
+                    "{/Script/Angelscript.Quest_OldCamp_SLEEPER}",
+                    "CurrentState"
+                ],
+                "value": "EQuestState::Available"
+            }),
+        };
+        let err = apply_private_edits(&data, &[&glossary, &peer], Some(&backend)).unwrap_err();
+        assert!(matches!(err, CoreError::UnsupportedEdit(_)));
     }
 
     #[test]
@@ -16051,6 +18061,35 @@ mod tests {
         })
         .unwrap_err();
         assert!(matches!(err, CoreError::InvalidRequest(_)));
+    }
+
+    #[test]
+    fn parse_private_npc_relationship_accepts_three_api_values() {
+        for (input, expected) in [
+            ("Friend", npc::PersonalRelationship::Friend),
+            ("Neutral", npc::PersonalRelationship::Neutral),
+            ("Enemy", npc::PersonalRelationship::Enemy),
+        ] {
+            let parsed = parse_private_npc_relationship_edit(&Edit {
+                path: "private.npc.setRelationship".to_string(),
+                value: json!({ "id": "OM_GRD_Asghan-1", "relationship": input }),
+            })
+            .unwrap();
+            assert_eq!(parsed.id, "OM_GRD_Asghan-1");
+            assert_eq!(parsed.relationship, expected);
+        }
+    }
+
+    #[test]
+    fn parse_private_npc_relationship_rejects_internal_or_bad_values() {
+        for relationship in ["Hostile", "Angry", "Unknown", ""] {
+            let error = parse_private_npc_relationship_edit(&Edit {
+                path: "private.npc.setRelationship".to_string(),
+                value: json!({ "id": "OM_GRD_Asghan-1", "relationship": relationship }),
+            })
+            .unwrap_err();
+            assert!(matches!(error, CoreError::InvalidRequest(_)));
+        }
     }
 
     #[test]

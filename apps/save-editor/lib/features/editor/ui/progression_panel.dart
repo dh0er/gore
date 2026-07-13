@@ -20,6 +20,7 @@ import '../domain/knowledge_catalog.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
 import 'add_knowledge_entry_dialog.dart';
+import 'npc_relationship_editor.dart';
 
 /// All five EQuestState values, in dropdown order.
 const questStates = <String>[
@@ -1309,6 +1310,8 @@ class EventsDetail extends ConsumerStatefulWidget {
     required this.editable,
     required this.reloadKey,
     required this.theme,
+    this.relationshipNpcId,
+    this.relationshipEditable = false,
   });
 
   /// GlobalId of the selected character, or null when nothing is selected.
@@ -1318,6 +1321,14 @@ class EventsDetail extends ConsumerStatefulWidget {
   final bool editable;
   final SaveInspection reloadKey;
   final ThemeData theme;
+
+  /// NPC whose saved relationship is edited above the event pagination.
+  /// Null for the player and for non-actor selections.
+  final String? relationshipNpcId;
+
+  /// Uses the Attribute tab's former write gate so moving the control does not
+  /// silently change which saves may edit this value.
+  final bool relationshipEditable;
 
   @override
   ConsumerState<EventsDetail> createState() => _EventsDetailState();
@@ -1480,6 +1491,15 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                           style: TextStyle(color: scheme.error),
                         ),
                       ),
+                    if (widget.relationshipNpcId != null) ...[
+                      NpcRelationshipEditor(
+                        npcId: widget.relationshipNpcId!,
+                        notifier: widget.notifier,
+                        editable: widget.relationshipEditable,
+                        reloadKey: widget.reloadKey,
+                      ),
+                      const Divider(height: 12),
+                    ],
                     _PaginationBar(
                       offset: _events.offset,
                       count: _events.events.length,

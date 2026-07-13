@@ -6,6 +6,24 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-07-14
+
+### Added
+
+- Added a dedicated Glossary section to the World tab for NPCs, creatures, and
+  locations. NPCs are grouped by camp and can be filtered by traders, teachers,
+  armorers, hostile relationships, or death entries.
+- Glossary entries can be added or removed individually, including NPC
+  discovery and portrait visibility. Entry text follows the selected game
+  language and can be viewed in full from truncated rows.
+- The stored NPC-to-player relationship can now be set to friend, neutral, or
+  enemy from the Events tab.
+
+### Fixed
+
+- NPC status, relationship, and glossary controls no longer briefly revert to
+  stale values while a saved game is refreshed.
+
 ## [1.0.0] - 2026-07-08
 
 ### Added

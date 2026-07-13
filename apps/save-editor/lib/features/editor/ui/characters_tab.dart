@@ -183,6 +183,10 @@ class CharactersTab extends ConsumerWidget {
                           editable: progressionEditable,
                           reloadKey: inspection,
                           theme: theme,
+                          relationshipNpcId: selected.isPlayer
+                              ? null
+                              : selected.id,
+                          relationshipEditable: attributeEditable,
                         ),
                       ),
               ),
