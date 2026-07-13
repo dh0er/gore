@@ -372,6 +372,22 @@ impl VerifiedQuestCollisionCapability {
             .ok_or_else(|| QuestCollisionCapabilityError::UnknownGiver(catalog_id.to_owned()))
     }
 
+    /// Whether one persisted parent identity is an exact member of the freshly loaded Story
+    /// catalog used to bind this capability.
+    ///
+    /// Revision-3 Quest drafts retain the closed parent identity rather than its UI-facing
+    /// catalog id. Comparing the complete value keeps that durable representation source-bound
+    /// without exposing or cloning the capability's catalog map.
+    pub fn authorizes_parent(&self, candidate: &QuestParentInput) -> bool {
+        self.parents.values().any(|parent| parent == candidate)
+    }
+
+    /// Whether one persisted giver identity is an exact member of the freshly loaded Story
+    /// catalog used to bind this capability.
+    pub fn authorizes_giver(&self, candidate: &QuestGiverInput) -> bool {
+        self.givers.values().any(|giver| giver == candidate)
+    }
+
     /// Consume the verified capability into the existing revision-2 Quest input without cloning
     /// the multi-megabyte collision sets. The exact project is re-collected first so a stale
     /// capability cannot be applied to a different head.

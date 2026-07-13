@@ -1,0 +1,1019 @@
+//! Source-bound inspection planning for one schema-revision-3 Quest.
+//!
+//! This module is deliberately separate from the frozen revision-2 `StoryBuildPlan`.
+//! It opens the pinned collision artifact and its immutable basis through the Working Store,
+//! projects only a Quest-free revision-3 basis back to the exact revision-2 source model, and
+//! then requires a freshly source-bound [`VerifiedQuestCollisionCapability`] to pass
+//! `verify_artifact_exact` before any source is regenerated. The result remains inspection-only:
+//! it grants no compilation, build, deployment, runtime, or publication authority.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use gore_authoring::{
+    migrate_revision2_to_revision3, AssetVerification, ContentSeal, DraftQuestCollisionCatalog,
+    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonV1, EntityId, FormatV2,
+    OpenedRevision3Checkpoint, ProjectDocument, ProjectDocumentError, ProjectId, ProjectRevision2,
+    ProjectRevision3, Revision2Entity, Revision2EntityPayload, Revision3Entity,
+    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
+    Revision3QuestDraftInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV2,
+    ScriptModuleStatus, Sha256Digest, WorkingProjectStore, WorkingStoreError,
+    MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES, MAX_PROJECT_JSON_BYTES,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+};
+use gore_authoring::{CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver};
+use gore_story_inventory::{
+    reopen_quest_collision_capability_artifact_v1, QuestCollisionCapabilityArtifactError,
+    QuestCollisionCapabilityArtifactV1, QuestCollisionCapabilityArtifactVerificationError,
+    QuestCollisionCapabilityError, VerifiedQuestCollisionCapability,
+};
+use serde::de;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use sha2::{Digest as _, Sha256};
+
+const PLAN_FORMAT: &str = "revision3_quest_source_inspection_plan";
+const PLAN_SCHEMA_REVISION: u32 = 2;
+const PLAN_INPUT_FINGERPRINT_DOMAIN: &[u8] =
+    b"gore-story-build.revision3-quest-v2.input-fingerprint\0";
+
+/// The revision-3 project parser and the resulting plan share the frozen project envelope.
+pub const MAX_REVISION3_QUEST_PROJECT_JSON_BYTES: usize = MAX_PROJECT_JSON_BYTES;
+/// A one-Quest plan repeats at most one bounded entity's source and provenance.
+pub const MAX_REVISION3_QUEST_PLAN_JSON_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PlanFormat;
+
+impl Serialize for PlanFormat {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(PLAN_FORMAT)
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanFormat {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value == PLAN_FORMAT {
+            Ok(Self)
+        } else {
+            Err(de::Error::custom(format!(
+                "unsupported revision-3 Quest inspection format {value:?}"
+            )))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PlanSchemaRevision;
+
+impl Serialize for PlanSchemaRevision {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(PLAN_SCHEMA_REVISION)
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanSchemaRevision {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = u32::deserialize(deserializer)?;
+        if value == PLAN_SCHEMA_REVISION {
+            Ok(Self)
+        } else {
+            Err(de::Error::custom(format!(
+                "unsupported revision-3 Quest inspection schema revision {value}"
+            )))
+        }
+    }
+}
+
+/// Closed scope marker. There is intentionally no compile/build/deploy variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestInspectionScope {
+    SourceInspectionOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestInspectionBuildStatus {
+    Blocked,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestInspectionRuntimeQualification {
+    RuntimeUnqualified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestInspectionPublicationStatus {
+    NotSupported,
+}
+
+/// Exact source identities retained by the inspection plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision3QuestInspectionProvenance {
+    pub project_id: ProjectId,
+    pub project_revision: u64,
+    pub target_executable: ContentSeal,
+    pub canonical_project: ContentSeal,
+    pub basis_snapshot: ContentSeal,
+    pub canonical_collision_source_project: ContentSeal,
+    pub collision_artifact: ContentSeal,
+    pub collision_source: ContentSeal,
+}
+
+/// Exact regenerated source and the two typed references that own it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision3QuestInspectionModule {
+    pub quest: Revision3TypedRef,
+    pub script_module: Revision3TypedRef,
+    pub draft_input: ContentSeal,
+    pub persisted_source: ContentSeal,
+    pub generated: Revision3ScriptModule,
+}
+
+/// Deterministic, sealed source inspection for exactly one revision-3 Quest.
+///
+/// Every capability marker is permanently fail-closed. This type cannot express compilation,
+/// deployment, runtime qualification, or publication readiness.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision3QuestSourceInspectionPlanV2 {
+    #[serde(rename = "format")]
+    pub(crate) format_marker: PlanFormat,
+    pub(crate) schema_revision: PlanSchemaRevision,
+    pub scope: QuestInspectionScope,
+    pub build_status: QuestInspectionBuildStatus,
+    pub runtime_qualification: QuestInspectionRuntimeQualification,
+    pub publication_status: QuestInspectionPublicationStatus,
+    pub provenance: Revision3QuestInspectionProvenance,
+    pub module: Revision3QuestInspectionModule,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PlanWire {
+    #[serde(rename = "format")]
+    format_marker: PlanFormat,
+    schema_revision: PlanSchemaRevision,
+    scope: QuestInspectionScope,
+    build_status: QuestInspectionBuildStatus,
+    runtime_qualification: QuestInspectionRuntimeQualification,
+    publication_status: QuestInspectionPublicationStatus,
+    provenance: Revision3QuestInspectionProvenance,
+    module: Revision3QuestInspectionModule,
+}
+
+impl From<PlanWire> for Revision3QuestSourceInspectionPlanV2 {
+    fn from(wire: PlanWire) -> Self {
+        Self {
+            format_marker: wire.format_marker,
+            schema_revision: wire.schema_revision,
+            scope: wire.scope,
+            build_status: wire.build_status,
+            runtime_qualification: wire.runtime_qualification,
+            publication_status: wire.publication_status,
+            provenance: wire.provenance,
+            module: wire.module,
+        }
+    }
+}
+
+impl Revision3QuestSourceInspectionPlanV2 {
+    pub const fn format(&self) -> &'static str {
+        PLAN_FORMAT
+    }
+
+    pub const fn schema_revision(&self) -> u32 {
+        PLAN_SCHEMA_REVISION
+    }
+
+    pub fn to_canonical_json(&self) -> Result<String, Revision3QuestInspectionError> {
+        self.validate_closed_invariants()?;
+        let json =
+            serde_json::to_string(self).map_err(Revision3QuestInspectionError::SerializePlan)?;
+        if json.len() > MAX_REVISION3_QUEST_PLAN_JSON_BYTES {
+            return Err(Revision3QuestInspectionError::PlanJsonTooLarge {
+                actual: json.len(),
+                limit: MAX_REVISION3_QUEST_PLAN_JSON_BYTES,
+            });
+        }
+        Ok(json)
+    }
+
+    pub fn from_json(json: &str) -> Result<Self, Revision3QuestInspectionError> {
+        if json.len() > MAX_REVISION3_QUEST_PLAN_JSON_BYTES {
+            return Err(Revision3QuestInspectionError::PlanJsonTooLarge {
+                actual: json.len(),
+                limit: MAX_REVISION3_QUEST_PLAN_JSON_BYTES,
+            });
+        }
+        let plan = serde_json::from_str::<PlanWire>(json)
+            .map(Self::from)
+            .map_err(Revision3QuestInspectionError::InvalidPlanJson)?;
+        plan.validate_closed_invariants()?;
+        if plan.to_canonical_json()?.as_bytes() != json.as_bytes() {
+            return Err(Revision3QuestInspectionError::NonCanonicalPlanJson);
+        }
+        Ok(plan)
+    }
+
+    pub fn content_seal(&self) -> Result<ContentSeal, Revision3QuestInspectionError> {
+        self.to_canonical_json()
+            .map(|json| seal_authoring_bytes(json.as_bytes()))
+    }
+
+    /// Re-run the complete store/source verification and require exact plan equivalence.
+    ///
+    /// Reopening plan JSON proves only its closed shape. This method is the authoritative check
+    /// when the current project, immutable store, and freshly bound sources are available.
+    pub fn verify_against_sources(
+        &self,
+        store: &WorkingProjectStore,
+        canonical_project_json: &str,
+        capability: VerifiedQuestCollisionCapability,
+    ) -> Result<(), Revision3QuestInspectionError> {
+        let expected = prepare_revision3_quest_source_inspection(
+            store,
+            canonical_project_json,
+            self.module.quest.id,
+        )?
+        .lower(capability)?;
+        if &expected != self {
+            return Err(Revision3QuestInspectionError::PlanSourceBindingMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_closed_invariants(&self) -> Result<(), Revision3QuestInspectionError> {
+        if self.scope != QuestInspectionScope::SourceInspectionOnly
+            || self.build_status != QuestInspectionBuildStatus::Blocked
+            || self.runtime_qualification != QuestInspectionRuntimeQualification::RuntimeUnqualified
+            || self.publication_status != QuestInspectionPublicationStatus::NotSupported
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "inspection plan contains an authority claim".to_owned(),
+            ));
+        }
+        for (field, seal) in [
+            ("target executable", &self.provenance.target_executable),
+            ("canonical project", &self.provenance.canonical_project),
+            ("basis snapshot", &self.provenance.basis_snapshot),
+            (
+                "canonical collision source project",
+                &self.provenance.canonical_collision_source_project,
+            ),
+            ("collision artifact", &self.provenance.collision_artifact),
+            ("collision source", &self.provenance.collision_source),
+            ("draft input", &self.module.draft_input),
+            ("persisted source", &self.module.persisted_source),
+        ] {
+            if seal.byte_len == 0 {
+                return Err(Revision3QuestInspectionError::PlanInvariant(format!(
+                    "{field} seal is empty"
+                )));
+            }
+        }
+        if self.module.draft_input.byte_len
+            > u64::try_from(MAX_REVISION3_ENTITY_JSON_BYTES).unwrap_or(u64::MAX)
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "draft input seal exceeds the revision-3 entity envelope".to_owned(),
+            ));
+        }
+        if self.provenance.canonical_project.byte_len
+            > u64::try_from(MAX_REVISION3_QUEST_PROJECT_JSON_BYTES).unwrap_or(u64::MAX)
+            || self.provenance.canonical_collision_source_project.byte_len
+                > u64::try_from(MAX_REVISION3_QUEST_PROJECT_JSON_BYTES).unwrap_or(u64::MAX)
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "canonical project seal exceeds the project envelope".to_owned(),
+            ));
+        }
+        if self.provenance.basis_snapshot.byte_len > MAX_REVISION3_SNAPSHOT_BYTES
+            || self.provenance.collision_artifact.byte_len > MAX_QUEST_COLLISION_ARTIFACT_BYTES
+            || self.provenance.collision_source.byte_len
+                != self.provenance.collision_artifact.byte_len
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "basis or collision artifact seal exceeds its closed envelope".to_owned(),
+            ));
+        }
+        if self.module.quest.project_id != self.provenance.project_id
+            || self.module.quest.expected_kind != Revision3EntityKind::QuestDraft
+            || self.module.script_module.project_id != self.provenance.project_id
+            || self.module.script_module.expected_kind != Revision3EntityKind::ScriptModule
+            || self.module.script_module.id == self.module.quest.id
+            || self.module.generated.owner != self.module.quest
+            || self.module.generated.generator_id != REVISION3_QUEST_GENERATOR_ID
+            || self.module.generated.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+            || self.module.generated.status != ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "typed owner or generator contract drifted".to_owned(),
+            ));
+        }
+        if self.module.generated.source.len() > MAX_REVISION3_ENTITY_JSON_BYTES {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "generated source exceeds the revision-3 entity envelope".to_owned(),
+            ));
+        }
+        if self.module.generated.module_namespace.len() > MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES
+            || self.module.generated.module_relative_path.len()
+                > MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES + 3
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "generated module identity exceeds the authoring envelope".to_owned(),
+            ));
+        }
+        let expected_relative_path = format!(
+            "{}.as",
+            self.module.generated.module_namespace.replace('.', "/")
+        );
+        if self.module.generated.module_relative_path != expected_relative_path {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "generated module namespace/path identity drifted".to_owned(),
+            ));
+        }
+        let actual_source = seal_authoring_bytes(self.module.generated.source.as_bytes());
+        if actual_source != self.module.persisted_source
+            || actual_source.sha256 != self.module.generated.source_sha256
+        {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "generated source seal drifted".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Opaque store-verified state. It exposes only the exact revision-2 collision source project so
+/// callers can freshly bind trusted base-game and Story-catalog sources before lowering.
+pub struct PreparedRevision3QuestSourceInspection {
+    canonical_project_json: String,
+    project: ProjectRevision3,
+    quest_id: EntityId,
+    basis_snapshot: ContentSeal,
+    collision_source_project: ProjectRevision2,
+    collision_source_project_seal: ContentSeal,
+    artifact: QuestCollisionCapabilityArtifactV1,
+}
+
+impl fmt::Debug for PreparedRevision3QuestSourceInspection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedRevision3QuestSourceInspection")
+            .field("project_id", &self.project.project_id)
+            .field("project_revision", &self.project.revision)
+            .field("quest_id", &self.quest_id)
+            .field("basis_snapshot", &self.basis_snapshot)
+            .field(
+                "collision_source_project_seal",
+                &self.collision_source_project_seal,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedRevision3QuestSourceInspection {
+    pub const fn quest_id(&self) -> EntityId {
+        self.quest_id
+    }
+
+    /// Exact Quest-free revision-2 projection against which the caller must bind fresh sources.
+    pub fn collision_source_project(&self) -> &ProjectRevision2 {
+        &self.collision_source_project
+    }
+
+    /// Consume the prepared store evidence and one freshly source-bound capability.
+    ///
+    /// The opaque artifact is never accepted as collision authority. It is used only as the
+    /// borrowed exact identity passed to `verify_artifact_exact`; failure consumes both prepared
+    /// state and capability and yields no plan.
+    pub fn lower(
+        self,
+        capability: VerifiedQuestCollisionCapability,
+    ) -> Result<Revision3QuestSourceInspectionPlanV2, Revision3QuestInspectionError> {
+        let capability = capability
+            .verify_artifact_exact(&self.artifact)
+            .map_err(Revision3QuestInspectionError::ArtifactVerification)?;
+
+        let quest_entity = self
+            .project
+            .entities
+            .get(&self.quest_id)
+            .ok_or(Revision3QuestInspectionError::MissingQuest(self.quest_id))?;
+        let Revision3EntityPayload::QuestDraft(quest) = &quest_entity.payload else {
+            return Err(Revision3QuestInspectionError::NotAQuest(self.quest_id));
+        };
+        if !capability.authorizes_parent(&quest.input.parent_quest) {
+            return Err(Revision3QuestInspectionError::UnauthorizedParent(
+                self.quest_id,
+            ));
+        }
+        if !capability.authorizes_giver(&quest.input.giver) {
+            return Err(Revision3QuestInspectionError::UnauthorizedGiver(
+                self.quest_id,
+            ));
+        }
+
+        let collision_input = capability
+            .into_quest_collision_input(&self.collision_source_project)
+            .map_err(Revision3QuestInspectionError::CollisionAuthority)?;
+        let reference = &quest.input.collision_catalog;
+        if collision_input.generation != reference.generation
+            || collision_input.source_seal != reference.source_seal
+            || collision_input.catalog_layer != reference.catalog_layer
+        {
+            return Err(Revision3QuestInspectionError::ArtifactReferenceDrift {
+                quest: self.quest_id,
+                field: ArtifactReferenceField::Capability,
+            });
+        }
+
+        let expected = regenerate_revision3_quest_module(quest, collision_input)?;
+        let module_entity = self.project.entities.get(&quest.script_module.id).ok_or(
+            Revision3QuestInspectionError::MissingScriptModule {
+                quest: self.quest_id,
+                module: quest.script_module.id,
+            },
+        )?;
+        let Revision3EntityPayload::ScriptModule(persisted) = &module_entity.payload else {
+            return Err(Revision3QuestInspectionError::MissingScriptModule {
+                quest: self.quest_id,
+                module: quest.script_module.id,
+            });
+        };
+        validate_module_owner(
+            self.project.project_id,
+            self.quest_id,
+            quest,
+            module_entity,
+            persisted,
+        )?;
+        if persisted.source_sha256
+            != Sha256Digest::from_bytes(Sha256::digest(persisted.source.as_bytes()).into())
+        {
+            return Err(Revision3QuestInspectionError::PersistedSourceSealMismatch {
+                quest: self.quest_id,
+                module: quest.script_module.id,
+            });
+        }
+        if persisted != &expected {
+            return Err(Revision3QuestInspectionError::PersistedModuleDrift {
+                quest: self.quest_id,
+                module: quest.script_module.id,
+            });
+        }
+
+        let input_bytes = serde_json::to_vec(&quest.input)
+            .map_err(Revision3QuestInspectionError::SerializeQuestInput)?;
+        let artifact_seal = inventory_seal_to_authoring(self.artifact.artifact_seal());
+        let artifact_source = inventory_seal_to_authoring(self.artifact.source_seal());
+        let plan = Revision3QuestSourceInspectionPlanV2 {
+            format_marker: PlanFormat,
+            schema_revision: PlanSchemaRevision,
+            scope: QuestInspectionScope::SourceInspectionOnly,
+            build_status: QuestInspectionBuildStatus::Blocked,
+            runtime_qualification: QuestInspectionRuntimeQualification::RuntimeUnqualified,
+            publication_status: QuestInspectionPublicationStatus::NotSupported,
+            provenance: Revision3QuestInspectionProvenance {
+                project_id: self.project.project_id,
+                project_revision: self.project.revision,
+                target_executable: self.project.target.executable.clone(),
+                canonical_project: seal_authoring_bytes(self.canonical_project_json.as_bytes()),
+                basis_snapshot: self.basis_snapshot,
+                canonical_collision_source_project: self.collision_source_project_seal,
+                collision_artifact: artifact_seal,
+                collision_source: artifact_source,
+            },
+            module: Revision3QuestInspectionModule {
+                quest: Revision3TypedRef::new(
+                    self.project.project_id,
+                    self.quest_id,
+                    Revision3EntityKind::QuestDraft,
+                ),
+                script_module: quest.script_module.clone(),
+                draft_input: seal_authoring_bytes(&input_bytes),
+                persisted_source: seal_authoring_bytes(expected.source.as_bytes()),
+                generated: expected,
+            },
+        };
+        plan.validate_closed_invariants()?;
+        let canonical = plan.to_canonical_json()?;
+        if Revision3QuestSourceInspectionPlanV2::from_json(&canonical)? != plan {
+            return Err(Revision3QuestInspectionError::PlanInvariant(
+                "canonical plan did not reopen exactly".to_owned(),
+            ));
+        }
+        Ok(plan)
+    }
+}
+
+/// Open and verify all store-backed structural evidence needed for one revision-3 Quest.
+///
+/// No capability or raw artifact bytes are accepted from the caller. The returned state is still
+/// non-authoritative until [`PreparedRevision3QuestSourceInspection::lower`] consumes a freshly
+/// source-bound capability and performs exact artifact verification.
+pub fn prepare_revision3_quest_source_inspection(
+    store: &WorkingProjectStore,
+    canonical_project_json: &str,
+    quest_id: EntityId,
+) -> Result<PreparedRevision3QuestSourceInspection, Revision3QuestInspectionError> {
+    if canonical_project_json.len() > MAX_REVISION3_QUEST_PROJECT_JSON_BYTES {
+        return Err(Revision3QuestInspectionError::ProjectJsonTooLarge {
+            actual: canonical_project_json.len(),
+            limit: MAX_REVISION3_QUEST_PROJECT_JSON_BYTES,
+        });
+    }
+    let document = ProjectDocument::from_json(canonical_project_json)
+        .map_err(Revision3QuestInspectionError::InvalidProjectDocument)?;
+    let reopened = document
+        .to_canonical_json()
+        .map_err(Revision3QuestInspectionError::SerializeProject)?;
+    if reopened.as_bytes() != canonical_project_json.as_bytes() {
+        return Err(Revision3QuestInspectionError::NonCanonicalProjectJson);
+    }
+    let ProjectDocument::Revision3(project) = document else {
+        return Err(Revision3QuestInspectionError::Revision3Required);
+    };
+    let quest_entity = project
+        .entities
+        .get(&quest_id)
+        .ok_or(Revision3QuestInspectionError::MissingQuest(quest_id))?;
+    let Revision3EntityPayload::QuestDraft(quest) = &quest_entity.payload else {
+        return Err(Revision3QuestInspectionError::NotAQuest(quest_id));
+    };
+    validate_current_quest(project.project_id, quest_id, quest_entity, quest, &project)?;
+    let reference = quest.input.collision_catalog.clone();
+
+    let artifact_bytes = store
+        .read_indexed_quest_collision_artifact_v1(&project.asset_store, &reference.artifact)
+        .map_err(
+            |source| Revision3QuestInspectionError::ArtifactUnavailable {
+                quest: quest_id,
+                source,
+            },
+        )?;
+    let expected_raw = authoring_seal_to_inventory(&reference.artifact);
+    let expected_source = authoring_seal_to_inventory(&reference.source_seal);
+    let artifact = reopen_quest_collision_capability_artifact_v1(
+        &artifact_bytes,
+        &expected_raw,
+        &expected_source,
+    )
+    .map_err(Revision3QuestInspectionError::InvalidArtifact)?;
+
+    let basis = store
+        .open_revision3_snapshot(&reference.basis_snapshot, AssetVerification::Full)
+        .map_err(|source| Revision3QuestInspectionError::BasisUnavailable {
+            quest: quest_id,
+            source,
+        })?;
+    if basis.head.snapshot != reference.basis_snapshot {
+        return Err(Revision3QuestInspectionError::ArtifactReferenceDrift {
+            quest: quest_id,
+            field: ArtifactReferenceField::BasisSnapshot,
+        });
+    }
+    if basis.project.project_id != project.project_id {
+        return Err(Revision3QuestInspectionError::ForeignProject {
+            quest: quest_id,
+            expected: project.project_id,
+            actual: basis.project.project_id,
+        });
+    }
+    if basis.project.target != project.target {
+        return Err(Revision3QuestInspectionError::ForeignGeneration {
+            quest: quest_id,
+            field: "basis project target",
+        });
+    }
+
+    let collision_source_project = project_revision3_basis_to_revision2(&basis)?;
+    let forward = migrate_revision2_to_revision3(&collision_source_project)
+        .map_err(Revision3QuestInspectionError::BasisForwardProjection)?;
+    if forward.project != basis.project {
+        return Err(Revision3QuestInspectionError::BasisRoundtripDrift);
+    }
+    let collision_source_json = collision_source_project
+        .to_canonical_json()
+        .map_err(Revision3QuestInspectionError::SerializeCollisionSourceProject)?;
+    let collision_source_project_seal = seal_authoring_bytes(collision_source_json.as_bytes());
+
+    if artifact.project_id() != collision_source_project.project_id {
+        return Err(Revision3QuestInspectionError::ArtifactBasisDrift {
+            field: ArtifactBasisField::ProjectId,
+        });
+    }
+    if artifact.project_revision() != collision_source_project.revision {
+        return Err(Revision3QuestInspectionError::ArtifactBasisDrift {
+            field: ArtifactBasisField::ProjectRevision,
+        });
+    }
+    if artifact.project_target() != &collision_source_project.target {
+        return Err(Revision3QuestInspectionError::ArtifactBasisDrift {
+            field: ArtifactBasisField::ProjectTarget,
+        });
+    }
+    if artifact.canonical_project() != &collision_source_project_seal {
+        return Err(Revision3QuestInspectionError::ArtifactBasisDrift {
+            field: ArtifactBasisField::CanonicalProject,
+        });
+    }
+
+    Ok(PreparedRevision3QuestSourceInspection {
+        canonical_project_json: canonical_project_json.to_owned(),
+        project,
+        quest_id,
+        basis_snapshot: basis.head.snapshot,
+        collision_source_project,
+        collision_source_project_seal,
+        artifact,
+    })
+}
+
+pub(crate) fn project_revision3_basis_to_revision2(
+    opened: &OpenedRevision3Checkpoint,
+) -> Result<ProjectRevision2, Revision3QuestInspectionError> {
+    let source = &opened.project;
+    let mut entities = BTreeMap::new();
+    for (id, entity) in &source.entities {
+        reject_recursive_basis_state(*id, entity)?;
+        let payload = match &entity.payload {
+            Revision3EntityPayload::LocalizationEntry(value) => {
+                Revision2EntityPayload::LocalizationEntry(value.clone())
+            }
+            Revision3EntityPayload::DialogLine(value) => {
+                Revision2EntityPayload::DialogLine(value.clone())
+            }
+            Revision3EntityPayload::VoiceSlot(value) => {
+                Revision2EntityPayload::VoiceSlot(value.clone())
+            }
+            Revision3EntityPayload::VoiceTake(value) => {
+                Revision2EntityPayload::VoiceTake(value.clone())
+            }
+            Revision3EntityPayload::NpcDraft(value) => {
+                Revision2EntityPayload::NpcDraft(value.clone())
+            }
+            Revision3EntityPayload::ScriptModule(value) => {
+                Revision2EntityPayload::ScriptModule(value.clone())
+            }
+            Revision3EntityPayload::QuestDraft(_) => {
+                return Err(Revision3QuestInspectionError::RecursiveQuestBasis { entity: *id });
+            }
+        };
+        entities.insert(
+            *id,
+            Revision2Entity {
+                id: entity.id,
+                display_name: entity.display_name.clone(),
+                origin: entity.origin.clone(),
+                revision: entity.revision,
+                payload,
+            },
+        );
+    }
+    Ok(ProjectRevision2 {
+        format: FormatV2,
+        schema_revision: SchemaRevisionV2,
+        project_id: source.project_id,
+        revision: source.revision,
+        meta: source.meta.clone(),
+        target: source.target.clone(),
+        authoring_locales: source.authoring_locales.clone(),
+        entities,
+        asset_store: source.asset_store.clone(),
+    })
+}
+
+fn reject_recursive_basis_state(
+    id: EntityId,
+    entity: &Revision3Entity,
+) -> Result<(), Revision3QuestInspectionError> {
+    if matches!(entity.payload, Revision3EntityPayload::QuestDraft(_)) {
+        return Err(Revision3QuestInspectionError::RecursiveQuestBasis { entity: id });
+    }
+    if let Revision3EntityPayload::ScriptModule(module) = &entity.payload {
+        if module.owner.expected_kind == Revision3EntityKind::QuestDraft
+            || module.generator_id == REVISION3_QUEST_GENERATOR_ID
+        {
+            return Err(Revision3QuestInspectionError::ResidualQuestBasis { entity: id });
+        }
+    }
+    if matches!(
+        &entity.origin,
+        Revision3OriginRef::Generated {
+            generator_id,
+            owner,
+            ..
+        } if generator_id == REVISION3_QUEST_GENERATOR_ID
+            || owner.expected_kind == Revision3EntityKind::QuestDraft
+    ) {
+        return Err(Revision3QuestInspectionError::ResidualQuestBasis { entity: id });
+    }
+    Ok(())
+}
+
+fn validate_current_quest(
+    project_id: ProjectId,
+    quest_id: EntityId,
+    quest_entity: &Revision3Entity,
+    quest: &Revision3QuestDraft,
+    project: &ProjectRevision3,
+) -> Result<(), Revision3QuestInspectionError> {
+    if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
+        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+    {
+        return Err(Revision3QuestInspectionError::ForeignGenerator { entity: quest_id });
+    }
+    if quest.input.target != project.target
+        || quest.input.parent_quest.generation != project.target
+        || quest.input.giver.generation != project.target
+        || quest.input.collision_catalog.generation != project.target
+    {
+        return Err(Revision3QuestInspectionError::ForeignGeneration {
+            quest: quest_id,
+            field: "Quest input",
+        });
+    }
+    let Some(module_entity) = project.entities.get(&quest.script_module.id) else {
+        return Err(Revision3QuestInspectionError::MissingScriptModule {
+            quest: quest_id,
+            module: quest.script_module.id,
+        });
+    };
+    let Revision3EntityPayload::ScriptModule(module) = &module_entity.payload else {
+        return Err(Revision3QuestInspectionError::MissingScriptModule {
+            quest: quest_id,
+            module: quest.script_module.id,
+        });
+    };
+    validate_module_owner(project_id, quest_id, quest, module_entity, module)?;
+    if !matches!(
+        &quest_entity.origin,
+        Revision3OriginRef::New { authored_runtime_id }
+            if authored_runtime_id == &quest.input.technical_id
+    ) {
+        return Err(Revision3QuestInspectionError::OwnerMismatch {
+            quest: quest_id,
+            module: quest.script_module.id,
+        });
+    }
+    Ok(())
+}
+
+fn validate_module_owner(
+    project_id: ProjectId,
+    quest_id: EntityId,
+    quest: &Revision3QuestDraft,
+    module_entity: &Revision3Entity,
+    module: &Revision3ScriptModule,
+) -> Result<(), Revision3QuestInspectionError> {
+    let owner = Revision3TypedRef::new(project_id, quest_id, Revision3EntityKind::QuestDraft);
+    if quest.script_module.project_id != project_id
+        || quest.script_module.expected_kind != Revision3EntityKind::ScriptModule
+        || module.owner != owner
+        || module.generator_id != REVISION3_QUEST_GENERATOR_ID
+        || module.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || module.status != ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED
+        || !matches!(
+            &module_entity.origin,
+            Revision3OriginRef::Generated {
+                generator_id,
+                generator_version,
+                owner: origin_owner,
+            } if generator_id == REVISION3_QUEST_GENERATOR_ID
+                && *generator_version == REVISION3_QUEST_GENERATOR_VERSION
+                && origin_owner == &owner
+        )
+    {
+        return Err(Revision3QuestInspectionError::OwnerMismatch {
+            quest: quest_id,
+            module: quest.script_module.id,
+        });
+    }
+    Ok(())
+}
+
+pub(crate) fn regenerate_revision3_quest_module(
+    quest: &Revision3QuestDraft,
+    collision: gore_authoring::QuestCollisionCatalogInput,
+) -> Result<Revision3ScriptModule, Revision3QuestInspectionError> {
+    let parent = CatalogQualifiedParentQuest::new(
+        quest.input.parent_quest.generation.clone(),
+        quest.input.parent_quest.source_seal.clone(),
+        quest.input.parent_quest.catalog_layer.clone(),
+        quest.input.parent_quest.canonical_selector.clone(),
+        quest.input.parent_quest.runtime_class.clone(),
+    )
+    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
+    let giver = CatalogQualifiedQuestGiver::new(
+        quest.input.giver.generation.clone(),
+        quest.input.giver.source_seal.clone(),
+        quest.input.giver.catalog_layer.clone(),
+        quest.input.giver.canonical_selector.clone(),
+        quest.input.giver.runtime_unique_name.clone(),
+    )
+    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
+    let collision_catalog = DraftQuestCollisionCatalog::new(
+        collision.generation,
+        collision.source_seal,
+        collision.catalog_layer,
+        collision.modules.into_iter().collect(),
+        collision.relative_paths.into_iter().collect(),
+        collision.symbols.into_iter().collect(),
+    )
+    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?;
+    let generated = DraftQuestSkeletonV1::new(DraftQuestSkeletonInput {
+        target: quest.input.target.clone(),
+        quest_id: quest.input.quest_id,
+        module_namespace: quest.input.module_namespace.clone(),
+        technical_id: quest.input.technical_id.clone(),
+        text_helper: quest.input.text_helper.clone(),
+        parent_quest: parent,
+        giver,
+        title: quest.input.title.clone(),
+        description: quest.input.description.clone(),
+        objective_title: quest.input.objective_title.clone(),
+        collision_catalog,
+    })
+    .map_err(Revision3QuestInspectionError::InvalidQuestIntent)?
+    .generate();
+    Ok(Revision3ScriptModule {
+        generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
+        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+        owner: Revision3TypedRef::new(
+            quest.script_module.project_id,
+            quest.input.quest_id,
+            Revision3EntityKind::QuestDraft,
+        ),
+        module_namespace: generated.technical_names.module_namespace,
+        module_relative_path: generated.technical_names.module_relative_path,
+        source: generated.source,
+        source_sha256: generated.source_sha256,
+        input_fingerprint: revision3_quest_input_fingerprint(&quest.input)?,
+        status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
+    })
+}
+
+/// Stable v2 fingerprint of the bounded revision-3 Quest intent, including raw, semantic, and
+/// basis seals. This is source-generation metadata only and grants no collision authority.
+pub fn revision3_quest_input_fingerprint(
+    input: &Revision3QuestDraftInput,
+) -> Result<Sha256Digest, Revision3QuestInspectionError> {
+    let canonical =
+        serde_json::to_vec(input).map_err(Revision3QuestInspectionError::SerializeQuestInput)?;
+    let mut hasher = Sha256::new();
+    hasher.update(PLAN_INPUT_FINGERPRINT_DOMAIN);
+    hasher.update((canonical.len() as u64).to_be_bytes());
+    hasher.update(&canonical);
+    Ok(Sha256Digest::from_bytes(hasher.finalize().into()))
+}
+
+fn seal_authoring_bytes(bytes: &[u8]) -> ContentSeal {
+    ContentSeal {
+        byte_len: bytes.len() as u64,
+        sha256: Sha256Digest::from_bytes(Sha256::digest(bytes).into()),
+    }
+}
+
+fn authoring_seal_to_inventory(seal: &ContentSeal) -> gore_story_inventory::ContentSeal {
+    gore_story_inventory::ContentSeal {
+        byte_len: seal.byte_len,
+        sha256: gore_story_inventory::Sha256Digest::from_bytes(*seal.sha256.as_bytes()),
+    }
+}
+
+fn inventory_seal_to_authoring(seal: &gore_story_inventory::ContentSeal) -> ContentSeal {
+    ContentSeal {
+        byte_len: seal.byte_len,
+        sha256: Sha256Digest::from_bytes(*seal.sha256.as_bytes()),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactReferenceField {
+    BasisSnapshot,
+    Capability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactBasisField {
+    ProjectId,
+    ProjectRevision,
+    ProjectTarget,
+    CanonicalProject,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Revision3QuestInspectionError {
+    #[error("revision-3 Quest project JSON exceeds the {limit}-byte limit: {actual} bytes")]
+    ProjectJsonTooLarge { actual: usize, limit: usize },
+    #[error("invalid authoring project document: {0}")]
+    InvalidProjectDocument(#[source] ProjectDocumentError),
+    #[error("could not canonicalize authoring project: {0}")]
+    SerializeProject(#[source] serde_json::Error),
+    #[error("revision-3 Quest inspection requires exact canonical project JSON")]
+    NonCanonicalProjectJson,
+    #[error("revision-3 Quest inspection requires authoring schema revision 3")]
+    Revision3Required,
+    #[error("revision-3 Quest {0} is absent")]
+    MissingQuest(EntityId),
+    #[error("revision-3 entity {0} is not a Quest Draft")]
+    NotAQuest(EntityId),
+    #[error("revision-3 Quest {quest} ScriptModule {module} is missing or mistyped")]
+    MissingScriptModule { quest: EntityId, module: EntityId },
+    #[error("revision-3 Quest {quest} references foreign project {actual}; expected {expected}")]
+    ForeignProject {
+        quest: EntityId,
+        expected: ProjectId,
+        actual: ProjectId,
+    },
+    #[error("revision-3 Quest {quest} has foreign generation at {field}")]
+    ForeignGeneration {
+        quest: EntityId,
+        field: &'static str,
+    },
+    #[error("revision-3 entity {entity} has a foreign generator contract")]
+    ForeignGenerator { entity: EntityId },
+    #[error("revision-3 Quest {quest} / ScriptModule {module} owner or origin mismatch")]
+    OwnerMismatch { quest: EntityId, module: EntityId },
+    #[error("revision-3 Quest {quest} collision artifact is unavailable: {source}")]
+    ArtifactUnavailable {
+        quest: EntityId,
+        #[source]
+        source: WorkingStoreError,
+    },
+    #[error("invalid revision-3 Quest collision artifact: {0}")]
+    InvalidArtifact(#[source] QuestCollisionCapabilityArtifactError),
+    #[error("revision-3 Quest {quest} basis snapshot is unavailable: {source}")]
+    BasisUnavailable {
+        quest: EntityId,
+        #[source]
+        source: WorkingStoreError,
+    },
+    #[error("revision-3 Quest {quest} artifact reference drift at {field:?}")]
+    ArtifactReferenceDrift {
+        quest: EntityId,
+        field: ArtifactReferenceField,
+    },
+    #[error("revision-3 basis recursively contains Quest {entity}")]
+    RecursiveQuestBasis { entity: EntityId },
+    #[error("revision-3 basis contains residual Quest generator state at {entity}")]
+    ResidualQuestBasis { entity: EntityId },
+    #[error("revision-3 basis could not roundtrip through its Quest-free revision-2 source: {0}")]
+    BasisForwardProjection(#[source] gore_authoring::Revision2ToRevision3Error),
+    #[error("revision-3 basis changed during the exact Quest-free revision-2 roundtrip")]
+    BasisRoundtripDrift,
+    #[error("could not serialize the Quest-free revision-2 collision source project: {0}")]
+    SerializeCollisionSourceProject(#[source] serde_json::Error),
+    #[error("collision artifact basis drift at {field:?}")]
+    ArtifactBasisDrift { field: ArtifactBasisField },
+    #[error("fresh source-bound capability does not exactly verify the stored artifact: {0}")]
+    ArtifactVerification(#[source] QuestCollisionCapabilityArtifactVerificationError),
+    #[error("fresh source-bound capability does not authorize Quest {0} parent identity")]
+    UnauthorizedParent(EntityId),
+    #[error("fresh source-bound capability does not authorize Quest {0} giver identity")]
+    UnauthorizedGiver(EntityId),
+    #[error("fresh source-bound collision capability does not match the exact basis: {0}")]
+    CollisionAuthority(#[source] QuestCollisionCapabilityError),
+    #[error("invalid revision-3 Quest generator intent: {0}")]
+    InvalidQuestIntent(#[source] DraftQuestSkeletonError),
+    #[error("could not serialize revision-3 Quest input: {0}")]
+    SerializeQuestInput(#[source] serde_json::Error),
+    #[error("revision-3 Quest {quest} ScriptModule {module} source seal mismatch")]
+    PersistedSourceSealMismatch { quest: EntityId, module: EntityId },
+    #[error(
+        "revision-3 Quest {quest} persisted ScriptModule {module} differs from exact lowering"
+    )]
+    PersistedModuleDrift { quest: EntityId, module: EntityId },
+    #[error("could not serialize revision-3 Quest inspection plan: {0}")]
+    SerializePlan(#[source] serde_json::Error),
+    #[error("invalid revision-3 Quest inspection plan JSON: {0}")]
+    InvalidPlanJson(#[source] serde_json::Error),
+    #[error("revision-3 Quest inspection plan JSON is not canonical")]
+    NonCanonicalPlanJson,
+    #[error("revision-3 Quest inspection plan exceeds {limit} bytes: {actual}")]
+    PlanJsonTooLarge { actual: usize, limit: usize },
+    #[error("revision-3 Quest inspection invariant failed: {0}")]
+    PlanInvariant(String),
+    #[error("revision-3 Quest inspection plan does not match freshly verified sources")]
+    PlanSourceBindingMismatch,
+}

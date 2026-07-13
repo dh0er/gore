@@ -26,6 +26,18 @@ use sha2::{Digest as _, Sha256};
 
 mod quest_capability;
 
+// The S3 end-to-end test needs the private synthetic source fixture below to create a genuinely
+// fresh capability, while `gore-story-build` normally depends on this crate. Including only the
+// production implementation under `cfg(test)` avoids both a dev-dependency cycle and any
+// production test constructor/authority API. The same file is also compiled normally by
+// `gore-story-build`; its unit tests live outside the included implementation.
+#[cfg(test)]
+extern crate self as gore_story_inventory;
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../gore-story-build/src/revision3_quest.rs"]
+mod revision3_quest_s3_test_subject;
+
 pub use quest_capability::{
     reopen_quest_collision_capability_artifact_v1, QuestCollisionBuildStatus,
     QuestCollisionCapabilityArtifactError, QuestCollisionCapabilityArtifactV1,
@@ -776,12 +788,51 @@ mod tests {
         SchemaRevisionV2, TypedRef,
     };
     use gore_authoring::{
-        AssetStoreIndex, ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId,
-        FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
-        Sha256Digest as AuthoringSha256Digest, LOGICAL_NPC_CLONE_GENERATOR_ID,
-        LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+        migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex,
+        ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
+        GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef, Revision3Entity,
+        Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
+        Revision3QuestDraftInput, Revision3TypedRef, Sha256Digest as AuthoringSha256Digest,
+        WorkingProjectStore, WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID,
+        LOGICAL_NPC_CLONE_GENERATOR_VERSION, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
+        QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID,
+        REVISION3_QUEST_GENERATOR_VERSION,
     };
+    use sha2::Sha256;
     use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use crate::revision3_quest_s3_test_subject::{
+        prepare_revision3_quest_source_inspection, regenerate_revision3_quest_module,
+        QuestInspectionBuildStatus, QuestInspectionPublicationStatus,
+        QuestInspectionRuntimeQualification, QuestInspectionScope, Revision3QuestInspectionError,
+        Revision3QuestSourceInspectionPlanV2,
+    };
+
+    static S3_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+    struct S3TestRoot(PathBuf);
+
+    impl S3TestRoot {
+        fn new(label: &str) -> Self {
+            let sequence = S3_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "gore-story-inventory-s3-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for S3TestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
 
     fn seal(bytes: &[u8]) -> ContentSeal {
         seal_bytes(bytes)
@@ -1366,6 +1417,7 @@ mod tests {
         let parent = capability
             .resolve_parent(&expected_parent.catalog_id)
             .unwrap();
+        assert!(capability.authorizes_parent(&parent));
         assert_eq!(
             parent.canonical_selector,
             expected_parent.quest_class.authoring_selector
@@ -1377,6 +1429,7 @@ mod tests {
         let giver = capability
             .resolve_giver(&expected_giver.catalog_id)
             .unwrap();
+        assert!(capability.authorizes_giver(&giver));
         assert_eq!(
             giver.canonical_selector,
             expected_giver.quest_giver.authoring_selector
@@ -1393,6 +1446,12 @@ mod tests {
             capability.resolve_giver("not-in-catalog"),
             Err(QuestCollisionCapabilityError::UnknownGiver(_))
         ));
+        let mut forged_parent = parent;
+        forged_parent.runtime_class.push_str("_Forged");
+        assert!(!capability.authorizes_parent(&forged_parent));
+        let mut forged_giver = giver;
+        forged_giver.runtime_unique_name.push_str("_Forged");
+        assert!(!capability.authorizes_giver(&forged_giver));
     }
 
     #[test]
@@ -1479,6 +1538,293 @@ mod tests {
         assert!(!input.modules.is_empty());
         assert!(!input.relative_paths.is_empty());
         assert!(!input.symbols.is_empty());
+    }
+
+    struct S3Fixture {
+        _root: S3TestRoot,
+        store: WorkingProjectStore,
+        catalog: StoryCatalogFile,
+        collision_source: ProjectRevision2,
+        project: gore_authoring::ProjectRevision3,
+        quest_id: AuthoringEntityId,
+    }
+
+    impl S3Fixture {
+        fn fresh_capability(&self) -> VerifiedQuestCollisionCapability {
+            VerifiedQuestCollisionCapability::bind(
+                artifact(),
+                &self.catalog,
+                &self.collision_source,
+            )
+            .unwrap()
+        }
+
+        fn canonical(&self, project: &gore_authoring::ProjectRevision3) -> String {
+            project.to_canonical_json().unwrap()
+        }
+    }
+
+    fn s3_fixture(label: &str) -> S3Fixture {
+        let root = S3TestRoot::new(label);
+        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+        let catalog = trusted_catalog();
+        let collision_source = empty_authoring_project();
+        let basis = migrate_revision2_to_revision3(&collision_source)
+            .unwrap()
+            .project;
+        let basis_checkpoint = store.prepare_revision3_checkpoint(None, &basis).unwrap();
+
+        let collision_artifact =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
+                .unwrap()
+                .into_artifact()
+                .unwrap();
+        let imported = store
+            .import_quest_collision_artifact_v1(collision_artifact.canonical_json(), None)
+            .unwrap();
+        assert_eq!(
+            imported.artifact,
+            authoring_seal(collision_artifact.artifact_seal())
+        );
+
+        let selection =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
+                .unwrap();
+        let parent = selection
+            .resolve_parent("g1r:quest-parent:swampcamp_scchapter2")
+            .unwrap();
+        let giver = selection
+            .resolve_giver("g1r:npc:om_grd_asghan_263")
+            .unwrap();
+
+        let quest_id = authoring_entity_id(0x71);
+        let module_id = authoring_entity_id(0x72);
+        let mut project = basis;
+        project.revision += 1;
+        project.asset_store.assets.insert(
+            imported.artifact.sha256,
+            AssetMeta {
+                byte_len: imported.asset_meta.byte_len,
+                media_type: imported.asset_meta.media_type,
+            },
+        );
+        let quest = Revision3QuestDraft {
+            generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
+            generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+            input: Revision3QuestDraftInput {
+                target: project.target.clone(),
+                quest_id,
+                module_namespace: "GoreMods.Quests.S3AsghanTrial".to_owned(),
+                technical_id: "GORE_S3_ASGHAN_TRIAL".to_owned(),
+                text_helper: "GoreS3QuestText".to_owned(),
+                parent_quest: parent,
+                giver,
+                title: "Asghan Trial".to_owned(),
+                description: "Prove that the gate is secure.".to_owned(),
+                objective_title: "Report to Asghan".to_owned(),
+                collision_catalog: QuestCollisionArtifactRef {
+                    generation: project.target.clone(),
+                    catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
+                    artifact: imported.artifact,
+                    source_seal: authoring_seal(collision_artifact.source_seal()),
+                    basis_snapshot: basis_checkpoint.head.snapshot,
+                },
+            },
+            script_module: Revision3TypedRef::new(
+                project.project_id,
+                module_id,
+                Revision3EntityKind::ScriptModule,
+            ),
+        };
+        let collision_input =
+            VerifiedQuestCollisionCapability::bind(artifact(), &catalog, &collision_source)
+                .unwrap()
+                .into_quest_collision_input(&collision_source)
+                .unwrap();
+        let module = regenerate_revision3_quest_module(&quest, collision_input).unwrap();
+        let owner = Revision3TypedRef::new(
+            project.project_id,
+            quest_id,
+            Revision3EntityKind::QuestDraft,
+        );
+        project.entities.insert(
+            quest_id,
+            Revision3Entity {
+                id: quest_id,
+                display_name: "S3 Asghan Trial".to_owned(),
+                origin: Revision3OriginRef::New {
+                    authored_runtime_id: quest.input.technical_id.clone(),
+                },
+                revision: 0,
+                payload: Revision3EntityPayload::QuestDraft(quest),
+            },
+        );
+        project.entities.insert(
+            module_id,
+            Revision3Entity {
+                id: module_id,
+                display_name: "S3 Asghan Trial source".to_owned(),
+                origin: Revision3OriginRef::Generated {
+                    generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
+                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+                    owner,
+                },
+                revision: 0,
+                payload: Revision3EntityPayload::ScriptModule(module),
+            },
+        );
+        project.validate_closed_model().unwrap();
+
+        S3Fixture {
+            _root: root,
+            store,
+            catalog,
+            collision_source,
+            project,
+            quest_id,
+        }
+    }
+
+    fn s3_quest_mut(
+        project: &mut gore_authoring::ProjectRevision3,
+        quest_id: AuthoringEntityId,
+    ) -> &mut Revision3QuestDraft {
+        let Revision3EntityPayload::QuestDraft(quest) =
+            &mut project.entities.get_mut(&quest_id).unwrap().payload
+        else {
+            panic!("expected S3 Quest Draft")
+        };
+        quest
+    }
+
+    #[test]
+    fn s3_store_to_fresh_capability_to_exact_source_plan_is_end_to_end() {
+        let fixture = s3_fixture("happy");
+        let canonical = fixture.canonical(&fixture.project);
+        let prepared =
+            prepare_revision3_quest_source_inspection(&fixture.store, &canonical, fixture.quest_id)
+                .unwrap();
+        assert_eq!(
+            prepared.collision_source_project(),
+            &fixture.collision_source
+        );
+        let plan = prepared.lower(fixture.fresh_capability()).unwrap();
+        assert_eq!(plan.scope, QuestInspectionScope::SourceInspectionOnly);
+        assert_eq!(plan.build_status, QuestInspectionBuildStatus::Blocked);
+        assert_eq!(
+            plan.runtime_qualification,
+            QuestInspectionRuntimeQualification::RuntimeUnqualified
+        );
+        assert_eq!(
+            plan.publication_status,
+            QuestInspectionPublicationStatus::NotSupported
+        );
+        assert_eq!(plan.module.quest.id, fixture.quest_id);
+        assert!(plan
+            .module
+            .generated
+            .source
+            .contains("UQuest_GORE_S3_ASGHAN_TRIAL"));
+
+        let plan_json = plan.to_canonical_json().unwrap();
+        assert_eq!(
+            Revision3QuestSourceInspectionPlanV2::from_json(&plan_json).unwrap(),
+            plan
+        );
+        plan.verify_against_sources(&fixture.store, &canonical, fixture.fresh_capability())
+            .unwrap();
+        assert!(plan.content_seal().unwrap().byte_len > 0);
+
+        let mut oversized_input = plan.clone();
+        oversized_input.module.draft_input.byte_len = u64::MAX;
+        assert!(matches!(
+            oversized_input.to_canonical_json(),
+            Err(Revision3QuestInspectionError::PlanInvariant(_))
+        ));
+    }
+
+    #[test]
+    fn s3_raw_semantic_basis_and_persisted_module_drift_fail_before_plan() {
+        let fixture = s3_fixture("drift");
+
+        let mut raw = fixture.project.clone();
+        let (raw_sha256, raw_byte_len) = {
+            let raw_ref = &mut s3_quest_mut(&mut raw, fixture.quest_id)
+                .input
+                .collision_catalog
+                .artifact;
+            raw_ref.sha256 = AuthoringSha256Digest::from_bytes([0xa1; 32]);
+            (raw_ref.sha256, raw_ref.byte_len)
+        };
+        raw.asset_store.assets.insert(
+            raw_sha256,
+            AssetMeta {
+                byte_len: raw_byte_len,
+                media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.to_owned(),
+            },
+        );
+        assert!(matches!(
+            prepare_revision3_quest_source_inspection(
+                &fixture.store,
+                &fixture.canonical(&raw),
+                fixture.quest_id,
+            ),
+            Err(Revision3QuestInspectionError::ArtifactUnavailable { .. })
+        ));
+
+        let mut semantic = fixture.project.clone();
+        s3_quest_mut(&mut semantic, fixture.quest_id)
+            .input
+            .collision_catalog
+            .source_seal
+            .sha256 = AuthoringSha256Digest::from_bytes([0xa2; 32]);
+        assert!(matches!(
+            prepare_revision3_quest_source_inspection(
+                &fixture.store,
+                &fixture.canonical(&semantic),
+                fixture.quest_id,
+            ),
+            Err(Revision3QuestInspectionError::InvalidArtifact(
+                QuestCollisionCapabilityArtifactError::SourceSealMismatch
+            ))
+        ));
+
+        let mut basis = fixture.project.clone();
+        s3_quest_mut(&mut basis, fixture.quest_id)
+            .input
+            .collision_catalog
+            .basis_snapshot
+            .sha256 = AuthoringSha256Digest::from_bytes([0xa3; 32]);
+        assert!(matches!(
+            prepare_revision3_quest_source_inspection(
+                &fixture.store,
+                &fixture.canonical(&basis),
+                fixture.quest_id,
+            ),
+            Err(Revision3QuestInspectionError::BasisUnavailable { .. })
+        ));
+
+        let mut module = fixture.project.clone();
+        let module_id = s3_quest_mut(&mut module, fixture.quest_id).script_module.id;
+        let Revision3EntityPayload::ScriptModule(persisted) =
+            &mut module.entities.get_mut(&module_id).unwrap().payload
+        else {
+            panic!("expected S3 ScriptModule")
+        };
+        persisted.source.push_str("\n// persisted drift\n");
+        persisted.source_sha256 =
+            AuthoringSha256Digest::from_bytes(Sha256::digest(persisted.source.as_bytes()).into());
+        let module_json = fixture.canonical(&module);
+        let prepared = prepare_revision3_quest_source_inspection(
+            &fixture.store,
+            &module_json,
+            fixture.quest_id,
+        )
+        .unwrap();
+        assert!(matches!(
+            prepared.lower(fixture.fresh_capability()),
+            Err(Revision3QuestInspectionError::PersistedModuleDrift { .. })
+        ));
     }
 
     #[test]

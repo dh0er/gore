@@ -6,6 +6,11 @@
 //! authoring generators, and returns a sealed inspection plan. Runtime-unqualified drafts are
 //! always blocking, including under the experimental validation profile.
 
+pub mod revision3_quest;
+
+#[cfg(test)]
+mod revision3_quest_tests;
+
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt;

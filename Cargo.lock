@@ -1064,6 +1064,7 @@ name = "gore-story-build"
 version = "0.0.0"
 dependencies = [
  "gore-authoring",
+ "gore-story-inventory",
  "serde",
  "serde_json",
  "sha2",
