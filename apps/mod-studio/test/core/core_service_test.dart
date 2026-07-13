@@ -93,6 +93,11 @@ void main() {
               .where((command) => command != 'voice_ogg_inspect_v1')
               .toList(),
         );
+        final missingDataAssetInspect = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where((command) => command != 'dataasset_fixed_inspect_v1')
+              .toList(),
+        );
         final missingWorkingStore = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -179,6 +184,7 @@ void main() {
           missingAuthoring,
           missingVoice,
           missingVoiceOggInspect,
+          missingDataAssetInspect,
           missingWorkingStore,
           missingDocumentStore,
           missingStoryTransaction,
@@ -192,7 +198,7 @@ void main() {
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(16), everyElement(isNull));
+        expect(decisions.take(17), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
@@ -229,6 +235,7 @@ void main() {
                 command != 'authoring_story_catalog_v1_read' &&
                 command != 'authoring_story_inventory_v1_build' &&
                 command != 'authoring_store_open_document' &&
+                command != 'dataasset_fixed_inspect_v1' &&
                 command != 'voice_archive_match_line' &&
                 command != 'voice_ogg_inspect_v1' &&
                 command != 'authoring_logical_npc_clone_draft_v1_generate' &&
@@ -254,6 +261,7 @@ void main() {
         'authoring_story_catalog_v1_build_for_game_root',
         'authoring_story_catalog_v1_read',
         'authoring_story_inventory_v1_build',
+        'dataasset_fixed_inspect_v1',
         'voice_archive_match_line',
         'voice_ogg_inspect_v1',
       ]);

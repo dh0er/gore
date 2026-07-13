@@ -12,6 +12,7 @@ import 'app/ui/window_chrome.dart';
 import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
+import 'dataasset/ui/dataasset_lab.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
@@ -353,7 +354,7 @@ class _HomePageState extends ConsumerState<HomePage>
         ],
       ),
       body: DefaultTabController(
-        length: 7,
+        length: 8,
         // KeepAliveTab keeps every tab (and its autoDispose providers)
         // mounted across switches, so the texture index / script module list
         // would go stale after a deploy, undeploy, or game patch. Entering
@@ -405,6 +406,10 @@ class _HomePageState extends ConsumerState<HomePage>
                             icon: const Icon(Icons.settings_outlined),
                             text: l10n.tabSettings,
                           ),
+                          const Tab(
+                            icon: Icon(Icons.data_object_outlined),
+                            text: 'DataAsset Lab',
+                          ),
                         ],
                       ),
                     ),
@@ -437,6 +442,8 @@ class _HomePageState extends ConsumerState<HomePage>
                     const KeepAliveTab(child: ChangesTab()),
                     // Settings.
                     const KeepAliveTab(child: SettingsTab()),
+                    // Bounded offline DataAsset evidence (never stages edits).
+                    const KeepAliveTab(child: DataAssetLab()),
                   ],
                 ),
               ),

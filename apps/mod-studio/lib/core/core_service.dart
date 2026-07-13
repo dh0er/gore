@@ -64,6 +64,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_story_catalog_v1_read',
   'authoring_story_inventory_v1_build',
   'core_info',
+  'dataasset_fixed_inspect_v1',
   'find_game',
   'generate_mod',
   'loc_extract',

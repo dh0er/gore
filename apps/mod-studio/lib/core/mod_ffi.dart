@@ -3,13 +3,19 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 
+import '../dataasset/domain/dataasset_inspection.dart';
 import 'core_service.dart';
+
+export '../dataasset/domain/dataasset_inspection.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
 const _maxVoiceOggPathBytes = 32 * 1024;
 const _maxVoiceOggInspectRequestBytes = _maxVoiceOggPathBytes * 6 + 256;
 const _maxVoiceOggBytes = 64 * 1024 * 1024;
+const _maxDataAssetPathBytes = 32 * 1024;
+const _maxDataAssetInspectRequestBytes = _maxDataAssetPathBytes * 12 + 512;
+const _maxDataAssetExportIndex = 0x7fffffff;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
@@ -166,6 +172,39 @@ class ModFfi {
     _voiceOggInspectEnvelopePreflight(command, oggPath);
     final response = await _call(command, {'ogg_path': oggPath});
     return VoiceOggInspectionResult.fromJson(response);
+  }
+
+  /// Inspect a cooked package pair against an exact USMAP snapshot without
+  /// writing either input or retaining runtime state.
+  Future<DataAssetInspection> dataAssetFixedInspectV1({
+    required String uassetPath,
+    required String usmapPath,
+    int? exportIndex,
+  }) async {
+    _dataAssetInspectPath(uassetPath, 'uassetPath');
+    _dataAssetInspectPath(usmapPath, 'usmapPath');
+    if (exportIndex != null &&
+        (exportIndex < 0 || exportIndex > _maxDataAssetExportIndex)) {
+      throw ArgumentError.value(
+        exportIndex,
+        'exportIndex',
+        'must be 0..=$_maxDataAssetExportIndex',
+      );
+    }
+    const command = 'dataasset_fixed_inspect_v1';
+    _dataAssetInspectEnvelopePreflight(
+      command,
+      uassetPath,
+      usmapPath,
+      exportIndex,
+    );
+    final payload = <String, Object?>{
+      'uasset_path': uassetPath,
+      'usmap_path': usmapPath,
+    };
+    if (exportIndex != null) payload['export_index'] = exportIndex;
+    final response = await _call(command, payload);
+    return DataAssetInspection.fromJson(response);
   }
 
   /// Parse, canonicalize, and validate one format-2 authoring snapshot without retaining state.
@@ -753,6 +792,82 @@ void _voiceOggInspectPath(String value) {
     );
   }
   _authoringDraftRequestString(value, 'oggPath', _maxVoiceOggPathBytes);
+}
+
+void _dataAssetInspectPath(String value, String field) {
+  if (value.isEmpty || value.contains('\u0000')) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      field,
+      'must be a non-empty path without NUL',
+    );
+  }
+  _authoringDraftRequestString(value, field, _maxDataAssetPathBytes);
+}
+
+void _dataAssetInspectEnvelopePreflight(
+  String command,
+  String uassetPath,
+  String usmapPath,
+  int? exportIndex,
+) {
+  var encodedBytes = exportIndex == null
+      ? '{"command":"","payload":{"uasset_path":"","usmap_path":""}}'.length +
+            command.length
+      : '{"command":"","payload":{"uasset_path":"","usmap_path":"","export_index":}}'
+                .length +
+            command.length +
+            exportIndex.toString().length;
+  encodedBytes = _dataAssetAddEscapedJsonStringBytes(
+    uassetPath,
+    'uassetPath',
+    encodedBytes,
+  );
+  _dataAssetAddEscapedJsonStringBytes(usmapPath, 'usmapPath', encodedBytes);
+}
+
+int _dataAssetAddEscapedJsonStringBytes(
+  String value,
+  String field,
+  int encodedBytes,
+) {
+  if (encodedBytes > _maxDataAssetInspectRequestBytes) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      field,
+      'escaped command envelope exceeds the '
+          '$_maxDataAssetInspectRequestBytes-byte native request limit',
+    );
+  }
+  for (var index = 0; index < value.length; index++) {
+    final unit = value.codeUnitAt(index);
+    final int added;
+    if (unit <= 0x1f || unit == 0x2028 || unit == 0x2029) {
+      added = 6;
+    } else if (unit == 0x22 || unit == 0x5c) {
+      added = 2;
+    } else if (unit <= 0x7f) {
+      added = 1;
+    } else if (unit <= 0x7ff) {
+      added = 2;
+    } else if (unit >= 0xd800 && unit <= 0xdbff) {
+      // The path preflight already proved this is a paired surrogate.
+      index++;
+      added = 4;
+    } else {
+      added = 3;
+    }
+    if (added > _maxDataAssetInspectRequestBytes - encodedBytes) {
+      throw ArgumentError.value(
+        '<${value.length} characters>',
+        field,
+        'escaped command envelope exceeds the '
+            '$_maxDataAssetInspectRequestBytes-byte native request limit',
+      );
+    }
+    encodedBytes += added;
+  }
+  return encodedBytes;
 }
 
 void _voiceOggInspectEnvelopePreflight(String command, String oggPath) {

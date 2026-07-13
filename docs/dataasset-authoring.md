@@ -94,6 +94,22 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 )
 ```
 
+### Mod Studio read-only inspection
+
+Mod Studio's **DataAsset Lab** exposes the same bounded inspection boundary for
+local snapshots. Select one `.uasset` and the exact `.usmap`; the native command
+derives the sibling `.uexp`, reads all three through guarded no-follow handles,
+and returns only sealed package facts plus offset-free selectors. The UI reports
+`walked`, `partial`, and `unsupported` exports separately, searches the proven
+leaf facts, and keeps large result lists lazy.
+
+This first Studio surface is deliberately evidence-only. It has no patch,
+stage, save, pack, deploy, or runtime-qualification control, and native paths or
+raw offsets are never returned in its result. Use the receipt-bound CLI workflow
+below for the currently supported copy-on-write patch operation. A future
+semantic editor must preserve these exact selector and provenance gates rather
+than treating a successfully opened package as general write support.
+
 ## 3. Prepare one raw fixed-width replacement
 
 The selector's `expected_hex` is the complete current on-wire value. Supply it
