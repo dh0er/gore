@@ -12,11 +12,13 @@ use crate::model_revision2::{
     Entity as Revision2Entity, EntityPayload as Revision2EntityPayload,
     OggCodec as Revision2OggCodec, OggMetadata as Revision2OggMetadata,
 };
+use crate::model_revision3::{Entity as Revision3Entity, EntityPayload as Revision3EntityPayload};
 use crate::{
-    AssetRef, AssetStoreIndex, ContentSeal, Diagnostic, DiagnosticCode, Entity, EntityId,
-    EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, OggCodec, OggMetadata,
-    ProjectDocument, ProjectId, ProjectMeta, ProjectRevision2, ProjectV2, SchemaRevisionV1,
-    SchemaRevisionV2, Sha256Digest, ValidationProfile,
+    AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, Diagnostic, DiagnosticCode, Entity,
+    EntityId, EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, OggCodec, OggMetadata,
+    ProjectDocument, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3, ProjectV2,
+    SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3, Sha256Digest, ValidationProfile,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
 };
 
 const HEAD_FILE_NAME: &str = "gore-project.json";
@@ -188,6 +190,27 @@ pub struct OpenedDocumentCheckpoint {
     pub blocks_build: bool,
 }
 
+/// Result of preparing one schema-revision-3 checkpoint without publishing the fixed head.
+///
+/// This type deliberately has no diagnostics or readiness boolean: this store slice proves only
+/// bounded structural identity and durable content-addressed storage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision3CheckpointPreparation {
+    pub head_bytes: Vec<u8>,
+    pub head: WorkingHead,
+}
+
+/// A schema-revision-3 project reconstituted from one exact immutable snapshot.
+///
+/// `head` identifies the opened snapshot. It does not assert that the fixed head currently points
+/// to that snapshot; this distinction keeps old basis snapshots independently reopenable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct OpenedRevision3Checkpoint {
+    pub head: WorkingHead,
+    pub project: ProjectRevision3,
+}
+
 /// Physical blob verification performed while opening or checking an asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +229,15 @@ pub enum AssetVerification {
 pub struct ImportedOgg {
     pub asset: AssetRef,
     pub ogg: OggMetadata,
+    pub deduplicated: bool,
+}
+
+/// Content-addressed result of installing one upstream-verified canonical Quest artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedQuestCollisionArtifactV1 {
+    pub artifact: ContentSeal,
+    pub asset_meta: AssetMeta,
     pub deduplicated: bool,
 }
 
@@ -307,6 +339,28 @@ struct SnapshotManifestRevision2 {
     asset_store: AssetStoreIndex,
 }
 
+/// Closed immutable snapshot manifest for schema revision 3.
+///
+/// It remains separate from the frozen revision-1 and revision-2 manifests so neither older wire
+/// parser nor their canonical bytes need to change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Revision3SnapshotManifest {
+    pub store_format: WorkingStoreFormat,
+    pub format: FormatV2,
+    pub schema_revision: SchemaRevisionV3,
+    pub project_id: ProjectId,
+    #[serde(default)]
+    pub revision: u64,
+    pub meta: ProjectMeta,
+    pub target: GameGenerationAnchor,
+    #[serde(default, deserialize_with = "deserialize_unique_set")]
+    pub authoring_locales: BTreeSet<LocaleCode>,
+    #[serde(default, deserialize_with = "deserialize_unique_map")]
+    pub entities: BTreeMap<EntityId, ContentSeal>,
+    pub asset_store: AssetStoreIndex,
+}
+
 impl SnapshotManifestRevision2 {
     fn from_project(project: &ProjectRevision2, entities: BTreeMap<EntityId, ContentSeal>) -> Self {
         Self {
@@ -325,6 +379,37 @@ impl SnapshotManifestRevision2 {
 
     fn into_project(self, entities: BTreeMap<EntityId, Revision2Entity>) -> ProjectRevision2 {
         ProjectRevision2 {
+            format: self.format,
+            schema_revision: self.schema_revision,
+            project_id: self.project_id,
+            revision: self.revision,
+            meta: self.meta,
+            target: self.target,
+            authoring_locales: self.authoring_locales,
+            entities,
+            asset_store: self.asset_store,
+        }
+    }
+}
+
+impl Revision3SnapshotManifest {
+    fn from_project(project: &ProjectRevision3, entities: BTreeMap<EntityId, ContentSeal>) -> Self {
+        Self {
+            store_format: WorkingStoreFormat,
+            format: project.format,
+            schema_revision: project.schema_revision,
+            project_id: project.project_id,
+            revision: project.revision,
+            meta: project.meta.clone(),
+            target: project.target.clone(),
+            authoring_locales: project.authoring_locales.clone(),
+            entities,
+            asset_store: project.asset_store.clone(),
+        }
+    }
+
+    fn into_project(self, entities: BTreeMap<EntityId, Revision3Entity>) -> ProjectRevision3 {
+        ProjectRevision3 {
             format: self.format,
             schema_revision: self.schema_revision,
             project_id: self.project_id,
@@ -524,6 +609,71 @@ impl WorkingProjectStore {
         }
     }
 
+    /// Prepare immutable entity and snapshot objects for one closed schema-revision-3 project.
+    ///
+    /// The fixed `gore-project.json` head is never created or replaced. The project is validated
+    /// structurally, every referenced asset is fully length/hash verified, and Quest source is
+    /// never regenerated. `expected_head` uses the same strict two-check CAS contract as the
+    /// frozen revision-1 and revision-2 preparation paths.
+    pub fn prepare_revision3_checkpoint(
+        &self,
+        expected_head: Option<&WorkingHead>,
+        project: &ProjectRevision3,
+    ) -> Result<Revision3CheckpointPreparation, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)?;
+        validate_revision3_persistability(project, &self.limits)?;
+
+        // Complete all cheap, filesystem-free entity work before hashing external assets or
+        // installing immutable objects.
+        let mut prepared_entities = Vec::with_capacity(project.entities.len());
+        for (id, entity) in &project.entities {
+            let bytes = canonical_json(entity)?;
+            let seal = seal_bytes(&bytes);
+            prepared_entities.push((*id, bytes, seal));
+        }
+
+        self.verify_asset_index(&project.asset_store, AssetVerification::Full)?;
+        self.verify_revision3_voice_take_ogg_metadata(project, AssetVerification::Full)?;
+        self.verify_revision3_basis_snapshots(project)?;
+
+        let mut entity_seals = BTreeMap::new();
+        for (id, bytes, seal) in prepared_entities {
+            let path = self.entity_path(id, seal.sha256);
+            self.install_immutable_bytes(&path, &bytes, &seal)?;
+            entity_seals.insert(id, seal);
+        }
+
+        let snapshot = Revision3SnapshotManifest::from_project(project, entity_seals);
+        let snapshot_bytes = canonical_json(&snapshot)?;
+        enforce_limit(
+            "revision-3 snapshot bytes",
+            snapshot_bytes.len(),
+            self.limits.max_snapshot_bytes,
+        )?;
+        let snapshot_seal = seal_bytes(&snapshot_bytes);
+        let snapshot_path = self.snapshot_path(snapshot_seal.sha256);
+        self.install_immutable_bytes(&snapshot_path, &snapshot_bytes, &snapshot_seal)?;
+
+        let head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: snapshot_seal,
+        };
+        let head_bytes = canonical_json(&head)?;
+        enforce_limit("head bytes", head_bytes.len(), self.limits.max_head_bytes)?;
+
+        // Objects installed after a concurrent head advance are safe immutable orphans. The
+        // second check prevents returning a preparation based on a stale CAS token.
+        self.check_expected_head(expected_head)?;
+        let reopened = self.open_revision3_head_bytes(&head_bytes, AssetVerification::Full)?;
+        if reopened.project != *project || reopened.head != head {
+            return Err(WorkingStoreError::Invariant(
+                "revision-3 candidate checkpoint did not reconstitute exactly".to_owned(),
+            ));
+        }
+        Ok(Revision3CheckpointPreparation { head_bytes, head })
+    }
+
     /// Open the currently published fixed head and exactly reconstitute its [`ProjectV2`].
     pub fn open_current(
         &self,
@@ -546,6 +696,49 @@ impl WorkingProjectStore {
         let path = self.head_path();
         let bytes = read_required_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?;
         self.open_head_bytes_document(&bytes, verification, profile)
+    }
+
+    /// Open the currently published fixed head as schema revision 3 only.
+    pub fn open_current_revision3(
+        &self,
+        verification: AssetVerification,
+    ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        let path = self.head_path();
+        let bytes = read_required_regular_bounded(&path, self.limits.max_head_bytes, "head bytes")?;
+        self.open_revision3_head_bytes(&bytes, verification)
+    }
+
+    /// Open canonical head bytes and require their sealed snapshot to be schema revision 3.
+    pub fn open_revision3_head_bytes(
+        &self,
+        bytes: &[u8],
+        verification: AssetVerification,
+    ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        enforce_limit("head bytes", bytes.len(), self.limits.max_head_bytes)?;
+        let head: WorkingHead = parse_canonical_json(bytes, "head")?;
+        self.open_revision3_snapshot_with_head(head, verification)
+    }
+
+    /// Reopen one exact immutable schema-revision-3 snapshot independently of the fixed head.
+    ///
+    /// This is the basis-snapshot path: advancing `gore-project.json` never invalidates an older
+    /// content-addressed snapshot. The returned `head` is only the canonical envelope for the
+    /// requested snapshot and makes no claim about current publication state.
+    pub fn open_revision3_snapshot(
+        &self,
+        snapshot: &ContentSeal,
+        verification: AssetVerification,
+    ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.open_revision3_snapshot_with_head(
+            WorkingHead {
+                store_format: WorkingStoreFormat,
+                snapshot: snapshot.clone(),
+            },
+            verification,
+        )
     }
 
     /// Validate canonical head bytes, all immutable manifests, and optionally complete assets.
@@ -783,6 +976,163 @@ impl WorkingProjectStore {
         })
     }
 
+    fn open_revision3_snapshot_with_head(
+        &self,
+        head: WorkingHead,
+        verification: AssetVerification,
+    ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
+        validate_nonzero_seal(
+            &head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "revision-3 snapshot",
+        )?;
+        let snapshot_path = self.snapshot_path(head.snapshot.sha256);
+        let snapshot_bytes = self.read_sealed_object(
+            &snapshot_path,
+            &head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "revision-3 snapshot",
+            AssetVerification::Full,
+        )?;
+        let snapshot: Revision3SnapshotManifest =
+            parse_canonical_json(&snapshot_bytes, "revision-3 snapshot")?;
+        self.validate_revision3_manifest_limits(&snapshot)?;
+        self.verify_asset_index(&snapshot.asset_store, verification)?;
+
+        let mut entities = BTreeMap::new();
+        for (id, seal) in &snapshot.entities {
+            let entity_path = self.entity_path(*id, seal.sha256);
+            let entity_bytes = self.read_sealed_object(
+                &entity_path,
+                seal,
+                self.limits.max_entity_bytes,
+                "revision-3 entity",
+                AssetVerification::Full,
+            )?;
+            let entity: Revision3Entity = parse_canonical_json(&entity_bytes, "revision-3 entity")?;
+            if entity.id != *id {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "revision-3 entity shard {id} contains embedded id {}",
+                    entity.id
+                )));
+            }
+            entities.insert(*id, entity);
+        }
+
+        let project = snapshot.into_project(entities);
+        validate_revision3_persistability(&project, &self.limits)?;
+        self.verify_revision3_voice_take_ogg_metadata(&project, verification)?;
+        self.verify_revision3_basis_snapshots(&project)?;
+        Ok(OpenedRevision3Checkpoint { head, project })
+    }
+
+    /// Install upstream-verified canonical Quest collision artifact bytes in the ordinary asset
+    /// CAS without parsing their semantic seal or making readiness claims.
+    ///
+    /// The caller must supply the exact canonical bytes returned by the version-1 artifact
+    /// capability. Semantic reopen remains in `gore-story-inventory`; this lower store layer only
+    /// enforces the exact 24 MiB boundary, raw SHA-256 identity, no-clobber installation, and head
+    /// CAS. `None` requires the fixed head to remain absent through installation and final full
+    /// verification; a raced install remains only an immutable orphan and returns a conflict.
+    pub fn import_quest_collision_artifact_v1(
+        &self,
+        canonical_bytes: &[u8],
+        expected_head: Option<&WorkingHead>,
+    ) -> Result<ImportedQuestCollisionArtifactV1, WorkingStoreError> {
+        self.import_quest_collision_artifact_v1_with_final_head_hook(
+            canonical_bytes,
+            expected_head,
+            || Ok(()),
+        )
+    }
+
+    fn import_quest_collision_artifact_v1_with_final_head_hook<F>(
+        &self,
+        canonical_bytes: &[u8],
+        expected_head: Option<&WorkingHead>,
+        before_final_head_check: F,
+    ) -> Result<ImportedQuestCollisionArtifactV1, WorkingStoreError>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        validate_quest_collision_artifact_length(canonical_bytes.len() as u64)?;
+        let artifact = seal_bytes(canonical_bytes);
+
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)?;
+        let (temp_path, mut temp) = self.create_temp_file()?;
+        let result = (|| {
+            temp.write_all(canonical_bytes)?;
+            temp.flush()?;
+            temp.sync_all()?;
+            self.check_expected_head(expected_head)?;
+            let destination = self.asset_path(artifact.sha256);
+            drop(temp);
+            let deduplicated = self.install_staged_file(&temp_path, &destination, &artifact)?;
+            self.verify_seal_at(&destination, &artifact, AssetVerification::Full, false)?;
+            before_final_head_check()?;
+            self.check_expected_head(expected_head)?;
+            Ok(ImportedQuestCollisionArtifactV1 {
+                asset_meta: AssetMeta {
+                    byte_len: artifact.byte_len,
+                    media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE.to_owned(),
+                },
+                artifact,
+                deduplicated,
+            })
+        })();
+        let cleanup = cleanup_staged_file(&temp_path);
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(source)) => Err(WorkingStoreError::StagingCleanup {
+                path: temp_path,
+                source,
+            }),
+            (Err(error), _) => Err(error),
+        }
+    }
+
+    /// Read one version-1 Quest collision artifact only through its exact indexed raw identity.
+    ///
+    /// Seal bounds and index digest/length/media are checked before any filesystem access. The
+    /// subsequent CAS read always streams and verifies the complete SHA-256 regardless of browse
+    /// verification policy. The independent semantic source seal is intentionally not accepted by
+    /// this storage-only API.
+    pub fn read_indexed_quest_collision_artifact_v1(
+        &self,
+        index: &AssetStoreIndex,
+        artifact: &ContentSeal,
+    ) -> Result<Vec<u8>, WorkingStoreError> {
+        validate_quest_collision_artifact_length(artifact.byte_len)?;
+        let meta = index.assets.get(&artifact.sha256).ok_or_else(|| {
+            WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} is absent from the supplied asset index",
+                artifact.sha256
+            ))
+        })?;
+        if meta.byte_len != artifact.byte_len {
+            return Err(WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} index declares {} bytes, raw seal declares {}",
+                artifact.sha256, meta.byte_len, artifact.byte_len
+            )));
+        }
+        if meta.media_type != QUEST_COLLISION_ARTIFACT_MEDIA_TYPE {
+            return Err(WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} media type is {:?}, expected {:?}",
+                artifact.sha256, meta.media_type, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE
+            )));
+        }
+
+        self.ensure_root_safe()?;
+        self.read_sealed_object(
+            &self.asset_path(artifact.sha256),
+            artifact,
+            quest_collision_artifact_limit(),
+            "Quest collision artifact bytes",
+            AssetVerification::Full,
+        )
+    }
+
     /// Stream, bound, hash, validate, and no-clobber install one Ogg asset.
     ///
     /// The source is opened without following a final symlink/reparse point. Deleting or changing
@@ -984,6 +1334,29 @@ impl WorkingProjectStore {
         self.validate_asset_index_limits(&snapshot.asset_store)
     }
 
+    fn validate_revision3_manifest_limits(
+        &self,
+        snapshot: &Revision3SnapshotManifest,
+    ) -> Result<(), WorkingStoreError> {
+        enforce_limit(
+            "entity count",
+            snapshot.entities.len(),
+            self.limits.max_entities,
+        )?;
+        validate_revision3_asset_index_persistability(&snapshot.asset_store, &self.limits)?;
+        let mut total_entity_bytes = 0u64;
+        for seal in snapshot.entities.values() {
+            validate_nonzero_seal(seal, self.limits.max_entity_bytes, "revision-3 entity")?;
+            total_entity_bytes = checked_bounded_sum(
+                "aggregate referenced entity bytes",
+                total_entity_bytes,
+                seal.byte_len,
+                self.limits.max_referenced_entity_bytes,
+            )?;
+        }
+        Ok(())
+    }
+
     fn validate_asset_index_limits(
         &self,
         index: &AssetStoreIndex,
@@ -1128,6 +1501,110 @@ impl WorkingProjectStore {
                     actual,
                 });
             }
+        }
+        Ok(())
+    }
+
+    fn verify_revision3_voice_take_ogg_metadata(
+        &self,
+        project: &ProjectRevision3,
+        verification: AssetVerification,
+    ) -> Result<(), WorkingStoreError> {
+        if verification != AssetVerification::Full {
+            return Ok(());
+        }
+
+        let mut validated = BTreeMap::<Sha256Digest, OggMetadata>::new();
+        for (entity_id, entity) in &project.entities {
+            let Revision3EntityPayload::VoiceTake(take) = &entity.payload else {
+                continue;
+            };
+            let indexed = project
+                .asset_store
+                .assets
+                .get(&take.asset.sha256)
+                .ok_or_else(|| {
+                    WorkingStoreError::Invariant(format!(
+                        "revision-3 voice take {entity_id} references asset {} absent from asset_store",
+                        take.asset.sha256
+                    ))
+                })?;
+            if indexed.byte_len != take.asset.byte_len {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "revision-3 voice take {entity_id} asset {} declares {} bytes but asset_store declares {}",
+                    take.asset.sha256, take.asset.byte_len, indexed.byte_len
+                )));
+            }
+            if indexed.media_type != "audio/ogg" {
+                return Err(WorkingStoreError::Invariant(format!(
+                    "revision-3 voice take {entity_id} asset {} has media type {:?}, expected \"audio/ogg\"",
+                    take.asset.sha256, indexed.media_type
+                )));
+            }
+
+            let actual = if let Some(actual) = validated.get(&take.asset.sha256) {
+                actual.clone()
+            } else {
+                let seal = ContentSeal {
+                    byte_len: indexed.byte_len,
+                    sha256: take.asset.sha256,
+                };
+                let bytes = self.read_sealed_object(
+                    &self.asset_path(take.asset.sha256),
+                    &seal,
+                    self.limits.max_ogg_bytes,
+                    "revision-3 Ogg bytes",
+                    AssetVerification::Full,
+                )?;
+                let actual = self.derive_ogg_metadata(&bytes)?;
+                validated.insert(take.asset.sha256, actual.clone());
+                actual
+            };
+
+            let declared = revision2_ogg_metadata_as_revision1(&take.ogg);
+            if declared != actual {
+                return Err(WorkingStoreError::OggMetadataMismatch {
+                    entity: *entity_id,
+                    asset: take.asset.sha256,
+                    declared,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn verify_revision3_basis_snapshots(
+        &self,
+        project: &ProjectRevision3,
+    ) -> Result<(), WorkingStoreError> {
+        let mut snapshots = BTreeMap::<Sha256Digest, u64>::new();
+        for entity in project.entities.values() {
+            let Revision3EntityPayload::QuestDraft(quest) = &entity.payload else {
+                continue;
+            };
+            let basis = &quest.input.collision_catalog.basis_snapshot;
+            if let Some(existing) = snapshots.insert(basis.sha256, basis.byte_len) {
+                if existing != basis.byte_len {
+                    return Err(WorkingStoreError::Invariant(format!(
+                        "revision-3 basis snapshot {} has conflicting lengths {existing} and {}",
+                        basis.sha256, basis.byte_len
+                    )));
+                }
+            }
+        }
+        for (sha256, byte_len) in snapshots {
+            let seal = ContentSeal { byte_len, sha256 };
+            let bytes = self.read_sealed_object(
+                &self.snapshot_path(sha256),
+                &seal,
+                self.limits.max_snapshot_bytes,
+                "revision-3 basis snapshot",
+                AssetVerification::Full,
+            )?;
+            let manifest: Revision3SnapshotManifest =
+                parse_canonical_json(&bytes, "revision-3 basis snapshot")?;
+            self.validate_revision3_manifest_limits(&manifest)?;
         }
         Ok(())
     }
@@ -1559,6 +2036,83 @@ pub(crate) fn validate_revision2_persistability(
             bytes.len() as u64,
             limits.max_referenced_entity_bytes,
         )?;
+    }
+    Ok(())
+}
+
+fn validate_revision3_persistability(
+    project: &ProjectRevision3,
+    limits: &WorkingStoreLimits,
+) -> Result<(), WorkingStoreError> {
+    let limits = (*limits).validate()?;
+    project.validate_closed_model().map_err(|error| {
+        WorkingStoreError::Invariant(format!("invalid schema-revision-3 project: {error}"))
+    })?;
+    enforce_limit("entity count", project.entities.len(), limits.max_entities)?;
+    validate_revision3_asset_index_persistability(&project.asset_store, &limits)?;
+    for entity in project.entities.values() {
+        if let Revision3EntityPayload::VoiceTake(take) = &entity.payload {
+            validate_logical_name_persistability(&take.asset.logical_name, &limits)?;
+            if take.asset.byte_len > limits.max_ogg_bytes as u64 {
+                return Err(WorkingStoreError::LimitExceeded {
+                    kind: "Ogg bytes",
+                    actual: take.asset.byte_len,
+                    limit: limits.max_ogg_bytes as u64,
+                });
+            }
+        }
+    }
+
+    let mut total_entity_bytes = 0u64;
+    for (id, entity) in &project.entities {
+        if id != &entity.id {
+            return Err(WorkingStoreError::Invariant(format!(
+                "revision-3 entity map key {id} does not match embedded id {}",
+                entity.id
+            )));
+        }
+        let bytes = canonical_json(entity)?;
+        enforce_limit("entity bytes", bytes.len(), limits.max_entity_bytes)?;
+        total_entity_bytes = checked_bounded_sum(
+            "aggregate referenced entity bytes",
+            total_entity_bytes,
+            bytes.len() as u64,
+            limits.max_referenced_entity_bytes,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_revision3_asset_index_persistability(
+    index: &AssetStoreIndex,
+    limits: &WorkingStoreLimits,
+) -> Result<(), WorkingStoreError> {
+    validate_asset_index_persistability(index, limits)?;
+    for meta in index.assets.values() {
+        if meta.media_type == QUEST_COLLISION_ARTIFACT_MEDIA_TYPE {
+            validate_quest_collision_artifact_length(meta.byte_len)?;
+        }
+    }
+    Ok(())
+}
+
+fn quest_collision_artifact_limit() -> usize {
+    usize::try_from(MAX_QUEST_COLLISION_ARTIFACT_BYTES)
+        .expect("the fixed Quest collision artifact limit fits usize")
+}
+
+fn validate_quest_collision_artifact_length(byte_len: u64) -> Result<(), WorkingStoreError> {
+    if byte_len == 0 {
+        return Err(WorkingStoreError::Invariant(
+            "Quest collision artifact byte length must be non-zero".to_owned(),
+        ));
+    }
+    if byte_len > MAX_QUEST_COLLISION_ARTIFACT_BYTES {
+        return Err(WorkingStoreError::LimitExceeded {
+            kind: "Quest collision artifact bytes",
+            actual: byte_len,
+            limit: MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+        });
     }
     Ok(())
 }
@@ -2125,5 +2679,51 @@ mod tests {
             Err(WorkingStoreError::StagingCleanup { .. })
         ));
         assert!(require_preinstall_collision(NoClobberInstallError::AlreadyExists).is_ok());
+    }
+
+    #[test]
+    fn quest_artifact_head_race_after_install_returns_conflict_and_leaves_only_orphan() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-artifact-final-head-race-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let raced_head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: ContentSeal {
+                byte_len: 1,
+                sha256: Sha256Digest::from_bytes([0x91; 32]),
+            },
+        };
+        let raced_head_bytes = canonical_json(&raced_head).unwrap();
+        let artifact_bytes = b"{}";
+        let artifact = seal_bytes(artifact_bytes);
+
+        let result = store.import_quest_collision_artifact_v1_with_final_head_hook(
+            artifact_bytes,
+            None,
+            || {
+                fs::write(store.head_path(), &raced_head_bytes)?;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(WorkingStoreError::HeadConflict {
+                expected: None,
+                actual: Some(actual),
+            }) if actual == raced_head
+        ));
+        store
+            .verify_seal_at(
+                &store.asset_path(artifact.sha256),
+                &artifact,
+                AssetVerification::Full,
+                false,
+            )
+            .unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 }
