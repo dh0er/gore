@@ -8,8 +8,10 @@
 mod document;
 mod ids;
 mod migration;
+mod migration_revision3;
 mod model;
 pub mod model_revision2;
+pub mod model_revision3;
 mod npc;
 mod quest;
 mod story_collision;
@@ -17,6 +19,7 @@ mod story_transaction;
 mod strict_json;
 mod validate;
 mod validate_revision2;
+mod validate_revision3;
 mod working_store;
 
 pub use document::{ProjectDocument, ProjectDocumentError};
@@ -24,6 +27,10 @@ pub use ids::{EntityId, FixedHexError, ProjectId, Sha256Digest};
 pub use migration::{
     migrate_revision1_to_revision2, Revision1ToRevision2Error, Revision1ToRevision2Migration,
     Revision1ToRevision2Report, Revision1ToRevision2Transformation, Revision1TypedRefPosition,
+};
+pub use migration_revision3::{
+    migrate_revision2_to_revision3, Revision2ToRevision3Error, Revision2ToRevision3Migration,
+    Revision2ToRevision3Report,
 };
 pub use model::{
     ArchiveSeal, AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, DialogLine, Entity, EntityKind,
@@ -47,6 +54,20 @@ pub use model_revision2::{
     VoiceSlot as Revision2VoiceSlot, VoiceTake as Revision2VoiceTake,
     VoiceTakeStatus as Revision2VoiceTakeStatus, VoiceTarget as Revision2VoiceTarget,
     VoiceTargetResolution as Revision2VoiceTargetResolution,
+};
+pub use model_revision3::{
+    Entity as Revision3Entity, EntityKind as Revision3EntityKind,
+    EntityPayload as Revision3EntityPayload, NpcDraft as Revision3NpcDraft,
+    NpcDraftInput as Revision3NpcDraftInput, OriginRef as Revision3OriginRef, ProjectRevision3,
+    ProjectRevision3JsonError, ProjectRevision3ValidationError, QuestCollisionArtifactRef,
+    QuestDraft as Revision3QuestDraft, QuestDraftInput as Revision3QuestDraftInput,
+    QuestGiverInput as Revision3QuestGiverInput, QuestParentInput as Revision3QuestParentInput,
+    SchemaRevisionV3, ScriptModule as Revision3ScriptModule, TypedRef as Revision3TypedRef,
+    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
+    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
+    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_FORMAT,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION,
+    QUEST_COLLISION_CATALOG_LAYER, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
