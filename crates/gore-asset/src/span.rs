@@ -6,11 +6,17 @@
 //! editable semantic model and no size is inferred for an unsupported type.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use usmap::PropertyInner;
 
+use crate::schema::{
+    clone_property_inner_bounded, clone_property_slot_bounded, BoundedSchemaBudget,
+    BoundedSchemaError, BoundedSchemaLimits, BoundedSchemaUsage,
+};
+use crate::unversioned::{HeaderDecodeBudget, HeaderDecodeLimits, HeaderDecodeUsage};
 use crate::{
     PropertySlot, SchemaDb, SchemaError, SchemaId, SchemaKind, UnversionedError, UnversionedHeader,
 };
@@ -33,6 +39,64 @@ impl Default for SpanLimits {
             max_collection_elements: 1_000_000,
             max_total_nodes: 1_000_000,
         }
+    }
+}
+
+/// Additional request-derived limits for the hostile-input walker. Unlike the
+/// legacy walk methods these limits meter schema expansion, header decoding,
+/// byte comparisons, and all dynamic span-tree metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpanWalkResourceLimits {
+    pub max_work: usize,
+    pub max_string_bytes: usize,
+    pub max_allocation_bytes: usize,
+    pub max_byte_work: usize,
+    pub max_inheritance_depth: usize,
+    pub max_header_fragments: usize,
+}
+
+impl Default for SpanWalkResourceLimits {
+    fn default() -> Self {
+        Self {
+            max_work: 2_000_000,
+            max_string_bytes: 32 * 1024 * 1024,
+            max_allocation_bytes: 128 * 1024 * 1024,
+            max_byte_work: 256 * 1024 * 1024,
+            max_inheritance_depth: 128,
+            max_header_fragments: 65_536,
+        }
+    }
+}
+
+/// Resources consumed by one walk, retained even when the walk fails.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpanWalkUsage {
+    pub nodes: usize,
+    pub collection_elements: usize,
+    pub work: usize,
+    pub string_bytes: usize,
+    pub allocation_bytes: usize,
+    pub byte_work: usize,
+}
+
+/// Error plus the exact successfully debited prefix of a failed walk.
+#[derive(Debug)]
+pub struct SpanWalkFailure {
+    source: SpanError,
+    usage: SpanWalkUsage,
+}
+
+impl SpanWalkFailure {
+    pub fn source(&self) -> &SpanError {
+        &self.source
+    }
+
+    pub fn usage(&self) -> SpanWalkUsage {
+        self.usage
+    }
+
+    pub fn into_source(self) -> SpanError {
+        self.source
     }
 }
 
@@ -371,6 +435,20 @@ pub enum SpanError {
         limit: usize,
     },
     #[error(
+        "map collections would contain {attempted} elements at byte {byte_offset}; global limit is {limit}"
+    )]
+    CollectionAggregateLimit {
+        byte_offset: usize,
+        attempted: usize,
+        limit: usize,
+    },
+    #[error("span walker could not reserve bounded storage for {wire_type}")]
+    Allocation { wire_type: &'static str },
+    #[error("bounded span walk exhausted {resource}")]
+    ResourceLimit { resource: &'static str },
+    #[error("bounded span walk could not bind required schema metadata")]
+    BoundedSchema,
+    #[error(
         "wire nesting depth {depth} at byte {byte_offset} exceeds the limit {limit} ({wire_type})"
     )]
     DepthLimit {
@@ -416,17 +494,83 @@ impl<'db> PropertySpanWalker<'db> {
         bytes: &'bytes [u8],
         schema_id: SchemaId,
     ) -> Result<PropertyBlockSpans<'bytes>, SpanError> {
+        self.walk_counted(bytes, schema_id).map(|(block, _)| block)
+    }
+
+    /// Walk once and return the exact node charge consumed by this span tree.
+    ///
+    /// This additive seam lets higher-level bounded inspectors debit a global cross-export node
+    /// budget without rewalking or estimating the already materialized tree.
+    pub fn walk_counted<'bytes>(
+        &self,
+        bytes: &'bytes [u8],
+        schema_id: SchemaId,
+    ) -> Result<(PropertyBlockSpans<'bytes>, usize), SpanError> {
+        self.walk_counted_with_collection_limit(bytes, schema_id, usize::MAX)
+            .map(|(block, nodes, _)| (block, nodes))
+    }
+
+    /// Walk once while enforcing and reporting an aggregate map-element limit.
+    pub fn walk_counted_with_collection_limit<'bytes>(
+        &self,
+        bytes: &'bytes [u8],
+        schema_id: SchemaId,
+        max_total_collection_elements: usize,
+    ) -> Result<(PropertyBlockSpans<'bytes>, usize, usize), SpanError> {
         let mut state = WalkState {
             schemas: self.schemas,
             limits: self.limits,
             bytes,
             nodes: 0,
+            collection_elements: 0,
+            work: 0,
+            string_bytes: 0,
+            allocation_bytes: 0,
+            byte_work: 0,
+            max_total_collection_elements,
+            resource_limits: None,
             linear_color_validated: false,
             vector4_validated: false,
             slot_cache: HashMap::new(),
         };
         let (block, _) = state.walk_block(schema_id, 0, 0)?;
-        Ok(block)
+        Ok((block, state.nodes, state.collection_elements))
+    }
+
+    /// Walk with request-derived resource limits and return accounting on both
+    /// success and failure. Callers must debit `usage` before continuing to a
+    /// different export.
+    #[allow(clippy::result_large_err)] // keep hostile-input errors allocation-free
+    pub fn walk_bounded_accounted<'bytes>(
+        &self,
+        bytes: &'bytes [u8],
+        schema_id: SchemaId,
+        max_total_collection_elements: usize,
+        resource_limits: SpanWalkResourceLimits,
+    ) -> Result<(PropertyBlockSpans<'bytes>, SpanWalkUsage), SpanWalkFailure> {
+        let mut state = WalkState {
+            schemas: self.schemas,
+            limits: self.limits,
+            bytes,
+            nodes: 0,
+            collection_elements: 0,
+            work: 0,
+            string_bytes: 0,
+            allocation_bytes: 0,
+            byte_work: 0,
+            max_total_collection_elements,
+            resource_limits: Some(resource_limits),
+            linear_color_validated: false,
+            vector4_validated: false,
+            slot_cache: HashMap::new(),
+        };
+        match state.walk_block(schema_id, 0, 0) {
+            Ok((block, _)) => Ok((block, state.usage())),
+            Err(source) => Err(SpanWalkFailure {
+                source,
+                usage: state.usage(),
+            }),
+        }
     }
 }
 
@@ -435,9 +579,16 @@ struct WalkState<'db, 'bytes> {
     limits: SpanLimits,
     bytes: &'bytes [u8],
     nodes: usize,
+    collection_elements: usize,
+    work: usize,
+    string_bytes: usize,
+    allocation_bytes: usize,
+    byte_work: usize,
+    max_total_collection_elements: usize,
+    resource_limits: Option<SpanWalkResourceLimits>,
     linear_color_validated: bool,
     vector4_validated: bool,
-    slot_cache: HashMap<SchemaId, Vec<PropertySlot>>,
+    slot_cache: HashMap<SchemaId, Arc<Vec<PropertySlot>>>,
 }
 
 impl<'db, 'bytes> WalkState<'db, 'bytes> {
@@ -449,7 +600,8 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
     ) -> Result<(PropertyBlockSpans<'bytes>, usize), SpanError> {
         self.ensure_depth(depth, start, "unversioned property block")?;
         self.charge_nodes(1, start)?;
-        let schema_name = self.schemas.schema(schema_id)?.qualified_name();
+        self.charge_work(1)?;
+        let schema_name = self.qualified_schema_name(schema_id)?;
         let slots = self.flattened_slots(schema_id)?;
         let remaining = self
             .bytes
@@ -460,37 +612,80 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
                 available: 0,
                 wire_type: "unversioned property block".to_owned(),
             })?;
-        let (header, header_len) =
-            UnversionedHeader::decode(remaining, slots.len()).map_err(|source| {
-                SpanError::Header {
-                    schema_id,
-                    byte_offset: start,
-                    source,
-                }
-            })?;
+        let decoded = if let Some(resource) = self.resource_limits {
+            let mut header_budget = HeaderDecodeBudget::new(HeaderDecodeLimits {
+                max_fragments: resource.max_header_fragments,
+                max_entries: self.limits.max_total_nodes.saturating_sub(self.nodes),
+                max_work: resource.max_work.saturating_sub(self.work),
+                max_allocation_bytes: resource
+                    .max_allocation_bytes
+                    .saturating_sub(self.allocation_bytes),
+                max_byte_work: resource.max_byte_work.saturating_sub(self.byte_work),
+            });
+            let result =
+                UnversionedHeader::decode_bounded(remaining, slots.len(), &mut header_budget);
+            self.absorb_header_usage(header_budget.usage(), start)?;
+            result
+        } else {
+            UnversionedHeader::decode(remaining, slots.len())
+        };
+        let (header, header_len) = decoded.map_err(|source| SpanError::Header {
+            schema_id,
+            byte_offset: start,
+            source,
+        })?;
         let header_end = self.checked_end(start, header_len, "unversioned header")?;
         let header_span = self.slice(start, header_end, "unversioned header")?;
-        self.charge_nodes(header.entries().len(), start)?;
-
-        let resolved = header
-            .resolve_slots(&slots)
-            .map_err(|source| SpanError::Header {
-                schema_id,
-                byte_offset: start,
-                source,
-            })?;
+        if self.resource_limits.is_none() {
+            self.charge_nodes(header.entries().len(), start)?;
+        }
         let mut cursor = header_end;
-        let mut properties = Vec::with_capacity(resolved.len());
-        for entry in resolved {
+        self.charge_allocation(
+            header
+                .entries()
+                .len()
+                .checked_mul(std::mem::size_of::<PropertySpan<'bytes>>())
+                .ok_or(SpanError::ResourceLimit {
+                    resource: "span allocations",
+                })?,
+        )?;
+        let mut properties = Vec::new();
+        properties
+            .try_reserve_exact(header.entries().len())
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "property spans",
+            })?;
+        for entry in header.entries() {
+            self.charge_work(1)?;
+            let slot = slots
+                .get(entry.schema_index)
+                .ok_or_else(|| SpanError::Header {
+                    schema_id,
+                    byte_offset: start,
+                    source: UnversionedError::SchemaIndexOutOfRange {
+                        schema_index: entry.schema_index,
+                        schema_slot_count: slots.len(),
+                    },
+                })?;
+            if slot.schema_index != entry.schema_index {
+                return Err(SpanError::Header {
+                    schema_id,
+                    byte_offset: start,
+                    source: UnversionedError::SlotLayoutMismatch {
+                        position: entry.schema_index,
+                        schema_index: slot.schema_index,
+                    },
+                });
+            }
             let value = if entry.is_zero {
                 None
             } else {
-                let (value, end) = self.walk_value(&entry.slot.inner, cursor, depth)?;
+                let (value, end) = self.walk_value(&slot.inner, cursor, depth)?;
                 cursor = end;
                 Some(value)
             };
             properties.push(PropertySpan {
-                slot: entry.slot.clone(),
+                slot: self.clone_slot(slot)?,
                 is_zero: entry.is_zero,
                 value,
             });
@@ -515,8 +710,9 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
         start: usize,
         depth: usize,
     ) -> Result<(ValueSpan<'bytes>, usize), SpanError> {
-        self.ensure_depth(depth, start, &format!("{inner:?}"))?;
+        self.ensure_depth(depth, start, "property value")?;
         self.charge_nodes(1, start)?;
+        self.charge_work(1)?;
 
         if let Some(kind) = fixed_wire_kind(inner) {
             let end = self.checked_end(start, kind.width(), fixed_wire_name(kind))?;
@@ -536,10 +732,17 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
         match inner {
             PropertyInner::Struct { name } => self.walk_struct(name, start, depth),
             PropertyInner::Map { key, value } => self.walk_map(key, value, start, depth),
-            unsupported => Err(SpanError::UnsupportedType {
-                byte_offset: start,
-                property_type: format!("{unsupported:?}"),
-            }),
+            unsupported => {
+                let property_type = if self.resource_limits.is_some() {
+                    self.clone_error_text("unsupported property type")?
+                } else {
+                    format!("{unsupported:?}")
+                };
+                Err(SpanError::UnsupportedType {
+                    byte_offset: start,
+                    property_type,
+                })
+            }
         }
     }
 
@@ -574,11 +777,11 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
             }
             "BoneFeetData" | "BoneTrackedData" => {
                 let child_depth = self.child_depth(depth, start, "nested unversioned struct")?;
-                let schema_id = self.schemas.resolve(name)?;
+                let schema_id = self.resolve_schema(name)?;
                 let schema = self.schemas.schema(schema_id)?;
                 if schema.kind != SchemaKind::Struct {
                     return Err(SpanError::NestedSchemaKind {
-                        name: name.to_owned(),
+                        name: self.clone_error_text(name)?,
                         actual: schema.kind,
                     });
                 }
@@ -588,15 +791,20 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
                     .is_some_and(|module| module.eq_ignore_ascii_case("/Script/G1R"))
                 {
                     return Err(SpanError::NestedSchemaModule {
-                        name: name.to_owned(),
-                        actual: schema.module_path.clone(),
+                        name: self.clone_error_text(name)?,
+                        actual: schema
+                            .module_path
+                            .as_deref()
+                            .map(|value| self.clone_error_text(value))
+                            .transpose()?,
                     });
                 }
                 let (properties, end) = self.walk_block(schema_id, start, child_depth)?;
                 let span = self.slice(start, end, "nested unversioned struct")?;
+                self.charge_allocation(std::mem::size_of::<PropertyBlockSpans<'bytes>>())?;
                 Ok((
                     ValueSpan::Struct(StructValueSpan {
-                        struct_name: name.to_owned(),
+                        struct_name: self.clone_error_text(name)?,
                         span,
                         properties: Box::new(properties),
                     }),
@@ -605,23 +813,27 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
             }
             _ => Err(SpanError::UnsupportedStruct {
                 byte_offset: start,
-                name: name.to_owned(),
+                name: self.clone_error_text(name)?,
             }),
         }
     }
 
     fn validate_fixed_struct_schema(
-        &self,
+        &mut self,
         name: &str,
         expected_names: &[&str],
         expected_inner: &PropertyInner,
     ) -> Result<(), SpanError> {
-        let schema_id = self.schemas.resolve(name)?;
+        let schema_id = self.resolve_schema(name)?;
         let schema = self.schemas.schema(schema_id)?;
         if schema.kind != SchemaKind::Struct {
             return Err(SpanError::FixedStructSchema {
-                name: name.to_owned(),
-                reason: format!("schema kind is {:?}", schema.kind),
+                name: self.clone_error_text(name)?,
+                reason: if self.resource_limits.is_some() {
+                    self.clone_error_text("schema kind mismatch")?
+                } else {
+                    format!("schema kind is {:?}", schema.kind)
+                },
             });
         }
         if !schema
@@ -630,50 +842,100 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
             .is_some_and(|module| module.eq_ignore_ascii_case("/Script/CoreUObject"))
         {
             return Err(SpanError::FixedStructSchema {
-                name: name.to_owned(),
-                reason: format!("module is {:?}", schema.module_path),
+                name: self.clone_error_text(name)?,
+                reason: if self.resource_limits.is_some() {
+                    self.clone_error_text("schema module mismatch")?
+                } else {
+                    format!("module is {:?}", schema.module_path)
+                },
             });
         }
-        let slots = self.schemas.flatten_slots(schema_id)?;
+        let slots = self.flattened_slots(schema_id)?;
         if slots.len() != expected_names.len() {
             return Err(SpanError::FixedStructSchema {
-                name: name.to_owned(),
-                reason: format!(
-                    "schema has {} slots, expected {}",
-                    slots.len(),
-                    expected_names.len()
-                ),
+                name: self.clone_error_text(name)?,
+                reason: if self.resource_limits.is_some() {
+                    self.clone_error_text("schema slot count mismatch")?
+                } else {
+                    format!(
+                        "schema has {} slots, expected {}",
+                        slots.len(),
+                        expected_names.len()
+                    )
+                },
             });
         }
         for (slot, expected_name) in slots.iter().zip(expected_names) {
+            self.charge_work(1)?;
+            self.charge_byte_work(slot.property_name.len().saturating_add(expected_name.len()))?;
             if slot.property_name != *expected_name
                 || slot.array_dimension != 1
                 || slot.array_index != 0
                 || slot.inner != *expected_inner
             {
                 return Err(SpanError::FixedStructSchema {
-                    name: name.to_owned(),
-                    reason: format!(
-                        "slot {} is {}[{}] {:?}, expected {} {:?}",
-                        slot.schema_index,
-                        slot.property_name,
-                        slot.array_index,
-                        slot.inner,
-                        expected_name,
-                        expected_inner
-                    ),
+                    name: self.clone_error_text(name)?,
+                    reason: if self.resource_limits.is_some() {
+                        self.clone_error_text("schema slot mismatch")?
+                    } else {
+                        format!(
+                            "slot {} is {}[{}] {:?}, expected {} {:?}",
+                            slot.schema_index,
+                            slot.property_name,
+                            slot.array_index,
+                            slot.inner,
+                            expected_name,
+                            expected_inner
+                        )
+                    },
                 });
             }
         }
         Ok(())
     }
 
-    fn flattened_slots(&mut self, schema_id: SchemaId) -> Result<Vec<PropertySlot>, SpanError> {
+    fn flattened_slots(
+        &mut self,
+        schema_id: SchemaId,
+    ) -> Result<Arc<Vec<PropertySlot>>, SpanError> {
+        self.charge_work(1)?;
         if let Some(slots) = self.slot_cache.get(&schema_id) {
-            return Ok(slots.clone());
+            return Ok(Arc::clone(slots));
         }
-        let slots = self.schemas.flatten_slots(schema_id)?;
-        self.slot_cache.insert(schema_id, slots.clone());
+        let slots = if let Some(resource) = self.resource_limits {
+            let mut schema_budget = BoundedSchemaBudget::new(BoundedSchemaLimits {
+                max_work: resource.max_work.saturating_sub(self.work),
+                max_slots: self.limits.max_total_nodes.saturating_sub(self.nodes),
+                max_string_bytes: resource.max_string_bytes.saturating_sub(self.string_bytes),
+                max_allocation_bytes: resource
+                    .max_allocation_bytes
+                    .saturating_sub(self.allocation_bytes),
+                max_byte_work: resource.max_byte_work.saturating_sub(self.byte_work),
+                max_inheritance_depth: resource.max_inheritance_depth,
+            });
+            let result = self
+                .schemas
+                .flatten_slots_bounded(schema_id, &mut schema_budget);
+            self.absorb_schema_usage(schema_budget.usage())?;
+            result.map_err(Self::bounded_schema_error)?
+        } else {
+            self.schemas.flatten_slots(schema_id)?
+        };
+        // Entry and Vec/Arc headers are explicit; the additional 64 bytes per
+        // insertion cover hashbrown control bytes, bucket slack, and rehash
+        // peak for this request-bounded usize-key cache.
+        self.charge_allocation(
+            std::mem::size_of::<Vec<PropertySlot>>()
+                .saturating_add(std::mem::size_of::<(SchemaId, Arc<Vec<PropertySlot>>)>())
+                .saturating_add(64),
+        )?;
+        self.slot_cache
+            .try_reserve(1)
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "schema slot cache",
+            })?;
+        let slots = Arc::new(slots);
+        self.slot_cache.insert(schema_id, Arc::clone(&slots));
         Ok(slots)
     }
 
@@ -697,10 +959,8 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
         let child_depth = self.child_depth(depth, start, "map")?;
         let (removed_count, removed_count_span, mut cursor) =
             self.read_collection_count(start, MapSection::RemovedKeys)?;
-        // Grow only after each child has charged the global node budget. This
-        // avoids a large up-front allocation when a caller deliberately sets a
-        // much smaller node limit than collection limit.
         let mut removed_keys = Vec::new();
+        self.reserve_removed_keys(&mut removed_keys, removed_count, start)?;
         for _ in 0..removed_count {
             let (key, end) = self.walk_value(key_type, cursor, child_depth)?;
             cursor = end;
@@ -711,7 +971,20 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
             self.read_collection_count(cursor, MapSection::Entries)?;
         cursor = next;
         self.charge_nodes(entry_count, cursor)?;
-        let mut entries = Vec::with_capacity(entry_count);
+        self.charge_work(entry_count)?;
+        self.charge_allocation(
+            entry_count
+                .checked_mul(std::mem::size_of::<MapEntrySpan<'bytes>>())
+                .ok_or(SpanError::ResourceLimit {
+                    resource: "span allocations",
+                })?,
+        )?;
+        let mut entries = Vec::new();
+        entries
+            .try_reserve_exact(entry_count)
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "map entries",
+            })?;
         for _ in 0..entry_count {
             let entry_start = cursor;
             let (key, key_end) = self.walk_value(key_type, cursor, child_depth)?;
@@ -725,11 +998,13 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
         }
 
         let span = self.slice(start, cursor, "map")?;
+        let cloned_key_type = self.clone_inner(key_type)?;
+        let cloned_value_type = self.clone_inner(value_type)?;
         Ok((
             ValueSpan::Map(MapValueSpan {
                 span,
-                key_type: key_type.clone(),
-                value_type: value_type.clone(),
+                key_type: cloned_key_type,
+                value_type: cloned_value_type,
                 removed_count: removed_count_span,
                 removed_keys,
                 entry_count: entry_count_span,
@@ -740,7 +1015,7 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
     }
 
     fn read_collection_count(
-        &self,
+        &mut self,
         start: usize,
         section: MapSection,
     ) -> Result<(usize, SliceSpan<'bytes>, usize), SpanError> {
@@ -767,7 +1042,53 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
                 limit: self.limits.max_collection_elements,
             });
         }
+        self.charge_collection_elements(count, start)?;
         Ok((count, span, end))
+    }
+
+    fn reserve_removed_keys(
+        &mut self,
+        removed_keys: &mut Vec<ValueSpan<'bytes>>,
+        count: usize,
+        byte_offset: usize,
+    ) -> Result<(), SpanError> {
+        self.ensure_nodes_available(count, byte_offset)?;
+        self.charge_work(count)?;
+        self.charge_allocation(
+            count
+                .checked_mul(std::mem::size_of::<ValueSpan<'bytes>>())
+                .ok_or(SpanError::ResourceLimit {
+                    resource: "span allocations",
+                })?,
+        )?;
+        removed_keys
+            .try_reserve_exact(count)
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "removed map keys",
+            })
+    }
+
+    fn charge_collection_elements(
+        &mut self,
+        count: usize,
+        byte_offset: usize,
+    ) -> Result<(), SpanError> {
+        let attempted = self.collection_elements.checked_add(count).ok_or(
+            SpanError::CollectionAggregateLimit {
+                byte_offset,
+                attempted: usize::MAX,
+                limit: self.max_total_collection_elements,
+            },
+        )?;
+        if attempted > self.max_total_collection_elements {
+            return Err(SpanError::CollectionAggregateLimit {
+                byte_offset,
+                attempted,
+                limit: self.max_total_collection_elements,
+            });
+        }
+        self.collection_elements = attempted;
+        Ok(())
     }
 
     fn ensure_depth(
@@ -818,6 +1139,211 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
         Ok(())
     }
 
+    fn ensure_nodes_available(&self, count: usize, byte_offset: usize) -> Result<(), SpanError> {
+        let attempted = self.nodes.checked_add(count).ok_or(SpanError::NodeLimit {
+            byte_offset,
+            attempted: usize::MAX,
+            limit: self.limits.max_total_nodes,
+        })?;
+        if attempted > self.limits.max_total_nodes {
+            return Err(SpanError::NodeLimit {
+                byte_offset,
+                attempted,
+                limit: self.limits.max_total_nodes,
+            });
+        }
+        Ok(())
+    }
+
+    fn usage(&self) -> SpanWalkUsage {
+        SpanWalkUsage {
+            nodes: self.nodes,
+            collection_elements: self.collection_elements,
+            work: self.work,
+            string_bytes: self.string_bytes,
+            allocation_bytes: self.allocation_bytes,
+            byte_work: self.byte_work,
+        }
+    }
+
+    fn charge_work(&mut self, amount: usize) -> Result<(), SpanError> {
+        let Some(limits) = self.resource_limits else {
+            return Ok(());
+        };
+        charge_bounded(&mut self.work, amount, limits.max_work, "span work")
+    }
+
+    fn charge_string_bytes(&mut self, amount: usize) -> Result<(), SpanError> {
+        let Some(limits) = self.resource_limits else {
+            return Ok(());
+        };
+        charge_bounded(
+            &mut self.string_bytes,
+            amount,
+            limits.max_string_bytes,
+            "span strings",
+        )
+    }
+
+    fn charge_allocation(&mut self, amount: usize) -> Result<(), SpanError> {
+        let Some(limits) = self.resource_limits else {
+            return Ok(());
+        };
+        charge_bounded(
+            &mut self.allocation_bytes,
+            amount,
+            limits.max_allocation_bytes,
+            "span allocations",
+        )
+    }
+
+    fn charge_byte_work(&mut self, amount: usize) -> Result<(), SpanError> {
+        let Some(limits) = self.resource_limits else {
+            return Ok(());
+        };
+        charge_bounded(
+            &mut self.byte_work,
+            amount,
+            limits.max_byte_work,
+            "span byte work",
+        )
+    }
+
+    fn absorb_schema_usage(&mut self, usage: BoundedSchemaUsage) -> Result<(), SpanError> {
+        self.charge_work(usage.work)?;
+        self.charge_nodes(usage.slots, 0)?;
+        self.charge_string_bytes(usage.string_bytes)?;
+        self.charge_allocation(usage.allocation_bytes)?;
+        self.charge_byte_work(usage.byte_work)
+    }
+
+    fn absorb_header_usage(
+        &mut self,
+        usage: HeaderDecodeUsage,
+        byte_offset: usize,
+    ) -> Result<(), SpanError> {
+        self.charge_nodes(usage.entries, byte_offset)?;
+        self.charge_work(usage.work)?;
+        self.charge_allocation(usage.allocation_bytes)?;
+        self.charge_byte_work(usage.byte_work)
+    }
+
+    fn bounded_schema_error(error: BoundedSchemaError) -> SpanError {
+        match error {
+            BoundedSchemaError::ResourceLimit { resource } => SpanError::ResourceLimit { resource },
+            BoundedSchemaError::Allocation => SpanError::Allocation {
+                wire_type: "schema metadata",
+            },
+            BoundedSchemaError::Missing
+            | BoundedSchemaError::Ambiguous
+            | BoundedSchemaError::WrongKind
+            | BoundedSchemaError::InheritanceCycle
+            | BoundedSchemaError::InvalidLayout => SpanError::BoundedSchema,
+        }
+    }
+
+    fn resolve_schema(&mut self, query: &str) -> Result<SchemaId, SpanError> {
+        let Some(resource) = self.resource_limits else {
+            return Ok(self.schemas.resolve(query)?);
+        };
+        let mut budget = BoundedSchemaBudget::new(BoundedSchemaLimits {
+            max_work: resource.max_work.saturating_sub(self.work),
+            max_slots: 0,
+            max_string_bytes: resource.max_string_bytes.saturating_sub(self.string_bytes),
+            max_allocation_bytes: resource
+                .max_allocation_bytes
+                .saturating_sub(self.allocation_bytes),
+            max_byte_work: resource.max_byte_work.saturating_sub(self.byte_work),
+            max_inheritance_depth: resource.max_inheritance_depth,
+        });
+        let result = self.schemas.resolve_compact_bounded(query, &mut budget);
+        self.absorb_schema_usage(budget.usage())?;
+        result.map_err(Self::bounded_schema_error)
+    }
+
+    fn clone_slot(&mut self, slot: &PropertySlot) -> Result<PropertySlot, SpanError> {
+        let Some(resource) = self.resource_limits else {
+            return Ok(slot.clone());
+        };
+        let mut budget = BoundedSchemaBudget::new(BoundedSchemaLimits {
+            max_work: resource.max_work.saturating_sub(self.work),
+            max_slots: 0,
+            max_string_bytes: resource.max_string_bytes.saturating_sub(self.string_bytes),
+            max_allocation_bytes: resource
+                .max_allocation_bytes
+                .saturating_sub(self.allocation_bytes),
+            max_byte_work: resource.max_byte_work.saturating_sub(self.byte_work),
+            max_inheritance_depth: resource.max_inheritance_depth,
+        });
+        let result = clone_property_slot_bounded(slot, &mut budget);
+        self.absorb_schema_usage(budget.usage())?;
+        result.map_err(Self::bounded_schema_error)
+    }
+
+    fn clone_inner(&mut self, inner: &PropertyInner) -> Result<PropertyInner, SpanError> {
+        let Some(resource) = self.resource_limits else {
+            return Ok(inner.clone());
+        };
+        let mut budget = BoundedSchemaBudget::new(BoundedSchemaLimits {
+            max_work: resource.max_work.saturating_sub(self.work),
+            max_slots: 0,
+            max_string_bytes: resource.max_string_bytes.saturating_sub(self.string_bytes),
+            max_allocation_bytes: resource
+                .max_allocation_bytes
+                .saturating_sub(self.allocation_bytes),
+            max_byte_work: resource.max_byte_work.saturating_sub(self.byte_work),
+            max_inheritance_depth: resource.max_inheritance_depth,
+        });
+        let result = clone_property_inner_bounded(inner, &mut budget);
+        self.absorb_schema_usage(budget.usage())?;
+        result.map_err(Self::bounded_schema_error)
+    }
+
+    fn clone_error_text(&mut self, value: &str) -> Result<String, SpanError> {
+        self.charge_string_bytes(value.len())?;
+        self.charge_allocation(value.len())?;
+        self.charge_byte_work(value.len())?;
+        let mut out = String::new();
+        out.try_reserve_exact(value.len())
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "error metadata",
+            })?;
+        out.push_str(value);
+        Ok(out)
+    }
+
+    fn qualified_schema_name(&mut self, schema_id: SchemaId) -> Result<String, SpanError> {
+        let schema = self.schemas.schema(schema_id)?;
+        if self.resource_limits.is_none() {
+            return Ok(schema.qualified_name());
+        }
+        let module = schema
+            .module_path
+            .as_deref()
+            .filter(|module| !module.is_empty());
+        let length = schema
+            .name
+            .len()
+            .checked_add(module.map_or(0, |value| value.len().saturating_add(1)))
+            .ok_or(SpanError::ResourceLimit {
+                resource: "span strings",
+            })?;
+        self.charge_string_bytes(length)?;
+        self.charge_allocation(length)?;
+        self.charge_byte_work(length)?;
+        let mut out = String::new();
+        out.try_reserve_exact(length)
+            .map_err(|_| SpanError::Allocation {
+                wire_type: "schema name",
+            })?;
+        if let Some(module) = module {
+            out.push_str(module);
+            out.push('.');
+        }
+        out.push_str(&schema.name);
+        Ok(out)
+    }
+
     fn checked_end(&self, start: usize, width: usize, wire_type: &str) -> Result<usize, SpanError> {
         start
             .checked_add(width)
@@ -853,6 +1379,22 @@ impl<'db, 'bytes> WalkState<'db, 'bytes> {
             bytes,
         })
     }
+}
+
+fn charge_bounded(
+    used: &mut usize,
+    amount: usize,
+    limit: usize,
+    resource: &'static str,
+) -> Result<(), SpanError> {
+    let attempted = used
+        .checked_add(amount)
+        .ok_or(SpanError::ResourceLimit { resource })?;
+    if attempted > limit {
+        return Err(SpanError::ResourceLimit { resource });
+    }
+    *used = attempted;
+    Ok(())
 }
 
 fn fixed_wire_kind(inner: &PropertyInner) -> Option<FixedWireKind> {
@@ -951,6 +1493,55 @@ mod tests {
         ));
 
         tagged_database(tagged)
+    }
+
+    #[test]
+    fn removed_key_vec_growth_is_fully_precharged_before_reserve() {
+        let db = database(Vec::new());
+        let count = 257usize;
+        let allocation = count * std::mem::size_of::<ValueSpan<'_>>();
+        let make_state = |max_allocation_bytes| WalkState {
+            schemas: &db,
+            limits: SpanLimits {
+                max_depth: 64,
+                max_collection_elements: count,
+                max_total_nodes: count,
+            },
+            bytes: &[],
+            nodes: 0,
+            collection_elements: 0,
+            work: 0,
+            string_bytes: 0,
+            allocation_bytes: 0,
+            byte_work: 0,
+            max_total_collection_elements: count,
+            resource_limits: Some(SpanWalkResourceLimits {
+                max_work: count,
+                max_string_bytes: 0,
+                max_allocation_bytes,
+                max_byte_work: 0,
+                max_inheritance_depth: 1,
+                max_header_fragments: 1,
+            }),
+            linear_color_validated: false,
+            vector4_validated: false,
+            slot_cache: HashMap::new(),
+        };
+
+        let mut limited = make_state(allocation - 1);
+        let mut keys = Vec::new();
+        assert!(matches!(
+            limited.reserve_removed_keys(&mut keys, count, 0),
+            Err(SpanError::ResourceLimit {
+                resource: "span allocations"
+            })
+        ));
+        assert_eq!(keys.capacity(), 0);
+
+        let mut exact = make_state(allocation);
+        exact.reserve_removed_keys(&mut keys, count, 0).unwrap();
+        assert!(keys.capacity() >= count);
+        assert_eq!(exact.allocation_bytes, allocation);
     }
 
     fn tagged_database(tagged: Vec<(usmap::Struct, FlagsType, String)>) -> SchemaDb {
@@ -1389,8 +1980,8 @@ mod tests {
         assert_eq!(
             tiny_tree.walk(&removed_keys, schema_id).unwrap_err(),
             SpanError::NodeLimit {
-                byte_offset: 6,
-                attempted: 4,
+                byte_offset: 2,
+                attempted: 5,
                 limit: 3
             }
         );

@@ -5,6 +5,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::usmap_preflight::{preflight_bounded_usmap, UsmapLimits, UsmapPreflightError};
+
 pub type SchemaId = usize;
 
 const MAX_USMAP_FILE_BYTES: usize = 128 * 1024 * 1024;
@@ -57,6 +59,124 @@ pub struct PropertySlot {
     pub declaring_module_path: Option<String>,
 }
 
+/// Closed budget used only by additive bounded schema lookup/flattening APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundedSchemaLimits {
+    pub max_work: usize,
+    pub max_slots: usize,
+    pub max_string_bytes: usize,
+    pub max_allocation_bytes: usize,
+    pub max_byte_work: usize,
+    pub max_inheritance_depth: usize,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BoundedSchemaUsage {
+    pub work: usize,
+    pub slots: usize,
+    pub string_bytes: usize,
+    pub allocation_bytes: usize,
+    pub byte_work: usize,
+}
+
+#[derive(Debug)]
+pub struct BoundedSchemaBudget {
+    limits: BoundedSchemaLimits,
+    usage: BoundedSchemaUsage,
+}
+
+impl BoundedSchemaBudget {
+    pub fn new(limits: BoundedSchemaLimits) -> Self {
+        Self {
+            limits,
+            usage: BoundedSchemaUsage::default(),
+        }
+    }
+
+    pub fn usage(&self) -> BoundedSchemaUsage {
+        self.usage
+    }
+
+    fn charge(
+        used: &mut usize,
+        amount: usize,
+        limit: usize,
+        resource: &'static str,
+    ) -> Result<(), BoundedSchemaError> {
+        let attempted = used
+            .checked_add(amount)
+            .ok_or(BoundedSchemaError::ResourceLimit { resource })?;
+        if attempted > limit {
+            return Err(BoundedSchemaError::ResourceLimit { resource });
+        }
+        *used = attempted;
+        Ok(())
+    }
+
+    fn work(&mut self, amount: usize) -> Result<(), BoundedSchemaError> {
+        Self::charge(
+            &mut self.usage.work,
+            amount,
+            self.limits.max_work,
+            "schema work",
+        )
+    }
+
+    fn slots(&mut self, amount: usize) -> Result<(), BoundedSchemaError> {
+        Self::charge(
+            &mut self.usage.slots,
+            amount,
+            self.limits.max_slots,
+            "flattened slots",
+        )
+    }
+
+    fn strings(&mut self, amount: usize) -> Result<(), BoundedSchemaError> {
+        Self::charge(
+            &mut self.usage.string_bytes,
+            amount,
+            self.limits.max_string_bytes,
+            "schema strings",
+        )
+    }
+
+    fn allocation(&mut self, amount: usize) -> Result<(), BoundedSchemaError> {
+        Self::charge(
+            &mut self.usage.allocation_bytes,
+            amount,
+            self.limits.max_allocation_bytes,
+            "schema allocations",
+        )
+    }
+
+    fn bytes(&mut self, amount: usize) -> Result<(), BoundedSchemaError> {
+        Self::charge(
+            &mut self.usage.byte_work,
+            amount,
+            self.limits.max_byte_work,
+            "schema byte work",
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum BoundedSchemaError {
+    #[error("bounded schema lookup did not find a compatible schema")]
+    Missing,
+    #[error("bounded schema lookup is ambiguous")]
+    Ambiguous,
+    #[error("bounded schema lookup found the wrong schema kind")]
+    WrongKind,
+    #[error("bounded schema inheritance cycles")]
+    InheritanceCycle,
+    #[error("bounded schema property layout is invalid")]
+    InvalidLayout,
+    #[error("bounded schema operation exhausted {resource}")]
+    ResourceLimit { resource: &'static str },
+    #[error("bounded schema operation could not reserve proven storage")]
+    Allocation,
+}
+
 impl PropertySlot {
     pub fn path(&self) -> String {
         if self.array_dimension > 1 {
@@ -69,6 +189,8 @@ impl PropertySlot {
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum SchemaError {
+    #[error(transparent)]
+    BoundedPreflight(#[from] UsmapPreflightError),
     #[error("USMAP input is empty or truncated while reading {0}")]
     Truncated(&'static str),
     #[error("USMAP input is {actual} bytes; the safety limit is {limit} bytes")]
@@ -164,6 +286,34 @@ impl SchemaDb {
         }))
         .map_err(|panic| SchemaError::ParserPanic(panic_message(panic)))?
         .map_err(|error| SchemaError::Parse(error.to_string()))?;
+        let mut db = Self::from_parsed(parsed)?;
+        db.source_sha256 = Some(Sha256::digest(bytes).into());
+        Ok(db)
+    }
+
+    /// Parse an exact `.usmap` only after a complete allocation-bounded structural preflight.
+    ///
+    /// Unlike [`Self::from_usmap`]'s legacy header-only guard, this validates the decompressed
+    /// name map, every enum/schema/property record, recursive property-type depth, and every
+    /// supported extension aggregate before the upstream parser can allocate from wire counts.
+    pub fn from_usmap_bounded(bytes: &[u8], limits: UsmapLimits) -> Result<Self, SchemaError> {
+        Self::from_usmap_bounded_with(bytes, limits, |bytes| {
+            usmap::Usmap::read(&mut Cursor::new(bytes)).map_err(|error| error.to_string())
+        })
+    }
+
+    fn from_usmap_bounded_with<F>(
+        bytes: &[u8],
+        limits: UsmapLimits,
+        parse: F,
+    ) -> Result<Self, SchemaError>
+    where
+        F: FnOnce(&[u8]) -> Result<usmap::Usmap, String>,
+    {
+        preflight_bounded_usmap(bytes, limits)?;
+        let parsed = catch_unwind(AssertUnwindSafe(|| parse(bytes)))
+            .map_err(|panic| SchemaError::ParserPanic(panic_message(panic)))?
+            .map_err(SchemaError::Parse)?;
         let mut db = Self::from_parsed(parsed)?;
         db.source_sha256 = Some(Sha256::digest(bytes).into());
         Ok(db)
@@ -409,6 +559,294 @@ impl SchemaDb {
             ));
         }
         self.unique(query, class_ids)
+    }
+
+    /// Resolve a class without materializing candidate IDs or diagnostic names.
+    pub fn resolve_class_compact_bounded(
+        &self,
+        query: &str,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<SchemaId, BoundedSchemaError> {
+        self.resolve_compact_bounded_kind(query, Some(SchemaKind::Class), budget)
+    }
+
+    /// Resolve any unique schema without materializing candidate diagnostics.
+    pub fn resolve_compact_bounded(
+        &self,
+        query: &str,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<SchemaId, BoundedSchemaError> {
+        self.resolve_compact_bounded_kind(query, None, budget)
+    }
+
+    fn resolve_compact_bounded_kind(
+        &self,
+        query: &str,
+        required_kind: Option<SchemaKind>,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<SchemaId, BoundedSchemaError> {
+        let query = query.trim();
+        let (module, name) = split_qualified(query)
+            .map(|(module, name)| (Some(module), name))
+            .unwrap_or((None, query));
+        let folded = fold_bounded(name, budget)?;
+        let candidates = self.by_name.get(&folded).map(Vec::as_slice).unwrap_or(&[]);
+        let mut compatible_count = 0usize;
+        let mut compatible = 0usize;
+        let mut any_count = 0usize;
+        for id in candidates {
+            budget.work(1)?;
+            let candidate = &self.schemas[*id];
+            if let Some(module) = module {
+                let candidate_module = candidate.module_path.as_deref().unwrap_or("");
+                budget.bytes(module.len().checked_add(candidate_module.len()).ok_or(
+                    BoundedSchemaError::ResourceLimit {
+                        resource: "schema byte work",
+                    },
+                )?)?;
+                if !candidate_module.eq_ignore_ascii_case(module) {
+                    continue;
+                }
+            }
+            any_count += 1;
+            if required_kind.is_none_or(|kind| candidate.kind == kind) {
+                compatible_count += 1;
+                compatible = *id;
+            }
+        }
+        match compatible_count {
+            1 => Ok(compatible),
+            count if count > 1 => Err(BoundedSchemaError::Ambiguous),
+            _ if any_count == 1 && required_kind.is_some() => Err(BoundedSchemaError::WrongKind),
+            _ => Err(BoundedSchemaError::Missing),
+        }
+    }
+
+    /// Flatten derived-to-base slots with every vector and recursive clone
+    /// charged before allocation. Errors remain compact and allocation-free.
+    pub fn flatten_slots_bounded(
+        &self,
+        id: SchemaId,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<Vec<PropertySlot>, BoundedSchemaError> {
+        if id >= self.schemas.len() {
+            return Err(BoundedSchemaError::Missing);
+        }
+        let mut chain = Vec::new();
+        let mut current = id;
+
+        loop {
+            if chain.len() >= budget.limits.max_inheritance_depth {
+                return Err(BoundedSchemaError::ResourceLimit {
+                    resource: "inheritance depth",
+                });
+            }
+            budget.work(chain.len().saturating_add(1))?;
+            if chain.contains(&current) {
+                return Err(BoundedSchemaError::InheritanceCycle);
+            }
+            reserve_schema_chain_entry(&mut chain, budget)?;
+            chain.push(current);
+
+            let schema = &self.schemas[current];
+            let Some(super_name) = schema.super_name.as_deref() else {
+                break;
+            };
+            current = self.resolve_super_compact_bounded(schema, super_name, budget)?;
+        }
+
+        budget.allocation(
+            chain
+                .len()
+                .checked_mul(std::mem::size_of::<usize>())
+                .ok_or(BoundedSchemaError::ResourceLimit {
+                    resource: "schema allocations",
+                })?,
+        )?;
+        let mut local_counts = Vec::new();
+        local_counts
+            .try_reserve_exact(chain.len())
+            .map_err(|_| BoundedSchemaError::Allocation)?;
+        let mut total_slots = 0usize;
+        for schema_id in &chain {
+            let local_count = self.local_slot_count_bounded(&self.schemas[*schema_id], budget)?;
+            total_slots = total_slots
+                .checked_add(local_count)
+                .ok_or(BoundedSchemaError::InvalidLayout)?;
+            local_counts.push(local_count);
+        }
+        budget.slots(total_slots)?;
+
+        budget.allocation(
+            chain
+                .len()
+                .checked_mul(std::mem::size_of::<Vec<Option<PropertySlot>>>())
+                .ok_or(BoundedSchemaError::ResourceLimit {
+                    resource: "schema allocations",
+                })?,
+        )?;
+        let mut levels = Vec::new();
+        levels
+            .try_reserve_exact(chain.len())
+            .map_err(|_| BoundedSchemaError::Allocation)?;
+        let mut absolute_base = 0usize;
+        for (schema_id, local_count) in chain.iter().zip(local_counts) {
+            levels.push(self.build_local_slots_bounded(
+                &self.schemas[*schema_id],
+                absolute_base,
+                local_count,
+                budget,
+            )?);
+            absolute_base = absolute_base
+                .checked_add(local_count)
+                .ok_or(BoundedSchemaError::InvalidLayout)?;
+        }
+
+        budget.allocation(
+            total_slots
+                .checked_mul(std::mem::size_of::<PropertySlot>())
+                .ok_or(BoundedSchemaError::ResourceLimit {
+                    resource: "schema allocations",
+                })?,
+        )?;
+        let mut slots = Vec::new();
+        slots
+            .try_reserve_exact(total_slots)
+            .map_err(|_| BoundedSchemaError::Allocation)?;
+        budget.work(total_slots)?;
+        for level in levels {
+            for slot in level {
+                slots.push(slot.ok_or(BoundedSchemaError::InvalidLayout)?);
+            }
+        }
+        Ok(slots)
+    }
+
+    fn local_slot_count_bounded(
+        &self,
+        schema: &SchemaRecord,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<usize, BoundedSchemaError> {
+        let mut local_count = 0usize;
+        for property in &schema.properties {
+            budget.work(1)?;
+            let dim = usize::from(property.array_dim);
+            if dim == 0 {
+                return Err(BoundedSchemaError::InvalidLayout);
+            }
+            local_count = local_count
+                .checked_add(dim)
+                .ok_or(BoundedSchemaError::InvalidLayout)?;
+        }
+        Ok(local_count)
+    }
+
+    fn build_local_slots_bounded(
+        &self,
+        schema: &SchemaRecord,
+        absolute_base: usize,
+        local_count: usize,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<Vec<Option<PropertySlot>>, BoundedSchemaError> {
+        budget.allocation(
+            local_count
+                .checked_mul(std::mem::size_of::<Option<PropertySlot>>())
+                .ok_or(BoundedSchemaError::ResourceLimit {
+                    resource: "schema allocations",
+                })?,
+        )?;
+        let mut local = Vec::new();
+        local
+            .try_reserve_exact(local_count)
+            .map_err(|_| BoundedSchemaError::Allocation)?;
+        local.resize_with(local_count, || None);
+
+        for property in &schema.properties {
+            let dim = usize::from(property.array_dim);
+            let start = usize::from(property.index);
+            for array_index in 0..dim {
+                budget.work(1)?;
+                let local_index = start
+                    .checked_add(array_index)
+                    .ok_or(BoundedSchemaError::InvalidLayout)?;
+                if local_index >= local_count || local[local_index].is_some() {
+                    return Err(BoundedSchemaError::InvalidLayout);
+                }
+                let schema_index = absolute_base
+                    .checked_add(local_index)
+                    .ok_or(BoundedSchemaError::InvalidLayout)?;
+                let property_name = clone_string_bounded(&property.name, budget)?;
+                let declaring_schema_name = clone_string_bounded(&schema.name, budget)?;
+                let declaring_module_path = schema
+                    .module_path
+                    .as_deref()
+                    .map(|value| clone_string_bounded(value, budget))
+                    .transpose()?;
+                let inner = clone_property_inner_bounded(&property.inner, budget)?;
+                local[local_index] = Some(PropertySlot {
+                    schema_index,
+                    property_name,
+                    array_index,
+                    array_dimension: dim,
+                    inner,
+                    declaring_schema_id: schema.id,
+                    declaring_schema_name,
+                    declaring_module_path,
+                });
+            }
+        }
+        budget.work(local_count)?;
+        if local.iter().any(Option::is_none) {
+            return Err(BoundedSchemaError::InvalidLayout);
+        }
+        Ok(local)
+    }
+
+    fn resolve_super_compact_bounded(
+        &self,
+        schema: &SchemaRecord,
+        super_name: &str,
+        budget: &mut BoundedSchemaBudget,
+    ) -> Result<SchemaId, BoundedSchemaError> {
+        let folded = fold_bounded(super_name, budget)?;
+        let candidates = self.by_name.get(&folded).map(Vec::as_slice).unwrap_or(&[]);
+        let mut all_count = 0usize;
+        let mut all_id = 0usize;
+        let mut same_count = 0usize;
+        let mut same_id = 0usize;
+        for id in candidates {
+            budget.work(1)?;
+            let candidate = &self.schemas[*id];
+            let compatible = schema.kind == SchemaKind::Unknown
+                || candidate.kind == SchemaKind::Unknown
+                || candidate.kind == schema.kind;
+            if !compatible {
+                continue;
+            }
+            all_count += 1;
+            all_id = *id;
+            if let Some(module) = schema.module_path.as_deref() {
+                let candidate_module = candidate.module_path.as_deref().unwrap_or("");
+                budget.bytes(module.len().checked_add(candidate_module.len()).ok_or(
+                    BoundedSchemaError::ResourceLimit {
+                        resource: "schema byte work",
+                    },
+                )?)?;
+                if candidate_module.eq_ignore_ascii_case(module) {
+                    same_count += 1;
+                    same_id = *id;
+                }
+            }
+        }
+        match same_count {
+            1 => Ok(same_id),
+            count if count > 1 => Err(BoundedSchemaError::Ambiguous),
+            _ => match all_count {
+                0 => Err(BoundedSchemaError::Missing),
+                1 => Ok(all_id),
+                _ => Err(BoundedSchemaError::Ambiguous),
+            },
+        }
     }
 
     /// Flatten derived schema first, then each parent. This is the index order
@@ -699,6 +1137,153 @@ fn fold(value: &str) -> String {
     value.to_ascii_lowercase()
 }
 
+fn fold_bounded(
+    value: &str,
+    budget: &mut BoundedSchemaBudget,
+) -> Result<String, BoundedSchemaError> {
+    budget.bytes(value.len())?;
+    let mut folded = clone_string_bounded(value, budget)?;
+    folded.make_ascii_lowercase();
+    Ok(folded)
+}
+
+fn clone_string_bounded(
+    value: &str,
+    budget: &mut BoundedSchemaBudget,
+) -> Result<String, BoundedSchemaError> {
+    budget.strings(value.len())?;
+    budget.allocation(value.len())?;
+    let mut cloned = String::new();
+    cloned
+        .try_reserve_exact(value.len())
+        .map_err(|_| BoundedSchemaError::Allocation)?;
+    cloned.push_str(value);
+    Ok(cloned)
+}
+
+fn reserve_schema_chain_entry(
+    chain: &mut Vec<SchemaId>,
+    budget: &mut BoundedSchemaBudget,
+) -> Result<(), BoundedSchemaError> {
+    if chain.len() == chain.capacity() {
+        let new_len = chain
+            .len()
+            .checked_add(1)
+            .ok_or(BoundedSchemaError::ResourceLimit {
+                resource: "schema allocations",
+            })?;
+        budget.work(chain.len())?;
+        budget.allocation(new_len.checked_mul(std::mem::size_of::<SchemaId>()).ok_or(
+            BoundedSchemaError::ResourceLimit {
+                resource: "schema allocations",
+            },
+        )?)?;
+        chain
+            .try_reserve_exact(1)
+            .map_err(|_| BoundedSchemaError::Allocation)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn clone_property_inner_bounded(
+    inner: &usmap::PropertyInner,
+    budget: &mut BoundedSchemaBudget,
+) -> Result<usmap::PropertyInner, BoundedSchemaError> {
+    budget.work(1)?;
+    use usmap::PropertyInner;
+    Ok(match inner {
+        PropertyInner::Byte => PropertyInner::Byte,
+        PropertyInner::Bool => PropertyInner::Bool,
+        PropertyInner::Int => PropertyInner::Int,
+        PropertyInner::Float => PropertyInner::Float,
+        PropertyInner::Object => PropertyInner::Object,
+        PropertyInner::Name => PropertyInner::Name,
+        PropertyInner::Delegate => PropertyInner::Delegate,
+        PropertyInner::Double => PropertyInner::Double,
+        PropertyInner::Array { inner } => {
+            budget.allocation(std::mem::size_of::<PropertyInner>())?;
+            PropertyInner::Array {
+                inner: Box::new(clone_property_inner_bounded(inner, budget)?),
+            }
+        }
+        PropertyInner::Struct { name } => PropertyInner::Struct {
+            name: clone_string_bounded(name, budget)?,
+        },
+        PropertyInner::Str => PropertyInner::Str,
+        PropertyInner::Text => PropertyInner::Text,
+        PropertyInner::Interface => PropertyInner::Interface,
+        PropertyInner::MulticastDelegate => PropertyInner::MulticastDelegate,
+        PropertyInner::WeakObject => PropertyInner::WeakObject,
+        PropertyInner::LazyObject => PropertyInner::LazyObject,
+        PropertyInner::AssetObject => PropertyInner::AssetObject,
+        PropertyInner::SoftObject => PropertyInner::SoftObject,
+        PropertyInner::UInt64 => PropertyInner::UInt64,
+        PropertyInner::UInt32 => PropertyInner::UInt32,
+        PropertyInner::UInt16 => PropertyInner::UInt16,
+        PropertyInner::Int64 => PropertyInner::Int64,
+        PropertyInner::Int16 => PropertyInner::Int16,
+        PropertyInner::Int8 => PropertyInner::Int8,
+        PropertyInner::Map { key, value } => {
+            budget.allocation(std::mem::size_of::<PropertyInner>().checked_mul(2).ok_or(
+                BoundedSchemaError::ResourceLimit {
+                    resource: "schema allocations",
+                },
+            )?)?;
+            PropertyInner::Map {
+                key: Box::new(clone_property_inner_bounded(key, budget)?),
+                value: Box::new(clone_property_inner_bounded(value, budget)?),
+            }
+        }
+        PropertyInner::Set { key } => {
+            budget.allocation(std::mem::size_of::<PropertyInner>())?;
+            PropertyInner::Set {
+                key: Box::new(clone_property_inner_bounded(key, budget)?),
+            }
+        }
+        PropertyInner::Enum { inner, name } => {
+            budget.allocation(std::mem::size_of::<PropertyInner>())?;
+            PropertyInner::Enum {
+                inner: Box::new(clone_property_inner_bounded(inner, budget)?),
+                name: clone_string_bounded(name, budget)?,
+            }
+        }
+        PropertyInner::FieldPath => PropertyInner::FieldPath,
+        PropertyInner::Optional { inner } => {
+            budget.allocation(std::mem::size_of::<PropertyInner>())?;
+            PropertyInner::Optional {
+                inner: Box::new(clone_property_inner_bounded(inner, budget)?),
+            }
+        }
+        PropertyInner::Utf8Str => PropertyInner::Utf8Str,
+        PropertyInner::AnsiStr => PropertyInner::AnsiStr,
+        PropertyInner::Unknown => PropertyInner::Unknown,
+    })
+}
+
+/// Clone one already flattened slot while charging every dynamic byte and
+/// recursive `PropertyInner` allocation before it is materialized.
+pub(crate) fn clone_property_slot_bounded(
+    slot: &PropertySlot,
+    budget: &mut BoundedSchemaBudget,
+) -> Result<PropertySlot, BoundedSchemaError> {
+    budget.work(1)?;
+    budget.allocation(std::mem::size_of::<PropertySlot>())?;
+    Ok(PropertySlot {
+        schema_index: slot.schema_index,
+        property_name: clone_string_bounded(&slot.property_name, budget)?,
+        array_index: slot.array_index,
+        array_dimension: slot.array_dimension,
+        inner: clone_property_inner_bounded(&slot.inner, budget)?,
+        declaring_schema_id: slot.declaring_schema_id,
+        declaring_schema_name: clone_string_bounded(&slot.declaring_schema_name, budget)?,
+        declaring_module_path: slot
+            .declaring_module_path
+            .as_deref()
+            .map(|value| clone_string_bounded(value, budget))
+            .transpose()?,
+    })
+}
+
 fn nonempty(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
@@ -716,6 +1301,7 @@ fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
 
     fn flags(kind: usmap::FlagsType) -> usmap::StructFlags {
         usmap::StructFlags {
@@ -782,6 +1368,50 @@ mod tests {
             }),
             envp: None,
         }
+    }
+
+    #[test]
+    fn bounded_preflight_runs_before_the_injected_upstream_parser() {
+        let empty = usmap::Usmap {
+            enums: Vec::new(),
+            structs: Vec::new(),
+            cext: None,
+            ppth: None,
+            eatr: None,
+            envp: None,
+        };
+        let mut bytes = Vec::new();
+        empty.write(&mut bytes).unwrap();
+        let payload_offset = 16;
+        assert_eq!(&bytes[..3], &[0xc4, 0x30, 4]);
+
+        let mut hostile = bytes.clone();
+        hostile[payload_offset..payload_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        let called = Cell::new(0usize);
+        let limits = UsmapLimits {
+            max_names: 0,
+            ..UsmapLimits::default()
+        };
+        let result = SchemaDb::from_usmap_bounded_with(&hostile, limits, |_| {
+            called.set(called.get() + 1);
+            Ok(empty.clone())
+        });
+        assert!(matches!(
+            result,
+            Err(SchemaError::BoundedPreflight(UsmapPreflightError::Limit {
+                resource: "names",
+                ..
+            }))
+        ));
+        assert_eq!(called.get(), 0);
+
+        let parsed = SchemaDb::from_usmap_bounded_with(&bytes, UsmapLimits::default(), |_| {
+            called.set(called.get() + 1);
+            Ok(empty)
+        })
+        .unwrap();
+        assert!(parsed.is_empty());
+        assert_eq!(called.get(), 1);
     }
 
     #[test]
@@ -969,6 +1599,221 @@ mod tests {
         );
         assert_eq!(slots[2].declaring_schema_name, "Derived");
         assert_eq!(slots[3].declaring_schema_name, "Base");
+    }
+
+    #[test]
+    fn bounded_flatten_is_identical_and_every_limit_is_exact() {
+        let db = SchemaDb::from_parsed(fixture()).unwrap();
+        let id = db.resolve_class("Derived").unwrap();
+        let legacy = db.flatten_slots(id).unwrap();
+        let generous = BoundedSchemaLimits {
+            max_work: 10_000,
+            max_slots: 10_000,
+            max_string_bytes: 10_000,
+            max_allocation_bytes: 1_000_000,
+            max_byte_work: 10_000,
+            max_inheritance_depth: 2,
+        };
+        let mut budget = BoundedSchemaBudget::new(generous);
+        let bounded = db.flatten_slots_bounded(id, &mut budget).unwrap();
+        assert_eq!(bounded, legacy);
+        let usage = budget.usage();
+
+        for tightened in [
+            BoundedSchemaLimits {
+                max_work: usage.work - 1,
+                ..generous
+            },
+            BoundedSchemaLimits {
+                max_slots: usage.slots - 1,
+                ..generous
+            },
+            BoundedSchemaLimits {
+                max_string_bytes: usage.string_bytes - 1,
+                ..generous
+            },
+            BoundedSchemaLimits {
+                max_allocation_bytes: usage.allocation_bytes - 1,
+                ..generous
+            },
+            BoundedSchemaLimits {
+                max_byte_work: usage.byte_work - 1,
+                ..generous
+            },
+            BoundedSchemaLimits {
+                max_inheritance_depth: 1,
+                ..generous
+            },
+        ] {
+            let mut limited = BoundedSchemaBudget::new(tightened);
+            assert!(matches!(
+                db.flatten_slots_bounded(id, &mut limited),
+                Err(BoundedSchemaError::ResourceLimit { .. })
+            ));
+        }
+
+        let exact = BoundedSchemaLimits {
+            max_work: usage.work,
+            max_slots: usage.slots,
+            max_string_bytes: usage.string_bytes,
+            max_allocation_bytes: usage.allocation_bytes,
+            max_byte_work: usage.byte_work,
+            max_inheritance_depth: 2,
+        };
+        let mut exact_budget = BoundedSchemaBudget::new(exact);
+        assert_eq!(
+            db.flatten_slots_bounded(id, &mut exact_budget).unwrap(),
+            legacy
+        );
+    }
+
+    #[test]
+    fn inheritance_chain_growth_is_debited_before_exact_reserve() {
+        let charge = std::mem::size_of::<SchemaId>();
+        let limits = |max_allocation_bytes| BoundedSchemaLimits {
+            max_work: 0,
+            max_slots: 0,
+            max_string_bytes: 0,
+            max_allocation_bytes,
+            max_byte_work: 0,
+            max_inheritance_depth: 1,
+        };
+        let mut chain = Vec::new();
+        let mut short = BoundedSchemaBudget::new(limits(charge - 1));
+        assert!(matches!(
+            reserve_schema_chain_entry(&mut chain, &mut short),
+            Err(BoundedSchemaError::ResourceLimit {
+                resource: "schema allocations"
+            })
+        ));
+        assert_eq!(chain.capacity(), 0);
+
+        let mut exact = BoundedSchemaBudget::new(limits(charge));
+        reserve_schema_chain_entry(&mut chain, &mut exact).unwrap();
+        assert!(chain.capacity() >= 1);
+        assert_eq!(exact.usage().allocation_bytes, charge);
+    }
+
+    #[test]
+    fn bounded_flatten_reserves_one_final_output_for_deep_wide_inheritance() {
+        const DEPTH: usize = 32;
+        const WIDTH: usize = 8;
+        let structs: Vec<_> = (0..DEPTH)
+            .map(|index| usmap::Struct {
+                name: format!("Level{index}"),
+                super_struct: (index + 1 < DEPTH).then(|| format!("Level{}", index + 1)),
+                properties: vec![usmap::Property {
+                    name: format!("P{index}"),
+                    array_dim: WIDTH as u8,
+                    index: 0,
+                    inner: usmap::PropertyInner::Int,
+                }],
+            })
+            .collect();
+        let db = SchemaDb::from_parsed(usmap::Usmap {
+            enums: Vec::new(),
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: vec!["/Script/Deep".into(); DEPTH],
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: vec![flags(usmap::FlagsType::Class); DEPTH],
+            }),
+            structs,
+            cext: None,
+            envp: None,
+        })
+        .unwrap();
+        let id = db.resolve_class("Level0").unwrap();
+        let generous = BoundedSchemaLimits {
+            max_work: 1_000_000,
+            max_slots: 1_000_000,
+            max_string_bytes: 1_000_000,
+            max_allocation_bytes: 64 * 1024 * 1024,
+            max_byte_work: 1_000_000,
+            max_inheritance_depth: DEPTH,
+        };
+        let mut measured = BoundedSchemaBudget::new(generous);
+        let slots = db.flatten_slots_bounded(id, &mut measured).unwrap();
+        assert_eq!(slots, db.flatten_slots(id).unwrap());
+        assert_eq!(slots.len(), DEPTH * WIDTH);
+        let usage = measured.usage();
+        let minimum_slot_storage = slots.len()
+            * (std::mem::size_of::<Option<PropertySlot>>() + std::mem::size_of::<PropertySlot>());
+        assert!(usage.allocation_bytes >= minimum_slot_storage);
+        assert!(usage.work >= slots.len() * 3 + (DEPTH * (DEPTH + 1)) / 2);
+
+        let exact = BoundedSchemaLimits {
+            max_work: usage.work,
+            max_slots: usage.slots,
+            max_string_bytes: usage.string_bytes,
+            max_allocation_bytes: usage.allocation_bytes,
+            max_byte_work: usage.byte_work,
+            max_inheritance_depth: DEPTH,
+        };
+        let mut exact_budget = BoundedSchemaBudget::new(exact);
+        assert_eq!(
+            db.flatten_slots_bounded(id, &mut exact_budget).unwrap(),
+            slots
+        );
+        for limited in [
+            BoundedSchemaLimits {
+                max_work: usage.work - 1,
+                ..exact
+            },
+            BoundedSchemaLimits {
+                max_allocation_bytes: usage.allocation_bytes - 1,
+                ..exact
+            },
+        ] {
+            let mut budget = BoundedSchemaBudget::new(limited);
+            assert!(matches!(
+                db.flatten_slots_bounded(id, &mut budget),
+                Err(BoundedSchemaError::ResourceLimit { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn compact_resolution_bounds_large_duplicate_sets_without_diagnostics() {
+        let mut map = fixture();
+        for index in 0..2_048 {
+            map.structs.push(usmap::Struct {
+                name: "Duplicate".into(),
+                super_struct: None,
+                properties: Vec::new(),
+            });
+            map.ppth
+                .as_mut()
+                .unwrap()
+                .structs
+                .push(format!("/Script/Duplicate{index}"));
+            map.eatr
+                .as_mut()
+                .unwrap()
+                .struct_flags
+                .push(flags(usmap::FlagsType::Class));
+        }
+        let db = SchemaDb::from_parsed(map).unwrap();
+        let mut limited = BoundedSchemaBudget::new(BoundedSchemaLimits {
+            max_work: 100,
+            max_slots: 0,
+            max_string_bytes: 128,
+            max_allocation_bytes: 128,
+            max_byte_work: 128,
+            max_inheritance_depth: 1,
+        });
+        assert!(matches!(
+            db.resolve_class_compact_bounded("Duplicate", &mut limited),
+            Err(BoundedSchemaError::ResourceLimit {
+                resource: "schema work"
+            })
+        ));
+        assert_eq!(limited.usage().work, 100);
+        assert!(limited.usage().allocation_bytes < 128);
     }
 
     #[test]

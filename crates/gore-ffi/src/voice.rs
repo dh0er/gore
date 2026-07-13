@@ -81,6 +81,28 @@ enum OggSourceReadError {
     Changed,
 }
 
+/// Stable, command-neutral classification for the guarded source reader shared by read-only
+/// native commands. Details stay private so callers cannot accidentally expose native paths or
+/// platform I/O messages across the FFI boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SecureSourceReadError {
+    Unavailable,
+    Unsafe,
+    Limit,
+    Changed,
+}
+
+impl From<OggSourceReadError> for SecureSourceReadError {
+    fn from(error: OggSourceReadError) -> Self {
+        match error {
+            OggSourceReadError::Unavailable => Self::Unavailable,
+            OggSourceReadError::Unsafe => Self::Unsafe,
+            OggSourceReadError::Limit => Self::Limit,
+            OggSourceReadError::Changed => Self::Changed,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OggInspectWireRequest {
@@ -188,6 +210,18 @@ fn ogg_bad_request() -> VoiceFailure {
 
 fn read_ogg_source_no_follow(path: &Path, max_bytes: u64) -> Result<Vec<u8>, OggSourceReadError> {
     read_ogg_source_no_follow_with_hook(path, max_bytes, || {})
+}
+
+/// Read one bounded, single-link regular file through the hardened source-handle chain.
+///
+/// The implementation retains every ancestor directory handle, never follows the final
+/// component, checks identity/size/link/change metadata around the read, and reopens relative to
+/// the retained parent (Unix) or while all ancestor handles exclude replacement (Windows).
+pub(super) fn read_bounded_single_link_source(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, SecureSourceReadError> {
+    read_ogg_source_no_follow(path, max_bytes).map_err(Into::into)
 }
 
 fn read_ogg_source_no_follow_with_hook(

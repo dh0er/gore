@@ -5,6 +5,7 @@
 //! components, then reparses and rewalks the package immediately before and
 //! after mutation. It never accepts a caller-supplied absolute offset.
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -14,9 +15,11 @@ use thiserror::Error;
 use usmap::PropertyInner;
 
 use crate::{
+    schema::{BoundedSchemaBudget, BoundedSchemaError, BoundedSchemaLimits, BoundedSchemaUsage},
     EnvelopeError, ExportEnvelope, ExportSchemaError, FixedValueSpan, FixedWireKind,
     LegacyPackageEnvelope, PackageCarrier, PackageComponent, PackageError, PropertyBlockSpans,
-    PropertySlot, PropertySpanWalker, SchemaDb, SchemaError, SliceSpan, SpanError, ValueSpan,
+    PropertySlot, PropertySpanWalker, SchemaDb, SchemaError, SchemaId, SliceSpan, SpanError,
+    SpanLimits, SpanWalkResourceLimits, SpanWalkUsage, ValueSpan,
 };
 
 /// On-disk/API version of [`FixedLeafSelector`].
@@ -32,6 +35,534 @@ pub const FIXED_LEAF_SELECTOR_PROFILE: &str = "g1r_ue5_4";
 pub struct FixedLeafDescriptor {
     pub selector: FixedLeafSelector,
     pub editable: bool,
+}
+
+/// Per-export bounds for the additive one-walk descriptor surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedLeafInspectionLimits {
+    pub span_limits: SpanLimits,
+    pub max_descriptors_per_export: usize,
+    pub max_selector_steps_per_leaf: usize,
+}
+
+impl Default for FixedLeafInspectionLimits {
+    fn default() -> Self {
+        Self {
+            span_limits: SpanLimits::default(),
+            max_descriptors_per_export: 10_000,
+            max_selector_steps_per_leaf: 128,
+        }
+    }
+}
+
+/// Cross-export resource limits consumed by [`FixedLeafInspectionSession`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedLeafWorkLimits {
+    pub max_work: usize,
+    pub max_nodes: usize,
+    pub max_collection_elements: usize,
+    pub max_leaves: usize,
+    pub max_selector_steps: usize,
+    pub max_selector_bytes: usize,
+    pub max_schema_string_bytes: usize,
+    pub max_allocation_bytes: usize,
+    pub max_byte_work: usize,
+    pub max_hash_bytes: usize,
+}
+
+impl Default for FixedLeafWorkLimits {
+    fn default() -> Self {
+        Self {
+            max_work: 2_000_000,
+            max_nodes: 1_000_000,
+            max_collection_elements: 1_000_000,
+            max_leaves: 20_000,
+            max_selector_steps: 1_000_000,
+            max_selector_bytes: 8 * 1024 * 1024,
+            max_schema_string_bytes: 32 * 1024 * 1024,
+            max_allocation_bytes: 128 * 1024 * 1024,
+            max_byte_work: 256 * 1024 * 1024,
+            max_hash_bytes: 512 * 1024 * 1024,
+        }
+    }
+}
+
+/// Mutable global budget shared by every export in one inspection request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FixedLeafWorkBudget {
+    remaining_work: usize,
+    remaining_nodes: usize,
+    remaining_collection_elements: usize,
+    remaining_leaves: usize,
+    remaining_selector_steps: usize,
+    remaining_selector_bytes: usize,
+    remaining_schema_string_bytes: usize,
+    remaining_allocation_bytes: usize,
+    remaining_byte_work: usize,
+    remaining_hash_bytes: usize,
+}
+
+impl FixedLeafWorkBudget {
+    pub fn new(limits: FixedLeafWorkLimits) -> Self {
+        Self {
+            remaining_work: limits.max_work,
+            remaining_nodes: limits.max_nodes,
+            remaining_collection_elements: limits.max_collection_elements,
+            remaining_leaves: limits.max_leaves,
+            remaining_selector_steps: limits.max_selector_steps,
+            remaining_selector_bytes: limits.max_selector_bytes,
+            remaining_schema_string_bytes: limits.max_schema_string_bytes,
+            remaining_allocation_bytes: limits.max_allocation_bytes,
+            remaining_byte_work: limits.max_byte_work,
+            remaining_hash_bytes: limits.max_hash_bytes,
+        }
+    }
+
+    pub fn remaining_nodes(&self) -> usize {
+        self.remaining_nodes
+    }
+
+    pub fn remaining_work(&self) -> usize {
+        self.remaining_work
+    }
+
+    pub fn remaining_collection_elements(&self) -> usize {
+        self.remaining_collection_elements
+    }
+
+    pub fn remaining_leaves(&self) -> usize {
+        self.remaining_leaves
+    }
+
+    pub fn remaining_selector_bytes(&self) -> usize {
+        self.remaining_selector_bytes
+    }
+
+    pub fn remaining_schema_string_bytes(&self) -> usize {
+        self.remaining_schema_string_bytes
+    }
+
+    pub fn remaining_allocation_bytes(&self) -> usize {
+        self.remaining_allocation_bytes
+    }
+
+    pub fn remaining_byte_work(&self) -> usize {
+        self.remaining_byte_work
+    }
+
+    pub fn remaining_hash_bytes(&self) -> usize {
+        self.remaining_hash_bytes
+    }
+
+    /// Tighten (never expand) the request-global selector allocation budget.
+    pub fn cap_selector_bytes(&mut self, maximum: usize) {
+        self.remaining_selector_bytes = self.remaining_selector_bytes.min(maximum);
+    }
+
+    fn charge(
+        remaining: &mut usize,
+        amount: usize,
+        resource: &'static str,
+    ) -> Result<(), FixedLeafInspectionError> {
+        if amount > *remaining {
+            return Err(FixedLeafInspectionError::ResourceLimit { resource });
+        }
+        *remaining -= amount;
+        Ok(())
+    }
+
+    fn work(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_work, amount, "work")
+    }
+
+    fn nodes(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_nodes, amount, "nodes")
+    }
+
+    fn collection(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(
+            &mut self.remaining_collection_elements,
+            amount,
+            "collection elements",
+        )
+    }
+
+    fn leaf(&mut self) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_leaves, 1, "leaves")
+    }
+
+    fn selector_steps(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_selector_steps, amount, "selector steps")
+    }
+
+    fn selector_bytes(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_selector_bytes, amount, "selector bytes")?;
+        Self::charge(&mut self.remaining_allocation_bytes, amount, "allocations")
+    }
+
+    fn schema_strings(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(
+            &mut self.remaining_schema_string_bytes,
+            amount,
+            "schema strings",
+        )
+    }
+
+    fn allocation(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_allocation_bytes, amount, "allocations")
+    }
+
+    fn byte_work(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_byte_work, amount, "byte work")
+    }
+
+    fn hash_bytes(&mut self, amount: usize) -> Result<(), FixedLeafInspectionError> {
+        Self::charge(&mut self.remaining_hash_bytes, amount, "hash bytes")
+    }
+
+    fn debit_schema_usage(
+        &mut self,
+        usage: BoundedSchemaUsage,
+    ) -> Result<(), FixedLeafInspectionError> {
+        self.work(usage.work)?;
+        self.nodes(usage.slots)?;
+        self.schema_strings(usage.string_bytes)?;
+        self.allocation(usage.allocation_bytes)?;
+        self.byte_work(usage.byte_work)
+    }
+
+    fn debit_span_usage(&mut self, usage: SpanWalkUsage) -> Result<(), FixedLeafInspectionError> {
+        self.nodes(usage.nodes)?;
+        self.collection(usage.collection_elements)?;
+        self.work(usage.work)?;
+        self.schema_strings(usage.string_bytes)?;
+        self.allocation(usage.allocation_bytes)?;
+        self.byte_work(usage.byte_work)
+    }
+}
+
+impl Default for FixedLeafWorkBudget {
+    fn default() -> Self {
+        Self::new(FixedLeafWorkLimits::default())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FixedLeafInspectionCounters {
+    pub package_seal_captures: usize,
+    pub usmap_sha256_captures: usize,
+    pub span_walks: usize,
+    pub schema_resolution_scans: usize,
+    pub schema_cache_hits: usize,
+}
+
+/// One bounded, prewalked export result. The returned descriptors were created
+/// directly from this single span tree; no hidden rewalk occurs.
+#[derive(Debug)]
+pub struct FixedLeafInspection {
+    schema_name: String,
+    property_bytes: usize,
+    native_suffix_bytes: usize,
+    descriptors: Vec<FixedLeafDescriptor>,
+}
+
+impl FixedLeafInspection {
+    pub fn schema_name(&self) -> &str {
+        &self.schema_name
+    }
+
+    pub fn property_bytes(&self) -> usize {
+        self.property_bytes
+    }
+
+    pub fn native_suffix_bytes(&self) -> usize {
+        self.native_suffix_bytes
+    }
+
+    pub fn descriptors(&self) -> &[FixedLeafDescriptor] {
+        &self.descriptors
+    }
+
+    pub fn into_descriptors(self) -> Vec<FixedLeafDescriptor> {
+        self.descriptors
+    }
+
+    pub fn into_parts(self) -> (String, usize, usize, Vec<FixedLeafDescriptor>) {
+        (
+            self.schema_name,
+            self.property_bytes,
+            self.native_suffix_bytes,
+            self.descriptors,
+        )
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum FixedLeafInspectionError {
+    #[error(transparent)]
+    Selector(#[from] FixedLeafSelectorError),
+    #[error("fixed-leaf inspection exhausted its global {resource} budget")]
+    ResourceLimit { resource: &'static str },
+    #[error("fixed-leaf inspection could not reserve bounded descriptor storage")]
+    Allocation,
+    #[error("fixed-leaf inspection could not bind the export class ({reason})")]
+    SchemaUnsupported { reason: &'static str },
+}
+
+impl FixedLeafInspectionError {
+    pub fn is_resource_limit(&self) -> bool {
+        matches!(
+            self,
+            Self::ResourceLimit { .. }
+                | Self::Allocation
+                | Self::Selector(FixedLeafSelectorError::Span(
+                    SpanError::CollectionLimit { .. }
+                        | SpanError::CollectionAggregateLimit { .. }
+                        | SpanError::DepthLimit { .. }
+                        | SpanError::NodeLimit { .. }
+                        | SpanError::Allocation { .. }
+                        | SpanError::ResourceLimit { .. }
+                ))
+                | Self::Selector(FixedLeafSelectorError::Span(SpanError::Header {
+                    source: crate::UnversionedError::ResourceLimit { .. }
+                        | crate::UnversionedError::Allocation,
+                    ..
+                }))
+        )
+    }
+}
+
+/// Request-scoped inspector which captures the package pair and USMAP hash once.
+pub struct FixedLeafInspectionSession<'a> {
+    carrier: &'a PackageCarrier,
+    schemas: &'a SchemaDb,
+    package_seal: PackagePairSeal,
+    usmap_sha256: String,
+    span_walks: Cell<usize>,
+    schema_resolution_scans: Cell<usize>,
+    schema_cache_hits: Cell<usize>,
+    schema_cache: RefCell<HashMap<String, CachedSchemaResolution>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CachedSchemaResolution {
+    Resolved(SchemaId),
+    Missing,
+    Ambiguous,
+    WrongKind,
+    Unsupported,
+}
+
+impl<'a> FixedLeafInspectionSession<'a> {
+    pub fn new(
+        carrier: &'a PackageCarrier,
+        schemas: &'a SchemaDb,
+    ) -> Result<Self, FixedLeafInspectionError> {
+        let usmap = schemas
+            .source_sha256()
+            .ok_or(FixedLeafSelectorError::MissingUsmapSource)?;
+        Ok(Self {
+            carrier,
+            schemas,
+            package_seal: PackagePairSeal::capture(carrier),
+            usmap_sha256: encode_hex_fallible(&usmap)?,
+            span_walks: Cell::new(0),
+            schema_resolution_scans: Cell::new(0),
+            schema_cache_hits: Cell::new(0),
+            schema_cache: RefCell::new(HashMap::new()),
+        })
+    }
+
+    pub fn package_seal(&self) -> &PackagePairSeal {
+        &self.package_seal
+    }
+
+    pub fn usmap_sha256(&self) -> &str {
+        &self.usmap_sha256
+    }
+
+    pub fn counters(&self) -> FixedLeafInspectionCounters {
+        FixedLeafInspectionCounters {
+            package_seal_captures: 1,
+            usmap_sha256_captures: 1,
+            span_walks: self.span_walks.get(),
+            schema_resolution_scans: self.schema_resolution_scans.get(),
+            schema_cache_hits: self.schema_cache_hits.get(),
+        }
+    }
+
+    pub fn inspect_export_bounded<'bytes>(
+        &self,
+        export: &ExportEnvelope<'bytes>,
+        limits: FixedLeafInspectionLimits,
+        budget: &mut FixedLeafWorkBudget,
+    ) -> Result<FixedLeafInspection, FixedLeafInspectionError> {
+        let boundary = export.boundary();
+        let carrier_export = self
+            .carrier
+            .slice(boundary.component(), boundary.offset(), boundary.length())
+            .map_err(|_| FixedLeafSelectorError::ForeignExport)?;
+        if !same_slice(carrier_export, export.bytes()) {
+            return Err(FixedLeafSelectorError::ForeignExport.into());
+        }
+        if budget.remaining_nodes == 0 {
+            return Err(FixedLeafInspectionError::ResourceLimit {
+                resource: "span tree",
+            });
+        }
+
+        let schema_id = self.resolve_schema_cached(boundary.class_path(), budget)?;
+        let span_limits = SpanLimits {
+            max_depth: limits.span_limits.max_depth,
+            max_collection_elements: limits
+                .span_limits
+                .max_collection_elements
+                .min(budget.remaining_collection_elements),
+            max_total_nodes: limits
+                .span_limits
+                .max_total_nodes
+                .min(budget.remaining_nodes),
+        };
+        self.span_walks.set(self.span_walks.get().saturating_add(1));
+        let walked = PropertySpanWalker::g1r_ue5_4_with_limits(self.schemas, span_limits)
+            .walk_bounded_accounted(
+                export.bytes(),
+                schema_id,
+                budget.remaining_collection_elements,
+                SpanWalkResourceLimits {
+                    max_work: budget.remaining_work(),
+                    max_string_bytes: budget.remaining_schema_string_bytes(),
+                    max_allocation_bytes: budget.remaining_allocation_bytes(),
+                    max_byte_work: budget.remaining_byte_work(),
+                    max_inheritance_depth: 128,
+                    max_header_fragments: 65_536,
+                },
+            );
+        let block = match walked {
+            Ok((block, usage)) => {
+                budget.debit_span_usage(usage)?;
+                block
+            }
+            Err(failure) => {
+                budget.debit_span_usage(failure.usage())?;
+                return Err(FixedLeafSelectorError::Span(failure.into_source()).into());
+            }
+        };
+        let native_suffix_bytes = export.bytes().len().checked_sub(block.consumed()).ok_or(
+            FixedLeafInspectionError::ResourceLimit {
+                resource: "property range",
+            },
+        )?;
+        budget.hash_bytes(export.bytes().len())?;
+        budget.allocation(64)?;
+        let export_sha256 = encode_hex_fallible(&sha256(export.bytes()))?;
+
+        let mut collector = BoundedDescriptorCollector {
+            limits,
+            budget,
+            package_seal: &self.package_seal,
+            usmap_sha256: &self.usmap_sha256,
+            boundary,
+            export_sha256: &export_sha256,
+            path: Vec::new(),
+            descriptors: Vec::new(),
+            identity_cache: HashMap::new(),
+        };
+        collector.collect_block(&block, FixedLeafRole::PropertyValue, None)?;
+        collector
+            .budget
+            .selector_bytes(json_string_upper_bound(block.schema_name()))?;
+        let schema_name = clone_string_fallible(block.schema_name())?;
+        Ok(FixedLeafInspection {
+            schema_name,
+            property_bytes: block.consumed(),
+            native_suffix_bytes,
+            descriptors: collector.descriptors,
+        })
+    }
+
+    fn resolve_schema_cached(
+        &self,
+        query: &str,
+        budget: &mut FixedLeafWorkBudget,
+    ) -> Result<SchemaId, FixedLeafInspectionError> {
+        budget.work(1)?;
+        budget.byte_work(query.len())?;
+        if let Some(cached) = self.schema_cache.borrow().get(query).copied() {
+            self.schema_cache_hits
+                .set(self.schema_cache_hits.get().saturating_add(1));
+            return cached.into_result();
+        }
+
+        self.schema_resolution_scans
+            .set(self.schema_resolution_scans.get().saturating_add(1));
+        let mut schema_budget = BoundedSchemaBudget::new(BoundedSchemaLimits {
+            max_work: budget.remaining_work(),
+            max_slots: 0,
+            max_string_bytes: budget.remaining_schema_string_bytes(),
+            max_allocation_bytes: budget.remaining_allocation_bytes(),
+            max_byte_work: budget.remaining_byte_work(),
+            max_inheritance_depth: 128,
+        });
+        let resolved = self
+            .schemas
+            .resolve_class_compact_bounded(query, &mut schema_budget);
+        budget.debit_schema_usage(schema_budget.usage())?;
+        let cached = match resolved {
+            Ok(id) => CachedSchemaResolution::Resolved(id),
+            Err(BoundedSchemaError::Missing) => CachedSchemaResolution::Missing,
+            Err(BoundedSchemaError::Ambiguous) => CachedSchemaResolution::Ambiguous,
+            Err(BoundedSchemaError::WrongKind) => CachedSchemaResolution::WrongKind,
+            Err(BoundedSchemaError::InheritanceCycle | BoundedSchemaError::InvalidLayout) => {
+                CachedSchemaResolution::Unsupported
+            }
+            Err(BoundedSchemaError::ResourceLimit { resource }) => {
+                return Err(FixedLeafInspectionError::ResourceLimit { resource });
+            }
+            Err(BoundedSchemaError::Allocation) => {
+                return Err(FixedLeafInspectionError::Allocation);
+            }
+        };
+
+        budget.work(1)?;
+        budget.byte_work(query.len())?;
+        budget.schema_strings(query.len())?;
+        // Key bytes and value size are explicit. The extra 128 bytes per
+        // insertion exceeds the current hashbrown bucket/control slack and
+        // amortized rehash peak for this request-bounded cache.
+        budget.allocation(
+            query
+                .len()
+                .saturating_add(std::mem::size_of::<CachedSchemaResolution>())
+                .saturating_add(128),
+        )?;
+        let mut cache = self.schema_cache.borrow_mut();
+        cache
+            .try_reserve(1)
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        cache.insert(clone_string_fallible(query)?, cached);
+        cached.into_result()
+    }
+}
+
+impl CachedSchemaResolution {
+    fn into_result(self) -> Result<SchemaId, FixedLeafInspectionError> {
+        match self {
+            Self::Resolved(id) => Ok(id),
+            Self::Missing => Err(FixedLeafInspectionError::SchemaUnsupported {
+                reason: "missing schema",
+            }),
+            Self::Ambiguous => Err(FixedLeafInspectionError::SchemaUnsupported {
+                reason: "ambiguous schema",
+            }),
+            Self::WrongKind => Err(FixedLeafInspectionError::SchemaUnsupported {
+                reason: "wrong schema kind",
+            }),
+            Self::Unsupported => Err(FixedLeafInspectionError::SchemaUnsupported {
+                reason: "unsupported schema metadata",
+            }),
+        }
+    }
 }
 
 /// Snapshot-specific, offset-free identity for one walked fixed-width leaf.
@@ -469,6 +1000,486 @@ pub fn describe_fixed_leaves<'bytes>(
             }
         })
         .collect())
+}
+
+struct BoundedDescriptorCollector<'a, 'budget> {
+    limits: FixedLeafInspectionLimits,
+    budget: &'budget mut FixedLeafWorkBudget,
+    package_seal: &'a PackagePairSeal,
+    usmap_sha256: &'a str,
+    boundary: &'a crate::ExportBoundary,
+    export_sha256: &'a str,
+    path: Vec<FixedLeafSelectorStep>,
+    descriptors: Vec<FixedLeafDescriptor>,
+    identity_cache: HashMap<(usize, usize, Option<u8>), FixedLeafMapKeyIdentity>,
+}
+
+impl<'a, 'budget> BoundedDescriptorCollector<'a, 'budget> {
+    fn prepare_step(&mut self) -> Result<(), FixedLeafInspectionError> {
+        let attempted =
+            self.path
+                .len()
+                .checked_add(1)
+                .ok_or(FixedLeafInspectionError::ResourceLimit {
+                    resource: "selector path depth",
+                })?;
+        if attempted > self.limits.max_selector_steps_per_leaf {
+            return Err(FixedLeafInspectionError::ResourceLimit {
+                resource: "selector path depth",
+            });
+        }
+        self.budget.work(1)?;
+        reserve_one_path_step(&mut self.path, self.budget)
+    }
+
+    fn collect_block(
+        &mut self,
+        block: &PropertyBlockSpans<'_>,
+        role: FixedLeafRole,
+        duplicate_key_occurrences: Option<usize>,
+    ) -> Result<(), FixedLeafInspectionError> {
+        self.budget.work(1)?;
+        for property in block.properties() {
+            self.budget.work(1)?;
+            let Some(value) = property.value() else {
+                continue;
+            };
+            self.prepare_step()?;
+            let slot = property.slot();
+            self.budget.selector_bytes(
+                256usize
+                    .saturating_add(json_string_upper_bound(&slot.property_name))
+                    .saturating_add(json_string_upper_bound(&slot.declaring_schema_name))
+                    .saturating_add(
+                        slot.declaring_module_path
+                            .as_deref()
+                            .map(json_string_upper_bound)
+                            .unwrap_or(4),
+                    )
+                    .saturating_add(property_inner_dynamic_upper_bound(&slot.inner)),
+            )?;
+            self.path.push(FixedLeafSelectorStep::Property {
+                schema_index: slot.schema_index,
+                property_name: clone_string_fallible(&slot.property_name)?,
+                array_index: slot.array_index,
+                array_dimension: slot.array_dimension,
+                declaring_schema_name: clone_string_fallible(&slot.declaring_schema_name)?,
+                declaring_module_path: slot
+                    .declaring_module_path
+                    .as_deref()
+                    .map(clone_string_fallible)
+                    .transpose()?,
+                property_type: FixedLeafWireType::from(&slot.inner),
+            });
+            let result = self.collect_value(value, role, duplicate_key_occurrences);
+            self.path.pop();
+            result?;
+        }
+        Ok(())
+    }
+
+    fn collect_value(
+        &mut self,
+        value: &ValueSpan<'_>,
+        role: FixedLeafRole,
+        duplicate_key_occurrences: Option<usize>,
+    ) -> Result<(), FixedLeafInspectionError> {
+        self.budget.work(1)?;
+        match value {
+            ValueSpan::Fixed(leaf) => self.emit_leaf(leaf, role, duplicate_key_occurrences),
+            ValueSpan::Struct(value) => {
+                self.prepare_step()?;
+                self.budget.selector_bytes(
+                    256usize
+                        .saturating_add(json_string_upper_bound(value.struct_name()))
+                        .saturating_add(json_string_upper_bound(value.properties().schema_name())),
+                )?;
+                self.path.push(FixedLeafSelectorStep::Struct {
+                    name: clone_string_fallible(value.struct_name())?,
+                    schema_name: clone_string_fallible(value.properties().schema_name())?,
+                });
+                let result =
+                    self.collect_block(value.properties(), role, duplicate_key_occurrences);
+                self.path.pop();
+                result
+            }
+            ValueSpan::Map(value) => {
+                self.prepare_step()?;
+                self.budget.selector_bytes(
+                    256usize
+                        .saturating_add(property_inner_dynamic_upper_bound(value.key_type()))
+                        .saturating_add(property_inner_dynamic_upper_bound(value.value_type())),
+                )?;
+                self.path.push(FixedLeafSelectorStep::Map {
+                    key_type: FixedLeafWireType::from(value.key_type()),
+                    value_type: FixedLeafWireType::from(value.value_type()),
+                });
+                let result = self.collect_map(value, role, duplicate_key_occurrences);
+                self.path.pop();
+                result
+            }
+        }
+    }
+
+    fn collect_map(
+        &mut self,
+        value: &crate::MapValueSpan<'_>,
+        role: FixedLeafRole,
+        duplicate_key_occurrences: Option<usize>,
+    ) -> Result<(), FixedLeafInspectionError> {
+        let mut removed_identities = Vec::new();
+        self.budget.work(value.removed_keys().len())?;
+        self.budget.allocation(
+            value
+                .removed_keys()
+                .len()
+                .checked_mul(std::mem::size_of::<FixedLeafMapKeyIdentity>())
+                .ok_or(FixedLeafInspectionError::ResourceLimit {
+                    resource: "allocations",
+                })?,
+        )?;
+        removed_identities
+            .try_reserve_exact(value.removed_keys().len())
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        for key in value.removed_keys() {
+            removed_identities.push(self.map_key_identity(key)?);
+        }
+        let removed_counts = map_key_identity_counts_fallible(&removed_identities, self.budget)?;
+        for (key, identity) in value.removed_keys().iter().zip(&removed_identities) {
+            let occurrences = map_key_identity_count(&removed_counts, identity);
+            let branch_duplicate =
+                duplicate_key_occurrences.or_else(|| (occurrences > 1).then_some(occurrences));
+            self.prepare_step()?;
+            self.budget.selector_bytes(512)?;
+            self.path.push(FixedLeafSelectorStep::RemovedMapKey {
+                key: identity.clone(),
+            });
+            let result = self.collect_value(key, role.removed_key_child(), branch_duplicate);
+            self.path.pop();
+            result?;
+        }
+
+        let mut entry_identities = Vec::new();
+        self.budget.work(value.entries().len())?;
+        self.budget.allocation(
+            value
+                .entries()
+                .len()
+                .checked_mul(std::mem::size_of::<FixedLeafMapKeyIdentity>())
+                .ok_or(FixedLeafInspectionError::ResourceLimit {
+                    resource: "allocations",
+                })?,
+        )?;
+        entry_identities
+            .try_reserve_exact(value.entries().len())
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        for entry in value.entries() {
+            entry_identities.push(self.map_key_identity(entry.key())?);
+        }
+        let entry_counts = map_key_identity_counts_fallible(&entry_identities, self.budget)?;
+        for (entry, identity) in value.entries().iter().zip(&entry_identities) {
+            let occurrences = map_key_identity_count(&entry_counts, identity);
+            let branch_duplicate =
+                duplicate_key_occurrences.or_else(|| (occurrences > 1).then_some(occurrences));
+
+            self.prepare_step()?;
+            self.budget.selector_bytes(512)?;
+            self.path.push(FixedLeafSelectorStep::MapEntryKey {
+                key: identity.clone(),
+            });
+            let key_result =
+                self.collect_value(entry.key(), role.live_key_child(), branch_duplicate);
+            self.path.pop();
+            key_result?;
+
+            self.prepare_step()?;
+            self.budget.selector_bytes(512)?;
+            self.path.push(FixedLeafSelectorStep::MapEntryValue {
+                key: identity.clone(),
+            });
+            let value_result = self.collect_value(entry.value(), role, branch_duplicate);
+            self.path.pop();
+            value_result?;
+        }
+        Ok(())
+    }
+
+    fn map_key_identity(
+        &mut self,
+        key: &ValueSpan<'_>,
+    ) -> Result<FixedLeafMapKeyIdentity, FixedLeafInspectionError> {
+        self.budget.work(1)?;
+        self.budget.selector_bytes(64)?;
+        let span = key.span();
+        let kind = match key {
+            ValueSpan::Fixed(fixed) => Some(fixed.kind()),
+            ValueSpan::Struct(_) | ValueSpan::Map(_) => None,
+        };
+        let cache_key = (span.offset(), span.len(), kind.map(fixed_wire_kind_tag));
+        if let Some(identity) = self.identity_cache.get(&cache_key) {
+            self.budget.allocation(
+                std::mem::size_of::<FixedLeafMapKeyIdentity>()
+                    .saturating_add(identity.sha256.len()),
+            )?;
+            return Ok(identity.clone());
+        }
+        self.budget.hash_bytes(span.len())?;
+        self.budget.allocation(64)?;
+        let identity = FixedLeafMapKeyIdentity {
+            kind,
+            byte_length: span.len(),
+            sha256: encode_hex_fallible(&sha256(span.bytes()))?,
+        };
+        self.budget.work(1)?;
+        // The identity and its second SHA string are explicit; 128 bytes of
+        // per-entry margin covers hashbrown bucket/control slack and rehash.
+        self.budget.allocation(
+            std::mem::size_of::<((usize, usize, Option<u8>), FixedLeafMapKeyIdentity)>()
+                .saturating_add(identity.sha256.len())
+                .saturating_add(128),
+        )?;
+        self.identity_cache
+            .try_reserve(1)
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        self.identity_cache.insert(cache_key, identity.clone());
+        Ok(identity)
+    }
+
+    fn emit_leaf(
+        &mut self,
+        leaf: &FixedValueSpan<'_>,
+        role: FixedLeafRole,
+        duplicate_key_occurrences: Option<usize>,
+    ) -> Result<(), FixedLeafInspectionError> {
+        if self.descriptors.len() >= self.limits.max_descriptors_per_export {
+            return Err(FixedLeafInspectionError::ResourceLimit {
+                resource: "descriptors per export",
+            });
+        }
+        self.budget.leaf()?;
+        self.budget.selector_steps(self.path.len())?;
+        self.budget.work(self.path.len().saturating_add(1))?;
+        let selector_bytes = selector_json_upper_bound(
+            self.boundary.object_name(),
+            self.boundary.class_path(),
+            self.usmap_sha256,
+            self.export_sha256,
+            leaf,
+            &self.path,
+        );
+        // selector_bytes is also charged to the allocation budget. Its fixed
+        // 1KiB+ base plus every dynamic string/path byte dominates Descriptor
+        // Vec slack, the exact owned-path reserve, and all selector clones.
+        self.budget.selector_bytes(selector_bytes)?;
+        self.descriptors
+            .try_reserve(1)
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        let mut owned_path = Vec::new();
+        owned_path
+            .try_reserve_exact(self.path.len())
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+        owned_path.extend(self.path.iter().cloned());
+        let editable = duplicate_key_occurrences.is_none()
+            && role == FixedLeafRole::PropertyValue
+            && fixed_wire_kind_is_editable(leaf.kind())
+            && !self.path.iter().any(|step| {
+                matches!(
+                    step,
+                    FixedLeafSelectorStep::MapEntryValue {
+                        key: FixedLeafMapKeyIdentity { kind: None, .. }
+                    }
+                )
+            });
+        self.descriptors.push(FixedLeafDescriptor {
+            selector: FixedLeafSelector {
+                format: FIXED_LEAF_SELECTOR_FORMAT,
+                profile: clone_string_fallible(FIXED_LEAF_SELECTOR_PROFILE)?,
+                package_seal: self.package_seal.clone(),
+                usmap_sha256: clone_string_fallible(self.usmap_sha256)?,
+                export_index: self.boundary.export_index(),
+                object_name: clone_string_fallible(self.boundary.object_name())?,
+                class_path: clone_string_fallible(self.boundary.class_path())?,
+                component: self.boundary.component(),
+                export_sha256: clone_string_fallible(self.export_sha256)?,
+                role,
+                kind: leaf.kind(),
+                path: owned_path,
+                expected_hex: encode_hex_fallible(leaf.span().bytes())?,
+            },
+            editable,
+        });
+        Ok(())
+    }
+}
+
+fn reserve_one_path_step(
+    path: &mut Vec<FixedLeafSelectorStep>,
+    budget: &mut FixedLeafWorkBudget,
+) -> Result<(), FixedLeafInspectionError> {
+    if path.len() == path.capacity() {
+        budget.allocation(
+            std::mem::size_of::<FixedLeafSelectorStep>()
+                .checked_add(64)
+                .ok_or(FixedLeafInspectionError::ResourceLimit {
+                    resource: "allocations",
+                })?,
+        )?;
+        // Exact growth keeps the precharge proportional instead of relying on
+        // Vec's geometric reserve policy.
+        path.try_reserve_exact(1)
+            .map_err(|_| FixedLeafInspectionError::Allocation)?;
+    }
+    Ok(())
+}
+
+fn map_key_identity_counts_fallible<'a>(
+    identities: &'a [FixedLeafMapKeyIdentity],
+    budget: &mut FixedLeafWorkBudget,
+) -> Result<MapKeyIdentityCounts<'a>, FixedLeafInspectionError> {
+    budget.work(identities.len())?;
+    budget.byte_work(identities.len().saturating_mul(64))?;
+    // A borrowed identity key is currently far below 160 bytes including
+    // hashbrown controls/slack; charging 160 per item also covers rehash peak.
+    budget.allocation(identities.len().checked_mul(160).ok_or(
+        FixedLeafInspectionError::ResourceLimit {
+            resource: "allocations",
+        },
+    )?)?;
+    let mut counts = HashMap::new();
+    counts
+        .try_reserve(identities.len())
+        .map_err(|_| FixedLeafInspectionError::Allocation)?;
+    for identity in identities {
+        *counts
+            .entry((
+                identity.kind.map(fixed_wire_kind_tag),
+                identity.byte_length,
+                identity.sha256.as_str(),
+            ))
+            .or_insert(0) += 1;
+    }
+    Ok(counts)
+}
+
+fn clone_string_fallible(value: &str) -> Result<String, FixedLeafInspectionError> {
+    let mut out = String::new();
+    out.try_reserve_exact(value.len())
+        .map_err(|_| FixedLeafInspectionError::Allocation)?;
+    out.push_str(value);
+    Ok(out)
+}
+
+fn encode_hex_fallible(bytes: &[u8]) -> Result<String, FixedLeafInspectionError> {
+    let capacity = bytes
+        .len()
+        .checked_mul(2)
+        .ok_or(FixedLeafInspectionError::ResourceLimit {
+            resource: "hex bytes",
+        })?;
+    let mut out = String::new();
+    out.try_reserve_exact(capacity)
+        .map_err(|_| FixedLeafInspectionError::Allocation)?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in bytes {
+        out.push(HEX[usize::from(byte >> 4)] as char);
+        out.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    Ok(out)
+}
+
+fn selector_json_upper_bound(
+    object_name: &str,
+    class_path: &str,
+    usmap_sha256: &str,
+    export_sha256: &str,
+    leaf: &FixedValueSpan<'_>,
+    path: &[FixedLeafSelectorStep],
+) -> usize {
+    let mut bytes = 1_024usize
+        .saturating_add(json_string_upper_bound(object_name))
+        .saturating_add(json_string_upper_bound(class_path))
+        .saturating_add(json_string_upper_bound(usmap_sha256))
+        .saturating_add(json_string_upper_bound(export_sha256))
+        .saturating_add(leaf.span().len().saturating_mul(2));
+    for step in path {
+        bytes = bytes
+            .saturating_add(256)
+            .saturating_add(selector_step_dynamic_upper_bound(step));
+    }
+    bytes
+}
+
+fn json_string_upper_bound(value: &str) -> usize {
+    value.len().saturating_mul(6).saturating_add(2)
+}
+
+fn selector_step_dynamic_upper_bound(step: &FixedLeafSelectorStep) -> usize {
+    match step {
+        FixedLeafSelectorStep::Property {
+            property_name,
+            declaring_schema_name,
+            declaring_module_path,
+            property_type,
+            ..
+        } => json_string_upper_bound(property_name)
+            .saturating_add(json_string_upper_bound(declaring_schema_name))
+            .saturating_add(
+                declaring_module_path
+                    .as_deref()
+                    .map(json_string_upper_bound)
+                    .unwrap_or(4),
+            )
+            .saturating_add(wire_type_dynamic_upper_bound(property_type)),
+        FixedLeafSelectorStep::Struct { name, schema_name } => {
+            json_string_upper_bound(name).saturating_add(json_string_upper_bound(schema_name))
+        }
+        FixedLeafSelectorStep::Map {
+            key_type,
+            value_type,
+        } => wire_type_dynamic_upper_bound(key_type)
+            .saturating_add(wire_type_dynamic_upper_bound(value_type)),
+        FixedLeafSelectorStep::MapEntryValue { key }
+        | FixedLeafSelectorStep::MapEntryKey { key }
+        | FixedLeafSelectorStep::RemovedMapKey { key } => {
+            json_string_upper_bound(&key.sha256).saturating_add(128)
+        }
+    }
+}
+
+fn wire_type_dynamic_upper_bound(wire: &FixedLeafWireType) -> usize {
+    match wire {
+        FixedLeafWireType::Array { inner }
+        | FixedLeafWireType::Set { key: inner }
+        | FixedLeafWireType::Optional { inner } => {
+            64usize.saturating_add(wire_type_dynamic_upper_bound(inner))
+        }
+        FixedLeafWireType::Enum { inner, name } => 96usize
+            .saturating_add(json_string_upper_bound(name))
+            .saturating_add(wire_type_dynamic_upper_bound(inner)),
+        FixedLeafWireType::Map { key, value } => 96usize
+            .saturating_add(wire_type_dynamic_upper_bound(key))
+            .saturating_add(wire_type_dynamic_upper_bound(value)),
+        FixedLeafWireType::Struct { name } => 64usize.saturating_add(json_string_upper_bound(name)),
+        _ => 64,
+    }
+}
+
+fn property_inner_dynamic_upper_bound(inner: &PropertyInner) -> usize {
+    match inner {
+        PropertyInner::Array { inner }
+        | PropertyInner::Set { key: inner }
+        | PropertyInner::Optional { inner } => {
+            64usize.saturating_add(property_inner_dynamic_upper_bound(inner))
+        }
+        PropertyInner::Enum { inner, name } => 96usize
+            .saturating_add(json_string_upper_bound(name))
+            .saturating_add(property_inner_dynamic_upper_bound(inner)),
+        PropertyInner::Map { key, value } => 96usize
+            .saturating_add(property_inner_dynamic_upper_bound(key))
+            .saturating_add(property_inner_dynamic_upper_bound(value)),
+        PropertyInner::Struct { name } => 64usize.saturating_add(json_string_upper_bound(name)),
+        _ => 64,
+    }
 }
 
 fn require_identity(
@@ -1146,9 +2157,13 @@ pub enum FixedLeafPatchError {
     ForeignExport,
     #[error("the property block does not start at byte zero of the supplied export")]
     ForeignPropertyBlock,
-    #[error("the supplied property block and leaf do not match a fresh walk with the export's exact schema")]
+    #[error(
+        "the supplied property block and leaf do not match a fresh walk with the export's exact schema"
+    )]
     SemanticPathMismatch,
-    #[error("the fixed leaf is not the unique matching leaf in the supplied property block (matches={matching_leaves})")]
+    #[error(
+        "the fixed leaf is not the unique matching leaf in the supplied property block (matches={matching_leaves})"
+    )]
     ForeignFixedLeaf { matching_leaves: usize },
     #[error(
         "fixed wire kind {kind:?} has width {expected}, but its observed span has {actual} bytes"
@@ -1174,17 +2189,25 @@ pub enum FixedLeafPatchError {
         expected: usize,
         actual: usize,
     },
-    #[error("expected bytes differ from the observed leaf at relative byte {mismatch_offset}: expected 0x{expected:02x}, got 0x{actual:02x}")]
+    #[error(
+        "expected bytes differ from the observed leaf at relative byte {mismatch_offset}: expected 0x{expected:02x}, got 0x{actual:02x}"
+    )]
     ExpectedMismatch {
         mismatch_offset: usize,
         expected: u8,
         actual: u8,
     },
-    #[error("editing referential fixed wire kind {kind:?} is refused until package-map validation is available")]
+    #[error(
+        "editing referential fixed wire kind {kind:?} is refused until package-map validation is available"
+    )]
     ReferentialEditUnsupported { kind: FixedWireKind },
-    #[error("editing a fixed leaf inside {section} is refused; map key identity is not a value-only patch")]
+    #[error(
+        "editing a fixed leaf inside {section} is refused; map key identity is not a value-only patch"
+    )]
     MapKeyEditUnsupported { section: &'static str },
-    #[error("editing a map value with a schema-recursive struct or map key is refused until the key's semantic schema can be sealed")]
+    #[error(
+        "editing a map value with a schema-recursive struct or map key is refused until the key's semantic schema can be sealed"
+    )]
     ComplexMapKeyUnsupported,
     #[error("Bool replacement byte must be 0 or 1, got {value}")]
     InvalidBool { value: u8 },
@@ -1216,7 +2239,9 @@ pub enum FixedLeafPatchError {
         postcondition: String,
         rollback: PackageError,
     },
-    #[error("postcondition failed ({postcondition}); rollback completed but pair verification failed: expected {expected}; got {actual}")]
+    #[error(
+        "postcondition failed ({postcondition}); rollback completed but pair verification failed: expected {expected}; got {actual}"
+    )]
     RollbackVerification {
         postcondition: String,
         expected: Box<PackagePairSeal>,
@@ -1946,5 +2971,30 @@ mod selector_wire_tests {
             let result = validate_fixed_replacement(kind, &observed, &observed, &replacement);
             assert_eq!(result.is_ok(), editable, "kind={kind:?}, result={result:?}");
         }
+    }
+
+    #[test]
+    fn selector_path_growth_is_debited_before_vec_allocation() {
+        let charge = std::mem::size_of::<FixedLeafSelectorStep>() + 64;
+        let mut path = Vec::new();
+        let mut zero = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_allocation_bytes: 0,
+            ..FixedLeafWorkLimits::default()
+        });
+        assert!(matches!(
+            reserve_one_path_step(&mut path, &mut zero),
+            Err(FixedLeafInspectionError::ResourceLimit {
+                resource: "allocations"
+            })
+        ));
+        assert_eq!(path.capacity(), 0);
+
+        let mut exact = FixedLeafWorkBudget::new(FixedLeafWorkLimits {
+            max_allocation_bytes: charge,
+            ..FixedLeafWorkLimits::default()
+        });
+        reserve_one_path_step(&mut path, &mut exact).unwrap();
+        assert!(path.capacity() >= 1);
+        assert_eq!(exact.remaining_allocation_bytes(), 0);
     }
 }

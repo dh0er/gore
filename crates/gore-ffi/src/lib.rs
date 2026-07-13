@@ -67,6 +67,9 @@
 //! - `voice_ogg_inspect_v1` accepts exactly `{ogg_path}` and safely validates one bounded,
 //!   single-link regular Ogg file without following links. It returns only the proven codec/page/
 //!   stream facts and the exact validated content seal; native paths are never returned.
+//! - `dataasset_fixed_inspect_v1` accepts exactly `{uasset_path, usmap_path, export_index?}` and
+//!   performs a bounded, offline-only G1R UE5.4 fixed-leaf inspection. It returns exact content
+//!   seals and offset-free selectors without paths, patching, deployment, or runtime claims.
 
 mod authoring;
 mod authoring_drafts;
@@ -77,6 +80,7 @@ mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_inventory;
 mod authoring_story_quest;
+mod dataasset;
 mod transport;
 mod voice;
 
@@ -123,6 +127,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_story_catalog_v1_read",
     "authoring_story_inventory_v1_build",
     "core_info",
+    "dataasset_fixed_inspect_v1",
     "find_game",
     "generate_mod",
     "loc_extract",
@@ -174,6 +179,7 @@ fn dispatch(input: &str) -> Value {
     let payload = req.get("payload").cloned().unwrap_or(Value::Null);
     match command {
         "core_info" => core_info(),
+        "dataasset_fixed_inspect_v1" => dataasset::fixed_inspect_v1_raw(input),
         "generate_mod" => generate_mod(payload),
         "validate" => validate(payload),
         "loc_status" => loc_status(),
@@ -1109,6 +1115,7 @@ mod tests {
                     "authoring_story_catalog_v1_read",
                     "authoring_story_inventory_v1_build",
                     "core_info",
+                    "dataasset_fixed_inspect_v1",
                     "find_game",
                     "generate_mod",
                     "loc_extract",

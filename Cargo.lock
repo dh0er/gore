@@ -913,6 +913,7 @@ dependencies = [
  "thiserror 1.0.69",
  "usmap",
  "windows-sys 0.61.2",
+ "zstd",
 ]
 
 [[package]]
@@ -939,6 +940,7 @@ name = "gore-ffi"
 version = "0.0.0"
 dependencies = [
  "gore-as",
+ "gore-asset",
  "gore-authoring",
  "gore-fmod",
  "gore-loc",
@@ -953,10 +955,12 @@ dependencies = [
  "gore-vo",
  "image",
  "libc",
+ "retoc",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "usmap",
  "windows-sys 0.61.2",
  "zip",
 ]
