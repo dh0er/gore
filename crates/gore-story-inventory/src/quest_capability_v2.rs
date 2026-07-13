@@ -282,6 +282,28 @@ impl PreparedQuestCollisionArtifactV2 {
             .map_err(PreparedQuestCollisionArtifactFinalizeErrorV2::ArtifactOrCapabilityDrift)?;
         Ok((artifact, capability.into_quest_collision_input()))
     }
+
+    /// Consume the linear capsule at the crate-internal revision-3 transaction boundary.
+    ///
+    /// This is deliberately not public: callers cannot split structural data from its fresh
+    /// capability or use this handoff as an authority constructor. The transaction must still
+    /// bind the untrusted current-project transport before it may mutate a local candidate.
+    pub(crate) fn into_transaction_authority(
+        self,
+    ) -> Result<
+        (
+            VerifiedRevision3QuestCollisionCapabilityV2,
+            QuestCollisionCapabilityArtifactV2,
+        ),
+        Revision3QuestCollisionCapabilityArtifactVerificationErrorV2,
+    > {
+        let Self {
+            capability,
+            artifact,
+        } = self;
+        let capability = capability.verify_artifact_exact(&artifact)?;
+        Ok((capability, artifact))
+    }
 }
 
 impl VerifiedRevision3QuestCollisionCapabilityV2 {
