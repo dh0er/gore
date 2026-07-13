@@ -1014,6 +1014,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gore-npc-catalog"
+version = "0.0.0"
+dependencies = [
+ "gore-as",
+ "gore-story-catalog",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "gore-oodle"
 version = "0.0.0"
 dependencies = [
