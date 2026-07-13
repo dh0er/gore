@@ -23,6 +23,7 @@ use crate::{
     ProjectRevision2, ProjectRevision3, ProjectV2, Revision3QuestCollisionSourceErrorV2,
     SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3, Sha256Digest, ValidationProfile,
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
 };
 
 const HEAD_FILE_NAME: &str = "gore-project.json";
@@ -242,6 +243,21 @@ pub struct ImportedOgg {
 pub struct ImportedQuestCollisionArtifactV1 {
     pub artifact: ContentSeal,
     pub asset_meta: AssetMeta,
+    pub deduplicated: bool,
+}
+
+/// Content-addressed result of installing one upstream-verified canonical version-2 Quest
+/// artifact against one exact currently published basis head.
+///
+/// This receipt is structural storage metadata only. It does not authenticate the semantic source
+/// seal and grants no artifact, build, runtime, source-inspection, publication, or head-publishing
+/// authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportedQuestCollisionArtifactV2 {
+    pub artifact: ContentSeal,
+    pub asset_meta: AssetMeta,
+    pub basis_head: WorkingHead,
     pub deduplicated: bool,
 }
 
@@ -1168,6 +1184,73 @@ impl WorkingProjectStore {
             expected_head,
             || Ok(()),
         )
+    }
+
+    /// Install upstream-verified canonical version-2 Quest collision artifact bytes in the
+    /// ordinary asset CAS while the exact current basis head remains fixed.
+    ///
+    /// This storage-only boundary validates the unchanged 24 MiB cap, computes the raw content
+    /// identity, installs without clobbering, fully re-reads the stored blob, and checks the basis
+    /// head before staging, before installation, and after full verification. A late head race can
+    /// therefore leave only the immutable content-addressed blob as an orphan. The semantic source
+    /// seal is deliberately not accepted here and the fixed head is never published.
+    pub fn import_quest_collision_artifact_v2(
+        &self,
+        canonical_bytes: &[u8],
+        basis_head: &WorkingHead,
+    ) -> Result<ImportedQuestCollisionArtifactV2, WorkingStoreError> {
+        self.import_quest_collision_artifact_v2_with_final_head_hook(
+            canonical_bytes,
+            basis_head,
+            || Ok(()),
+        )
+    }
+
+    fn import_quest_collision_artifact_v2_with_final_head_hook<F>(
+        &self,
+        canonical_bytes: &[u8],
+        basis_head: &WorkingHead,
+        before_final_head_check: F,
+    ) -> Result<ImportedQuestCollisionArtifactV2, WorkingStoreError>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        validate_quest_collision_artifact_length(canonical_bytes.len() as u64)?;
+        let artifact = seal_bytes(canonical_bytes);
+
+        self.ensure_root_safe()?;
+        self.check_expected_head(Some(basis_head))?;
+        let (temp_path, mut temp) = self.create_temp_file()?;
+        let result = (|| {
+            temp.write_all(canonical_bytes)?;
+            temp.flush()?;
+            temp.sync_all()?;
+            self.check_expected_head(Some(basis_head))?;
+            let destination = self.asset_path(artifact.sha256);
+            drop(temp);
+            let deduplicated = self.install_staged_file(&temp_path, &destination, &artifact)?;
+            self.verify_seal_at(&destination, &artifact, AssetVerification::Full, false)?;
+            before_final_head_check()?;
+            self.check_expected_head(Some(basis_head))?;
+            Ok(ImportedQuestCollisionArtifactV2 {
+                asset_meta: AssetMeta {
+                    byte_len: artifact.byte_len,
+                    media_type: QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2.to_owned(),
+                },
+                basis_head: basis_head.clone(),
+                artifact,
+                deduplicated,
+            })
+        })();
+        let cleanup = cleanup_staged_file(&temp_path);
+        match (result, cleanup) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Ok(_), Err(source)) => Err(WorkingStoreError::StagingCleanup {
+                path: temp_path,
+                source,
+            }),
+            (Err(error), _) => Err(error),
+        }
     }
 
     fn import_quest_collision_artifact_v1_with_final_head_hook<F>(
@@ -2792,6 +2875,35 @@ fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 mod tests {
     use super::*;
 
+    fn published_revision3_basis(
+        store: &WorkingProjectStore,
+        tag: u8,
+    ) -> Revision3CheckpointPreparation {
+        let project = ProjectRevision3 {
+            format: FormatV2,
+            schema_revision: SchemaRevisionV3,
+            project_id: ProjectId::from_bytes([tag; 16]),
+            revision: 4,
+            meta: ProjectMeta {
+                name: "Quest artifact V2 basis".into(),
+                version: "0.1.0".into(),
+                author: "tests".into(),
+            },
+            target: GameGenerationAnchor {
+                executable: ContentSeal {
+                    byte_len: 170_000_000,
+                    sha256: Sha256Digest::from_bytes([tag.wrapping_add(1); 32]),
+                },
+            },
+            authoring_locales: BTreeSet::new(),
+            entities: BTreeMap::new(),
+            asset_store: AssetStoreIndex::default(),
+        };
+        let preparation = store.prepare_revision3_checkpoint(None, &project).unwrap();
+        fs::write(store.head_path(), &preparation.head_bytes).unwrap();
+        preparation
+    }
+
     #[test]
     fn post_install_durability_failure_is_never_reclassified_as_dedupe() {
         let injected = WorkingStoreError::StagingCleanup {
@@ -2848,6 +2960,131 @@ mod tests {
                 false,
             )
             .unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quest_artifact_v2_import_is_exact_basis_bound_and_deduplicates() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-artifact-v2-import-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x62);
+        let bytes = br#"{"format":"quest_collision_capability","schema_revision":2}"#;
+        let expected = seal_bytes(bytes);
+
+        let first = store
+            .import_quest_collision_artifact_v2(bytes, &basis.head)
+            .unwrap();
+        let second = store
+            .import_quest_collision_artifact_v2(bytes, &basis.head)
+            .unwrap();
+        assert_eq!(first.artifact, expected);
+        assert_eq!(first.basis_head, basis.head);
+        assert_eq!(first.asset_meta.byte_len, expected.byte_len);
+        assert_eq!(
+            first.asset_meta.media_type,
+            QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2
+        );
+        assert!(!first.deduplicated);
+        assert!(second.deduplicated);
+        store
+            .verify_seal_at(
+                &store.asset_path(expected.sha256),
+                &expected,
+                AssetVerification::Full,
+                false,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .open_current_revision3(AssetVerification::Full)
+                .unwrap()
+                .head,
+            basis.head
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quest_artifact_v2_stale_basis_is_rejected_before_install() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-artifact-v2-stale-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x63);
+        let stale = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: ContentSeal {
+                byte_len: 1,
+                sha256: Sha256Digest::from_bytes([0x64; 32]),
+            },
+        };
+        let bytes = b"stale V2 artifact";
+        let expected = seal_bytes(bytes);
+
+        assert!(matches!(
+            store.import_quest_collision_artifact_v2(bytes, &stale),
+            Err(WorkingStoreError::HeadConflict {
+                expected: Some(expected),
+                actual: Some(actual),
+            }) if expected == stale && actual == basis.head
+        ));
+        assert!(!store.asset_path(expected.sha256).exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn quest_artifact_v2_post_install_head_race_leaves_only_verified_orphan() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-artifact-v2-final-head-race-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x65);
+        let raced_head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: ContentSeal {
+                byte_len: 1,
+                sha256: Sha256Digest::from_bytes([0x66; 32]),
+            },
+        };
+        let raced_head_bytes = canonical_json(&raced_head).unwrap();
+        let bytes = b"racing V2 artifact";
+        let artifact = seal_bytes(bytes);
+
+        let result = store.import_quest_collision_artifact_v2_with_final_head_hook(
+            bytes,
+            &basis.head,
+            || {
+                fs::write(store.head_path(), &raced_head_bytes)?;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(WorkingStoreError::HeadConflict {
+                expected: Some(expected),
+                actual: Some(actual),
+            }) if expected == basis.head && actual == raced_head
+        ));
+        store
+            .verify_seal_at(
+                &store.asset_path(artifact.sha256),
+                &artifact,
+                AssetVerification::Full,
+                false,
+            )
+            .unwrap();
+        assert_eq!(fs::read(store.head_path()).unwrap(), raced_head_bytes);
         let _ = fs::remove_dir_all(root);
     }
 

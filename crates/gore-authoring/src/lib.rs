@@ -126,7 +126,7 @@ pub use story_transaction_revision3::{
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
     AssetVerification, CheckpointPreparation, ImportedOgg, ImportedQuestCollisionArtifactV1,
-    OpenedCheckpoint, OpenedDocumentCheckpoint, OpenedRevision3Checkpoint,
-    Revision3CheckpointPreparation, Revision3SnapshotManifest, WorkingHead, WorkingProjectStore,
-    WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
+    ImportedQuestCollisionArtifactV2, OpenedCheckpoint, OpenedDocumentCheckpoint,
+    OpenedRevision3Checkpoint, Revision3CheckpointPreparation, Revision3SnapshotManifest,
+    WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
 };

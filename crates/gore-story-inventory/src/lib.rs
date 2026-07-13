@@ -26,6 +26,7 @@ use sha2::{Digest as _, Sha256};
 
 mod quest_capability;
 mod quest_capability_v2;
+mod revision3_quest_persistence_v3;
 mod revision3_quest_transaction_v3;
 
 // The S3 end-to-end test needs the private synthetic source fixture below to create a genuinely
@@ -56,6 +57,10 @@ pub use quest_capability_v2::{
     Revision3QuestCollisionCapabilityErrorV2, Revision3QuestCollisionCoverageV2,
     VerifiedRevision3QuestCollisionCapabilityV2,
     BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2,
+};
+pub use revision3_quest_persistence_v3::{
+    prepare_revision3_quest_draft_persistence_v3, Revision3QuestDraftPersistenceErrorV3,
+    Revision3QuestDraftPersistencePreparationV3, Revision3QuestDraftPersistenceValidationErrorV3,
 };
 pub use revision3_quest_transaction_v3::{
     apply_revision3_quest_draft_transaction_v3, Revision3QuestArtifactAuthorityV3,
@@ -811,17 +816,17 @@ mod tests {
         NpcParentClassInput, OriginRef, ProjectRevision2, SchemaRevisionV2, TypedRef,
     };
     use gore_authoring::{
-        migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex,
+        migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex, AssetVerification,
         ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
         GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef,
         QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
         Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput, Revision3TypedRef,
-        Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore,
+        Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
         WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-        MAX_PROJECT_JSON_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER,
-        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
-        REVISION3_QUEST_GENERATOR_VERSION,
+        MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+        QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
+        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
     };
     use sha2::Sha256;
     use std::collections::BTreeSet;
@@ -1935,6 +1940,15 @@ mod tests {
             byte_len: bytes.len() as u64,
             sha256: AuthoringSha256Digest::from_bytes(Sha256::digest(bytes).into()),
         }
+    }
+
+    fn stored_asset_path(root: &S3TestRoot, digest: AuthoringSha256Digest) -> PathBuf {
+        let hex = digest.to_string();
+        root.0
+            .join("assets")
+            .join("sha256")
+            .join(&hex[..2])
+            .join(&hex[2..])
     }
 
     fn v2_semantic_seal(bytes: &[u8]) -> ContentSeal {
@@ -3096,6 +3110,297 @@ mod tests {
         assert!(capability.contains_module("GoreMods.Quests.AuthorityQuest1"));
         assert!(capability.contains_module("GoreMods.Quests.AuthorityQuest2"));
         assert!(capability.contains_module("GoreMods.Quests.AuthorityQuest3"));
+    }
+
+    #[test]
+    fn revision3_v3_persistence_prepares_first_and_second_heads_without_publishing() {
+        let root = S3TestRoot::new("v3-persist-two");
+        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+        let catalog = trusted_catalog();
+        let mut project = migrate_revision2_to_revision3(&empty_authoring_project())
+            .unwrap()
+            .project;
+        let mut head = publish_revision3_head(&root, &store, &project);
+
+        for ordinal in 1..=2 {
+            let request = request_v3(&project, &head, ordinal);
+            let outcome = apply_v3(&store, &head, &catalog, &project, &request);
+            let prepared = prepare_revision3_quest_draft_persistence_v3(&store, outcome).unwrap();
+
+            assert_eq!(prepared.basis_head, head);
+            assert!(!prepared.imported_artifact.deduplicated);
+            assert_eq!(
+                store
+                    .open_current_revision3(AssetVerification::Full)
+                    .unwrap()
+                    .head,
+                head,
+                "preparation must never publish the fixed head"
+            );
+            let reopened = store
+                .open_revision3_head_bytes(&prepared.checkpoint.head_bytes, AssetVerification::Full)
+                .unwrap();
+            assert_eq!(reopened.head, prepared.checkpoint.head);
+            assert_eq!(reopened.project, prepared.project);
+            assert!(stored_asset_path(&root, prepared.imported_artifact.artifact.sha256).is_file());
+
+            fs::write(
+                root.0.join("gore-project.json"),
+                &prepared.checkpoint.head_bytes,
+            )
+            .unwrap();
+            let published = store
+                .open_current_revision3(AssetVerification::Full)
+                .unwrap();
+            assert_eq!(published.project, prepared.project);
+            project = prepared.project;
+            head = prepared.checkpoint.head;
+        }
+
+        assert_eq!(project.entities.len(), 4);
+        assert_eq!(project.asset_store.assets.len(), 2);
+    }
+
+    #[test]
+    fn revision3_v3_persistence_exact_replay_deduplicates_without_head_change() {
+        let root = S3TestRoot::new("v3-persist-dedupe");
+        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+        let catalog = trusted_catalog();
+        let project = migrate_revision2_to_revision3(&empty_authoring_project())
+            .unwrap()
+            .project;
+        let head = publish_revision3_head(&root, &store, &project);
+        let request = request_v3(&project, &head, 1);
+        let first_outcome = apply_v3(&store, &head, &catalog, &project, &request);
+        let second_outcome = apply_v3(&store, &head, &catalog, &project, &request);
+
+        let first = prepare_revision3_quest_draft_persistence_v3(&store, first_outcome).unwrap();
+        let second = prepare_revision3_quest_draft_persistence_v3(&store, second_outcome).unwrap();
+
+        assert!(!first.imported_artifact.deduplicated);
+        assert!(second.imported_artifact.deduplicated);
+        assert_eq!(
+            first.imported_artifact.artifact,
+            second.imported_artifact.artifact
+        );
+        assert_eq!(first.checkpoint, second.checkpoint);
+        assert_eq!(
+            store
+                .open_current_revision3(AssetVerification::Full)
+                .unwrap()
+                .head,
+            head
+        );
+    }
+
+    #[test]
+    fn revision3_v3_persistence_rejects_stale_and_forged_outcomes_before_publication() {
+        let root = S3TestRoot::new("v3-persist-forged");
+        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+        let catalog = trusted_catalog();
+        let project = migrate_revision2_to_revision3(&empty_authoring_project())
+            .unwrap()
+            .project;
+        let head = publish_revision3_head(&root, &store, &project);
+        let request = request_v3(&project, &head, 1);
+
+        let mut transport_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        transport_drift.canonical_project_json.push('\n');
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, transport_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::CandidateProject(_))
+        ));
+
+        let mut project_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        project_drift.project.meta.name.push_str(" forged");
+        project_drift.canonical_project_json = project_drift.project.to_canonical_json().unwrap();
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, project_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::CandidateProjectMetadataMismatch
+            ))
+        ));
+
+        for invalid_display_name in [
+            String::new(),
+            "control\nname".to_owned(),
+            "x".repeat(MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES + 1),
+        ] {
+            let mut display_drift = apply_v3(&store, &head, &catalog, &project, &request);
+            display_drift
+                .project
+                .entities
+                .get_mut(&request.quest_id)
+                .unwrap()
+                .display_name = invalid_display_name;
+            display_drift.canonical_project_json =
+                display_drift.project.to_canonical_json().unwrap();
+            assert!(matches!(
+                prepare_revision3_quest_draft_persistence_v3(&store, display_drift),
+                Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                    Revision3QuestDraftPersistenceValidationErrorV3::QuestEntityMismatch
+                ))
+            ));
+        }
+
+        let mut outcome_id_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        outcome_id_drift.quest_id = authoring_entity_id(0xd1);
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, outcome_id_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::CandidateEntityDeltaMismatch
+            ))
+        ));
+
+        let mut artifact_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        let artifact_json =
+            std::str::from_utf8(artifact_drift.collision_artifact.canonical_json()).unwrap();
+        let forged_artifact = replace_v2_wire_field(
+            artifact_json,
+            "project_revision",
+            &project.revision,
+            &(project.revision + 1),
+        );
+        artifact_drift.collision_artifact = reopen_forged_v2(forged_artifact.as_bytes());
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, artifact_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::ArtifactBasisMismatch
+            ))
+        ));
+
+        let mut meta_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        let raw_digest = authoring_seal(meta_drift.collision_artifact.artifact_seal()).sha256;
+        let Revision3EntityPayload::QuestDraft(quest) = &mut meta_drift
+            .project
+            .entities
+            .get_mut(&request.quest_id)
+            .unwrap()
+            .payload
+        else {
+            panic!("expected Quest Draft")
+        };
+        quest.input.collision_catalog.artifact.byte_len += 1;
+        quest.input.collision_catalog.source_seal.byte_len += 1;
+        meta_drift
+            .project
+            .asset_store
+            .assets
+            .get_mut(&raw_digest)
+            .unwrap()
+            .byte_len += 1;
+        meta_drift.canonical_project_json = meta_drift.project.to_canonical_json().unwrap();
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, meta_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::CandidateAssetDeltaMismatch
+            ))
+        ));
+
+        let mut ref_drift = apply_v3(&store, &head, &catalog, &project, &request);
+        let Revision3EntityPayload::QuestDraft(quest) = &mut ref_drift
+            .project
+            .entities
+            .get_mut(&request.quest_id)
+            .unwrap()
+            .payload
+        else {
+            panic!("expected Quest Draft")
+        };
+        quest.input.collision_catalog.basis_snapshot.sha256 =
+            AuthoringSha256Digest::from_bytes([0xc1; 32]);
+        ref_drift.canonical_project_json = ref_drift.project.to_canonical_json().unwrap();
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, ref_drift),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::QuestEntityMismatch
+            ))
+        ));
+
+        let mut advanced_project = project.clone();
+        advanced_project.revision += 1;
+        advanced_project.meta.name.push_str(" advanced");
+        let advanced_head = advance_revision3_head(&root, &store, &head, &advanced_project);
+        let stale = apply_v3(
+            &WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap(),
+            &advanced_head,
+            &catalog,
+            &advanced_project,
+            &request_v3(&advanced_project, &advanced_head, 2),
+        );
+        let stale_artifact = stale.collision_artifact;
+        let mut foreign_artifact_outcome = apply_v3(
+            &store,
+            &advanced_head,
+            &catalog,
+            &advanced_project,
+            &request_v3(&advanced_project, &advanced_head, 3),
+        );
+        foreign_artifact_outcome.collision_artifact = stale_artifact;
+        // The fixed head is still the advanced one; a deliberately stale basis token fails before
+        // immutable artifact installation.
+        foreign_artifact_outcome.basis_head = head.clone();
+        let raw = authoring_seal(foreign_artifact_outcome.collision_artifact.artifact_seal());
+        assert!(matches!(
+            prepare_revision3_quest_draft_persistence_v3(&store, foreign_artifact_outcome),
+            Err(Revision3QuestDraftPersistenceErrorV3::Validation(
+                Revision3QuestDraftPersistenceValidationErrorV3::BasisHeadMismatch
+            ))
+        ));
+        assert!(!stored_asset_path(&root, raw.sha256).exists());
+        assert_eq!(
+            store
+                .open_current_revision3(AssetVerification::Full)
+                .unwrap()
+                .head,
+            advanced_head
+        );
+    }
+
+    #[test]
+    fn revision3_v3_persistence_head_race_after_import_leaves_verified_artifact_orphan() {
+        let root = S3TestRoot::new("v3-persist-after-import-race");
+        let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+        let catalog = trusted_catalog();
+        let project = migrate_revision2_to_revision3(&empty_authoring_project())
+            .unwrap()
+            .project;
+        let head = publish_revision3_head(&root, &store, &project);
+        let request = request_v3(&project, &head, 1);
+        let outcome = apply_v3(&store, &head, &catalog, &project, &request);
+        let artifact = authoring_seal(outcome.collision_artifact.artifact_seal());
+        let mut raced_project = project.clone();
+        raced_project.revision += 1;
+        raced_project.meta.name.push_str(" raced");
+        let raced = store
+            .prepare_revision3_checkpoint(Some(&head), &raced_project)
+            .unwrap();
+
+        let result = crate::revision3_quest_persistence_v3::prepare_revision3_quest_draft_persistence_v3_with_after_import_hook(
+            &store,
+            outcome,
+            || {
+                fs::write(root.0.join("gore-project.json"), &raced.head_bytes)?;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(Revision3QuestDraftPersistenceErrorV3::Store(
+                WorkingStoreError::HeadConflict {
+                    expected: Some(expected),
+                    actual: Some(actual),
+                }
+            )) if expected == head && actual == raced.head
+        ));
+        assert!(stored_asset_path(&root, artifact.sha256).is_file());
+        assert_eq!(
+            store
+                .open_current_revision3(AssetVerification::Full)
+                .unwrap()
+                .project,
+            raced_project
+        );
     }
 
     #[test]

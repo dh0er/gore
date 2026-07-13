@@ -222,20 +222,73 @@ pub enum Revision3QuestDraftPublicationStatusV3 {
 ///
 /// The structural artifact bytes are retained for a later store transaction, but are not
 /// authority evidence. `basis_head` is the old exact head; no new head exists until a future CAS
-/// persistence boundary publishes one.
+/// persistence boundary publishes one. Its fields are externally opaque so a caller cannot
+/// rewrite the capability-checked result before handing the whole value to that boundary.
+///
+/// ```compile_fail
+/// fn rewrite(mut outcome: gore_story_inventory::Revision3QuestDraftInsertOutcomeV3) {
+///     outcome.project.revision += 1;
+/// }
+/// ```
 #[derive(Debug, PartialEq, Eq)]
 pub struct Revision3QuestDraftInsertOutcomeV3 {
-    pub project: ProjectRevision3,
-    pub canonical_project_json: String,
-    pub collision_artifact: QuestCollisionCapabilityArtifactV2,
-    pub basis_head: WorkingHead,
-    pub quest_id: EntityId,
-    pub script_module_id: EntityId,
-    pub build_status: Revision3QuestDraftBuildStatusV3,
-    pub runtime_status: Revision3QuestDraftRuntimeStatusV3,
-    pub artifact_authority: Revision3QuestArtifactAuthorityV3,
-    pub source_inspection: Revision3QuestSourceInspectionStatusV3,
-    pub publication_status: Revision3QuestDraftPublicationStatusV3,
+    pub(crate) project: ProjectRevision3,
+    pub(crate) canonical_project_json: String,
+    pub(crate) collision_artifact: QuestCollisionCapabilityArtifactV2,
+    pub(crate) basis_head: WorkingHead,
+    pub(crate) quest_id: EntityId,
+    pub(crate) script_module_id: EntityId,
+    pub(crate) build_status: Revision3QuestDraftBuildStatusV3,
+    pub(crate) runtime_status: Revision3QuestDraftRuntimeStatusV3,
+    pub(crate) artifact_authority: Revision3QuestArtifactAuthorityV3,
+    pub(crate) source_inspection: Revision3QuestSourceInspectionStatusV3,
+    pub(crate) publication_status: Revision3QuestDraftPublicationStatusV3,
+}
+
+impl Revision3QuestDraftInsertOutcomeV3 {
+    pub fn project(&self) -> &ProjectRevision3 {
+        &self.project
+    }
+
+    pub fn canonical_project_json(&self) -> &str {
+        &self.canonical_project_json
+    }
+
+    pub fn collision_artifact(&self) -> &QuestCollisionCapabilityArtifactV2 {
+        &self.collision_artifact
+    }
+
+    pub fn basis_head(&self) -> &WorkingHead {
+        &self.basis_head
+    }
+
+    pub const fn quest_id(&self) -> EntityId {
+        self.quest_id
+    }
+
+    pub const fn script_module_id(&self) -> EntityId {
+        self.script_module_id
+    }
+
+    pub const fn build_status(&self) -> Revision3QuestDraftBuildStatusV3 {
+        self.build_status
+    }
+
+    pub const fn runtime_status(&self) -> Revision3QuestDraftRuntimeStatusV3 {
+        self.runtime_status
+    }
+
+    pub const fn artifact_authority(&self) -> Revision3QuestArtifactAuthorityV3 {
+        self.artifact_authority
+    }
+
+    pub const fn source_inspection(&self) -> Revision3QuestSourceInspectionStatusV3 {
+        self.source_inspection
+    }
+
+    pub const fn publication_status(&self) -> Revision3QuestDraftPublicationStatusV3 {
+        self.publication_status
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -524,13 +577,16 @@ fn validate_request_shape(
     if request.quest_id == request.script_module_id {
         return Err(Revision3QuestDraftConflictV3::SharedEntityId);
     }
-    if request.display_name.trim().is_empty()
-        || request.display_name.len() > MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES
-        || request.display_name.chars().any(char::is_control)
-    {
+    if !is_valid_revision3_quest_draft_display_name_v3(&request.display_name) {
         return Err(Revision3QuestDraftConflictV3::InvalidDisplayName);
     }
     validate_entity_capacity(project.entities.len())
+}
+
+pub(crate) fn is_valid_revision3_quest_draft_display_name_v3(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.len() <= MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 fn validate_entity_capacity(existing_count: usize) -> Result<(), Revision3QuestDraftConflictV3> {

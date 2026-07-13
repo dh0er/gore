@@ -251,6 +251,30 @@ impl QuestCollisionCapabilityArtifactV2 {
     pub const fn publication_status(&self) -> QuestCollisionPublicationStatus {
         QuestCollisionPublicationStatus::NotSupported
     }
+
+    /// Reconstruct the plain collision input encoded by this structural artifact.
+    ///
+    /// This is crate-private because reopening an artifact must never be mistaken for restoring
+    /// the fresh capability consumed by authoring. Callers still receive no authority token.
+    pub(crate) fn structural_collision_input(
+        &self,
+    ) -> Result<QuestCollisionCatalogInput, QuestCollisionCapabilityArtifactErrorV2> {
+        let wire: CombinedArtifactWireV2 = serde_json::from_slice(&self.canonical_json)
+            .map_err(QuestCollisionCapabilityArtifactErrorV2::InvalidJson)?;
+        validate_artifact_wire_v2(&wire)?;
+        let canonical = canonical_artifact_wire_v2(&wire)?;
+        if canonical != self.canonical_json {
+            return Err(QuestCollisionCapabilityArtifactErrorV2::NonCanonicalJson);
+        }
+        Ok(QuestCollisionCatalogInput {
+            generation: wire.project_target,
+            source_seal: authoring_seal(&self.source_seal),
+            catalog_layer: BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2.to_owned(),
+            modules: wire.modules.into_iter().collect(),
+            relative_paths: wire.relative_paths.into_iter().collect(),
+            symbols: wire.symbols.into_iter().collect(),
+        })
+    }
 }
 
 impl PreparedQuestCollisionArtifactV2 {
