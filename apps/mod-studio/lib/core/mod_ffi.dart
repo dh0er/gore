@@ -14,6 +14,14 @@ const _maxAuthoringStoryMutationJsonBytes = 20 * 1024 * 1024;
 const _maxAuthoringStoryCatalogJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringStoryCatalogNpcs = 2;
 const _maxAuthoringStoryCatalogQuestParents = 1;
+const _maxAuthoringNpcCatalogJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringNpcCatalogRecords = 4096;
+const _maxAuthoringNpcCatalogRejections = 100000;
+const _maxAuthoringNpcCatalogTextBytes = 1024;
+const _maxAuthoringNpcCatalogTotalTextBytes = 12 * 1024 * 1024;
+const _maxAuthoringNpcCatalogFunctionBytecodeDwords = 1024 * 1024;
+const _maxAuthoringNpcCatalogFunctionBytecodeBytes =
+    _maxAuthoringNpcCatalogFunctionBytecodeDwords * Uint32List.bytesPerElement;
 const _maxAuthoringStoryInventoryJsonBytes = 24 * 1024 * 1024;
 const _maxAuthoringStoryInventoryEntries = 100000;
 const _maxAuthoringStoryInventoryEntryBytes = 512;
@@ -286,6 +294,26 @@ class ModFfi {
     );
     final response = await _call(command, {'game_root': gameRoot});
     return AuthoringStoryCatalogBuildResult._fromGameRootJson(
+      response,
+      gameRoot: gameRoot,
+    );
+  }
+
+  /// Build one generation-sealed, read-only NPC archetype catalog from the native game root.
+  Future<AuthoringNpcArchetypeCatalogBuildResult>
+  authoringNpcArchetypeCatalogV1BuildForGameRoot({
+    required String gameRoot,
+  }) async {
+    _authoringStoryCatalogPath(gameRoot, 'gameRoot');
+    const command = 'authoring_npc_archetype_catalog_v1_build_for_game_root';
+    _authoringSingleRawJsonEnvelopePreflight(
+      command,
+      'game_root',
+      'gameRoot',
+      gameRoot,
+    );
+    final response = await _call(command, {'game_root': gameRoot});
+    return AuthoringNpcArchetypeCatalogBuildResult._fromJson(
       response,
       gameRoot: gameRoot,
     );
@@ -2634,6 +2662,895 @@ final class AuthoringStoryBuildPlanResult {
   }
 }
 
+enum AuthoringNpcCatalogLinkageQualification { sealedLinkageVerified }
+
+enum AuthoringNpcCatalogRuntimeQualification { runtimeUnqualified }
+
+enum AuthoringNpcCatalogSupportStatus { notSupported }
+
+enum AuthoringNpcCatalogBlueprintFamily { humanBase, humanWoman, other }
+
+enum AuthoringNpcCatalogRejectionKind {
+  missingInitDefaults,
+  ambiguousInitDefaults,
+  invalidInitDefaultsBytecode,
+  missingDefaultEdge,
+  ambiguousDefaultEdge,
+  missingReferencedClass,
+  wrongAncestry,
+  inheritanceCycle,
+  nonInheritableClass,
+}
+
+final class AuthoringNpcCatalogQualification {
+  const AuthoringNpcCatalogQualification._();
+
+  AuthoringNpcCatalogLinkageQualification get linkage =>
+      AuthoringNpcCatalogLinkageQualification.sealedLinkageVerified;
+  AuthoringNpcCatalogRuntimeQualification get runtime =>
+      AuthoringNpcCatalogRuntimeQualification.runtimeUnqualified;
+  AuthoringNpcCatalogSupportStatus get build =>
+      AuthoringNpcCatalogSupportStatus.notSupported;
+  AuthoringNpcCatalogSupportStatus get deploy =>
+      AuthoringNpcCatalogSupportStatus.notSupported;
+  AuthoringNpcCatalogSupportStatus get publication =>
+      AuthoringNpcCatalogSupportStatus.notSupported;
+
+  factory AuthoringNpcCatalogQualification._fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'linkage',
+      'runtime',
+      'build',
+      'deploy',
+      'publication',
+    }, 'NPC catalog qualification');
+    if (json['linkage'] != 'sealed_linkage_verified' ||
+        json['runtime'] != 'runtime_unqualified' ||
+        json['build'] != 'not_supported' ||
+        json['deploy'] != 'not_supported' ||
+        json['publication'] != 'not_supported') {
+      throw const FormatException(
+        'authoring NPC catalog qualification overstates its capabilities',
+      );
+    }
+    return const AuthoringNpcCatalogQualification._();
+  }
+}
+
+final class AuthoringNpcCatalogSource {
+  const AuthoringNpcCatalogSource._({
+    required this.shippingCache,
+    required this.bindsCache,
+    required this.sourcePairSeal,
+  });
+
+  final AuthoringDraftContentSeal shippingCache;
+  final AuthoringDraftContentSeal bindsCache;
+  final AuthoringDraftContentSeal sourcePairSeal;
+
+  factory AuthoringNpcCatalogSource._fromJson(Map<String, Object?> json) {
+    _authoringExactFields(json, const {
+      'shipping_cache',
+      'binds_cache',
+      'source_pair_seal',
+    }, 'NPC catalog source');
+    return AuthoringNpcCatalogSource._(
+      shippingCache: _authoringStoryCatalogSeal(
+        json['shipping_cache'],
+        'NPC source shipping_cache',
+      ),
+      bindsCache: _authoringStoryCatalogSeal(
+        json['binds_cache'],
+        'NPC source binds_cache',
+      ),
+      sourcePairSeal: _authoringStoryCatalogSeal(
+        json['source_pair_seal'],
+        'NPC source source_pair_seal',
+      ),
+    );
+  }
+}
+
+final class AuthoringNpcCatalogClassEvidence {
+  const AuthoringNpcCatalogClassEvidence._({
+    required this.className,
+    required this.superClass,
+    required this.moduleName,
+    required this.relativePath,
+    required this.sourceSeal,
+  });
+
+  final String className;
+  final String? superClass;
+  final String moduleName;
+  final String relativePath;
+  final AuthoringDraftContentSeal sourceSeal;
+}
+
+final class AuthoringNpcCatalogDefaultEdgeEvidence {
+  const AuthoringNpcCatalogDefaultEdgeEvidence._({
+    required this.ownerClass,
+    required this.fieldName,
+    required this.assignedValue,
+    required this.instructionOffsetDwords,
+    required this.initDefaultsBytecodeSeal,
+    required this.evidenceSha256,
+  });
+
+  final String ownerClass;
+  final String fieldName;
+  final String assignedValue;
+  final int instructionOffsetDwords;
+  final AuthoringDraftContentSeal initDefaultsBytecodeSeal;
+  final String evidenceSha256;
+}
+
+final class AuthoringNpcCatalogRecord {
+  const AuthoringNpcCatalogRecord._({
+    required this.spawn,
+    required this.aiConfig,
+    required this.characterDefinition,
+    required this.actorBlueprint,
+    required this.blueprintFamily,
+    required this.spawnAiEdge,
+    required this.spawnBlueprintEdge,
+    required this.aiCharacterEdge,
+    required this.evidenceSha256,
+  });
+
+  final AuthoringNpcCatalogClassEvidence spawn;
+  final AuthoringNpcCatalogClassEvidence aiConfig;
+  final AuthoringNpcCatalogClassEvidence characterDefinition;
+  final String actorBlueprint;
+  final AuthoringNpcCatalogBlueprintFamily blueprintFamily;
+  final AuthoringNpcCatalogDefaultEdgeEvidence spawnAiEdge;
+  final AuthoringNpcCatalogDefaultEdgeEvidence spawnBlueprintEdge;
+  final AuthoringNpcCatalogDefaultEdgeEvidence aiCharacterEdge;
+  final String evidenceSha256;
+}
+
+final class AuthoringNpcCatalogRejection {
+  const AuthoringNpcCatalogRejection._({
+    required this.spawnClass,
+    required this.kind,
+    this.ownerClass,
+    this.fieldName,
+    this.detail,
+    this.role,
+    this.className,
+    this.requiredBase,
+    this.count,
+  });
+
+  final String spawnClass;
+  final AuthoringNpcCatalogRejectionKind kind;
+  final String? ownerClass;
+  final String? fieldName;
+  final String? detail;
+  final String? role;
+  final String? className;
+  final String? requiredBase;
+  final int? count;
+}
+
+/// Strict projection of the native, read-only `npc_archetype_catalog.v1` artifact.
+///
+/// Static linkage evidence does not authorize build, deploy, publication, runtime use, or an
+/// offline-clone qualification. Consumers must preserve those capability boundaries.
+/// Generation/catalog authenticity remains owned by the already trusted bundled native core:
+/// Dart verifies canonical structure and internal seals, but deliberately does not duplicate the
+/// native version allowlist and thereby reject a future generation supported by that same core.
+final class AuthoringNpcArchetypeCatalogBuildResult {
+  const AuthoringNpcArchetypeCatalogBuildResult._({
+    required this.requestBindingSha256,
+    required this.catalogJson,
+    required this.generation,
+    required this.catalogSeal,
+    required this.storyCatalogSeal,
+    required this.source,
+    required this.payloadSeal,
+    required this.extractorRecordsSha256,
+    required this.qualification,
+    required this.records,
+    required this.rejections,
+  });
+
+  final String requestBindingSha256;
+  final String catalogJson;
+  final AuthoringStoryCatalogGeneration generation;
+  final AuthoringDraftContentSeal catalogSeal;
+  final AuthoringDraftContentSeal storyCatalogSeal;
+  final AuthoringNpcCatalogSource source;
+  final AuthoringDraftContentSeal payloadSeal;
+  final String extractorRecordsSha256;
+  final AuthoringNpcCatalogQualification qualification;
+  final List<AuthoringNpcCatalogRecord> records;
+  final List<AuthoringNpcCatalogRejection> rejections;
+
+  int get recordCount => records.length;
+  int get rejectionCount => rejections.length;
+
+  factory AuthoringNpcArchetypeCatalogBuildResult._fromJson(
+    Map<String, Object?> json, {
+    required String gameRoot,
+  }) {
+    _authoringExactFields(json, const {
+      'ok',
+      'request_binding_sha256',
+      'catalog_json',
+      'generation',
+      'catalog_seal',
+      'source',
+      'payload_seal',
+      'record_count',
+      'rejection_count',
+      'qualification',
+    }, 'NPC archetype catalog response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring NPC archetype catalog response is not ok',
+      );
+    }
+    final requestBindingSha256 = _authoringRequiredString(
+      json,
+      'request_binding_sha256',
+      maxBytes: 64,
+    );
+    final expectedBinding = _authoringNpcCatalogGameRootBindingSha256(gameRoot);
+    if (!_authoringSha256Pattern.hasMatch(requestBindingSha256) ||
+        requestBindingSha256 != expectedBinding) {
+      throw const FormatException(
+        'authoring NPC catalog response is not bound to its exact game root',
+      );
+    }
+
+    final catalogJson = _authoringRequiredString(
+      json,
+      'catalog_json',
+      maxBytes: _maxAuthoringNpcCatalogJsonBytes,
+    );
+    final rawArtifact = _authoringDecodeDuplicateSafeObject(
+      catalogJson,
+      'NPC archetype catalog',
+    );
+    _authoringExactFields(rawArtifact, const {
+      'format',
+      'schema_revision',
+      'catalog',
+      'catalog_seal',
+    }, 'NPC archetype catalog');
+    if (rawArtifact['format'] != 'npc_archetype_catalog') {
+      throw const FormatException(
+        'authoring NPC archetype catalog format is unsupported',
+      );
+    }
+    _authoringRequiredInt(rawArtifact, 'schema_revision', min: 1, max: 1);
+
+    final rawCatalog = _authoringRequiredObject(
+      rawArtifact['catalog'],
+      'NPC archetype catalog body',
+    );
+    _authoringExactFields(rawCatalog, const {
+      'generation',
+      'story_catalog_seal',
+      'qualification',
+      'source',
+      'payload',
+      'payload_seal',
+    }, 'NPC archetype catalog body');
+
+    final generation = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        rawCatalog['generation'],
+        'NPC archetype catalog generation',
+      ),
+    );
+    final outerGeneration = AuthoringStoryCatalogGeneration._fromJson(
+      _authoringRequiredObject(
+        json['generation'],
+        'NPC archetype response generation',
+      ),
+    );
+    if (!_authoringStoryCatalogSameGeneration(generation, outerGeneration)) {
+      throw const FormatException(
+        'authoring NPC catalog generation disagrees with its response',
+      );
+    }
+
+    final qualification = AuthoringNpcCatalogQualification._fromJson(
+      _authoringRequiredObject(
+        rawCatalog['qualification'],
+        'NPC archetype catalog qualification',
+      ),
+    );
+    AuthoringNpcCatalogQualification._fromJson(
+      _authoringRequiredObject(
+        json['qualification'],
+        'NPC archetype response qualification',
+      ),
+    );
+
+    final source = AuthoringNpcCatalogSource._fromJson(
+      _authoringRequiredObject(
+        rawCatalog['source'],
+        'NPC archetype catalog source',
+      ),
+    );
+    final outerSource = AuthoringNpcCatalogSource._fromJson(
+      _authoringRequiredObject(json['source'], 'NPC archetype response source'),
+    );
+    if (!_authoringNpcCatalogSameSource(source, outerSource) ||
+        !_authoringStoryCatalogSameSeal(
+          source.shippingCache,
+          generation.shippingCache,
+        ) ||
+        !_authoringStoryCatalogSameSeal(
+          source.bindsCache,
+          generation.bindsCache,
+        )) {
+      throw const FormatException(
+        'authoring NPC catalog source provenance is inconsistent',
+      );
+    }
+    final sourceIdentity = jsonEncode(<String, Object?>{
+      'shipping_cache': _authoringNpcCatalogSealJson(source.shippingCache),
+      'binds_cache': _authoringNpcCatalogSealJson(source.bindsCache),
+    });
+    _authoringNpcCatalogRequireBytesSeal(
+      source.sourcePairSeal,
+      sourceIdentity,
+      'source pair',
+    );
+
+    final rawPayload = _authoringRequiredObject(
+      rawCatalog['payload'],
+      'NPC archetype catalog payload',
+    );
+    _authoringExactFields(rawPayload, const {
+      'extractor_records_sha256',
+      'records',
+      'rejections',
+    }, 'NPC archetype catalog payload');
+    final extractorRecordsSha256 = _authoringNpcCatalogDigest(
+      rawPayload['extractor_records_sha256'],
+      'extractor_records_sha256',
+    );
+    final budget = _AuthoringNpcCatalogTextBudget();
+    final records = _authoringNpcCatalogRecords(rawPayload['records'], budget);
+    final rejections = _authoringNpcCatalogRejections(
+      rawPayload['rejections'],
+      budget,
+    );
+
+    final recordCount = _authoringRequiredInt(
+      json,
+      'record_count',
+      max: _maxAuthoringNpcCatalogRecords,
+    );
+    final rejectionCount = _authoringRequiredInt(
+      json,
+      'rejection_count',
+      max: _maxAuthoringNpcCatalogRejections,
+    );
+    if (recordCount != records.length || rejectionCount != rejections.length) {
+      throw const FormatException(
+        'authoring NPC catalog response counts disagree with its payload',
+      );
+    }
+
+    final payloadSeal = _authoringStoryCatalogSeal(
+      rawCatalog['payload_seal'],
+      'NPC payload_seal',
+    );
+    final outerPayloadSeal = _authoringStoryCatalogSeal(
+      json['payload_seal'],
+      'NPC response payload_seal',
+    );
+    if (!_authoringStoryCatalogSameSeal(payloadSeal, outerPayloadSeal)) {
+      throw const FormatException(
+        'authoring NPC catalog payload seal disagrees with its response',
+      );
+    }
+    _authoringNpcCatalogRequireBytesSeal(
+      payloadSeal,
+      jsonEncode(rawPayload),
+      'payload',
+    );
+
+    final storyCatalogSeal = _authoringStoryCatalogSeal(
+      rawCatalog['story_catalog_seal'],
+      'NPC story_catalog_seal',
+    );
+    final catalogSeal = _authoringStoryCatalogSeal(
+      rawArtifact['catalog_seal'],
+      'NPC catalog_seal',
+    );
+    final outerCatalogSeal = _authoringStoryCatalogSeal(
+      json['catalog_seal'],
+      'NPC response catalog_seal',
+    );
+    if (!_authoringStoryCatalogSameSeal(catalogSeal, outerCatalogSeal)) {
+      throw const FormatException(
+        'authoring NPC catalog seal disagrees with its response',
+      );
+    }
+    _authoringNpcCatalogRequireBytesSeal(
+      catalogSeal,
+      jsonEncode(rawCatalog),
+      'catalog',
+    );
+    if (jsonEncode(rawArtifact) != catalogJson) {
+      throw const FormatException(
+        'authoring NPC archetype catalog is not canonical JSON',
+      );
+    }
+
+    return AuthoringNpcArchetypeCatalogBuildResult._(
+      requestBindingSha256: requestBindingSha256,
+      catalogJson: catalogJson,
+      generation: generation,
+      catalogSeal: catalogSeal,
+      storyCatalogSeal: storyCatalogSeal,
+      source: source,
+      payloadSeal: payloadSeal,
+      extractorRecordsSha256: extractorRecordsSha256,
+      qualification: qualification,
+      records: List<AuthoringNpcCatalogRecord>.unmodifiable(records),
+      rejections: List<AuthoringNpcCatalogRejection>.unmodifiable(rejections),
+    );
+  }
+}
+
+final class _AuthoringNpcCatalogTextBudget {
+  int _used = 0;
+
+  String add(Object? raw, String context) {
+    if (raw is! String || raw.isEmpty) {
+      throw FormatException('authoring NPC catalog $context is not text');
+    }
+    final byteLength = utf8.encode(raw).length;
+    if (byteLength > _maxAuthoringNpcCatalogTextBytes ||
+        byteLength > _maxAuthoringNpcCatalogTotalTextBytes - _used) {
+      throw FormatException(
+        'authoring NPC catalog $context exceeds its text budget',
+      );
+    }
+    _used += byteLength;
+    return raw;
+  }
+}
+
+List<AuthoringNpcCatalogRecord> _authoringNpcCatalogRecords(
+  Object? raw,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  if (raw is! List || raw.length > _maxAuthoringNpcCatalogRecords) {
+    throw const FormatException(
+      'authoring NPC catalog records is not a bounded array',
+    );
+  }
+  final records = <AuthoringNpcCatalogRecord>[];
+  String? previous;
+  for (var index = 0; index < raw.length; index++) {
+    final record = _authoringNpcCatalogRecord(
+      _authoringRequiredObject(raw[index], 'NPC catalog record $index'),
+      budget,
+    );
+    if (previous != null &&
+        _authoringNpcCatalogCompareUtf8(previous, record.spawn.className) >=
+            0) {
+      throw const FormatException(
+        'authoring NPC catalog records are not sorted and unique',
+      );
+    }
+    previous = record.spawn.className;
+    records.add(record);
+  }
+  return records;
+}
+
+AuthoringNpcCatalogRecord _authoringNpcCatalogRecord(
+  Map<String, Object?> json,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  _authoringExactFields(json, const {
+    'spawn',
+    'ai_config',
+    'character_definition',
+    'actor_blueprint',
+    'blueprint_family',
+    'spawn_ai_edge',
+    'spawn_blueprint_edge',
+    'ai_character_edge',
+    'evidence_sha256',
+  }, 'NPC catalog record');
+  final spawn = _authoringNpcCatalogClass(
+    json['spawn'],
+    'record spawn',
+    budget,
+  );
+  final aiConfig = _authoringNpcCatalogClass(
+    json['ai_config'],
+    'record AI config',
+    budget,
+  );
+  final characterDefinition = _authoringNpcCatalogClass(
+    json['character_definition'],
+    'record character definition',
+    budget,
+  );
+  final actorBlueprint = budget.add(
+    json['actor_blueprint'],
+    'record actor blueprint',
+  );
+  final spawnAiEdge = _authoringNpcCatalogEdge(
+    json['spawn_ai_edge'],
+    'record spawn-AI edge',
+    budget,
+  );
+  final spawnBlueprintEdge = _authoringNpcCatalogEdge(
+    json['spawn_blueprint_edge'],
+    'record spawn-blueprint edge',
+    budget,
+  );
+  final aiCharacterEdge = _authoringNpcCatalogEdge(
+    json['ai_character_edge'],
+    'record AI-character edge',
+    budget,
+  );
+  if (spawnAiEdge.ownerClass != spawn.className ||
+      spawnAiEdge.assignedValue != aiConfig.className ||
+      spawnBlueprintEdge.ownerClass != spawn.className ||
+      spawnBlueprintEdge.assignedValue != actorBlueprint ||
+      aiCharacterEdge.ownerClass != aiConfig.className ||
+      aiCharacterEdge.assignedValue != characterDefinition.className) {
+    throw const FormatException(
+      'authoring NPC catalog record linkage evidence is inconsistent',
+    );
+  }
+  return AuthoringNpcCatalogRecord._(
+    spawn: spawn,
+    aiConfig: aiConfig,
+    characterDefinition: characterDefinition,
+    actorBlueprint: actorBlueprint,
+    blueprintFamily: switch (json['blueprint_family']) {
+      'human_base' => AuthoringNpcCatalogBlueprintFamily.humanBase,
+      'human_woman' => AuthoringNpcCatalogBlueprintFamily.humanWoman,
+      'other' => AuthoringNpcCatalogBlueprintFamily.other,
+      _ => throw const FormatException(
+        'authoring NPC catalog blueprint family is unsupported',
+      ),
+    },
+    spawnAiEdge: spawnAiEdge,
+    spawnBlueprintEdge: spawnBlueprintEdge,
+    aiCharacterEdge: aiCharacterEdge,
+    evidenceSha256: _authoringNpcCatalogDigest(
+      json['evidence_sha256'],
+      'record evidence_sha256',
+      nonzero: true,
+    ),
+  );
+}
+
+AuthoringNpcCatalogClassEvidence _authoringNpcCatalogClass(
+  Object? raw,
+  String context,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  final json = _authoringRequiredObject(raw, 'NPC catalog $context');
+  _authoringExactFields(json, const {
+    'class_name',
+    'super_class',
+    'module_name',
+    'relative_path',
+    'source_seal',
+  }, 'NPC catalog class evidence');
+  final superClassRaw = json['super_class'];
+  final String? superClass;
+  if (superClassRaw == null) {
+    superClass = null;
+  } else {
+    superClass = budget.add(superClassRaw, '$context super class');
+  }
+  return AuthoringNpcCatalogClassEvidence._(
+    className: budget.add(json['class_name'], '$context class name'),
+    superClass: superClass,
+    moduleName: budget.add(json['module_name'], '$context module name'),
+    relativePath: budget.add(json['relative_path'], '$context relative path'),
+    sourceSeal: _authoringNpcCatalogNonemptySeal(
+      json['source_seal'],
+      'NPC $context source_seal',
+    ),
+  );
+}
+
+AuthoringNpcCatalogDefaultEdgeEvidence _authoringNpcCatalogEdge(
+  Object? raw,
+  String context,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  final json = _authoringRequiredObject(raw, 'NPC catalog $context');
+  _authoringExactFields(json, const {
+    'owner_class',
+    'field_name',
+    'assigned_value',
+    'instruction_offset_dwords',
+    'init_defaults_bytecode_seal',
+    'evidence_sha256',
+  }, 'NPC catalog default edge');
+  final initDefaultsBytecodeSeal = _authoringNpcCatalogNonemptySeal(
+    json['init_defaults_bytecode_seal'],
+    'NPC $context bytecode seal',
+  );
+  if (initDefaultsBytecodeSeal.byteLength % Uint32List.bytesPerElement != 0 ||
+      initDefaultsBytecodeSeal.byteLength >
+          _maxAuthoringNpcCatalogFunctionBytecodeBytes) {
+    throw FormatException(
+      'authoring NPC catalog $context bytecode seal is not a bounded DWORD stream',
+    );
+  }
+  final bytecodeDwords =
+      initDefaultsBytecodeSeal.byteLength ~/ Uint32List.bytesPerElement;
+  final instructionOffsetDwords = _authoringRequiredInt(
+    json,
+    'instruction_offset_dwords',
+    max: bytecodeDwords - 1,
+  );
+  return AuthoringNpcCatalogDefaultEdgeEvidence._(
+    ownerClass: budget.add(json['owner_class'], '$context owner class'),
+    fieldName: budget.add(json['field_name'], '$context field name'),
+    assignedValue: budget.add(
+      json['assigned_value'],
+      '$context assigned value',
+    ),
+    instructionOffsetDwords: instructionOffsetDwords,
+    initDefaultsBytecodeSeal: initDefaultsBytecodeSeal,
+    evidenceSha256: _authoringNpcCatalogDigest(
+      json['evidence_sha256'],
+      '$context evidence_sha256',
+      nonzero: true,
+    ),
+  );
+}
+
+List<AuthoringNpcCatalogRejection> _authoringNpcCatalogRejections(
+  Object? raw,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  if (raw is! List || raw.length > _maxAuthoringNpcCatalogRejections) {
+    throw const FormatException(
+      'authoring NPC catalog rejections is not a bounded array',
+    );
+  }
+  final rejections = <AuthoringNpcCatalogRejection>[];
+  String? previous;
+  for (var index = 0; index < raw.length; index++) {
+    final json = _authoringRequiredObject(
+      raw[index],
+      'NPC catalog rejection $index',
+    );
+    _authoringExactFields(json, const {
+      'spawn_class',
+      'reason',
+    }, 'NPC catalog rejection');
+    final spawnClass = budget.add(json['spawn_class'], 'rejection spawn class');
+    if (previous != null &&
+        _authoringNpcCatalogCompareUtf8(previous, spawnClass) >= 0) {
+      throw const FormatException(
+        'authoring NPC catalog rejections are not sorted and unique',
+      );
+    }
+    previous = spawnClass;
+    rejections.add(
+      _authoringNpcCatalogRejection(
+        spawnClass,
+        _authoringRequiredObject(
+          json['reason'],
+          'NPC catalog rejection reason',
+        ),
+        budget,
+      ),
+    );
+  }
+  return rejections;
+}
+
+AuthoringNpcCatalogRejection _authoringNpcCatalogRejection(
+  String spawnClass,
+  Map<String, Object?> json,
+  _AuthoringNpcCatalogTextBudget budget,
+) {
+  final kind = json['kind'];
+  String text(String field) => budget.add(json[field], 'rejection $field');
+  int count() => _authoringRequiredInt(json, 'count', min: 1, max: 0x7fffffff);
+  switch (kind) {
+    case 'missing_init_defaults':
+      _authoringExactFields(json, const {
+        'kind',
+        'owner_class',
+      }, 'NPC missing-init-defaults rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.missingInitDefaults,
+        ownerClass: text('owner_class'),
+      );
+    case 'ambiguous_init_defaults':
+      _authoringExactFields(json, const {
+        'kind',
+        'owner_class',
+        'count',
+      }, 'NPC ambiguous-init-defaults rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.ambiguousInitDefaults,
+        ownerClass: text('owner_class'),
+        count: count(),
+      );
+    case 'invalid_init_defaults_bytecode':
+      _authoringExactFields(json, const {
+        'kind',
+        'owner_class',
+        'detail',
+      }, 'NPC invalid-init-defaults rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.invalidInitDefaultsBytecode,
+        ownerClass: text('owner_class'),
+        detail: text('detail'),
+      );
+    case 'missing_default_edge':
+      _authoringExactFields(json, const {
+        'kind',
+        'owner_class',
+        'field_name',
+      }, 'NPC missing-default-edge rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.missingDefaultEdge,
+        ownerClass: text('owner_class'),
+        fieldName: text('field_name'),
+      );
+    case 'ambiguous_default_edge':
+      _authoringExactFields(json, const {
+        'kind',
+        'owner_class',
+        'field_name',
+        'count',
+      }, 'NPC ambiguous-default-edge rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.ambiguousDefaultEdge,
+        ownerClass: text('owner_class'),
+        fieldName: text('field_name'),
+        count: count(),
+      );
+    case 'missing_referenced_class':
+      _authoringExactFields(json, const {
+        'kind',
+        'role',
+        'class_name',
+      }, 'NPC missing-referenced-class rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.missingReferencedClass,
+        role: text('role'),
+        className: text('class_name'),
+      );
+    case 'wrong_ancestry':
+      _authoringExactFields(json, const {
+        'kind',
+        'role',
+        'class_name',
+        'required_base',
+      }, 'NPC wrong-ancestry rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.wrongAncestry,
+        role: text('role'),
+        className: text('class_name'),
+        requiredBase: text('required_base'),
+      );
+    case 'inheritance_cycle':
+      _authoringExactFields(json, const {
+        'kind',
+        'role',
+        'class_name',
+      }, 'NPC inheritance-cycle rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.inheritanceCycle,
+        role: text('role'),
+        className: text('class_name'),
+      );
+    case 'non_inheritable_class':
+      _authoringExactFields(json, const {
+        'kind',
+        'role',
+        'class_name',
+      }, 'NPC non-inheritable-class rejection');
+      return AuthoringNpcCatalogRejection._(
+        spawnClass: spawnClass,
+        kind: AuthoringNpcCatalogRejectionKind.nonInheritableClass,
+        role: text('role'),
+        className: text('class_name'),
+      );
+    default:
+      throw const FormatException(
+        'authoring NPC catalog rejection kind is unsupported',
+      );
+  }
+}
+
+String _authoringNpcCatalogDigest(
+  Object? raw,
+  String context, {
+  bool nonzero = false,
+}) {
+  if (raw is! String ||
+      !_authoringSha256Pattern.hasMatch(raw) ||
+      (nonzero && _authoringNpcCatalogIsZeroDigest(raw))) {
+    throw FormatException('authoring NPC catalog $context is not a digest');
+  }
+  return raw;
+}
+
+AuthoringDraftContentSeal _authoringNpcCatalogNonemptySeal(
+  Object? raw,
+  String context,
+) {
+  final seal = _authoringStoryCatalogSeal(raw, context);
+  if (_authoringNpcCatalogIsZeroDigest(seal.sha256)) {
+    throw FormatException('authoring NPC catalog $context must be nonempty');
+  }
+  return seal;
+}
+
+bool _authoringNpcCatalogIsZeroDigest(String value) {
+  for (final unit in value.codeUnits) {
+    if (unit != 0x30) return false;
+  }
+  return true;
+}
+
+int _authoringNpcCatalogCompareUtf8(String left, String right) {
+  final leftBytes = utf8.encode(left);
+  final rightBytes = utf8.encode(right);
+  final shared = leftBytes.length < rightBytes.length
+      ? leftBytes.length
+      : rightBytes.length;
+  for (var index = 0; index < shared; index++) {
+    final difference = leftBytes[index] - rightBytes[index];
+    if (difference != 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+void _authoringNpcCatalogRequireBytesSeal(
+  AuthoringDraftContentSeal seal,
+  String canonicalJson,
+  String context,
+) {
+  final bytes = utf8.encode(canonicalJson);
+  if (seal.byteLength != bytes.length ||
+      seal.sha256 != crypto.sha256.convert(bytes).toString()) {
+    throw FormatException('authoring NPC catalog $context seal is invalid');
+  }
+}
+
+Map<String, Object?> _authoringNpcCatalogSealJson(
+  AuthoringDraftContentSeal seal,
+) => <String, Object?>{'byte_len': seal.byteLength, 'sha256': seal.sha256};
+
+bool _authoringNpcCatalogSameSource(
+  AuthoringNpcCatalogSource left,
+  AuthoringNpcCatalogSource right,
+) =>
+    _authoringStoryCatalogSameSeal(left.shippingCache, right.shippingCache) &&
+    _authoringStoryCatalogSameSeal(left.bindsCache, right.bindsCache) &&
+    _authoringStoryCatalogSameSeal(left.sourcePairSeal, right.sourcePairSeal);
+
 enum AuthoringStoryCatalogNpcDiscoveryStatus { sealedCacheDefaultsVerified }
 
 enum AuthoringStoryCatalogNpcAuthoringQualification { offlineQualified }
@@ -2663,6 +3580,8 @@ const _authoringStoryCatalogBuildBindingDomain =
     'gore-story-catalog.authoring-build-v1.request-binding\u0000';
 const _authoringStoryCatalogGameRootBindingDomain =
     'gore-story-catalog.authoring-build-for-game-root-v1.request-binding\u0000';
+const _authoringNpcCatalogGameRootBindingDomain =
+    'gore-ffi.authoring-npc-archetype-catalog-v1.build-for-game-root.request-binding\u0000';
 const _authoringStoryInventoryBuildBindingDomain =
     'gore-story-inventory.authoring-build-v1.request-binding\u0000';
 const _authoringStoryInventoryCatalogLayer =
@@ -4941,6 +5860,20 @@ String _authoringStoryCatalogGameRootBindingSha256(String gameRoot) {
   final output = _AuthoringDigestCollector();
   final input = crypto.sha256.startChunkedConversion(output);
   input.add(utf8.encode(_authoringStoryCatalogGameRootBindingDomain));
+  final bytes = utf8.encode(gameRoot);
+  final length = Uint8List(8);
+  ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
+  input
+    ..add(length)
+    ..add(bytes)
+    ..close();
+  return output.value.toString();
+}
+
+String _authoringNpcCatalogGameRootBindingSha256(String gameRoot) {
+  final output = _AuthoringDigestCollector();
+  final input = crypto.sha256.startChunkedConversion(output);
+  input.add(utf8.encode(_authoringNpcCatalogGameRootBindingDomain));
   final bytes = utf8.encode(gameRoot);
   final length = Uint8List(8);
   ByteData.sublistView(length).setUint64(0, bytes.length, Endian.little);
