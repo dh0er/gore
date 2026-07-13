@@ -27,9 +27,11 @@ use sha2::{Digest as _, Sha256};
 mod quest_capability;
 
 pub use quest_capability::{
-    QuestCollisionBuildStatus, QuestCollisionCapabilityError, QuestCollisionCoverage,
-    QuestCollisionPublicationStatus, QuestCollisionRuntimeQualification,
-    VerifiedQuestCollisionCapability, BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
+    reopen_quest_collision_capability_artifact_v1, QuestCollisionBuildStatus,
+    QuestCollisionCapabilityArtifactError, QuestCollisionCapabilityArtifactV1,
+    QuestCollisionCapabilityError, QuestCollisionCoverage, QuestCollisionPublicationStatus,
+    QuestCollisionRuntimeQualification, VerifiedQuestCollisionCapability,
+    BASE_GAME_AND_EXACT_PROJECT_COLLISION_LAYER,
 };
 
 /// Exact identity of the only layer represented by revision 1.
@@ -1447,5 +1449,48 @@ mod tests {
             capability.into_quest_collision_input(&changed_head),
             Err(QuestCollisionCapabilityError::ProjectDrift)
         ));
+    }
+
+    #[test]
+    #[ignore = "requires exact pinned executable, Shipping Cache, and Binds Cache paths"]
+    fn configured_real_combined_artifact_golden() {
+        let executable = std::env::var_os("GORE_STORY_INVENTORY_REAL_EXE")
+            .expect("set GORE_STORY_INVENTORY_REAL_EXE for the ignored real golden");
+        let shipping_path = std::env::var_os("GORE_STORY_INVENTORY_REAL_SHIPPING")
+            .expect("set GORE_STORY_INVENTORY_REAL_SHIPPING for the ignored real golden");
+        let binds_path = std::env::var_os("GORE_STORY_INVENTORY_REAL_BINDS")
+            .expect("set GORE_STORY_INVENTORY_REAL_BINDS for the ignored real golden");
+        let shipping = std::fs::read(&shipping_path).unwrap();
+        let binds = std::fs::read(&binds_path).unwrap();
+        let catalog = gore_story_catalog::build_known_catalog_with_shipping_snapshot(
+            std::path::Path::new(&executable),
+            &shipping,
+            std::path::Path::new(&binds_path),
+            gore_story_catalog::GenerationInputLimits::default(),
+        )
+        .unwrap();
+        let base = build_base_game_inventory(&catalog, &shipping, &binds).unwrap();
+        assert_eq!(base.payload_seal().byte_len, 3_517_746);
+
+        let project = empty_authoring_project();
+        let artifact = VerifiedQuestCollisionCapability::bind(base, &catalog, &project)
+            .unwrap()
+            .into_artifact()
+            .unwrap();
+        assert_eq!(artifact.canonical_json().len(), 3_517_569);
+        assert_eq!(
+            artifact.artifact_seal().sha256.to_string(),
+            "89d87887f531e6ea837bf4f00adcb987cb85f8bec5afb2b07d1343b8b407422f"
+        );
+        assert_eq!(
+            artifact.source_seal().sha256.to_string(),
+            "945f60dd495fad5bb19864ba270566b64325751c82607309b99e7ec71ad2f8f9"
+        );
+        reopen_quest_collision_capability_artifact_v1(
+            artifact.canonical_json(),
+            artifact.artifact_seal(),
+            artifact.source_seal(),
+        )
+        .unwrap();
     }
 }
