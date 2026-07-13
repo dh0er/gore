@@ -484,6 +484,28 @@ class ModFfi {
     return AuthoringStoreOpenedResult.fromJson(response);
   }
 
+  /// Open the fixed head as one exact schema-revision-3 checkpoint.
+  ///
+  /// This is a read-only reconstruction. It grants no build, runtime, deployment, or publication
+  /// authority.
+  Future<AuthoringRevision3StoreOpenedResult> authoringStoreOpenRevision3({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) async {
+    const command = 'authoring_store_open_revision3';
+    _authoringRevision3StorePath(root);
+    _authoringRevision3OpenEnvelopePreflight(
+      command,
+      root,
+      verification.wireName,
+    );
+    final response = await _call(command, {
+      'root': root,
+      'verification': verification.wireName,
+    });
+    return AuthoringRevision3StoreOpenedResult.fromJson(response);
+  }
+
   /// Prepare immutable objects without publishing `gore-project.json`.
   ///
   /// `expectedHead == null` is a strict CAS assertion that the fixed head is absent. The raw
@@ -535,6 +557,38 @@ class ModFfi {
     return AuthoringCheckpointPreparation.fromJson(response);
   }
 
+  /// Prepare immutable schema-revision-3 objects without publishing the fixed head.
+  ///
+  /// This is prepare-only: `expectedHead == null` asserts that the fixed head is absent, while a
+  /// head value is passed through as its exact canonical CAS string. The project string is also
+  /// preserved byte-for-byte so native duplicate-key and canonical-byte checks remain authoritative.
+  Future<AuthoringRevision3CheckpointPreparation>
+  authoringStorePrepareRevision3Checkpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_checkpoint';
+    _authoringRevision3StorePath(root);
+    _authoringRevision3RequestString(
+      projectJson,
+      'projectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3PrepareEnvelopePreflight(
+      command,
+      root,
+      expectedHead?.canonicalJson,
+      projectJson,
+    );
+    final response = await _call(command, {
+      'root': root,
+      'expected_head_json': expectedHead?.canonicalJson,
+      'project_json': projectJson,
+    });
+    return AuthoringRevision3CheckpointPreparation.fromJson(response);
+  }
+
   /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.
   Future<AuthoringStoreOpenedResult> authoringStoreOpenHeadBytes({
     required String root,
@@ -567,6 +621,31 @@ class ModFfi {
       'profile': profile.wireName,
     });
     return AuthoringStoreOpenedResult.fromJson(response);
+  }
+
+  /// Reopen one schema-revision-3 candidate from its exact canonical head bytes.
+  ///
+  /// This only inspects already-prepared immutable objects and never publishes the candidate.
+  Future<AuthoringRevision3StoreOpenedResult>
+  authoringStoreOpenRevision3HeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) async {
+    const command = 'authoring_store_open_revision3_head_bytes';
+    _authoringRevision3StorePath(root);
+    _authoringRevision3OpenHeadEnvelopePreflight(
+      command,
+      root,
+      head.canonicalJson,
+      verification.wireName,
+    );
+    final response = await _call(command, {
+      'root': root,
+      'head_json': head.canonicalJson,
+      'verification': verification.wireName,
+    });
+    return AuthoringRevision3StoreOpenedResult.fromJson(response);
   }
 
   /// Stream one bounded Ogg into the content-addressed store under a strict head CAS token.
@@ -781,6 +860,86 @@ void _authoringStoreRequestString(String value, String field, int maxBytes) {
       'must be 1..=$maxBytes UTF-8 bytes',
     );
   }
+}
+
+void _authoringRevision3RequestString(
+  String value,
+  String field,
+  int maxBytes,
+) {
+  // The revision-3 bridge validates UTF-16 explicitly so jsonEncode cannot silently replace an
+  // unpaired surrogate while constructing a security-sensitive nested-string request.
+  _authoringDraftRequestString(value, field, maxBytes);
+}
+
+void _authoringRevision3StorePath(String value) {
+  _authoringRevision3RequestString(value, 'root', _maxAuthoringStorePathBytes);
+  if (value.contains('\u0000')) {
+    throw ArgumentError.value(
+      '<${value.length} characters>',
+      'root',
+      'must not contain NUL',
+    );
+  }
+}
+
+void _authoringRevision3OpenEnvelopePreflight(
+  String command,
+  String root,
+  String verification,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"root":"","verification":""}}'.length +
+      command.length +
+      verification.length;
+  _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
+}
+
+void _authoringRevision3OpenHeadEnvelopePreflight(
+  String command,
+  String root,
+  String headJson,
+  String verification,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"root":"","head_json":"","verification":""}}'
+          .length +
+      command.length +
+      verification.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    root,
+    'root',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(headJson, 'head', encodedBytes);
+}
+
+void _authoringRevision3PrepareEnvelopePreflight(
+  String command,
+  String root,
+  String? expectedHeadJson,
+  String projectJson,
+) {
+  var encodedBytes = expectedHeadJson == null
+      ? '{"command":"","payload":{"root":"","expected_head_json":null,"project_json":""}}'
+                .length +
+            command.length
+      : '{"command":"","payload":{"root":"","expected_head_json":"","project_json":""}}'
+                .length +
+            command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    root,
+    'root',
+    encodedBytes,
+  );
+  if (expectedHeadJson != null) {
+    encodedBytes = _authoringAddEscapedJsonStringBytes(
+      expectedHeadJson,
+      'expectedHead',
+      encodedBytes,
+    );
+  }
+  _authoringAddEscapedJsonStringBytes(projectJson, 'projectJson', encodedBytes);
 }
 
 void _voiceOggInspectPath(String value) {
@@ -1311,6 +1470,27 @@ String _authoringRequiredString(
   return value;
 }
 
+String _authoringRevision3ResponseString(
+  Map<String, Object?> json,
+  String field, {
+  required int maxBytes,
+}) {
+  final value = json[field];
+  if (value is! String) {
+    throw FormatException(
+      'authoring revision-3 response field $field is not a string',
+    );
+  }
+  try {
+    _authoringRevision3RequestString(value, field, maxBytes);
+  } on ArgumentError {
+    throw FormatException(
+      'authoring revision-3 response field $field is not bounded UTF-8',
+    );
+  }
+  return value;
+}
+
 int _authoringRequiredInt(
   Map<String, Object?> json,
   String field, {
@@ -1436,6 +1616,48 @@ _authoringRequireCanonicalProjectJson(String projectJson) {
     schemaRevision: schemaRevision,
     revision: revision,
   );
+}
+
+({String projectId, int revision})
+_authoringRequireCanonicalRevision3ProjectJson(String projectJson) {
+  final project = _authoringDecodeDuplicateSafeObject(
+    projectJson,
+    'revision-3 store project',
+  );
+  final fields = project.keys.toList(growable: false);
+  if (fields.length != _authoringProjectTopLevelFields.length) {
+    throw const FormatException(
+      'authoring revision-3 store project JSON has an invalid top-level schema',
+    );
+  }
+  for (var index = 0; index < fields.length; index++) {
+    if (fields[index] != _authoringProjectTopLevelFields[index]) {
+      throw const FormatException(
+        'authoring revision-3 store project JSON has non-canonical field order',
+      );
+    }
+  }
+  if (project['format'] != 2 || project['schema_revision'] != 3) {
+    throw const FormatException(
+      'authoring revision-3 store project JSON has an unsupported schema',
+    );
+  }
+  final projectId = _authoringEntityId(
+    _authoringRequiredString(project, 'project_id', maxBytes: 32),
+    'project_id',
+  );
+  if (projectId == '00000000000000000000000000000000') {
+    throw const FormatException(
+      'authoring revision-3 store project ID must not be zero',
+    );
+  }
+  final revision = _authoringRequiredInt(project, 'revision');
+  if (jsonEncode(project) != projectJson) {
+    throw const FormatException(
+      'authoring revision-3 store project JSON is not canonical',
+    );
+  }
+  return (projectId: projectId, revision: revision);
 }
 
 Map<String, Object?> _authoringDraftObjectField(
@@ -7109,6 +7331,90 @@ class AuthoringStoreOpenedResult {
       projectJson: projectJson,
       diagnostics: diagnostics,
       blocksBuild: blocksBuild,
+    );
+  }
+}
+
+/// Exact, read-only schema-revision-3 Store reconstruction.
+///
+/// Absence of diagnostics/readiness fields is intentional: this DTO carries immutable checkpoint
+/// bytes only and does not claim that the project can build, run, deploy, or publish.
+final class AuthoringRevision3StoreOpenedResult {
+  const AuthoringRevision3StoreOpenedResult._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+  });
+
+  final AuthoringWorkingHead head;
+
+  /// The exact canonical nested string returned by native code; never reconstructed from fields.
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+
+  factory AuthoringRevision3StoreOpenedResult.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'head_json',
+      'project_json',
+    }, 'revision-3 store-open response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring revision-3 store-open response is not ok',
+      );
+    }
+    final headJson = _authoringRevision3ResponseString(
+      json,
+      'head_json',
+      maxBytes: _maxAuthoringHeadJsonBytes,
+    );
+    final projectJson = _authoringRevision3ResponseString(
+      json,
+      'project_json',
+      maxBytes: _maxAuthoringProjectJsonBytes,
+    );
+    final project = _authoringRequireCanonicalRevision3ProjectJson(projectJson);
+    return AuthoringRevision3StoreOpenedResult._(
+      head: AuthoringWorkingHead.fromCanonicalJson(headJson),
+      projectJson: projectJson,
+      projectId: project.projectId,
+      projectRevision: project.revision,
+    );
+  }
+}
+
+/// Head token for a prepare-only schema-revision-3 checkpoint operation.
+///
+/// The native command may install immutable objects, but this result cannot publish the fixed head
+/// and intentionally contains no readiness, diagnostics, runtime, or publication claims.
+final class AuthoringRevision3CheckpointPreparation {
+  const AuthoringRevision3CheckpointPreparation._({required this.head});
+
+  final AuthoringWorkingHead head;
+
+  factory AuthoringRevision3CheckpointPreparation.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'head_json',
+    }, 'revision-3 checkpoint-preparation response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring revision-3 checkpoint-preparation response is not ok',
+      );
+    }
+    final headJson = _authoringRevision3ResponseString(
+      json,
+      'head_json',
+      maxBytes: _maxAuthoringHeadJsonBytes,
+    );
+    return AuthoringRevision3CheckpointPreparation._(
+      head: AuthoringWorkingHead.fromCanonicalJson(headJson),
     );
   }
 }

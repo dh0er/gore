@@ -110,6 +110,14 @@ void main() {
               .where((command) => command != 'authoring_store_open_document')
               .toList(),
         );
+        final missingRevision3Store = _coreInfoResponse(
+          commands: requiredStudioCoreCommands
+              .where(
+                (command) =>
+                    command != 'authoring_store_prepare_revision3_checkpoint',
+              )
+              .toList(),
+        );
         final missingStoryTransaction = _coreInfoResponse(
           commands: requiredStudioCoreCommands
               .where(
@@ -187,6 +195,7 @@ void main() {
           missingDataAssetInspect,
           missingWorkingStore,
           missingDocumentStore,
+          missingRevision3Store,
           missingStoryTransaction,
           missingStoryBuildPlan,
           missingStoryCatalog,
@@ -198,7 +207,7 @@ void main() {
           missingQuestDraft,
           current,
         ].map(GoreCoreInfo.tryParseCompatibleResponse).toList();
-        expect(decisions.take(17), everyElement(isNull));
+        expect(decisions.take(18), everyElement(isNull));
         expect(decisions.last?.version, '0.2.0-current');
       },
     );
