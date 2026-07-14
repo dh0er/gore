@@ -330,6 +330,46 @@ fn exact_current_source_ignores_deleted_historical_artifact_and_basis() {
 }
 
 #[test]
+fn historical_inspection_source_reopens_old_head_without_current_head_authority() {
+    let root = TestRoot::new("historical-inspection-only");
+    let store = WorkingProjectStore::at(&root.0, WorkingStoreLimits::default()).unwrap();
+    let historical_project = empty_project();
+    let historical = store
+        .prepare_revision3_checkpoint(None, &historical_project)
+        .unwrap();
+    fs::write(root.0.join("gore-project.json"), &historical.head_bytes).unwrap();
+
+    let mut current_project = historical_project.clone();
+    current_project.revision += 1;
+    current_project.meta.name = "Advanced fixed head".to_owned();
+    let current = store
+        .prepare_revision3_checkpoint(Some(&historical.head), &current_project)
+        .unwrap();
+    fs::write(root.0.join("gore-project.json"), &current.head_bytes).unwrap();
+
+    let inspection = store
+        .prepare_revision3_quest_collision_inspection_source_v2(&historical.head)
+        .unwrap();
+    assert_eq!(inspection.historical_head(), &historical.head);
+    assert_eq!(inspection.project_id(), historical_project.project_id);
+    assert_eq!(inspection.project_revision(), historical_project.revision);
+    assert_eq!(inspection.prior_quest_count(), 0);
+    assert_eq!(
+        store.current_head().unwrap().as_ref(),
+        Some(&current.head),
+        "historical inspection must neither require nor publish the old fixed head"
+    );
+
+    let _: fn(
+        &WorkingProjectStore,
+        &gore_authoring::WorkingHead,
+    ) -> Result<
+        gore_authoring::PreparedRevision3QuestCollisionInspectionSourceV2,
+        gore_authoring::Revision3QuestCollisionSourceErrorV2,
+    > = WorkingProjectStore::prepare_revision3_quest_collision_inspection_source_v2;
+}
+
+#[test]
 fn v1_and_v2_layer_media_pairs_are_exact() {
     let raw = seal(7, 2);
     let basis = seal(8, 200);

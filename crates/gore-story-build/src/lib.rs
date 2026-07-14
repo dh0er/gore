@@ -6,7 +6,11 @@
 //! authoring generators, and returns a sealed inspection plan. Runtime-unqualified drafts are
 //! always blocking, including under the experimental validation profile.
 
+pub mod revision3_npc;
 pub mod revision3_quest;
+
+#[cfg(test)]
+mod revision3_npc_tests;
 
 #[cfg(test)]
 mod revision3_quest_tests;

@@ -19,11 +19,11 @@ use crate::model_revision3::{
 use crate::{
     AssetMeta, AssetRef, AssetStoreIndex, ContentSeal, Diagnostic, DiagnosticCode, Entity,
     EntityId, EntityPayload, FormatV2, GameGenerationAnchor, LocaleCode, OggCodec, OggMetadata,
-    PreparedRevision3QuestCollisionSourceV2, ProjectDocument, ProjectId, ProjectMeta,
-    ProjectRevision2, ProjectRevision3, ProjectV2, Revision3QuestCollisionSourceErrorV2,
-    SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3, Sha256Digest, ValidationProfile,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
+    PreparedRevision3QuestCollisionInspectionSourceV2, PreparedRevision3QuestCollisionSourceV2,
+    ProjectDocument, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3, ProjectV2,
+    Revision3QuestCollisionSourceErrorV2, SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3,
+    Sha256Digest, ValidationProfile, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
 };
 
 const HEAD_FILE_NAME: &str = "gore-project.json";
@@ -910,22 +910,60 @@ impl WorkingProjectStore {
     {
         self.ensure_root_safe()?;
         self.check_expected_head(Some(expected_head))?;
-        validate_nonzero_seal(
-            &expected_head.snapshot,
-            self.limits.max_snapshot_bytes,
-            "current revision-3 snapshot",
+        let prepared = self.prepare_revision3_quest_collision_source_from_sealed_head_v2(
+            expected_head,
+            "current revision-3",
         )?;
 
-        let snapshot_path = self.snapshot_path(expected_head.snapshot.sha256);
+        before_final_head_check()?;
+        self.check_expected_head(Some(expected_head))?;
+        Ok(prepared)
+    }
+
+    /// Reconstruct inspection-only collision evidence for one immutable historical head.
+    ///
+    /// Unlike [`Self::prepare_current_revision3_quest_collision_source_v2`], this path never
+    /// compares with or returns authority over the fixed head. The distinct return type cannot be
+    /// converted into authoring capability, cannot resolve catalog selections, and exists only so
+    /// a caller can linearly verify the exact version-2 artifact that names this historical head.
+    pub fn prepare_revision3_quest_collision_inspection_source_v2(
+        &self,
+        historical_head: &WorkingHead,
+    ) -> Result<
+        PreparedRevision3QuestCollisionInspectionSourceV2,
+        Revision3QuestCollisionSourceErrorV2,
+    > {
+        self.ensure_root_safe()?;
+        self.prepare_revision3_quest_collision_source_from_sealed_head_v2(
+            historical_head,
+            "historical revision-3 Quest inspection",
+        )
+        .map(PreparedRevision3QuestCollisionInspectionSourceV2::new)
+    }
+
+    fn prepare_revision3_quest_collision_source_from_sealed_head_v2(
+        &self,
+        source_head: &WorkingHead,
+        source_kind: &'static str,
+    ) -> Result<PreparedRevision3QuestCollisionSourceV2, Revision3QuestCollisionSourceErrorV2> {
+        validate_nonzero_seal(
+            &source_head.snapshot,
+            self.limits.max_snapshot_bytes,
+            "revision-3 Quest collision source snapshot",
+        )?;
+
+        let snapshot_path = self.snapshot_path(source_head.snapshot.sha256);
         let snapshot_bytes = self.read_sealed_object(
             &snapshot_path,
-            &expected_head.snapshot,
+            &source_head.snapshot,
             self.limits.max_snapshot_bytes,
-            "current revision-3 snapshot",
+            "revision-3 Quest collision source snapshot",
             AssetVerification::Full,
         )?;
-        let snapshot: Revision3SnapshotManifest =
-            parse_canonical_json(&snapshot_bytes, "current revision-3 snapshot")?;
+        let snapshot: Revision3SnapshotManifest = parse_canonical_json(
+            &snapshot_bytes,
+            "revision-3 Quest collision source snapshot",
+        )?;
         self.validate_revision3_manifest_limits(&snapshot)?;
 
         // A monolithic current project is capped at 16 MiB. Entity JSON is a strict lower bound
@@ -957,17 +995,17 @@ impl WorkingProjectStore {
                 &entity_path,
                 seal,
                 self.limits.max_entity_bytes,
-                "current revision-3 entity",
+                "revision-3 Quest collision source entity",
                 AssetVerification::Full,
             )?;
             let entity: Revision3Entity =
-                parse_canonical_json(&entity_bytes, "current revision-3 entity")?;
+                parse_canonical_json(&entity_bytes, "revision-3 Quest collision source entity")?;
             if entity.id != *id {
                 return Err(
                     Revision3QuestCollisionSourceErrorV2::InvalidCurrentProject {
                         reason: format!(
-                            "current revision-3 entity shard {id} contains embedded id {}",
-                            entity.id
+                            "{source_kind} entity shard {id} contains embedded id {}",
+                            entity.id,
                         ),
                     },
                 );
@@ -984,7 +1022,7 @@ impl WorkingProjectStore {
         let prepared =
             crate::revision3_quest_source_v2::prepare_exact_revision3_quest_collision_source_v2(
                 &project,
-                expected_head.clone(),
+                source_head.clone(),
             )?;
 
         // Verify only the exact non-Quest projection. Historical Quest artifacts removed by the
@@ -994,8 +1032,6 @@ impl WorkingProjectStore {
         self.verify_asset_index(&nonquest.asset_store, AssetVerification::Full)?;
         self.verify_revision2_voice_take_ogg_metadata(nonquest, AssetVerification::Full)?;
 
-        before_final_head_check()?;
-        self.check_expected_head(Some(expected_head))?;
         Ok(prepared)
     }
 
@@ -1486,6 +1522,46 @@ impl WorkingProjectStore {
             artifact,
             quest_collision_artifact_limit(),
             "Quest collision artifact bytes",
+            AssetVerification::Full,
+        )
+    }
+
+    /// Read one version-2 Quest collision artifact only through its exact indexed raw identity.
+    ///
+    /// This is storage-only inspection: the asset index, length, media type, and complete CAS
+    /// digest are verified, but the bytes grant no collision, head, build, or publication
+    /// authority. Semantic reopening remains the inventory crate's responsibility.
+    pub fn read_indexed_quest_collision_artifact_v2(
+        &self,
+        index: &AssetStoreIndex,
+        artifact: &ContentSeal,
+    ) -> Result<Vec<u8>, WorkingStoreError> {
+        validate_quest_collision_artifact_length(artifact.byte_len)?;
+        let meta = index.assets.get(&artifact.sha256).ok_or_else(|| {
+            WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} is absent from the supplied asset index",
+                artifact.sha256
+            ))
+        })?;
+        if meta.byte_len != artifact.byte_len {
+            return Err(WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} index declares {} bytes, raw seal declares {}",
+                artifact.sha256, meta.byte_len, artifact.byte_len
+            )));
+        }
+        if meta.media_type != QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2 {
+            return Err(WorkingStoreError::Invariant(format!(
+                "Quest collision artifact {} media type is {:?}, expected {:?}",
+                artifact.sha256, meta.media_type, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2
+            )));
+        }
+
+        self.ensure_root_safe()?;
+        self.read_sealed_object(
+            &self.asset_path(artifact.sha256),
+            artifact,
+            quest_collision_artifact_limit(),
+            "Quest collision artifact V2 bytes",
             AssetVerification::Full,
         )
     }

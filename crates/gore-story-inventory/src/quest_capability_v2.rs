@@ -11,12 +11,14 @@ use std::io::{self, Write};
 
 use gore_authoring::{
     ContentSeal as AuthoringContentSeal, EntityId, GameGenerationAnchor,
-    PreparedRevision3QuestCollisionSourceV2, ProjectId, QuestCollisionCatalogInput,
-    Revision3QuestGiverInput as QuestGiverInput, Revision3QuestParentInput as QuestParentInput,
-    Sha256Digest as AuthoringSha256Digest, WorkingHead, MAX_PROJECT_JSON_BYTES,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_COLLISION_IDENTITIES_V2,
-    MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2, MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2,
-    MAX_REVISION3_PRIOR_QUESTS_V2, MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_CATALOG_LAYER_V2,
+    PreparedRevision3QuestCollisionInspectionSourceV2, PreparedRevision3QuestCollisionSourceV2,
+    ProjectId, QuestCollisionCatalogInput, Revision3NonQuestCollisionBasisV2,
+    Revision3PriorQuestEvidenceV2, Revision3QuestGiverInput as QuestGiverInput,
+    Revision3QuestParentInput as QuestParentInput, Sha256Digest as AuthoringSha256Digest,
+    WorkingHead, MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    MAX_REVISION3_COLLISION_IDENTITIES_V2, MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2,
+    MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2, MAX_REVISION3_PRIOR_QUESTS_V2,
+    MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_CATALOG_LAYER_V2,
 };
 use gore_story_catalog::{CatalogError, StoryCatalogFile, MAX_CATALOG_JSON_BYTES};
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -61,6 +63,48 @@ pub enum Revision3QuestCollisionCoverageV2 {
 /// consuming an independently fresh instance through [`Self::verify_artifact_exact`].
 pub struct VerifiedRevision3QuestCollisionCapabilityV2 {
     source: PreparedRevision3QuestCollisionSourceV2,
+    base_inventory_payload_seal: ContentSeal,
+    story_catalog_seal: ContentSeal,
+    combined_source_seal: ContentSeal,
+    modules: BTreeSet<String>,
+    relative_paths: BTreeSet<String>,
+    symbols: BTreeSet<String>,
+    parents: BTreeMap<String, QuestParentInput>,
+    givers: BTreeMap<String, QuestGiverInput>,
+}
+
+/// Linear, inspection-only capability bound to one immutable historical version-2 source.
+///
+/// Unlike [`VerifiedRevision3QuestCollisionCapabilityV2`], this type cannot resolve catalog
+/// selections, create an artifact, or enter any authoring transaction. Its sole consuming
+/// operation verifies one already-persisted artifact and the Quest identities that artifact was
+/// originally used with, then returns only a plain source-generation input.
+///
+/// ```compile_fail
+/// use gore_authoring::PreparedRevision3QuestCollisionInspectionSourceV2;
+/// use gore_story_catalog::StoryCatalogFile;
+/// use gore_story_inventory::{
+///     BaseGameCollisionInventory, VerifiedRevision3QuestCollisionCapabilityV2,
+/// };
+/// fn cannot_rebind_historical_source_as_authoring(
+///     base: BaseGameCollisionInventory,
+///     catalog: &StoryCatalogFile,
+///     source: PreparedRevision3QuestCollisionInspectionSourceV2,
+/// ) {
+///     let _ = VerifiedRevision3QuestCollisionCapabilityV2::bind(base, catalog, source);
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use gore_story_inventory::VerifiedRevision3QuestCollisionInspectionCapabilityV2;
+/// fn cannot_create_artifact(
+///     capability: VerifiedRevision3QuestCollisionInspectionCapabilityV2,
+/// ) {
+///     let _ = capability.prepare_artifact();
+/// }
+/// ```
+pub struct VerifiedRevision3QuestCollisionInspectionCapabilityV2 {
+    source: PreparedRevision3QuestCollisionInspectionSourceV2,
     base_inventory_payload_seal: ContentSeal,
     story_catalog_seal: ContentSeal,
     combined_source_seal: ContentSeal,
@@ -118,6 +162,19 @@ impl fmt::Debug for VerifiedRevision3QuestCollisionCapabilityV2 {
             .field("relative_path_count", &self.relative_paths.len())
             .field("symbol_count", &self.symbols.len())
             .finish()
+    }
+}
+
+impl fmt::Debug for VerifiedRevision3QuestCollisionInspectionCapabilityV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedRevision3QuestCollisionInspectionCapabilityV2")
+            .field("project_id", &self.source.project_id())
+            .field("project_revision", &self.source.project_revision())
+            .field("historical_head", self.source.historical_head())
+            .field("retains_selection_authority", &false)
+            .field("can_create_artifact", &false)
+            .finish_non_exhaustive()
     }
 }
 
@@ -252,6 +309,48 @@ impl QuestCollisionCapabilityArtifactV2 {
         QuestCollisionPublicationStatus::NotSupported
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_only_with_noncanonical_identity(&self) -> Self {
+        let mut canonical_json = self.canonical_json.clone();
+        canonical_json.push(b' ');
+        Self {
+            canonical_json,
+            artifact_seal: self.artifact_seal.clone(),
+            source_seal: self.source_seal.clone(),
+            base_inventory_payload_seal: self.base_inventory_payload_seal.clone(),
+            story_catalog_seal: self.story_catalog_seal.clone(),
+            project_id: self.project_id,
+            project_revision: self.project_revision,
+            project_target: self.project_target.clone(),
+            current_head: self.current_head.clone(),
+            current_project: self.current_project.clone(),
+            nonquest_project: self.nonquest_project.clone(),
+            prior_quest_count: self.prior_quest_count,
+            prior_quest_evidence: self.prior_quest_evidence.clone(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only_with_raw_seal_drift(&self) -> Self {
+        let mut artifact_seal = self.artifact_seal.clone();
+        artifact_seal.sha256 = super::Sha256Digest::from_bytes([0xfd; 32]);
+        Self {
+            canonical_json: self.canonical_json.clone(),
+            artifact_seal,
+            source_seal: self.source_seal.clone(),
+            base_inventory_payload_seal: self.base_inventory_payload_seal.clone(),
+            story_catalog_seal: self.story_catalog_seal.clone(),
+            project_id: self.project_id,
+            project_revision: self.project_revision,
+            project_target: self.project_target.clone(),
+            current_head: self.current_head.clone(),
+            current_project: self.current_project.clone(),
+            nonquest_project: self.nonquest_project.clone(),
+            prior_quest_count: self.prior_quest_count,
+            prior_quest_evidence: self.prior_quest_evidence.clone(),
+        }
+    }
+
     /// Reconstruct the plain collision input encoded by this structural artifact.
     ///
     /// This is crate-private because reopening an artifact must never be mistaken for restoring
@@ -339,6 +438,288 @@ impl PreparedQuestCollisionArtifactV2 {
     }
 }
 
+trait Revision3QuestCollisionSourceViewV2 {
+    fn project_id(&self) -> ProjectId;
+    fn project_revision(&self) -> u64;
+    fn target(&self) -> &GameGenerationAnchor;
+    fn current_head(&self) -> &WorkingHead;
+    fn current_project(&self) -> &AuthoringContentSeal;
+    fn nonquest_basis(&self) -> &Revision3NonQuestCollisionBasisV2;
+    fn prior_quest_count(&self) -> usize;
+    fn prior_quest_count_u64(&self) -> u64;
+    fn prior_quest_evidence(&self) -> &AuthoringContentSeal;
+    fn prior_quests(&self) -> &BTreeMap<EntityId, Revision3PriorQuestEvidenceV2>;
+}
+
+impl Revision3QuestCollisionSourceViewV2 for PreparedRevision3QuestCollisionSourceV2 {
+    fn project_id(&self) -> ProjectId {
+        self.project_id()
+    }
+
+    fn project_revision(&self) -> u64 {
+        self.project_revision()
+    }
+
+    fn target(&self) -> &GameGenerationAnchor {
+        self.target()
+    }
+
+    fn current_head(&self) -> &WorkingHead {
+        self.current_head()
+    }
+
+    fn current_project(&self) -> &AuthoringContentSeal {
+        self.current_project()
+    }
+
+    fn nonquest_basis(&self) -> &Revision3NonQuestCollisionBasisV2 {
+        self.nonquest_basis()
+    }
+
+    fn prior_quest_count(&self) -> usize {
+        self.prior_quest_count()
+    }
+
+    fn prior_quest_count_u64(&self) -> u64 {
+        self.prior_quest_count_u64()
+    }
+
+    fn prior_quest_evidence(&self) -> &AuthoringContentSeal {
+        self.prior_quest_evidence()
+    }
+
+    fn prior_quests(&self) -> &BTreeMap<EntityId, Revision3PriorQuestEvidenceV2> {
+        self.prior_quests()
+    }
+}
+
+impl Revision3QuestCollisionSourceViewV2 for PreparedRevision3QuestCollisionInspectionSourceV2 {
+    fn project_id(&self) -> ProjectId {
+        self.project_id()
+    }
+
+    fn project_revision(&self) -> u64 {
+        self.project_revision()
+    }
+
+    fn target(&self) -> &GameGenerationAnchor {
+        self.target()
+    }
+
+    fn current_head(&self) -> &WorkingHead {
+        self.historical_head()
+    }
+
+    fn current_project(&self) -> &AuthoringContentSeal {
+        self.historical_project()
+    }
+
+    fn nonquest_basis(&self) -> &Revision3NonQuestCollisionBasisV2 {
+        self.nonquest_basis()
+    }
+
+    fn prior_quest_count(&self) -> usize {
+        self.prior_quest_count()
+    }
+
+    fn prior_quest_count_u64(&self) -> u64 {
+        self.prior_quest_count_u64()
+    }
+
+    fn prior_quest_evidence(&self) -> &AuthoringContentSeal {
+        self.prior_quest_evidence()
+    }
+
+    fn prior_quests(&self) -> &BTreeMap<EntityId, Revision3PriorQuestEvidenceV2> {
+        self.prior_quests()
+    }
+}
+
+struct BoundRevision3QuestCollisionInputsV2 {
+    base_inventory_payload_seal: ContentSeal,
+    story_catalog_seal: ContentSeal,
+    combined_source_seal: ContentSeal,
+    modules: BTreeSet<String>,
+    relative_paths: BTreeSet<String>,
+    symbols: BTreeSet<String>,
+    parents: BTreeMap<String, QuestParentInput>,
+    givers: BTreeMap<String, QuestGiverInput>,
+}
+
+fn bind_revision3_quest_collision_inputs_v2<S>(
+    base: BaseGameCollisionInventory,
+    catalog: &StoryCatalogFile,
+    source: &S,
+) -> Result<BoundRevision3QuestCollisionInputsV2, Revision3QuestCollisionCapabilityErrorV2>
+where
+    S: Revision3QuestCollisionSourceViewV2,
+{
+    let selections = catalog.authoring_selections()?;
+    if base.generation() != catalog.generation()
+        || base.story_catalog_seal() != catalog.catalog_seal()
+    {
+        return Err(Revision3QuestCollisionCapabilityErrorV2::CatalogBindingMismatch);
+    }
+    let expected_target = authoring_generation(catalog.generation());
+    if source.target() != &expected_target {
+        return Err(Revision3QuestCollisionCapabilityErrorV2::TargetMismatch);
+    }
+    validate_source_bindings(source)?;
+
+    let generation = authoring_generation(&selections.generation);
+    let parents = selections
+        .quest_parents
+        .into_iter()
+        .map(|parent| {
+            (
+                parent.catalog_id,
+                QuestParentInput {
+                    generation: generation.clone(),
+                    source_seal: authoring_seal(&parent.quest_class.source_seal),
+                    catalog_layer: parent.quest_class.catalog_layer,
+                    canonical_selector: parent.quest_class.authoring_selector,
+                    runtime_class: parent.quest_class.runtime_class,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let givers = selections
+        .npcs
+        .into_iter()
+        .map(|npc| {
+            (
+                npc.catalog_id,
+                QuestGiverInput {
+                    generation: generation.clone(),
+                    source_seal: authoring_seal(&npc.quest_giver.source_seal),
+                    catalog_layer: npc.quest_giver.catalog_layer,
+                    canonical_selector: npc.quest_giver.authoring_selector,
+                    runtime_unique_name: npc.quest_giver.runtime_unique_name,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for prior in source.prior_quests().values() {
+        if !parents.values().any(|parent| parent == prior.parent()) {
+            return Err(
+                Revision3QuestCollisionCapabilityErrorV2::PriorQuestParentDrift {
+                    quest: prior.quest_id(),
+                },
+            );
+        }
+        if !givers.values().any(|giver| giver == prior.giver()) {
+            return Err(
+                Revision3QuestCollisionCapabilityErrorV2::PriorQuestGiverDrift {
+                    quest: prior.quest_id(),
+                },
+            );
+        }
+    }
+
+    let base_inventory_payload_seal = base.payload_seal().clone();
+    let story_catalog_seal = base.story_catalog_seal().clone();
+    let (base_modules, base_relative_paths, base_symbols) = base.into_collision_domains();
+    let mut budget = CollisionBudgetV2::default();
+    let mut modules = base_domain_map("module", base_modules, &mut budget)?;
+    let mut relative_paths = base_domain_map("relative path", base_relative_paths, &mut budget)?;
+    let mut symbols = base_domain_map("symbol", base_symbols, &mut budget)?;
+
+    let nonquest = source.nonquest_basis().story_identities();
+    merge_current_domain(
+        "module",
+        &mut modules,
+        nonquest
+            .modules()
+            .iter()
+            .map(|(value, owner)| (value.as_str(), *owner)),
+        &mut budget,
+    )?;
+    merge_current_domain(
+        "relative path",
+        &mut relative_paths,
+        nonquest
+            .relative_paths()
+            .iter()
+            .map(|(value, owner)| (value.as_str(), *owner)),
+        &mut budget,
+    )?;
+    merge_current_domain(
+        "symbol",
+        &mut symbols,
+        nonquest
+            .symbols()
+            .iter()
+            .map(|(value, owner)| (value.as_str(), *owner)),
+        &mut budget,
+    )?;
+    for prior in source.prior_quests().values() {
+        merge_current_domain(
+            "module",
+            &mut modules,
+            std::iter::once((prior.module_namespace(), prior.quest_id())),
+            &mut budget,
+        )?;
+        merge_current_domain(
+            "relative path",
+            &mut relative_paths,
+            std::iter::once((prior.module_relative_path(), prior.quest_id())),
+            &mut budget,
+        )?;
+        merge_current_domain(
+            "symbol",
+            &mut symbols,
+            prior
+                .symbols()
+                .iter()
+                .map(|symbol| (symbol.as_str(), prior.quest_id())),
+            &mut budget,
+        )?;
+    }
+
+    let modules = modules.into_keys().collect::<BTreeSet<_>>();
+    let relative_paths = relative_paths.into_keys().collect::<BTreeSet<_>>();
+    let symbols = symbols.into_keys().collect::<BTreeSet<_>>();
+    debug_assert_eq!(
+        budget.count,
+        modules.len() + relative_paths.len() + symbols.len()
+    );
+
+    let combined_source_seal = seal_combined_payload_v2(&CombinedPayloadV2 {
+        format: COMBINED_FORMAT_V2,
+        schema_revision: COMBINED_SCHEMA_REVISION_V2,
+        coverage: Revision3QuestCollisionCoverageV2::BaseGameAndExactRevision3ProjectOnly,
+        catalog_layer: BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2,
+        runtime_qualification: QuestCollisionRuntimeQualification::RuntimeUnqualified,
+        build_status: QuestCollisionBuildStatus::Blocked,
+        publication_status: QuestCollisionPublicationStatus::NotSupported,
+        base_inventory_payload_seal: &base_inventory_payload_seal,
+        story_catalog_seal: &story_catalog_seal,
+        project_id: source.project_id(),
+        project_revision: source.project_revision(),
+        project_target: source.target(),
+        current_head: source.current_head(),
+        current_project: source.current_project(),
+        nonquest_project: source.nonquest_basis().canonical_project(),
+        prior_quest_count: source.prior_quest_count_u64(),
+        prior_quest_evidence: source.prior_quest_evidence(),
+        modules: &modules,
+        relative_paths: &relative_paths,
+        symbols: &symbols,
+    })?;
+
+    Ok(BoundRevision3QuestCollisionInputsV2 {
+        base_inventory_payload_seal,
+        story_catalog_seal,
+        combined_source_seal,
+        modules,
+        relative_paths,
+        symbols,
+        parents,
+        givers,
+    })
+}
+
 impl VerifiedRevision3QuestCollisionCapabilityV2 {
     /// Bind fresh base/catalog capabilities to one opaque exact-current revision-3 source.
     pub fn bind(
@@ -346,171 +727,18 @@ impl VerifiedRevision3QuestCollisionCapabilityV2 {
         catalog: &StoryCatalogFile,
         source: PreparedRevision3QuestCollisionSourceV2,
     ) -> Result<Self, Revision3QuestCollisionCapabilityErrorV2> {
-        let selections = catalog.authoring_selections()?;
-        if base.generation() != catalog.generation()
-            || base.story_catalog_seal() != catalog.catalog_seal()
-        {
-            return Err(Revision3QuestCollisionCapabilityErrorV2::CatalogBindingMismatch);
-        }
-        let expected_target = authoring_generation(catalog.generation());
-        if source.target() != &expected_target {
-            return Err(Revision3QuestCollisionCapabilityErrorV2::TargetMismatch);
-        }
-        validate_source_bindings(&source)?;
-
-        let generation = authoring_generation(&selections.generation);
-        let parents = selections
-            .quest_parents
-            .into_iter()
-            .map(|parent| {
-                (
-                    parent.catalog_id,
-                    QuestParentInput {
-                        generation: generation.clone(),
-                        source_seal: authoring_seal(&parent.quest_class.source_seal),
-                        catalog_layer: parent.quest_class.catalog_layer,
-                        canonical_selector: parent.quest_class.authoring_selector,
-                        runtime_class: parent.quest_class.runtime_class,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        let givers = selections
-            .npcs
-            .into_iter()
-            .map(|npc| {
-                (
-                    npc.catalog_id,
-                    QuestGiverInput {
-                        generation: generation.clone(),
-                        source_seal: authoring_seal(&npc.quest_giver.source_seal),
-                        catalog_layer: npc.quest_giver.catalog_layer,
-                        canonical_selector: npc.quest_giver.authoring_selector,
-                        runtime_unique_name: npc.quest_giver.runtime_unique_name,
-                    },
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-
-        for prior in source.prior_quests().values() {
-            if !parents.values().any(|parent| parent == prior.parent()) {
-                return Err(
-                    Revision3QuestCollisionCapabilityErrorV2::PriorQuestParentDrift {
-                        quest: prior.quest_id(),
-                    },
-                );
-            }
-            if !givers.values().any(|giver| giver == prior.giver()) {
-                return Err(
-                    Revision3QuestCollisionCapabilityErrorV2::PriorQuestGiverDrift {
-                        quest: prior.quest_id(),
-                    },
-                );
-            }
-        }
-
-        let base_inventory_payload_seal = base.payload_seal().clone();
-        let story_catalog_seal = base.story_catalog_seal().clone();
-        let (base_modules, base_relative_paths, base_symbols) = base.into_collision_domains();
-        let mut budget = CollisionBudgetV2::default();
-        let mut modules = base_domain_map("module", base_modules, &mut budget)?;
-        let mut relative_paths =
-            base_domain_map("relative path", base_relative_paths, &mut budget)?;
-        let mut symbols = base_domain_map("symbol", base_symbols, &mut budget)?;
-
-        let nonquest = source.nonquest_basis().story_identities();
-        merge_current_domain(
-            "module",
-            &mut modules,
-            nonquest
-                .modules()
-                .iter()
-                .map(|(value, owner)| (value.as_str(), *owner)),
-            &mut budget,
-        )?;
-        merge_current_domain(
-            "relative path",
-            &mut relative_paths,
-            nonquest
-                .relative_paths()
-                .iter()
-                .map(|(value, owner)| (value.as_str(), *owner)),
-            &mut budget,
-        )?;
-        merge_current_domain(
-            "symbol",
-            &mut symbols,
-            nonquest
-                .symbols()
-                .iter()
-                .map(|(value, owner)| (value.as_str(), *owner)),
-            &mut budget,
-        )?;
-        for prior in source.prior_quests().values() {
-            merge_current_domain(
-                "module",
-                &mut modules,
-                std::iter::once((prior.module_namespace(), prior.quest_id())),
-                &mut budget,
-            )?;
-            merge_current_domain(
-                "relative path",
-                &mut relative_paths,
-                std::iter::once((prior.module_relative_path(), prior.quest_id())),
-                &mut budget,
-            )?;
-            merge_current_domain(
-                "symbol",
-                &mut symbols,
-                prior
-                    .symbols()
-                    .iter()
-                    .map(|symbol| (symbol.as_str(), prior.quest_id())),
-                &mut budget,
-            )?;
-        }
-
-        let modules = modules.into_keys().collect::<BTreeSet<_>>();
-        let relative_paths = relative_paths.into_keys().collect::<BTreeSet<_>>();
-        let symbols = symbols.into_keys().collect::<BTreeSet<_>>();
-        debug_assert_eq!(
-            budget.count,
-            modules.len() + relative_paths.len() + symbols.len()
-        );
-
-        let combined_source_seal = seal_combined_payload_v2(&CombinedPayloadV2 {
-            format: COMBINED_FORMAT_V2,
-            schema_revision: COMBINED_SCHEMA_REVISION_V2,
-            coverage: Revision3QuestCollisionCoverageV2::BaseGameAndExactRevision3ProjectOnly,
-            catalog_layer: BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2,
-            runtime_qualification: QuestCollisionRuntimeQualification::RuntimeUnqualified,
-            build_status: QuestCollisionBuildStatus::Blocked,
-            publication_status: QuestCollisionPublicationStatus::NotSupported,
-            base_inventory_payload_seal: &base_inventory_payload_seal,
-            story_catalog_seal: &story_catalog_seal,
-            project_id: source.project_id(),
-            project_revision: source.project_revision(),
-            project_target: source.target(),
-            current_head: source.current_head(),
-            current_project: source.current_project(),
-            nonquest_project: source.nonquest_basis().canonical_project(),
-            prior_quest_count: source.prior_quest_count_u64(),
-            prior_quest_evidence: source.prior_quest_evidence(),
-            modules: &modules,
-            relative_paths: &relative_paths,
-            symbols: &symbols,
-        })?;
+        let bound = bind_revision3_quest_collision_inputs_v2(base, catalog, &source)?;
 
         Ok(Self {
             source,
-            base_inventory_payload_seal,
-            story_catalog_seal,
-            combined_source_seal,
-            modules,
-            relative_paths,
-            symbols,
-            parents,
-            givers,
+            base_inventory_payload_seal: bound.base_inventory_payload_seal,
+            story_catalog_seal: bound.story_catalog_seal,
+            combined_source_seal: bound.combined_source_seal,
+            modules: bound.modules,
+            relative_paths: bound.relative_paths,
+            symbols: bound.symbols,
+            parents: bound.parents,
+            givers: bound.givers,
         })
     }
 
@@ -651,54 +879,11 @@ impl VerifiedRevision3QuestCollisionCapabilityV2 {
         self,
         artifact: &QuestCollisionCapabilityArtifactV2,
     ) -> Result<Self, Revision3QuestCollisionCapabilityArtifactVerificationErrorV2> {
-        let expected = self.materialize_artifact_identity(&artifact.canonical_json)?;
-        if artifact.base_inventory_payload_seal != self.base_inventory_payload_seal {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::BaseInventoryPayloadSealMismatch);
-        }
-        if artifact.story_catalog_seal != self.story_catalog_seal {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::StoryCatalogSealMismatch);
-        }
-        if artifact.project_id != self.project_id() {
-            return Err(
-                Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectIdMismatch,
-            );
-        }
-        if artifact.project_revision != self.project_revision() {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectRevisionMismatch);
-        }
-        if artifact.project_target != *self.project_target() {
-            return Err(
-                Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectTargetMismatch,
-            );
-        }
-        if artifact.current_head != *self.current_head() {
-            return Err(
-                Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CurrentHeadMismatch,
-            );
-        }
-        if artifact.current_project != *self.current_project() {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CurrentProjectMismatch);
-        }
-        if artifact.nonquest_project != *self.nonquest_project() {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::NonQuestProjectMismatch);
-        }
-        if artifact.prior_quest_count != self.prior_quest_count() {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::PriorQuestCountMismatch);
-        }
-        if artifact.prior_quest_evidence != *self.prior_quest_evidence() {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::PriorQuestEvidenceMismatch);
-        }
-        if expected.source_seal != self.combined_source_seal
-            || artifact.source_seal != expected.source_seal
-        {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::SemanticSourceSealMismatch);
-        }
-        if !expected.canonical_matches {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CanonicalIdentityMismatch);
-        }
-        if artifact.artifact_seal != expected.artifact_seal {
-            return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::RawArtifactSealMismatch);
-        }
+        verify_revision3_quest_collision_artifact_exact_v2(
+            self.combined_payload(),
+            &self.combined_source_seal,
+            artifact,
+        )?;
         Ok(self)
     }
 
@@ -795,16 +980,6 @@ impl VerifiedRevision3QuestCollisionCapabilityV2 {
         canonical_combined_payload_v2(&self.combined_payload())
     }
 
-    fn materialize_artifact_identity(
-        &self,
-        expected_canonical: &[u8],
-    ) -> Result<
-        MaterializedArtifactIdentityV2,
-        Revision3QuestCollisionCapabilityArtifactVerificationErrorV2,
-    > {
-        materialize_artifact_identity_v2(&self.combined_payload(), expected_canonical)
-    }
-
     fn combined_payload(&self) -> CombinedPayloadV2<'_> {
         CombinedPayloadV2 {
             format: COMBINED_FORMAT_V2,
@@ -824,6 +999,108 @@ impl VerifiedRevision3QuestCollisionCapabilityV2 {
             nonquest_project: self.nonquest_project(),
             prior_quest_count: self.prior_quest_count(),
             prior_quest_evidence: self.prior_quest_evidence(),
+            modules: &self.modules,
+            relative_paths: &self.relative_paths,
+            symbols: &self.symbols,
+        }
+    }
+}
+
+impl VerifiedRevision3QuestCollisionInspectionCapabilityV2 {
+    /// Bind trusted base/catalog inputs to one store-reconstructed historical source.
+    ///
+    /// Successful binding still grants no reusable authoring authority. The result has exactly
+    /// one public consuming verification operation and cannot resolve catalog entries or create a
+    /// replacement artifact.
+    pub fn bind(
+        base: BaseGameCollisionInventory,
+        catalog: &StoryCatalogFile,
+        source: PreparedRevision3QuestCollisionInspectionSourceV2,
+    ) -> Result<Self, Revision3QuestCollisionCapabilityErrorV2> {
+        let bound = bind_revision3_quest_collision_inputs_v2(base, catalog, &source)?;
+        Ok(Self {
+            source,
+            base_inventory_payload_seal: bound.base_inventory_payload_seal,
+            story_catalog_seal: bound.story_catalog_seal,
+            combined_source_seal: bound.combined_source_seal,
+            modules: bound.modules,
+            relative_paths: bound.relative_paths,
+            symbols: bound.symbols,
+            parents: bound.parents,
+            givers: bound.givers,
+        })
+    }
+
+    /// Consume the inspection capability, require exact artifact identity and exact catalog-backed
+    /// Quest context, and return only the plain collision input needed to regenerate source.
+    pub fn verify_artifact_for_quest(
+        self,
+        artifact: &QuestCollisionCapabilityArtifactV2,
+        parent: &QuestParentInput,
+        giver: &QuestGiverInput,
+    ) -> Result<QuestCollisionCatalogInput, Revision3QuestCollisionInspectionVerificationErrorV2>
+    {
+        self.verify_artifact_exact(artifact)?;
+        if !self.parents.values().any(|candidate| candidate == parent) {
+            return Err(Revision3QuestCollisionInspectionVerificationErrorV2::UnauthorizedParent);
+        }
+        if !self.givers.values().any(|candidate| candidate == giver) {
+            return Err(Revision3QuestCollisionInspectionVerificationErrorV2::UnauthorizedGiver);
+        }
+
+        let Self {
+            source,
+            base_inventory_payload_seal: _,
+            story_catalog_seal: _,
+            combined_source_seal,
+            modules,
+            relative_paths,
+            symbols,
+            parents: _,
+            givers: _,
+        } = self;
+        let generation = source.target().clone();
+        drop(source);
+        Ok(QuestCollisionCatalogInput {
+            generation,
+            source_seal: authoring_seal(&combined_source_seal),
+            catalog_layer: BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2.to_owned(),
+            modules,
+            relative_paths,
+            symbols,
+        })
+    }
+
+    fn verify_artifact_exact(
+        &self,
+        artifact: &QuestCollisionCapabilityArtifactV2,
+    ) -> Result<(), Revision3QuestCollisionCapabilityArtifactVerificationErrorV2> {
+        verify_revision3_quest_collision_artifact_exact_v2(
+            self.combined_payload(),
+            &self.combined_source_seal,
+            artifact,
+        )
+    }
+
+    fn combined_payload(&self) -> CombinedPayloadV2<'_> {
+        CombinedPayloadV2 {
+            format: COMBINED_FORMAT_V2,
+            schema_revision: COMBINED_SCHEMA_REVISION_V2,
+            coverage: Revision3QuestCollisionCoverageV2::BaseGameAndExactRevision3ProjectOnly,
+            catalog_layer: BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2,
+            runtime_qualification: QuestCollisionRuntimeQualification::RuntimeUnqualified,
+            build_status: QuestCollisionBuildStatus::Blocked,
+            publication_status: QuestCollisionPublicationStatus::NotSupported,
+            base_inventory_payload_seal: &self.base_inventory_payload_seal,
+            story_catalog_seal: &self.story_catalog_seal,
+            project_id: self.source.project_id(),
+            project_revision: self.source.project_revision(),
+            project_target: self.source.target(),
+            current_head: self.source.historical_head(),
+            current_project: self.source.historical_project(),
+            nonquest_project: self.source.nonquest_basis().canonical_project(),
+            prior_quest_count: self.source.prior_quest_count_u64(),
+            prior_quest_evidence: self.source.prior_quest_evidence(),
             modules: &self.modules,
             relative_paths: &self.relative_paths,
             symbols: &self.symbols,
@@ -971,6 +1248,16 @@ pub enum Revision3QuestCollisionCapabilityArtifactVerificationErrorV2 {
     Limit { actual: usize, max: usize },
     #[error("could not serialize source-bound revision-3 artifact identity: {0}")]
     Serialize(#[source] serde_json::Error),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Revision3QuestCollisionInspectionVerificationErrorV2 {
+    #[error(transparent)]
+    Artifact(#[from] Revision3QuestCollisionCapabilityArtifactVerificationErrorV2),
+    #[error("persisted Quest parent is absent from the freshly bound Story catalog")]
+    UnauthorizedParent,
+    #[error("persisted Quest giver is absent from the freshly bound Story catalog")]
+    UnauthorizedGiver,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1182,9 +1469,10 @@ fn validate_catalog_query_v2(
     Ok(())
 }
 
-fn validate_source_bindings(
-    source: &PreparedRevision3QuestCollisionSourceV2,
-) -> Result<(), Revision3QuestCollisionCapabilityErrorV2> {
+fn validate_source_bindings<S>(source: &S) -> Result<(), Revision3QuestCollisionCapabilityErrorV2>
+where
+    S: Revision3QuestCollisionSourceViewV2,
+{
     let identities = source.nonquest_basis().story_identities();
     if identities.project_id() != source.project_id()
         || identities.project_revision() != source.project_revision()
@@ -1600,6 +1888,77 @@ struct MaterializedArtifactIdentityV2 {
     artifact_seal: ContentSeal,
     source_seal: ContentSeal,
     canonical_matches: bool,
+}
+
+fn verify_revision3_quest_collision_artifact_exact_v2(
+    payload: CombinedPayloadV2<'_>,
+    combined_source_seal: &ContentSeal,
+    artifact: &QuestCollisionCapabilityArtifactV2,
+) -> Result<(), Revision3QuestCollisionCapabilityArtifactVerificationErrorV2> {
+    let expected = materialize_artifact_identity_v2(&payload, &artifact.canonical_json)?;
+    if artifact.base_inventory_payload_seal != *payload.base_inventory_payload_seal {
+        return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::BaseInventoryPayloadSealMismatch);
+    }
+    if artifact.story_catalog_seal != *payload.story_catalog_seal {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::StoryCatalogSealMismatch,
+        );
+    }
+    if artifact.project_id != payload.project_id {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectIdMismatch,
+        );
+    }
+    if artifact.project_revision != payload.project_revision {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectRevisionMismatch,
+        );
+    }
+    if artifact.project_target != *payload.project_target {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::ProjectTargetMismatch,
+        );
+    }
+    if artifact.current_head != *payload.current_head {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CurrentHeadMismatch,
+        );
+    }
+    if artifact.current_project != *payload.current_project {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CurrentProjectMismatch,
+        );
+    }
+    if artifact.nonquest_project != *payload.nonquest_project {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::NonQuestProjectMismatch,
+        );
+    }
+    if artifact.prior_quest_count != payload.prior_quest_count {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::PriorQuestCountMismatch,
+        );
+    }
+    if artifact.prior_quest_evidence != *payload.prior_quest_evidence {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::PriorQuestEvidenceMismatch,
+        );
+    }
+    if expected.source_seal != *combined_source_seal || artifact.source_seal != expected.source_seal
+    {
+        return Err(Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::SemanticSourceSealMismatch);
+    }
+    if !expected.canonical_matches {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::CanonicalIdentityMismatch,
+        );
+    }
+    if artifact.artifact_seal != expected.artifact_seal {
+        return Err(
+            Revision3QuestCollisionCapabilityArtifactVerificationErrorV2::RawArtifactSealMismatch,
+        );
+    }
+    Ok(())
 }
 
 fn materialize_artifact_identity_v2(
