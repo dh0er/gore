@@ -29,12 +29,15 @@ import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
+import 'project/revision3_content_index.dart';
 import 'project/revision3_content_library.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_npc_authoring.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
+import 'project/revision3_quest_outline_authoring.dart';
+import 'project/revision3_quest_outline_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
@@ -735,6 +738,15 @@ class _HomePageState extends ConsumerState<HomePage>
                 gameRoot: gameRoot,
                 input: input,
               ),
+          editQuestOutline: ({required input}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .editCurrentRevision3QuestOutline(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                input: input,
+              ),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -879,6 +891,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.publishNpcDraft,
     required this.loadQuestCatalog,
     required this.publishQuestDraft,
+    required this.editQuestOutline,
   });
 
   final ManagedRevision3CurrentProjectState project;
@@ -903,6 +916,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3NpcDraftPublisher publishNpcDraft;
   final Revision3QuestCatalogLoader loadQuestCatalog;
   final Revision3QuestDraftPublisher publishQuestDraft;
+  final Revision3QuestOutlineEditPublisher editQuestOutline;
 
   @override
   Widget build(BuildContext context) {
@@ -1164,6 +1178,13 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                               projectHeadCanonicalJson:
                                   project.head.canonicalJson,
                               load: loadContentIndex,
+                              editQuestOutline: project.requiresReopen
+                                  ? null
+                                  : (index, quest) => _openQuestOutlineEditor(
+                                      context,
+                                      index,
+                                      quest,
+                                    ),
                             ),
                             Revision3DataAssetStagePanel(
                               projectRoot: project.root.path,
@@ -1278,6 +1299,30 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       SnackBar(
         content: Text(
           'Quest draft saved in project revision ${publication.projectRevision}. It remains build-blocked and runtime-unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openQuestOutlineEditor(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity quest,
+  ) async {
+    if (project.requiresReopen) return;
+    final publication = await showDialog<Revision3QuestOutlineEditPublication>(
+      context: context,
+      builder: (context) => Revision3QuestOutlineEditDialog(
+        index: index,
+        quest: quest,
+        publish: editQuestOutline,
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Quest outline saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
         ),
       ),
     );

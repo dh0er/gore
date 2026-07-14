@@ -661,6 +661,29 @@ final class Revision3ContentDialogLineSummary {
   final List<String> voiceSlotLocales;
 }
 
+/// Structured QuestDraft facts retained from the exact-current projection.
+///
+/// These values are the safe authoring seed for the outline editor. In
+/// particular, objective order is semantic and must never be reconstructed
+/// from presentation strings or reference ordering.
+final class Revision3ContentQuestDraftSummary {
+  Revision3ContentQuestDraftSummary({
+    required this.technicalId,
+    required this.title,
+    required List<String> objectiveTitles,
+    required this.moduleNamespace,
+    required this.parentRuntimeClass,
+    required this.giverRuntimeUniqueName,
+  }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles);
+
+  final String technicalId;
+  final String title;
+  final List<String> objectiveTitles;
+  final String moduleNamespace;
+  final String parentRuntimeClass;
+  final String giverRuntimeUniqueName;
+}
+
 final class Revision3ContentSummary {
   const Revision3ContentSummary._({
     required this.primaryIdentity,
@@ -669,6 +692,7 @@ final class Revision3ContentSummary {
     required this.dialogLine,
     required this.voiceSlot,
     required this.voiceTake,
+    required this.questDraft,
   });
 
   final String primaryIdentity;
@@ -677,6 +701,7 @@ final class Revision3ContentSummary {
   final Revision3ContentDialogLineSummary? dialogLine;
   final Revision3ContentVoiceSlotSummary? voiceSlot;
   final Revision3ContentVoiceTakeSummary? voiceTake;
+  final Revision3ContentQuestDraftSummary? questDraft;
 
   factory Revision3ContentSummary._fromJson(
     Map<String, Object?> json,
@@ -695,6 +720,7 @@ final class Revision3ContentSummary {
     Revision3ContentDialogLineSummary? dialogLine;
     Revision3ContentVoiceSlotSummary? voiceSlot;
     Revision3ContentVoiceTakeSummary? voiceTake;
+    Revision3ContentQuestDraftSummary? questDraft;
     switch (entityKind) {
       case Revision3ContentEntityKind.localizationEntry:
         _requireKeys(data, const ['loc_id', 'locales'], '$context data');
@@ -881,6 +907,14 @@ final class Revision3ContentSummary {
           data['giver_runtime_unique_name'],
           '$context giver_runtime_unique_name',
         );
+        questDraft = Revision3ContentQuestDraftSummary(
+          technicalId: primary,
+          title: title,
+          objectiveTitles: <String>[objective, ...additionalObjectives],
+          moduleNamespace: namespace,
+          parentRuntimeClass: parent,
+          giverRuntimeUniqueName: giver,
+        );
         secondary = title.isEmpty ? objective : title;
         terms.addAll([
           title,
@@ -926,6 +960,7 @@ final class Revision3ContentSummary {
       dialogLine: dialogLine,
       voiceSlot: voiceSlot,
       voiceTake: voiceTake,
+      questDraft: questDraft,
     );
   }
 }

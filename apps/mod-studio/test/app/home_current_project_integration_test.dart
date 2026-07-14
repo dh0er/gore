@@ -21,12 +21,14 @@ import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
@@ -220,6 +222,117 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'selected Library Quest opens count-preserving outline edit and refreshes selection',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      var currentFixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\quest-outline-authoring'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) => currentFixture.contentIndex(),
+        onQuestOutlinePublish: (lease, input) {
+          expect(input.questId, revision3QuestOutlineQuestId);
+          expect(input.moduleId, revision3QuestOutlineModuleId);
+          expect(input.objectiveTitles, currentFixture.objectiveTitles);
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          currentFixture = Revision3QuestOutlineFixture(
+            projectRevision: 8,
+            questRevision: 5,
+            moduleRevision: 6,
+            displayName: input.displayName,
+            title: input.title,
+            objectiveTitles: input.objectiveTitles,
+          );
+          return Revision3QuestOutlineEditPublication(
+            projectId: revision3QuestOutlineProjectId,
+            projectRevision: 8,
+            questId: input.questId,
+            moduleId: input.moduleId,
+            questRevision: 5,
+            moduleRevision: 6,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final edit = find.byKey(
+        const Key(
+          'revision3-content-edit-quest-outline-$revision3QuestOutlineQuestId',
+        ),
+      );
+      if (edit.evaluate().isEmpty) {
+        await tester.tap(
+          find.byKey(
+            const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        if (edit.evaluate().isEmpty) {
+          await tester.drag(
+            find.byKey(const Key('revision3-content-entity-details')),
+            const Offset(0, -300),
+          );
+          await tester.pump();
+        }
+      }
+      expect(edit, findsOneWidget);
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-outline-objective-add')),
+        findsNothing,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-outline-title')),
+        'Find Homer safely',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
+      await tester.pumpAndSettle();
+
+      expect(managed.questOutlinePublishCalls, 1);
+      expect(managed.contentReadCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+      expect(currentFixture.title, 'Find Homer safely');
+      final selectedQuest = find.byKey(
+        const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+      );
+      expect(
+        tester.widget<ListTile>(selectedQuest).selected,
+        isTrue,
+        reason: 'the same Quest remains selected across the exact-head reload',
+      );
+      expect(
+        find.textContaining(
+          'Build remains blocked; runtime remains unqualified',
+        ),
+        findsOneWidget,
+      );
     },
   );
 
@@ -1240,6 +1353,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.verificationError,
     this.onNpcPublish,
     this.onQuestPublish,
+    this.onQuestOutlinePublish,
     this.onVoicePublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
@@ -1271,6 +1385,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestDraftAuthoringInput input,
   )?
   onQuestPublish;
+  final Revision3QuestOutlineEditPublication Function(
+    _FakeManagedLease lease,
+    Revision3QuestOutlineEditInput input,
+  )?
+  onQuestOutlinePublish;
   final Revision3VoiceTakePublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -1315,6 +1434,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int contentReadCalls = 0;
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int questOutlinePublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
@@ -1348,6 +1468,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest publisher');
     }
     return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<Revision3QuestOutlineEditPublication>
+  prepareAndPublishQuestOutlineEditV1({
+    required Revision3QuestOutlineEditInput input,
+  }) async {
+    questOutlinePublishCalls++;
+    final publish = onQuestOutlinePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest outline publisher');
+    }
+    return publish(this, input);
   }
 
   @override

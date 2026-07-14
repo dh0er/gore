@@ -3,13 +3,20 @@ import 'package:flutter/material.dart';
 import 'revision3_content_index.dart';
 
 typedef Revision3ContentIndexLoader = Future<Revision3ContentIndex> Function();
+typedef Revision3QuestOutlineEditor =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity quest,
+    );
 
 enum _ContentMode { entities, assets }
 
 /// First real managed-R3 content surface.
 ///
-/// It is deliberately read-only: the native index proves exact-current project content and
-/// reference shape, but does not grant build, publication, deployment, or runtime authority.
+/// The native index proves exact-current project content and reference shape.
+/// Its only write entry point is the explicitly supplied, count-preserving Quest
+/// outline editor; no build, publication, deployment, or runtime authority is
+/// implied.
 class Revision3ContentLibrary extends StatefulWidget {
   const Revision3ContentLibrary({
     required this.projectRoot,
@@ -17,6 +24,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     required this.projectRevision,
     required this.projectHeadCanonicalJson,
     required this.load,
+    this.editQuestOutline,
     super.key,
   });
 
@@ -25,6 +33,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final int projectRevision;
   final String projectHeadCanonicalJson;
   final Revision3ContentIndexLoader load;
+  final Revision3QuestOutlineEditor? editQuestOutline;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -56,11 +65,16 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         oldWidget.projectId != widget.projectId ||
         oldWidget.projectRevision != widget.projectRevision ||
         oldWidget.projectHeadCanonicalJson != widget.projectHeadCanonicalJson) {
-      _search.clear();
-      _mode = _ContentMode.entities;
-      _kind = null;
-      _selectedEntityId = null;
-      _selectedAssetSha256 = null;
+      final changedProject =
+          oldWidget.projectRoot != widget.projectRoot ||
+          oldWidget.projectId != widget.projectId;
+      if (changedProject) {
+        _search.clear();
+        _mode = _ContentMode.entities;
+        _kind = null;
+        _selectedEntityId = null;
+        _selectedAssetSha256 = null;
+      }
       _reload(clearCurrent: true);
     }
   }
@@ -221,6 +235,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                     Navigator.of(context).pop();
                     _selectAsset(index, sha256);
                   },
+                  onEditQuestOutline: widget.editQuestOutline == null
+                      ? null
+                      : () => widget.editQuestOutline!(index, entity),
                 ),
               );
             }
@@ -243,6 +260,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       onOpenEntity: (entityId) =>
                           _selectEntity(index, entityId),
                       onOpenAsset: (sha256) => _selectAsset(index, sha256),
+                      onEditQuestOutline: widget.editQuestOutline == null
+                          ? null
+                          : () => widget.editQuestOutline!(index, selected),
                     ),
             ),
           ],
@@ -640,12 +660,14 @@ class _EntityDetails extends StatelessWidget {
     required this.entity,
     required this.onOpenEntity,
     required this.onOpenAsset,
+    required this.onEditQuestOutline,
   });
 
   final Revision3ContentIndex index;
   final Revision3ContentEntity entity;
   final ValueChanged<String> onOpenEntity;
   final ValueChanged<String> onOpenAsset;
+  final Future<void> Function()? onEditQuestOutline;
 
   @override
   Widget build(BuildContext context) {
@@ -666,6 +688,20 @@ class _EntityDetails extends StatelessWidget {
             ),
           ),
           Text(entity.kind.displayName),
+          if (entity.kind == Revision3ContentEntityKind.questDraft &&
+              entity.summary.questDraft != null &&
+              onEditQuestOutline != null) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.tonalIcon(
+                key: Key('revision3-content-edit-quest-outline-${entity.id}'),
+                onPressed: onEditQuestOutline,
+                icon: const Icon(Icons.edit_note_outlined),
+                label: const Text('Edit quest outline'),
+              ),
+            ),
+          ],
           const Divider(height: 28),
           _Detail(
             label: 'Semantic identity',

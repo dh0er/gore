@@ -12,6 +12,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
+import 'revision3_quest_outline_authoring.dart';
 import 'revision3_voice_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
@@ -136,6 +137,10 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
+  });
+  Future<Revision3QuestOutlineEditPublication>
+  prepareAndPublishQuestOutlineEditV1({
+    required Revision3QuestOutlineEditInput input,
   });
   Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
     required String gameRoot,
@@ -282,6 +287,30 @@ final class _ManagedRevision3SessionLease
       projectRevision: checkpoint.projectRevision,
       questId: checkpoint.questId,
       scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
+
+  @override
+  Future<Revision3QuestOutlineEditPublication>
+  prepareAndPublishQuestOutlineEditV1({
+    required Revision3QuestOutlineEditInput input,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishQuestOutlineEditV1(
+      questId: input.questId,
+      expectedQuestRevision: input.expectedQuestRevision,
+      expectedModuleId: input.moduleId,
+      expectedModuleRevision: input.expectedModuleRevision,
+      displayName: input.displayName,
+      title: input.title,
+      objectiveTitles: input.objectiveTitles,
+    );
+    return Revision3QuestOutlineEditPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      questId: checkpoint.questId,
+      moduleId: checkpoint.moduleId,
+      questRevision: checkpoint.questRevision,
+      moduleRevision: checkpoint.moduleRevision,
     );
   }
 
@@ -730,6 +759,64 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3QuestDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Edit one selected exact-current Quest outline without a game root. The
+  /// selected Quest/module revisions and visible project checkpoint are all
+  /// checked before entering the managed publication lane.
+  Future<Revision3QuestOutlineEditPublication>
+  editCurrentRevision3QuestOutline({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3QuestOutlineEditInput input,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest outline editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestOutlineRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestOutlineStaleCheckpointException();
+    }
+    try {
+      final publication = await lease.prepareAndPublishQuestOutlineEditV1(
+        input: input,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.questId != input.questId ||
+          publication.moduleId != input.moduleId ||
+          publication.questRevision != input.expectedQuestRevision + 1 ||
+          publication.moduleRevision != input.expectedModuleRevision + 1) {
+        throw const CurrentProjectCoordinatorException(
+          'published Quest outline disagrees with the selected managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestOutlineRequiresReopenException(),
           stackTrace,
         );
       }

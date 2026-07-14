@@ -17,6 +17,7 @@ import '../dataasset/dataasset_test_fixtures.dart';
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
+import '../support/revision3_quest_outline_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
 
 void main() {
@@ -936,6 +937,170 @@ void main() {
       expect(session.requiresReopen, isTrue);
       expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
       await session.close();
+    },
+  );
+
+  test(
+    'Quest outline edit publishes through full reopen CAS without a game root',
+    () async {
+      final outline = Revision3QuestOutlineFixture();
+      final root = await _projectRoot(fixture, suffix: 'quest_outline');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: outline.projectJson,
+      );
+
+      final published = await session.prepareAndPublishQuestOutlineEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: outline.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: outline.moduleRevision,
+        displayName: 'Find Homer safely',
+        title: 'Find Homer safely',
+        objectiveTitles: const [
+          'Inspect the old gate',
+          'Ask Asghan about Homer',
+          'Report to Diego',
+        ],
+      );
+
+      expect(store.questOutlinePrepareCalls, 1);
+      expect(published.projectRevision, 8);
+      expect(published.questRevision, 5);
+      expect(published.moduleRevision, 6);
+      expect(session.projectRevision, 8);
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 8);
+      expect(reopened.projectJson, published.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Quest outline semantic rejection retries but integrity failure poisons',
+    () async {
+      final outline = Revision3QuestOutlineFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_outline_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: outline.projectJson,
+      );
+      retryStore.nextQuestOutlineError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_NO_CHANGES',
+        message: 'fake semantic no-op',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishQuestOutlineEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: outline.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: outline.moduleRevision,
+          displayName: 'Find Homer safely',
+          title: 'Find Homer safely',
+          objectiveTitles: const [
+            'Inspect the old gate',
+            'Ask Asghan about Homer',
+            'Report to Diego',
+          ],
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_QUEST_OUTLINE_NO_CHANGES',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.prepareAndPublishQuestOutlineEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: outline.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: outline.moduleRevision,
+        displayName: 'Find Homer safely',
+        title: 'Find Homer safely',
+        objectiveTitles: const [
+          'Inspect the old gate',
+          'Ask Asghan about Homer',
+          'Report to Diego',
+        ],
+      );
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_outline_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: outline.projectJson,
+          );
+      poisonStore.nextQuestOutlineError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_PROJECT_INVALID',
+        message: 'fake integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishQuestOutlineEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: outline.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: outline.moduleRevision,
+          displayName: 'Find Homer safely',
+          title: 'Find Homer safely',
+          objectiveTitles: const [
+            'Inspect the old gate',
+            'Ask Asghan about Homer',
+            'Report to Diego',
+          ],
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.questOutlinePrepareCalls;
+      await expectLater(
+        poisonSession.prepareAndPublishQuestOutlineEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: outline.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: outline.moduleRevision,
+          displayName: 'Another name',
+          title: 'Another title',
+          objectiveTitles: const [
+            'Inspect the old gate',
+            'Ask Asghan about Homer',
+            'Report to Diego',
+          ],
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.questOutlinePrepareCalls, calls);
+      await poisonSession.close();
     },
   );
 
@@ -2472,6 +2637,9 @@ DataAssetSemanticEditIntent _semanticDataAssetIntent() {
 }
 
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
+  _FakeRevision3Store({this.sealRegisteredHeads = false});
+
+  final bool sealRegisteredHeads;
   final Map<String, String> _projectsByHead = <String, String>{};
   final List<AuthoringAssetVerification> openVerifications =
       <AuthoringAssetVerification>[];
@@ -2481,6 +2649,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int _sequence = 0;
   int prepareCalls = 0;
   int questPrepareCalls = 0;
+  int questOutlinePrepareCalls = 0;
   int npcPrepareCalls = 0;
   int voicePrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
@@ -2516,6 +2685,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> voiceBuildGameRoots = <String>[];
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
+  ModFfiException? nextQuestOutlineError;
   Object? nextNpcError;
   Object? nextVoiceError;
   Object? nextVoiceTargetError;
@@ -2535,7 +2705,9 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
 
   AuthoringWorkingHead register(String projectJson) {
     _sequence++;
-    final sha = _sequence.toRadixString(16).padLeft(64, '0');
+    final sha = sealRegisteredHeads
+        ? crypto.sha256.convert(utf8.encode(projectJson)).toString()
+        : _sequence.toRadixString(16).padLeft(64, '0');
     final head = AuthoringWorkingHead.fromCanonicalJson(
       jsonEncode(<String, Object?>{
         'store_format': 1,
@@ -2739,6 +2911,46 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
         message: error.message.toString(),
       );
     }
+  }
+
+  @override
+  Future<AuthoringRevision3QuestOutlineEditPreparation>
+  prepareQuestOutlineEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV1 request,
+  }) async {
+    questOutlinePrepareCalls++;
+    final injected = nextQuestOutlineError;
+    nextQuestOutlineError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_outline_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_HEAD_CONFLICT',
+        message: 'fake native Quest outline basis CAS rejected',
+      );
+    }
+    final fixture = Revision3QuestOutlineFixture();
+    if (currentProjectJson != fixture.projectJson) {
+      throw StateError('fake outline fixture received an unexpected basis');
+    }
+    final response = fixture.response(
+      displayName: request.displayName,
+      title: request.title,
+      objectiveTitles: request.objectiveTitles,
+    );
+    response['basis_head_json'] = request.expectedHead.canonicalJson;
+    final candidateProject = response['project_json']! as String;
+    final candidateHead = register(candidateProject);
+    response['head_json'] = candidateHead.canonicalJson;
+    return AuthoringRevision3QuestOutlineEditPreparation.fromJson(
+      response,
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
   }
 
   @override

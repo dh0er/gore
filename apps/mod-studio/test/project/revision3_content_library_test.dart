@@ -51,6 +51,21 @@ void main() {
     expect(find.text('GORE_GATE_GUARD'), findsWidgets);
   });
 
+  testWidgets('hides Quest outline editing without an edit lease', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLoadedLibrary(tester);
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+
+    expect(
+      find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
+      findsNothing,
+    );
+  });
+
   testWidgets('searches content and filters by semantic kind', (tester) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
     await _pumpLoadedLibrary(tester);

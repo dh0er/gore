@@ -11,11 +11,13 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
@@ -708,6 +710,140 @@ void main() {
         throwsA(isA<Revision3QuestDraftRequiresReopenException>()),
       );
       expect(managed.questPublishCalls, 1);
+    },
+  );
+
+  test(
+    'Quest outline edit is exact-checkpoint bound and needs no game root',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final index = fixture.contentIndex();
+      final input = Revision3QuestOutlineEditInput.forQuest(
+        index: index,
+        quest: index.entityById(revision3QuestOutlineQuestId)!,
+        displayName: 'Find Homer safely',
+        title: 'Find Homer safely',
+        objectiveTitles: const [
+          'Inspect the old gate',
+          'Ask Asghan about Homer',
+          'Report to Diego',
+        ],
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-outline'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onQuestOutlinePublish: (lease, received) {
+          expect(received, same(input));
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3QuestOutlineEditPublication(
+            projectId: revision3QuestOutlineProjectId,
+            projectRevision: 8,
+            questId: revision3QuestOutlineQuestId,
+            moduleId: revision3QuestOutlineModuleId,
+            questRevision: 5,
+            moduleRevision: 6,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final publication = await coordinator.editCurrentRevision3QuestOutline(
+        expectedRoot: managed.root.path,
+        expectedProjectId: revision3QuestOutlineProjectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        input: input,
+      );
+
+      expect(publication.projectRevision, 8);
+      expect(managed.questOutlinePublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+    },
+  );
+
+  test(
+    'Quest outline stale/reopen guards make zero additional lease calls',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final index = fixture.contentIndex();
+      final input = Revision3QuestOutlineEditInput.forQuest(
+        index: index,
+        quest: index.entityById(revision3QuestOutlineQuestId)!,
+        displayName: 'Find Homer safely',
+        title: 'Find Homer safely',
+        objectiveTitles: const [
+          'Inspect the old gate',
+          'Ask Asghan about Homer',
+          'Report to Diego',
+        ],
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-outline-guard'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onQuestOutlinePublish: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected outline verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.editCurrentRevision3QuestOutline(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(6),
+          input: input,
+        ),
+        throwsA(isA<Revision3QuestOutlineStaleCheckpointException>()),
+      );
+      expect(managed.questOutlinePublishCalls, 0);
+
+      await expectLater(
+        coordinator.editCurrentRevision3QuestOutline(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          input: input,
+        ),
+        throwsA(isA<Revision3QuestOutlineRequiresReopenException>()),
+      );
+      expect(managed.questOutlinePublishCalls, 1);
+      await expectLater(
+        coordinator.editCurrentRevision3QuestOutline(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          input: input,
+        ),
+        throwsA(isA<Revision3QuestOutlineRequiresReopenException>()),
+      );
+      expect(managed.questOutlinePublishCalls, 1);
     },
   );
 
@@ -1544,6 +1680,11 @@ typedef _QuestPublishHook =
       String gameRoot,
       Revision3QuestDraftAuthoringInput input,
     );
+typedef _QuestOutlinePublishHook =
+    FutureOr<Revision3QuestOutlineEditPublication> Function(
+      _FakeManagedLease lease,
+      Revision3QuestOutlineEditInput input,
+    );
 typedef _NpcPublishHook =
     FutureOr<Revision3NpcDraftPublication> Function(
       _FakeManagedLease lease,
@@ -1594,6 +1735,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onVerify,
     this.onNpcPublish,
     this.onQuestPublish,
+    this.onQuestOutlinePublish,
     this.onVoicePublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
@@ -1616,6 +1758,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _VerifyHook? onVerify;
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
+  final _QuestOutlinePublishHook? onQuestOutlinePublish;
   final _VoicePublishHook? onVoicePublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
   final _VoiceBuildHook? onVoiceBuild;
@@ -1631,6 +1774,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int contentReadCalls = 0;
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int questOutlinePublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
@@ -1675,6 +1819,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest publisher');
     }
     return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<Revision3QuestOutlineEditPublication>
+  prepareAndPublishQuestOutlineEditV1({
+    required Revision3QuestOutlineEditInput input,
+  }) async {
+    questOutlinePublishCalls++;
+    final publish = onQuestOutlinePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest outline publisher');
+    }
+    return publish(this, input);
   }
 
   @override
