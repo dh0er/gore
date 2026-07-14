@@ -136,12 +136,17 @@
 //! - `dataasset_fixed_inspect_v1` accepts exactly `{uasset_path, usmap_path, export_index?}` and
 //!   performs a bounded, offline-only G1R UE5.4 fixed-leaf inspection. It returns exact content
 //!   seals and offset-free selectors without paths, patching, deployment, or runtime claims.
+//! - `authoring_store_inspect_revision3_installed_dataasset_v1` accepts only one exact managed
+//!   revision-3 head, installed package-snapshot seals, game/Store roots, and a candidate ordinal.
+//!   It rebuilds every native authority and returns bounded whole-package fixed-leaf inspection
+//!   evidence without accepting package, output, or USMAP paths.
 
 mod authoring;
 mod authoring_content_revision3;
 mod authoring_dataasset_package_index_revision3;
 mod authoring_dataasset_revision3;
 mod authoring_drafts;
+mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
 mod authoring_store;
 mod authoring_story;
@@ -196,6 +201,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_read_dataasset_extract_receipt_v2",
     "authoring_store_build_revision3_voice_v1",
     "authoring_store_import_ogg",
+    "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
     "authoring_store_inspect_revision3_quest_source_v1",
     "authoring_store_list_revision3_dataasset_stages_v1",
@@ -477,6 +483,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_build_revision3_voice_v1" => {
             Some(authoring_voice_build_revision3::build_revision3_voice_v1_raw)
         }
+        "authoring_store_inspect_revision3_installed_dataasset_v1" => Some(
+            authoring_installed_dataasset_inspection_revision3::inspect_revision3_installed_dataasset_v1_raw,
+        ),
         "authoring_store_inspect_revision3_npc_source_v1" => Some(
             authoring_story_npc_inspection_revision3::inspect_revision3_npc_source_v1_raw,
         ),
@@ -1546,6 +1555,7 @@ mod tests {
                     "authoring_read_dataasset_extract_receipt_v2",
                     "authoring_store_build_revision3_voice_v1",
                     "authoring_store_import_ogg",
+                    "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
                     "authoring_store_inspect_revision3_quest_source_v1",
                     "authoring_store_list_revision3_dataasset_stages_v1",
