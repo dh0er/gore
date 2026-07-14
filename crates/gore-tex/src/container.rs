@@ -32,7 +32,7 @@ use retoc::script_objects::FPackageObjectIndex;
 use retoc::zen::FZenPackageHeader;
 use retoc::{
     Config, EIoChunkType, EIoStoreTocVersion, FIoChunkId, FIoChunkIdRaw, FIoContainerId,
-    FPackageId, FSFileWriter, UEPath, UEPathBuf,
+    FPackageId, FSFileWriter, FileWriterTrait, UEPath, UEPathBuf,
 };
 
 use crate::error::{Result, TexError};
@@ -62,6 +62,37 @@ pub struct VerifiedUnpackedAsset {
     pub uasset: PathBuf,
     pub consumed_chunks: Vec<VerifiedChunkReceipt>,
     pub metadata_utocs: Vec<PathBuf>,
+}
+
+/// One known optional component emitted while converting a Zen package to the
+/// legacy cooked representation used by the bounded DataAsset inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum VerifiedLegacySidecarKind {
+    Bulk,
+    Optional,
+    MemoryMapped,
+}
+
+/// Path-free bytes for one known optional legacy cooked-package component.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedLegacySidecarBytes {
+    pub(crate) kind: VerifiedLegacySidecarKind,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// Snapshot-backed Zen-to-legacy conversion held entirely in memory.
+///
+/// The source container paths in the native receipts are retained for
+/// subsequent native generation checks, but no output path exists and no
+/// filesystem write is performed. Callers must keep and revalidate the
+/// installation guard that supplied the already-open composite store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VerifiedUnpackedAssetBytes {
+    pub(crate) uasset: Vec<u8>,
+    pub(crate) uexp: Vec<u8>,
+    pub(crate) sidecars: Vec<VerifiedLegacySidecarBytes>,
+    pub(crate) consumed_chunks: Vec<VerifiedChunkReceipt>,
+    pub(crate) metadata_utocs: Vec<PathBuf>,
 }
 
 /// Exact, write-free generation probe for one package in a composite store.
@@ -309,6 +340,11 @@ const MAX_REPACK_COMPONENT_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_REPACK_BUNDLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SNAPSHOT_CHUNK_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_SNAPSHOT_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_LEGACY_MEMORY_UASSET_BYTES: usize = 64 * 1024 * 1024;
+const MAX_LEGACY_MEMORY_UEXP_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LEGACY_MEMORY_PACKAGE_PAIR_BYTES: usize = 320 * 1024 * 1024;
+const MAX_LEGACY_MEMORY_SIDECAR_BYTES: usize = 256 * 1024 * 1024;
+const MAX_LEGACY_MEMORY_TOTAL_BYTES: usize = 512 * 1024 * 1024;
 
 /// List texture assets in an IoStore container, using `usmap` to resolve types.
 ///
@@ -706,7 +742,46 @@ pub fn unpack_asset_verified(
     // script imports. Fall back to the file itself if it has no parent.
     let store_path = utoc.parent().unwrap_or(utoc);
     let store = iostore::open(store_path, Arc::new(Config::default()))?;
-    let snapshot = VerifiedSnapshotStore::new(store.as_ref());
+    let (snapshot, package_id) = verified_package_snapshot(store.as_ref(), asset_path)?;
+
+    std::fs::create_dir_all(out_dir)?;
+    let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    let uasset = legacy_from_package(&snapshot, package_id, leaf, out_dir)?;
+    Ok(VerifiedUnpackedAsset {
+        uasset,
+        consumed_chunks: snapshot.receipts()?,
+        metadata_utocs: snapshot.metadata_utocs(),
+    })
+}
+
+/// Convert one exact package through an already-open composite store without
+/// creating an output directory or writing any file.
+///
+/// This seam is intentionally crate-private. The installed-package snapshot is
+/// the public authority that owns the path guards, validates the opened child
+/// container set, chooses the candidate server-side, and brackets this call
+/// with full source revalidation.
+pub(crate) fn unpack_asset_from_open_store_verified_to_memory(
+    store: &dyn iostore::IoStoreTrait,
+    asset_path: &str,
+) -> Result<VerifiedUnpackedAssetBytes> {
+    let (snapshot, package_id) = verified_package_snapshot(store, asset_path)?;
+    let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    let converted = legacy_from_package_to_memory(&snapshot, package_id, leaf)?;
+    Ok(VerifiedUnpackedAssetBytes {
+        uasset: converted.uasset,
+        uexp: converted.uexp,
+        sidecars: converted.sidecars,
+        consumed_chunks: snapshot.receipts()?,
+        metadata_utocs: snapshot.metadata_utocs(),
+    })
+}
+
+fn verified_package_snapshot<'a>(
+    store: &'a dyn iostore::IoStoreTrait,
+    asset_path: &str,
+) -> Result<(VerifiedSnapshotStore<'a>, FPackageId)> {
+    let snapshot = VerifiedSnapshotStore::new(store);
     snapshot.prime_container_metadata()?;
 
     let container_version = snapshot
@@ -717,10 +792,8 @@ pub fn unpack_asset_verified(
         .ok_or_else(|| anyhow::anyhow!("container has no header version"))?;
 
     // UE package IDs are the lower-cased UTF-16 CityHash of the virtual package
-    // path. `FIoContainerId::from_name` is public and uses that exact shared hash
-    // routine; wrapping its u64 as an FPackageId avoids a full O(n) package scan.
-    // We still deserialize the one resolved header and compare its full package
-    // name before extraction, so a missing package or hash collision fails closed.
+    // path. The complete deserialized package name is still compared below so a
+    // missing package or hash collision fails closed before conversion.
     let package_id = package_id_from_asset_path(asset_path);
     let chunk_id = FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData);
     if !snapshot.has_chunk_id(chunk_id) {
@@ -743,15 +816,7 @@ pub fn unpack_asset_verified(
     if verified_name != asset_path {
         return Err(TexError::AssetNotFound(asset_path.into()));
     }
-
-    std::fs::create_dir_all(out_dir)?;
-    let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
-    let uasset = legacy_from_package(&snapshot, package_id, leaf, out_dir)?;
-    Ok(VerifiedUnpackedAsset {
-        uasset,
-        consumed_chunks: snapshot.receipts()?,
-        metadata_utocs: snapshot.metadata_utocs(),
-    })
+    Ok((snapshot, package_id))
 }
 
 /// Bind one virtual package to the concrete winning package/bulk chunks and all
@@ -956,6 +1021,223 @@ fn legacy_from_package(
 
     let uasset = out_dir.join(format!("{leaf}.uasset"));
     Ok(uasset)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LegacyMemoryLimits {
+    max_uasset_bytes: usize,
+    max_uexp_bytes: usize,
+    max_pair_bytes: usize,
+    max_sidecar_bytes: usize,
+    max_total_bytes: usize,
+}
+
+impl Default for LegacyMemoryLimits {
+    fn default() -> Self {
+        Self {
+            max_uasset_bytes: MAX_LEGACY_MEMORY_UASSET_BYTES,
+            max_uexp_bytes: MAX_LEGACY_MEMORY_UEXP_BYTES,
+            max_pair_bytes: MAX_LEGACY_MEMORY_PACKAGE_PAIR_BYTES,
+            max_sidecar_bytes: MAX_LEGACY_MEMORY_SIDECAR_BYTES,
+            max_total_bytes: MAX_LEGACY_MEMORY_TOTAL_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum LegacyMemoryComponent {
+    Uasset,
+    Uexp,
+    Bulk,
+    Optional,
+    MemoryMapped,
+}
+
+impl LegacyMemoryComponent {
+    fn sidecar_kind(self) -> Option<VerifiedLegacySidecarKind> {
+        match self {
+            Self::Uasset | Self::Uexp => None,
+            Self::Bulk => Some(VerifiedLegacySidecarKind::Bulk),
+            Self::Optional => Some(VerifiedLegacySidecarKind::Optional),
+            Self::MemoryMapped => Some(VerifiedLegacySidecarKind::MemoryMapped),
+        }
+    }
+}
+
+#[derive(Default)]
+struct LegacyMemoryWriterState {
+    files: std::collections::BTreeMap<LegacyMemoryComponent, Vec<u8>>,
+    total_bytes: usize,
+}
+
+struct BoundedLegacyMemoryWriter {
+    leaf: String,
+    limits: LegacyMemoryLimits,
+    state: Mutex<LegacyMemoryWriterState>,
+}
+
+struct LegacyMemoryOutput {
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    sidecars: Vec<VerifiedLegacySidecarBytes>,
+}
+
+impl BoundedLegacyMemoryWriter {
+    fn new(leaf: &str, limits: LegacyMemoryLimits) -> anyhow::Result<Self> {
+        if leaf.is_empty()
+            || leaf.len() > 255
+            || !leaf
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            anyhow::bail!("legacy package output leaf is noncanonical");
+        }
+        if limits.max_uasset_bytes == 0
+            || limits.max_uexp_bytes == 0
+            || limits.max_pair_bytes == 0
+            || limits.max_sidecar_bytes == 0
+            || limits.max_total_bytes == 0
+            || limits.max_pair_bytes
+                > limits
+                    .max_uasset_bytes
+                    .checked_add(limits.max_uexp_bytes)
+                    .ok_or_else(|| anyhow::anyhow!("legacy package memory limits overflowed"))?
+            || limits.max_pair_bytes > limits.max_total_bytes
+            || limits.max_sidecar_bytes > limits.max_total_bytes
+        {
+            anyhow::bail!("legacy package memory limits are invalid");
+        }
+        Ok(Self {
+            leaf: leaf.to_owned(),
+            limits,
+            state: Mutex::new(LegacyMemoryWriterState::default()),
+        })
+    }
+
+    fn component_for_path(&self, path: &str) -> Option<LegacyMemoryComponent> {
+        if path == format!("{}.uasset", self.leaf) {
+            Some(LegacyMemoryComponent::Uasset)
+        } else if path == format!("{}.uexp", self.leaf) {
+            Some(LegacyMemoryComponent::Uexp)
+        } else if path == format!("{}.ubulk", self.leaf) {
+            Some(LegacyMemoryComponent::Bulk)
+        } else if path == format!("{}.uptnl", self.leaf) {
+            Some(LegacyMemoryComponent::Optional)
+        } else if path == format!("{}.m.ubulk", self.leaf) {
+            Some(LegacyMemoryComponent::MemoryMapped)
+        } else {
+            None
+        }
+    }
+
+    fn finish(self) -> anyhow::Result<LegacyMemoryOutput> {
+        let mut state = self
+            .state
+            .into_inner()
+            .map_err(|_| anyhow::anyhow!("legacy package memory writer was poisoned"))?;
+        let uasset = state
+            .files
+            .remove(&LegacyMemoryComponent::Uasset)
+            .filter(|bytes| !bytes.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("legacy conversion emitted no non-empty uasset"))?;
+        let uexp = state
+            .files
+            .remove(&LegacyMemoryComponent::Uexp)
+            .filter(|bytes| !bytes.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("legacy conversion emitted no non-empty uexp"))?;
+        let pair_bytes = uasset
+            .len()
+            .checked_add(uexp.len())
+            .ok_or_else(|| anyhow::anyhow!("legacy package pair length overflowed"))?;
+        if pair_bytes > self.limits.max_pair_bytes {
+            anyhow::bail!("legacy package pair exceeds its memory budget");
+        }
+
+        let mut sidecars = Vec::with_capacity(state.files.len());
+        for (component, bytes) in state.files {
+            let kind = component.sidecar_kind().ok_or_else(|| {
+                anyhow::anyhow!("legacy conversion emitted duplicate core output")
+            })?;
+            sidecars.push(VerifiedLegacySidecarBytes { kind, bytes });
+        }
+        Ok(LegacyMemoryOutput {
+            uasset,
+            uexp,
+            sidecars,
+        })
+    }
+}
+
+impl FileWriterTrait for BoundedLegacyMemoryWriter {
+    fn write_file(&self, path: String, _allow_compress: bool, data: Vec<u8>) -> anyhow::Result<()> {
+        let component = self.component_for_path(&path).ok_or_else(|| {
+            anyhow::anyhow!("legacy conversion emitted an unexpected output name")
+        })?;
+        let component_limit = match component {
+            LegacyMemoryComponent::Uasset => self.limits.max_uasset_bytes,
+            LegacyMemoryComponent::Uexp => self.limits.max_uexp_bytes,
+            LegacyMemoryComponent::Bulk
+            | LegacyMemoryComponent::Optional
+            | LegacyMemoryComponent::MemoryMapped => self.limits.max_sidecar_bytes,
+        };
+        if data.len() > component_limit {
+            anyhow::bail!("legacy conversion output exceeds its component memory budget");
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("legacy package memory writer was poisoned"))?;
+        if state.files.contains_key(&component) {
+            anyhow::bail!("legacy conversion emitted a duplicate output component");
+        }
+        let next_total = state
+            .total_bytes
+            .checked_add(data.len())
+            .ok_or_else(|| anyhow::anyhow!("legacy package aggregate length overflowed"))?;
+        if next_total > self.limits.max_total_bytes {
+            anyhow::bail!("legacy conversion output exceeds its aggregate memory budget");
+        }
+        let prospective_pair = match component {
+            LegacyMemoryComponent::Uasset => data.len().checked_add(
+                state
+                    .files
+                    .get(&LegacyMemoryComponent::Uexp)
+                    .map_or(0, Vec::len),
+            ),
+            LegacyMemoryComponent::Uexp => data.len().checked_add(
+                state
+                    .files
+                    .get(&LegacyMemoryComponent::Uasset)
+                    .map_or(0, Vec::len),
+            ),
+            _ => Some(0),
+        }
+        .ok_or_else(|| anyhow::anyhow!("legacy package pair length overflowed"))?;
+        if prospective_pair > self.limits.max_pair_bytes {
+            anyhow::bail!("legacy package pair exceeds its memory budget");
+        }
+        state.files.insert(component, data);
+        state.total_bytes = next_total;
+        Ok(())
+    }
+}
+
+fn legacy_from_package_to_memory(
+    store: &dyn iostore::IoStoreTrait,
+    package_id: FPackageId,
+    leaf: &str,
+) -> Result<LegacyMemoryOutput> {
+    let out_rel = format!("{leaf}.uasset");
+    let log = Log::no_log();
+    let context = FZenPackageContext::create(store, None, &log, None);
+    let writer = BoundedLegacyMemoryWriter::new(leaf, LegacyMemoryLimits::default())?;
+    let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build_legacy(&context, package_id, UEPath::new(&out_rel), &writer)
+    }))
+    .map_err(|_| anyhow::anyhow!("legacy package conversion panicked"))?;
+    build_result?;
+    Ok(writer.finish()?)
 }
 
 /// Pack a directory of edited legacy cooked files (laid out under their mount
@@ -1644,6 +1926,112 @@ mod tests {
             write!(&mut hex, "{byte:02x}").unwrap();
             hex
         })
+    }
+
+    fn tiny_legacy_memory_limits() -> LegacyMemoryLimits {
+        LegacyMemoryLimits {
+            max_uasset_bytes: 4,
+            max_uexp_bytes: 5,
+            max_pair_bytes: 7,
+            max_sidecar_bytes: 3,
+            max_total_bytes: 10,
+        }
+    }
+
+    #[test]
+    fn bounded_legacy_memory_writer_accepts_only_the_exact_flat_component_set() {
+        let writer =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        writer
+            .write_file("DA_Test.uexp".to_owned(), false, vec![2; 4])
+            .unwrap();
+        writer
+            .write_file("DA_Test.ubulk".to_owned(), false, vec![3; 3])
+            .unwrap();
+        writer
+            .write_file("DA_Test.uasset".to_owned(), false, vec![1; 3])
+            .unwrap();
+        let output = writer.finish().unwrap();
+        assert_eq!(output.uasset, vec![1; 3]);
+        assert_eq!(output.uexp, vec![2; 4]);
+        assert_eq!(
+            output.sidecars,
+            vec![VerifiedLegacySidecarBytes {
+                kind: VerifiedLegacySidecarKind::Bulk,
+                bytes: vec![3; 3],
+            }]
+        );
+
+        for invalid in [
+            "../DA_Test.uasset",
+            "nested/DA_Test.uasset",
+            "DA_Test.UASSET",
+            "Other.uasset",
+            "DA_Test.txt",
+        ] {
+            let writer =
+                BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+            assert!(writer
+                .write_file(invalid.to_owned(), false, vec![1])
+                .is_err());
+        }
+        assert!(BoundedLegacyMemoryWriter::new("../bad", tiny_legacy_memory_limits()).is_err());
+    }
+
+    #[test]
+    fn bounded_legacy_memory_writer_fails_closed_on_duplicate_and_every_budget() {
+        let duplicate =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        duplicate
+            .write_file("DA_Test.uasset".to_owned(), false, vec![1])
+            .unwrap();
+        assert!(duplicate
+            .write_file("DA_Test.uasset".to_owned(), false, vec![1])
+            .is_err());
+
+        let component =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        assert!(component
+            .write_file("DA_Test.uasset".to_owned(), false, vec![0; 5])
+            .is_err());
+        assert!(component
+            .write_file("DA_Test.uexp".to_owned(), false, vec![0; 6])
+            .is_err());
+
+        let sidecar =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        assert!(sidecar
+            .write_file("DA_Test.ubulk".to_owned(), false, vec![0; 4])
+            .is_err());
+
+        let pair = BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        pair.write_file("DA_Test.uasset".to_owned(), false, vec![0; 4])
+            .unwrap();
+        assert!(pair
+            .write_file("DA_Test.uexp".to_owned(), false, vec![0; 4])
+            .is_err());
+
+        let aggregate =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        aggregate
+            .write_file("DA_Test.uasset".to_owned(), false, vec![0; 3])
+            .unwrap();
+        aggregate
+            .write_file("DA_Test.uexp".to_owned(), false, vec![0; 4])
+            .unwrap();
+        aggregate
+            .write_file("DA_Test.ubulk".to_owned(), false, vec![0; 3])
+            .unwrap();
+        assert!(aggregate
+            .write_file("DA_Test.uptnl".to_owned(), false, vec![0; 1])
+            .is_err());
+
+        let missing =
+            BoundedLegacyMemoryWriter::new("DA_Test", tiny_legacy_memory_limits()).unwrap();
+        missing
+            .write_file("DA_Test.uasset".to_owned(), false, vec![1])
+            .unwrap();
+        assert!(missing.finish().is_err());
     }
 
     #[test]

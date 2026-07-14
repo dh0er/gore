@@ -49,7 +49,7 @@ const RESPONSE_EXPORT_BASE_BYTES: usize = 768;
 const RESPONSE_LEAF_BASE_BYTES: usize = 128;
 
 #[derive(Debug)]
-struct Failure {
+pub(super) struct Failure {
     code: &'static str,
     message: &'static str,
 }
@@ -59,7 +59,11 @@ impl Failure {
         Self { code, message }
     }
 
-    fn response(self) -> Value {
+    pub(super) const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    pub(super) fn response(self) -> Value {
         err(self.code, self.message)
     }
 }
@@ -190,7 +194,37 @@ fn fixed_inspect_v1_inner(payload: WirePayload) -> Result<Value, Failure> {
     let uasset = read_input(&uasset_path, MAX_UASSET_BYTES, "uasset")?;
     let uexp = read_input(&uexp_path, MAX_UEXP_BYTES, "uexp")?;
     let usmap = read_input(&usmap_path, MAX_USMAP_BYTES, "usmap")?;
+    fixed_inspect_verified_bytes_v1(uasset, uexp, usmap, payload.export_index)
+}
+
+/// Inspect one already verified in-memory package pair and USMAP using the exact same bounded
+/// parser, work budget, selector receipts, and response schema as the path-based expert command.
+///
+/// This is crate-internal rather than a second wire command: installed-package orchestration can
+/// retain its own filesystem guards and pass only immutable bytes across this seam. Callers must
+/// still treat the returned selectors as read-only inspection evidence until a separate
+/// exact-current edit transaction reopens and compares every bound input.
+pub(super) fn fixed_inspect_verified_bytes_v1(
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    usmap: Vec<u8>,
+    export_index: Option<usize>,
+) -> Result<Value, Failure> {
+    let uasset_length = to_u64(uasset.len())?;
+    let uexp_length = to_u64(uexp.len())?;
     let usmap_length = to_u64(usmap.len())?;
+    if uasset_length == 0
+        || uasset_length > MAX_UASSET_BYTES
+        || uexp_length == 0
+        || uexp_length > MAX_UEXP_BYTES
+        || uasset_length
+            .checked_add(uexp_length)
+            .is_none_or(|length| length > MAX_PACKAGE_BYTES)
+        || usmap_length == 0
+        || usmap_length > MAX_USMAP_BYTES
+    {
+        return Err(input_limit());
+    }
 
     let limits = package_limits();
     let carrier = PackageCarrier::from_bytes(uasset, uexp, limits).map_err(|_| input_limit())?;
@@ -235,7 +269,7 @@ fn fixed_inspect_v1_inner(payload: WirePayload) -> Result<Value, Failure> {
     })?;
 
     let package_export_count = package.exports().len();
-    let indices = selected_indices(package_export_count, payload.export_index)?;
+    let indices = selected_indices(package_export_count, export_index)?;
     let session = FixedLeafInspectionSession::new(&carrier, &schemas).map_err(|_| {
         Failure::new(
             "DATAASSET_INSPECT_FAILED",
@@ -316,13 +350,11 @@ fn fixed_inspect_v1_inner(payload: WirePayload) -> Result<Value, Failure> {
             usmap_sha256: session.usmap_sha256().to_owned(),
         },
         input: InputFacts {
-            uasset_length: to_u64(carrier.len(PackageComponent::Uasset))?,
-            uexp_length: to_u64(carrier.len(PackageComponent::Uexp))?,
+            uasset_length,
+            uexp_length,
             usmap_length,
         },
-        selection: Selection {
-            export_index: payload.export_index,
-        },
+        selection: Selection { export_index },
         exports: reports,
     };
     bounded_to_value(response, MAX_FFI_RESPONSE_BYTES)
@@ -734,6 +766,34 @@ mod tests {
             .to_string()
             .contains(temp.path().to_string_lossy().as_ref()));
         assert!(serialized_within_limit(&response, MAX_FFI_RESPONSE_BYTES));
+    }
+
+    #[test]
+    fn verified_byte_core_matches_the_path_command_and_reapplies_all_input_limits() {
+        let temp = TempDir::new().unwrap();
+        let fixture = write_fixture(temp.path(), &[WALKED_EXPORT, &[0xff]]);
+        let path_response = call(&fixture.uasset, &fixture.usmap, Some(0));
+        let byte_response = fixed_inspect_verified_bytes_v1(
+            fs::read(&fixture.uasset).unwrap(),
+            fs::read(fixture.uasset.with_extension("uexp")).unwrap(),
+            fs::read(&fixture.usmap).unwrap(),
+            Some(0),
+        )
+        .unwrap();
+        assert_eq!(byte_response, path_response);
+
+        for (uasset, uexp, usmap) in [
+            (Vec::new(), vec![0], vec![0]),
+            (vec![0], Vec::new(), vec![0]),
+            (vec![0], vec![0], Vec::new()),
+        ] {
+            assert_eq!(
+                fixed_inspect_verified_bytes_v1(uasset, uexp, usmap, None)
+                    .unwrap_err()
+                    .code,
+                "DATAASSET_INPUT_LIMIT"
+            );
+        }
     }
 
     #[test]

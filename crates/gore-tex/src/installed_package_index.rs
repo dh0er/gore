@@ -13,10 +13,13 @@
 //! broader zero-payload claim.
 //!
 //! V1 is Windows-only. On Unix, retained file descriptors cannot prevent a pathname ABA swap
-//! while Retoc independently reopens the directory by path. Every public V1 entry point therefore
-//! returns [`InstalledPackageIndexErrorV1::UnsupportedPlatform`] before validating inputs or
-//! touching the filesystem on any non-Windows target.
+//! while Retoc independently reopens the directory by path. Every public V1 filesystem entry point
+//! therefore returns its typed `UnsupportedPlatform` error before validating inputs or touching
+//! the filesystem on any non-Windows target.
 
+use crate::container::{
+    unpack_asset_from_open_store_verified_to_memory, VerifiedUnpackedAssetBytes,
+};
 use crate::package_index::{
     index_winning_game_packages_with_limits, validate_unambiguous_container_priority_names,
     InstalledPackageIndex, PackageIndexError, PackageIndexLimits,
@@ -37,10 +40,12 @@ use thiserror::Error;
 const G1R_DIRECTORY: &str = "G1R";
 const PAKS_RELATIVE_PATH: &str = "Content/Paks";
 const EXECUTABLE_RELATIVE_PATH: &str = "Binaries/Win64/G1R-Win64-Shipping.exe";
+const UE4SS_RELATIVE_PATH: &str = "Binaries/Win64/ue4ss";
 const MAIN_CONTAINER_FILE_NAME: &str = "G1R-Windows.utoc";
 
 const MOUNT_INVENTORY_SEAL_DOMAIN: &[u8] = b"gore-tex.installed-package-index.mount-inventory.v1\0";
 const SOURCE_SNAPSHOT_SEAL_DOMAIN: &[u8] = b"gore-tex.installed-package-index.source-snapshot.v1\0";
+const USMAP_INVENTORY_SEAL_DOMAIN: &[u8] = b"gore-tex.installed-usmap.direct-inventory.v1\0";
 
 pub const MAX_INSTALLED_PAKS_TREE_ENTRIES: usize = 8_192;
 pub const MAX_INSTALLED_PAKS_TREE_DEPTH: usize = 8;
@@ -54,6 +59,10 @@ pub const MAX_INSTALLED_PAK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_INSTALLED_UCAS_BYTES: u64 = 128 * 1024 * 1024 * 1024;
 pub const MAX_INSTALLED_AGGREGATE_HASHED_MOUNT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_INSTALLED_PACKAGE_INDEX_JSON_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_INSTALLED_USMAP_DIRECTORY_ENTRIES: usize = 4_096;
+pub const MAX_INSTALLED_USMAP_ENTRY_NAME_BYTES: usize = 255;
+pub const MAX_INSTALLED_USMAP_AGGREGATE_NAME_BYTES: usize = 1024 * 1024;
+pub const MAX_INSTALLED_USMAP_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Exact project-owned executable identity expected at the selected installation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +94,184 @@ impl RawSeal {
     }
 }
 
+/// Held, read-only bytes of the deterministic installed generation USMAP.
+///
+/// Local paths and platform identities remain private. The direct `ue4ss`
+/// inventory and selected file are retained so callers can revalidate both
+/// after a long parse before exposing any derived facts.
+pub struct VerifiedInstalledUsmapV1 {
+    directory: PathBuf,
+    directory_guard: HeldFile,
+    inventory: UsmapDirectoryScan,
+    selected: HeldFile,
+    selected_file_name: String,
+    bytes: Vec<u8>,
+    content_seal: InstalledPackageContentSealV1,
+    inventory_entry_count: u64,
+    inventory_seal: InstalledPackageContentSealV1,
+}
+
+impl fmt::Debug for VerifiedInstalledUsmapV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedInstalledUsmapV1")
+            .field("selected_file_name", &self.selected_file_name)
+            .field("content_seal", &self.content_seal)
+            .field("inventory_entry_count", &self.inventory_entry_count)
+            .field("inventory_seal", &self.inventory_seal)
+            .finish()
+    }
+}
+
+impl VerifiedInstalledUsmapV1 {
+    pub fn selected_file_name(&self) -> &str {
+        &self.selected_file_name
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn content_seal(&self) -> &InstalledPackageContentSealV1 {
+        &self.content_seal
+    }
+
+    pub const fn inventory_entry_count(&self) -> u64 {
+        self.inventory_entry_count
+    }
+
+    pub fn inventory_seal(&self) -> &InstalledPackageContentSealV1 {
+        &self.inventory_seal
+    }
+
+    pub fn revalidate(&self) -> Result<(), InstalledUsmapErrorV1> {
+        self.directory_guard
+            .revalidate_identity("UE4SS directory")?;
+        self.selected.revalidate_hashed("generation USMAP")?;
+        let current = scan_usmap_directory(&self.directory)?;
+        if !self.inventory.same_shape(&current)
+            || current
+                .candidates
+                .first()
+                .is_none_or(|candidate| candidate.file_name != self.selected_file_name)
+        {
+            return Err(InstalledUsmapErrorV1::InventoryChanged);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum InstalledUsmapErrorV1 {
+    #[error("installed USMAP snapshots are unsupported on this platform")]
+    UnsupportedPlatform,
+    #[error("the installed USMAP source boundary failed")]
+    Source(#[source] InstalledPackageIndexErrorV1),
+    #[error("the direct UE4SS inventory has {actual} entries; limit is {limit}")]
+    EntryLimit { actual: u64, limit: usize },
+    #[error("an installed UE4SS entry has a non-UTF-8 name")]
+    NonUtf8EntryName,
+    #[error("an installed UE4SS entry name has {actual} bytes; limit is {limit}")]
+    EntryNameLimit { actual: usize, limit: usize },
+    #[error("aggregate installed UE4SS entry names have {actual} bytes; limit is {limit}")]
+    AggregateNameLimit { actual: usize, limit: usize },
+    #[error("installed UE4SS entry names or direct USMAP candidates are ambiguous")]
+    EntryNameCollision,
+    #[error("installed USMAP file name {file_name:?} is noncanonical")]
+    NoncanonicalUsmapName { file_name: String },
+    #[error("the installed UE4SS directory contains no canonical direct USMAP")]
+    MissingUsmap,
+    #[error("the installed UE4SS direct inventory changed during inspection")]
+    InventoryChanged,
+    #[error("an installed USMAP counter overflowed")]
+    CounterOverflow,
+}
+
+impl From<InstalledPackageIndexErrorV1> for InstalledUsmapErrorV1 {
+    fn from(error: InstalledPackageIndexErrorV1) -> Self {
+        Self::Source(error)
+    }
+}
+
+/// Capture the deterministic direct installed generation USMAP and retain the
+/// source guards needed to revalidate it after parsing.
+///
+/// V1 is Windows-only and returns before validating or accessing `game_root`
+/// on every other platform. Selection is performed solely from the bounded,
+/// collision-free direct `Binaries/Win64/ue4ss` inventory containing exactly
+/// one canonical USMAP candidate; callers cannot supply a file name or path.
+pub fn inspect_installed_usmap_v1(
+    game_root: &Path,
+) -> Result<VerifiedInstalledUsmapV1, InstalledUsmapErrorV1> {
+    if !cfg!(windows) {
+        let _ = game_root;
+        return Err(InstalledUsmapErrorV1::UnsupportedPlatform);
+    }
+    inspect_installed_usmap_with_hooks_v1(game_root, |_| {}, |_| {})
+}
+
+fn inspect_installed_usmap_with_hooks_v1<AfterInventory, AfterRead>(
+    game_root: &Path,
+    after_inventory: AfterInventory,
+    after_read: AfterRead,
+) -> Result<VerifiedInstalledUsmapV1, InstalledUsmapErrorV1>
+where
+    AfterInventory: FnOnce(&Path),
+    AfterRead: FnOnce(&Path),
+{
+    let g1r = resolve_g1r_directory(game_root)?;
+    let directory = canonical_existing_plain(
+        &g1r.join(UE4SS_RELATIVE_PATH),
+        NodeKind::Directory,
+        "UE4SS directory",
+    )?;
+    let directory_guard = HeldFile::open_directory(&directory, "UE4SS directory")?;
+    let inventory = scan_usmap_directory(&directory)?;
+    let selected_candidate = select_single_usmap_candidate(&inventory)?.clone();
+    after_inventory(&directory);
+    let selected = HeldFile::open_hashed(
+        &selected_candidate.path,
+        MAX_INSTALLED_USMAP_BYTES,
+        "generation USMAP",
+    )?;
+    let bytes = selected.read_hashed_bytes("generation USMAP")?;
+    after_read(&directory);
+
+    let second = scan_usmap_directory(&directory)?;
+    if !inventory.same_shape(&second)
+        || second
+            .candidates
+            .first()
+            .is_none_or(|candidate| candidate.file_name != selected_candidate.file_name)
+    {
+        return Err(InstalledUsmapErrorV1::InventoryChanged);
+    }
+    directory_guard.revalidate_identity("UE4SS directory")?;
+    selected.revalidate_hashed("generation USMAP")?;
+
+    let content_seal = RawSeal {
+        byte_len: selected.snapshot.length,
+        sha256: selected
+            .sha256
+            .expect("a hashed installed USMAP retains its digest"),
+    };
+    let inventory_seal = usmap_inventory_seal(&inventory, &selected_candidate.file_name)?;
+    let inventory_entry_count = u64::try_from(inventory.entries.len())
+        .map_err(|_| InstalledUsmapErrorV1::CounterOverflow)?;
+
+    Ok(VerifiedInstalledUsmapV1 {
+        directory,
+        directory_guard,
+        inventory,
+        selected,
+        selected_file_name: selected_candidate.file_name,
+        bytes,
+        content_seal: content_seal.public(),
+        inventory_entry_count,
+        inventory_seal: inventory_seal.public(),
+    })
+}
+
 /// One exact installed package candidate index plus retained local read guards.
 ///
 /// Filesystem paths and platform identities remain private. Callers receive only the candidate
@@ -100,6 +287,83 @@ pub struct VerifiedInstalledPackageIndexV1 {
     mount_inventory_seal: InstalledPackageContentSealV1,
     index_seal: InstalledPackageContentSealV1,
     source_snapshot_seal: InstalledPackageContentSealV1,
+}
+
+/// One server-selected installed package converted to bounded, path-free legacy
+/// bytes while its originating installation snapshot remained live.
+pub struct VerifiedInstalledPackageExtractionV1 {
+    candidate_ordinal: u64,
+    target_path: String,
+    package_id_hex: String,
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    sidecar_count: u64,
+}
+
+impl fmt::Debug for VerifiedInstalledPackageExtractionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedInstalledPackageExtractionV1")
+            .field("candidate_ordinal", &self.candidate_ordinal)
+            .field("target_path", &self.target_path)
+            .field("package_id_hex", &self.package_id_hex)
+            .field("uasset_bytes", &self.uasset.len())
+            .field("uexp_bytes", &self.uexp.len())
+            .field("sidecar_count", &self.sidecar_count)
+            .finish()
+    }
+}
+
+impl VerifiedInstalledPackageExtractionV1 {
+    pub const fn candidate_ordinal(&self) -> u64 {
+        self.candidate_ordinal
+    }
+
+    pub fn target_path(&self) -> &str {
+        &self.target_path
+    }
+
+    pub fn package_id_hex(&self) -> &str {
+        &self.package_id_hex
+    }
+
+    pub fn uasset_bytes(&self) -> &[u8] {
+        &self.uasset
+    }
+
+    pub fn uexp_bytes(&self) -> &[u8] {
+        &self.uexp
+    }
+
+    pub const fn sidecar_count(&self) -> u64 {
+        self.sidecar_count
+    }
+
+    pub fn into_core_bytes(self) -> (Vec<u8>, Vec<u8>) {
+        (self.uasset, self.uexp)
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum InstalledPackageExtractionErrorV1 {
+    #[error("the retained installed package snapshot is no longer exact")]
+    Snapshot(#[source] InstalledPackageIndexErrorV1),
+    #[error("installed package candidate ordinal {ordinal} is outside the sealed candidate count {candidate_count}")]
+    CandidateOrdinalOutOfRange { ordinal: u64, candidate_count: u64 },
+    #[error("the installed IoStore could not be opened for selected-package conversion")]
+    IoStoreOpen,
+    #[error("the preflighted and opened IoStore container sets disagree")]
+    OpenedContainerSetChanged,
+    #[error("the selected installed package could not be converted exactly")]
+    Conversion,
+    #[error("an installed package extraction counter overflowed")]
+    CounterOverflow,
+}
+
+impl From<InstalledPackageIndexErrorV1> for InstalledPackageExtractionErrorV1 {
+    fn from(error: InstalledPackageIndexErrorV1) -> Self {
+        Self::Snapshot(error)
+    }
 }
 
 impl fmt::Debug for VerifiedInstalledPackageIndexV1 {
@@ -154,6 +418,103 @@ impl VerifiedInstalledPackageIndexV1 {
     pub fn revalidate(&self) -> Result<(), InstalledPackageIndexErrorV1> {
         self.executable.revalidate_hashed("game executable")?;
         self.inventory.revalidate()
+    }
+
+    /// Select one candidate only by its ordinal in this sealed index and
+    /// convert it through the same guarded installation snapshot.
+    ///
+    /// No caller-supplied target or output path is accepted. The composite
+    /// store is opened while every direct mount guard remains live, its exact
+    /// child-container set is compared to the preflight inventory, and all
+    /// legacy outputs stay in bounded memory. Full source revalidation runs
+    /// both before and after conversion.
+    pub fn extract_candidate_to_memory_v1(
+        &self,
+        candidate_ordinal: u64,
+    ) -> Result<VerifiedInstalledPackageExtractionV1, InstalledPackageExtractionErrorV1> {
+        self.extract_candidate_to_memory_with_hooks_v1(
+            candidate_ordinal,
+            |_| {},
+            |store, target_path| {
+                unpack_asset_from_open_store_verified_to_memory(store, target_path)
+            },
+            |_| {},
+        )
+    }
+
+    fn extract_candidate_to_memory_with_hooks_v1<BeforeOpen, Convert, AfterConvert>(
+        &self,
+        candidate_ordinal: u64,
+        before_open: BeforeOpen,
+        convert: Convert,
+        after_convert: AfterConvert,
+    ) -> Result<VerifiedInstalledPackageExtractionV1, InstalledPackageExtractionErrorV1>
+    where
+        BeforeOpen: FnOnce(&Path),
+        Convert: FnOnce(
+            &dyn iostore::IoStoreTrait,
+            &str,
+        ) -> crate::error::Result<VerifiedUnpackedAssetBytes>,
+        AfterConvert: FnOnce(&Path),
+    {
+        self.revalidate()?;
+        let candidate_count = u64::try_from(self.index.candidates.len())
+            .map_err(|_| InstalledPackageExtractionErrorV1::CounterOverflow)?;
+        let ordinal = usize::try_from(candidate_ordinal).map_err(|_| {
+            InstalledPackageExtractionErrorV1::CandidateOrdinalOutOfRange {
+                ordinal: candidate_ordinal,
+                candidate_count,
+            }
+        })?;
+        let candidate = self.index.candidates.get(ordinal).cloned().ok_or({
+            InstalledPackageExtractionErrorV1::CandidateOrdinalOutOfRange {
+                ordinal: candidate_ordinal,
+                candidate_count,
+            }
+        })?;
+
+        before_open(&self.inventory.paks);
+        let opened = iostore::open(&self.inventory.paks, Arc::new(Config::default()))
+            .map_err(|_| InstalledPackageExtractionErrorV1::IoStoreOpen);
+        let converted = match opened.as_ref() {
+            Ok(store) => {
+                let mut opened_container_names = store
+                    .child_containers()
+                    .map(|container| container.container_name().to_owned())
+                    .collect::<Vec<_>>();
+                opened_container_names.sort();
+                if opened_container_names != self.inventory.expected_container_names {
+                    Err(InstalledPackageExtractionErrorV1::OpenedContainerSetChanged)
+                } else {
+                    convert(store.as_ref(), &candidate.target_path)
+                        .map_err(|_| InstalledPackageExtractionErrorV1::Conversion)
+                }
+            }
+            Err(_) => Err(InstalledPackageExtractionErrorV1::IoStoreOpen),
+        };
+        after_convert(&self.inventory.paks);
+
+        // Security drift wins over a conversion/parser error: never return
+        // bytes or a weaker diagnostic from a source that did not remain exact.
+        self.revalidate()?;
+        let package = converted?;
+        let VerifiedUnpackedAssetBytes {
+            uasset,
+            uexp,
+            sidecars,
+            consumed_chunks: _,
+            metadata_utocs: _,
+        } = package;
+        let sidecar_count = u64::try_from(sidecars.len())
+            .map_err(|_| InstalledPackageExtractionErrorV1::CounterOverflow)?;
+        Ok(VerifiedInstalledPackageExtractionV1 {
+            candidate_ordinal,
+            target_path: candidate.target_path,
+            package_id_hex: candidate.package_id_hex,
+            uasset,
+            uexp,
+            sidecar_count,
+        })
     }
 }
 
@@ -358,7 +719,7 @@ struct GameLayout {
     executable: PathBuf,
 }
 
-fn resolve_game_layout(game_root: &Path) -> Result<GameLayout, InstalledPackageIndexErrorV1> {
+fn resolve_g1r_directory(game_root: &Path) -> Result<PathBuf, InstalledPackageIndexErrorV1> {
     let root = canonical_existing_plain(game_root, NodeKind::Directory, "game root")?;
     let g1r = if root.file_name() == Some(OsStr::new(G1R_DIRECTORY)) {
         root
@@ -369,6 +730,11 @@ fn resolve_game_layout(game_root: &Path) -> Result<GameLayout, InstalledPackageI
             "G1R directory",
         )?
     };
+    Ok(g1r)
+}
+
+fn resolve_game_layout(game_root: &Path) -> Result<GameLayout, InstalledPackageIndexErrorV1> {
+    let g1r = resolve_g1r_directory(game_root)?;
     let paks = canonical_existing_plain(
         &g1r.join(PAKS_RELATIVE_PATH),
         NodeKind::Directory,
@@ -464,6 +830,181 @@ impl TreeScan {
     fn same_shape(&self, other: &Self) -> bool {
         self.entries == other.entries && self.mount_descriptors() == other.mount_descriptors()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UsmapInventoryLimits {
+    max_entries: usize,
+    max_entry_name_bytes: usize,
+    max_aggregate_name_bytes: usize,
+}
+
+impl Default for UsmapInventoryLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: MAX_INSTALLED_USMAP_DIRECTORY_ENTRIES,
+            max_entry_name_bytes: MAX_INSTALLED_USMAP_ENTRY_NAME_BYTES,
+            max_aggregate_name_bytes: MAX_INSTALLED_USMAP_AGGREGATE_NAME_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UsmapCandidate {
+    file_name: String,
+    path: PathBuf,
+}
+
+struct UsmapDirectoryScan {
+    entries: Vec<TreeEntryDescriptor>,
+    candidates: Vec<UsmapCandidate>,
+}
+
+impl UsmapDirectoryScan {
+    fn candidate_names(&self) -> impl Iterator<Item = &str> {
+        self.candidates
+            .iter()
+            .map(|candidate| candidate.file_name.as_str())
+    }
+
+    fn same_shape(&self, other: &Self) -> bool {
+        self.entries == other.entries && self.candidate_names().eq(other.candidate_names())
+    }
+}
+
+fn select_single_usmap_candidate(
+    inventory: &UsmapDirectoryScan,
+) -> Result<&UsmapCandidate, InstalledUsmapErrorV1> {
+    match inventory.candidates.as_slice() {
+        [] => Err(InstalledUsmapErrorV1::MissingUsmap),
+        [candidate] => Ok(candidate),
+        [_, _, ..] => Err(InstalledUsmapErrorV1::EntryNameCollision),
+    }
+}
+
+fn scan_usmap_directory(directory: &Path) -> Result<UsmapDirectoryScan, InstalledUsmapErrorV1> {
+    scan_usmap_directory_with_limits(directory, UsmapInventoryLimits::default())
+}
+
+fn scan_usmap_directory_with_limits(
+    directory: &Path,
+    limits: UsmapInventoryLimits,
+) -> Result<UsmapDirectoryScan, InstalledUsmapErrorV1> {
+    let iterator =
+        fs::read_dir(directory).map_err(|source| InstalledPackageIndexErrorV1::Filesystem {
+            operation: "read UE4SS directory",
+            source,
+        })?;
+    let mut entry_count = 0u64;
+    let mut aggregate_name_bytes = 0usize;
+    let mut folded_names = BTreeSet::new();
+    let mut entries = Vec::new();
+    let mut candidates = Vec::new();
+
+    for entry in iterator {
+        let entry = entry.map_err(|source| InstalledPackageIndexErrorV1::Filesystem {
+            operation: "read UE4SS entry",
+            source,
+        })?;
+        entry_count = entry_count
+            .checked_add(1)
+            .ok_or(InstalledUsmapErrorV1::CounterOverflow)?;
+        if entry_count > limits.max_entries as u64 {
+            return Err(InstalledUsmapErrorV1::EntryLimit {
+                actual: entry_count,
+                limit: limits.max_entries,
+            });
+        }
+
+        let file_name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| InstalledUsmapErrorV1::NonUtf8EntryName)?;
+        if file_name.len() > limits.max_entry_name_bytes {
+            return Err(InstalledUsmapErrorV1::EntryNameLimit {
+                actual: file_name.len(),
+                limit: limits.max_entry_name_bytes,
+            });
+        }
+        aggregate_name_bytes = aggregate_name_bytes
+            .checked_add(file_name.len())
+            .ok_or(InstalledUsmapErrorV1::CounterOverflow)?;
+        if aggregate_name_bytes > limits.max_aggregate_name_bytes {
+            return Err(InstalledUsmapErrorV1::AggregateNameLimit {
+                actual: aggregate_name_bytes,
+                limit: limits.max_aggregate_name_bytes,
+            });
+        }
+        if !folded_names.insert(file_name.to_lowercase()) {
+            return Err(InstalledUsmapErrorV1::EntryNameCollision);
+        }
+
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|source| {
+            InstalledPackageIndexErrorV1::Filesystem {
+                operation: "inspect UE4SS entry",
+                source,
+            }
+        })?;
+        if metadata_is_reparse(&metadata) || (!metadata.is_dir() && !metadata.is_file()) {
+            return Err(InstalledPackageIndexErrorV1::UnsafeTreeEntry.into());
+        }
+        let kind = if metadata.is_dir() {
+            TreeEntryKind::Directory
+        } else {
+            TreeEntryKind::File
+        };
+        let node_kind = if metadata.is_dir() {
+            NodeKind::Directory
+        } else {
+            NodeKind::File
+        };
+        let snapshot =
+            HeldFile::open(&path, node_kind, None, false, "UE4SS inventory entry")?.snapshot;
+        entries.push(TreeEntryDescriptor {
+            relative_path: file_name.clone(),
+            kind,
+            snapshot,
+        });
+
+        if is_canonical_usmap_candidate(&file_name, kind)? {
+            candidates.push(UsmapCandidate { file_name, path });
+        }
+    }
+
+    entries.sort();
+    candidates.sort_by(|left, right| left.file_name.cmp(&right.file_name));
+    Ok(UsmapDirectoryScan {
+        entries,
+        candidates,
+    })
+}
+
+fn is_canonical_usmap_candidate(
+    file_name: &str,
+    kind: TreeEntryKind,
+) -> Result<bool, InstalledUsmapErrorV1> {
+    let Some((stem, extension)) = file_name.rsplit_once('.') else {
+        return Ok(false);
+    };
+    if !extension.eq_ignore_ascii_case("usmap") {
+        return Ok(false);
+    }
+    let canonical = kind == TreeEntryKind::File
+        && extension == "usmap"
+        && !stem.is_empty()
+        && file_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        && !file_name.ends_with(['.', ' '])
+        && !windows_reserved_name(file_name)
+        && !windows_reserved_name(stem);
+    if !canonical {
+        return Err(InstalledUsmapErrorV1::NoncanonicalUsmapName {
+            file_name: truncate_utf8(file_name, MAX_INSTALLED_USMAP_ENTRY_NAME_BYTES),
+        });
+    }
+    Ok(true)
 }
 
 fn scan_paks_tree(paks: &Path) -> Result<TreeScan, InstalledPackageIndexErrorV1> {
@@ -988,6 +1529,53 @@ impl HeldFile {
         }
         self.revalidate_identity(role)
     }
+
+    fn read_hashed_bytes(
+        &self,
+        role: &'static str,
+    ) -> Result<Vec<u8>, InstalledPackageIndexErrorV1> {
+        self.revalidate_hashed(role)?;
+        let length = usize::try_from(self.snapshot.length)
+            .map_err(|_| InstalledPackageIndexErrorV1::CounterOverflow)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(|source| {
+            InstalledPackageIndexErrorV1::Filesystem {
+                operation: "allocate retained source bytes",
+                source: io::Error::other(source.to_string()),
+            }
+        })?;
+        bytes.resize(length, 0);
+
+        let mut reader = &self.file;
+        reader.seek(SeekFrom::Start(0)).map_err(|source| {
+            InstalledPackageIndexErrorV1::Filesystem {
+                operation: "seek retained source before reading bytes",
+                source,
+            }
+        })?;
+        reader.read_exact(&mut bytes).map_err(|source| {
+            InstalledPackageIndexErrorV1::Filesystem {
+                operation: "read retained source bytes",
+                source,
+            }
+        })?;
+        let mut trailing = [0u8; 1];
+        if reader.read(&mut trailing).map_err(|source| {
+            InstalledPackageIndexErrorV1::Filesystem {
+                operation: "verify retained source end of file",
+                source,
+            }
+        })? != 0
+        {
+            return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
+        }
+        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        if self.sha256 != Some(digest) {
+            return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
+        }
+        self.revalidate_hashed(role)?;
+        Ok(bytes)
+    }
 }
 
 fn canonical_existing_plain(
@@ -1310,6 +1898,26 @@ fn mount_inventory_seal(
     Ok(builder.finish())
 }
 
+fn usmap_inventory_seal(
+    inventory: &UsmapDirectoryScan,
+    selected_file_name: &str,
+) -> Result<RawSeal, InstalledUsmapErrorV1> {
+    let mut builder = SealBuilder::new(USMAP_INVENTORY_SEAL_DOMAIN)?;
+    builder.u64(
+        u64::try_from(inventory.entries.len())
+            .map_err(|_| InstalledUsmapErrorV1::CounterOverflow)?,
+    )?;
+    for entry in &inventory.entries {
+        builder.byte(entry.kind.seal_tag())?;
+        builder.bytes(entry.relative_path.as_bytes())?;
+        builder.u64(entry.snapshot.length)?;
+        builder.bytes(entry.snapshot.modified_stamp.as_bytes())?;
+        builder.bytes(entry.snapshot.platform_identity.as_bytes())?;
+    }
+    builder.bytes(selected_file_name.as_bytes())?;
+    Ok(builder.finish())
+}
+
 fn source_snapshot_seal(
     executable: RawSeal,
     inventory: RawSeal,
@@ -1452,10 +2060,12 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use crate::container::{VerifiedLegacySidecarBytes, VerifiedLegacySidecarKind};
     use crate::package_index::PackageIndexStatus;
     use retoc::iostore_writer::IoStoreWriter;
     use retoc::version::EngineVersion;
     use retoc::{EIoChunkType, FIoChunkId, FIoContainerId, FPackageId, UEPath, UEPathBuf};
+    use std::cell::Cell;
     use std::collections::BTreeMap;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1503,6 +2113,18 @@ mod tests {
                     sha256: Sha256::digest(EXE_BYTES).into(),
                 },
             }
+        }
+
+        fn usmap_directory(&self) -> PathBuf {
+            self.game_root.join(UE4SS_RELATIVE_PATH)
+        }
+
+        fn write_usmap(&self, file_name: &str, bytes: &[u8]) -> PathBuf {
+            let directory = self.usmap_directory();
+            fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(file_name);
+            fs::write(&path, bytes).unwrap();
+            path
         }
     }
 
@@ -1570,6 +2192,383 @@ mod tests {
         }
         file.flush().unwrap();
         assert_eq!(fs::metadata(path).unwrap().len(), length);
+    }
+
+    fn dummy_converted_package(secret_root: &Path) -> VerifiedUnpackedAssetBytes {
+        VerifiedUnpackedAssetBytes {
+            uasset: b"bounded-uasset".to_vec(),
+            uexp: b"bounded-uexp".to_vec(),
+            sidecars: vec![VerifiedLegacySidecarBytes {
+                kind: VerifiedLegacySidecarKind::Bulk,
+                bytes: b"bounded-sidecar".to_vec(),
+            }],
+            consumed_chunks: Vec::new(),
+            metadata_utocs: vec![secret_root.join("must-not-leak.utoc")],
+        }
+    }
+
+    #[test]
+    fn installed_usmap_snapshot_is_deterministic_read_only_and_path_free() {
+        let fixture = Fixture::new("usmap-success");
+        let selected_path = fixture.write_usmap("a.usmap", b"selected mapping bytes");
+        fs::write(fixture.usmap_directory().join("notes.txt"), b"inventory").unwrap();
+        fs::write(
+            fixture.usmap_directory().join("z.bin"),
+            b"non-candidate inventory member",
+        )
+        .unwrap();
+        fs::create_dir_all(fixture.usmap_directory().join("cache")).unwrap();
+        fs::write(
+            fixture.usmap_directory().join("cache/ignored.bin"),
+            b"direct inventory does not recurse",
+        )
+        .unwrap();
+        let before = tree_bytes(&fixture.root);
+
+        let first = inspect_installed_usmap_v1(&fixture.install_root).unwrap();
+        let second = inspect_installed_usmap_v1(&fixture.game_root).unwrap();
+
+        assert_eq!(first.selected_file_name(), "a.usmap");
+        assert_eq!(first.bytes(), b"selected mapping bytes");
+        assert_eq!(first.inventory_entry_count(), 4);
+        assert_eq!(first.content_seal(), second.content_seal());
+        assert_eq!(first.inventory_seal(), second.inventory_seal());
+        assert_eq!(
+            first.content_seal().sha256,
+            hex_digest(&Sha256::digest(b"selected mapping bytes").into())
+        );
+        assert_eq!(
+            first.content_seal().byte_len,
+            b"selected mapping bytes".len() as u64
+        );
+        first.revalidate().unwrap();
+        assert!(OpenOptions::new().write(true).open(selected_path).is_err());
+        assert_eq!(tree_bytes(&fixture.root), before);
+
+        let debug = format!("{first:?}");
+        assert!(!debug.contains(&fixture.root.to_string_lossy().to_string()));
+        assert!(!debug.contains("platform_identity"));
+    }
+
+    #[test]
+    fn installed_usmap_snapshot_rejects_multiple_canonical_direct_candidates_before_read() {
+        let fixture = Fixture::new("usmap-ambiguous");
+        fixture.write_usmap("a.usmap", b"first mapping bytes");
+        fixture.write_usmap("z.usmap", b"second mapping bytes");
+        let before = tree_bytes(&fixture.root);
+        let after_inventory = Cell::new(false);
+        let after_read = Cell::new(false);
+
+        let error = inspect_installed_usmap_with_hooks_v1(
+            &fixture.install_root,
+            |_| after_inventory.set(true),
+            |_| after_read.set(true),
+        )
+        .unwrap_err();
+
+        assert!(matches!(&error, InstalledUsmapErrorV1::EntryNameCollision));
+        assert!(!after_inventory.get());
+        assert!(!after_read.get());
+        assert_eq!(
+            error.to_string(),
+            "installed UE4SS entry names or direct USMAP candidates are ambiguous"
+        );
+        assert!(!error.to_string().contains("a.usmap"));
+        assert!(!error.to_string().contains("z.usmap"));
+        assert!(!error
+            .to_string()
+            .contains(fixture.root.to_string_lossy().as_ref()));
+        assert_eq!(tree_bytes(&fixture.root), before);
+    }
+
+    #[test]
+    fn installed_usmap_snapshot_rejects_missing_and_noncanonical_candidates() {
+        let missing = Fixture::new("usmap-missing");
+        fs::create_dir_all(missing.usmap_directory()).unwrap();
+        fs::write(missing.usmap_directory().join("notes.txt"), b"none").unwrap();
+        assert!(matches!(
+            inspect_installed_usmap_v1(&missing.install_root),
+            Err(InstalledUsmapErrorV1::MissingUsmap)
+        ));
+
+        let uppercase = Fixture::new("usmap-uppercase");
+        uppercase.write_usmap("Mappings.USMAP", b"noncanonical extension");
+        assert!(matches!(
+            inspect_installed_usmap_v1(&uppercase.install_root),
+            Err(InstalledUsmapErrorV1::NoncanonicalUsmapName { .. })
+        ));
+
+        let directory = Fixture::new("usmap-directory-candidate");
+        fs::create_dir_all(directory.usmap_directory().join("fake.usmap")).unwrap();
+        assert!(matches!(
+            inspect_installed_usmap_v1(&directory.install_root),
+            Err(InstalledUsmapErrorV1::NoncanonicalUsmapName { .. })
+        ));
+    }
+
+    #[test]
+    fn installed_usmap_direct_inventory_limits_and_name_rules_fail_closed() {
+        let fixture = Fixture::new("usmap-limits");
+        fixture.write_usmap("a.usmap", b"mapping");
+        fs::write(fixture.usmap_directory().join("notes.txt"), b"inventory").unwrap();
+        let directory = canonical_existing_plain(
+            &fixture.usmap_directory(),
+            NodeKind::Directory,
+            "test UE4SS directory",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            scan_usmap_directory_with_limits(
+                &directory,
+                UsmapInventoryLimits {
+                    max_entries: 1,
+                    ..UsmapInventoryLimits::default()
+                }
+            ),
+            Err(InstalledUsmapErrorV1::EntryLimit { .. })
+        ));
+        assert!(matches!(
+            scan_usmap_directory_with_limits(
+                &directory,
+                UsmapInventoryLimits {
+                    max_entry_name_bytes: 3,
+                    ..UsmapInventoryLimits::default()
+                }
+            ),
+            Err(InstalledUsmapErrorV1::EntryNameLimit { .. })
+        ));
+        assert!(matches!(
+            scan_usmap_directory_with_limits(
+                &directory,
+                UsmapInventoryLimits {
+                    max_aggregate_name_bytes: 1,
+                    ..UsmapInventoryLimits::default()
+                }
+            ),
+            Err(InstalledUsmapErrorV1::AggregateNameLimit { .. })
+        ));
+        assert!(is_canonical_usmap_candidate("safe-name_1.usmap", TreeEntryKind::File).unwrap());
+        for invalid in [".usmap", "CON.usmap", "bad name.usmap", "bad.USMAP"] {
+            assert!(matches!(
+                is_canonical_usmap_candidate(invalid, TreeEntryKind::File),
+                Err(InstalledUsmapErrorV1::NoncanonicalUsmapName { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn installed_usmap_capture_and_public_revalidation_detect_inventory_drift() {
+        let capture_race = Fixture::new("usmap-capture-race");
+        capture_race.write_usmap("a.usmap", b"mapping");
+        let error = inspect_installed_usmap_with_hooks_v1(
+            &capture_race.install_root,
+            |directory| {
+                fs::write(directory.join("0.usmap"), b"late earlier candidate").unwrap();
+            },
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstalledUsmapErrorV1::InventoryChanged));
+
+        let post_read_race = Fixture::new("usmap-post-read-race");
+        post_read_race.write_usmap("a.usmap", b"mapping");
+        let error = inspect_installed_usmap_with_hooks_v1(
+            &post_read_race.install_root,
+            |_| {},
+            |directory| {
+                fs::write(directory.join("late.txt"), b"late inventory member").unwrap();
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, InstalledUsmapErrorV1::InventoryChanged));
+
+        let public_drift = Fixture::new("usmap-public-drift");
+        public_drift.write_usmap("a.usmap", b"mapping");
+        let verified = inspect_installed_usmap_v1(&public_drift.install_root).unwrap();
+        fs::write(
+            public_drift.usmap_directory().join("late.txt"),
+            b"late inventory member",
+        )
+        .unwrap();
+        assert!(matches!(
+            verified.revalidate(),
+            Err(InstalledUsmapErrorV1::InventoryChanged)
+                | Err(InstalledUsmapErrorV1::Source(
+                    InstalledPackageIndexErrorV1::SourceChanged { .. }
+                ))
+        ));
+    }
+
+    #[test]
+    fn installed_usmap_direct_reparse_entry_is_rejected_when_supported() {
+        let fixture = Fixture::new("usmap-reparse-entry");
+        fixture.write_usmap("a.usmap", b"mapping");
+        let target = fixture.root.join("external-cache");
+        fs::create_dir_all(&target).unwrap();
+        let link = fixture.usmap_directory().join("linked-cache");
+        if !create_directory_link(&target, &link) {
+            return;
+        }
+
+        assert!(matches!(
+            inspect_installed_usmap_v1(&fixture.install_root),
+            Err(InstalledUsmapErrorV1::Source(
+                InstalledPackageIndexErrorV1::UnsafeTreeEntry
+            ))
+        ));
+    }
+
+    #[test]
+    fn ordinal_extraction_returns_only_sanitized_bounded_core_bytes() {
+        let fixture = Fixture::new("extract-success");
+        let before = tree_bytes(&fixture.root);
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let expected_package_id = verified.index().candidates[0].package_id_hex.clone();
+
+        let extracted = verified
+            .extract_candidate_to_memory_with_hooks_v1(
+                0,
+                |_| {},
+                |_, target_path| {
+                    assert_eq!(target_path, PRIMARY_TARGET);
+                    Ok(dummy_converted_package(&fixture.root))
+                },
+                |_| {},
+            )
+            .unwrap();
+
+        assert_eq!(extracted.candidate_ordinal(), 0);
+        assert_eq!(extracted.target_path(), PRIMARY_TARGET);
+        assert_eq!(extracted.package_id_hex(), expected_package_id);
+        assert_eq!(extracted.uasset_bytes(), b"bounded-uasset");
+        assert_eq!(extracted.uexp_bytes(), b"bounded-uexp");
+        assert_eq!(extracted.sidecar_count(), 1);
+        let debug = format!("{extracted:?}");
+        assert!(!debug.contains(&fixture.root.to_string_lossy().to_string()));
+        assert!(!debug.contains("must-not-leak.utoc"));
+        let (uasset, uexp) = extracted.into_core_bytes();
+        assert_eq!(uasset, b"bounded-uasset");
+        assert_eq!(uexp, b"bounded-uexp");
+        verified.revalidate().unwrap();
+        assert_eq!(tree_bytes(&fixture.root), before);
+    }
+
+    #[test]
+    fn ordinal_extraction_rejects_out_of_range_without_conversion() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new("extract-ordinal");
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let converted = Cell::new(false);
+        let error = verified
+            .extract_candidate_to_memory_with_hooks_v1(
+                u64::MAX,
+                |_| {},
+                |_, _| {
+                    converted.set(true);
+                    Ok(dummy_converted_package(&fixture.root))
+                },
+                |_| {},
+            )
+            .unwrap_err();
+
+        assert!(!converted.get());
+        assert!(matches!(
+            error,
+            InstalledPackageExtractionErrorV1::CandidateOrdinalOutOfRange {
+                ordinal: u64::MAX,
+                candidate_count: 1
+            }
+        ));
+    }
+
+    #[test]
+    fn ordinal_extraction_postflight_drift_wins_over_converted_bytes() {
+        let fixture = Fixture::new("extract-postflight");
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let error = verified
+            .extract_candidate_to_memory_with_hooks_v1(
+                0,
+                |_| {},
+                |_, _| Ok(dummy_converted_package(&fixture.root)),
+                |paks| {
+                    fs::write(paks.join("late.txt"), b"late source member").unwrap();
+                },
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstalledPackageExtractionErrorV1::Snapshot(
+                InstalledPackageIndexErrorV1::TreeChanged
+                    | InstalledPackageIndexErrorV1::SourceChanged { .. }
+            )
+        ));
+    }
+
+    #[test]
+    fn ordinal_extraction_rechecks_opened_container_set_and_never_writes_output() {
+        use std::cell::Cell;
+
+        let fixture = Fixture::new("extract-open-race");
+        let before = tree_bytes(&fixture.root);
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let converted = Cell::new(false);
+        let error = verified
+            .extract_candidate_to_memory_with_hooks_v1(
+                0,
+                |paks| {
+                    write_container(
+                        &paks.join("late.utoc"),
+                        "/Game/Late/DA_Late",
+                        EIoChunkType::BulkData,
+                    );
+                },
+                |_, _| {
+                    converted.set(true);
+                    Ok(dummy_converted_package(&fixture.root))
+                },
+                |_| {},
+            )
+            .unwrap_err();
+
+        assert!(!converted.get());
+        assert!(matches!(
+            error,
+            InstalledPackageExtractionErrorV1::Snapshot(
+                InstalledPackageIndexErrorV1::TreeChanged
+                    | InstalledPackageIndexErrorV1::SourceChanged { .. }
+            )
+        ));
+        let after = tree_bytes(&fixture.root);
+        assert_eq!(
+            after.get("install/G1R/Content/Paks/G1R-Windows.utoc"),
+            before.get("install/G1R/Content/Paks/G1R-Windows.utoc")
+        );
+    }
+
+    #[test]
+    fn public_ordinal_extraction_fails_closed_on_invalid_package_payload() {
+        let fixture = Fixture::new("extract-invalid-payload");
+        let before = tree_bytes(&fixture.root);
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+
+        assert!(matches!(
+            verified.extract_candidate_to_memory_v1(0),
+            Err(InstalledPackageExtractionErrorV1::Conversion)
+        ));
+        assert_eq!(tree_bytes(&fixture.root), before);
     }
 
     #[test]
@@ -1909,6 +2908,12 @@ mod unix_tests {
                 PackageIndexLimits::default(),
             ),
             Err(InstalledPackageIndexErrorV1::UnsupportedPlatform)
+        ));
+        assert!(!missing.exists());
+
+        assert!(matches!(
+            inspect_installed_usmap_v1(&missing),
+            Err(InstalledUsmapErrorV1::UnsupportedPlatform)
         ));
         assert!(!missing.exists());
     }
