@@ -23,6 +23,7 @@ import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:path/path.dart' as p;
@@ -461,6 +462,112 @@ void main() {
       );
       expect(
         find.byKey(const Key('revision3-quest-context-dialog')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'selected Library Quest behavior edit publishes without a game root',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\quest-transitions-authoring'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (lease) => Revision3QuestOutlineFixture(
+          projectRevision: lease.projectRevision,
+          questRevision: lease.projectRevision == fixture.projectRevision
+              ? fixture.questRevision
+              : fixture.questRevision + 1,
+          moduleRevision: lease.projectRevision == fixture.projectRevision
+              ? fixture.moduleRevision
+              : fixture.moduleRevision + 1,
+        ).contentIndex(),
+        onQuestTransitionsSeed:
+            (lease, questId, questRevision, moduleId, moduleRevision) =>
+                AuthoringRevision3QuestTransitionsSeed.forProject(
+                  currentProjectJson: fixture.projectJson,
+                  questId: questId,
+                  expectedQuestRevision: questRevision,
+                  expectedModuleId: moduleId,
+                  expectedModuleRevision: moduleRevision,
+                ),
+        onQuestTransitionsPublish: (lease, plan) {
+          expect(plan.questId, revision3QuestOutlineQuestId);
+          expect(plan.moduleId, revision3QuestOutlineModuleId);
+          expect(
+            plan.transitionPlan.transitions.any(
+              (transition) => transition.effects.isNotEmpty,
+            ),
+            isTrue,
+          );
+          lease.projectRevision = fixture.projectRevision + 1;
+          lease.head = _head(fixture.projectRevision + 1);
+          return Revision3QuestTransitionsEditPublication(
+            projectId: revision3QuestOutlineProjectId,
+            projectRevision: fixture.projectRevision + 1,
+            questId: revision3QuestOutlineQuestId,
+            moduleId: revision3QuestOutlineModuleId,
+            questRevision: fixture.questRevision + 1,
+            moduleRevision: fixture.moduleRevision + 1,
+            transitionPlanSeal: plan.transitionPlan.contentSeal,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          const Key(
+            'revision3-content-edit-quest-$revision3QuestOutlineQuestId',
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('States & transitions'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-transitions-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-quest-transitions-sequential-template'),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-transitions-save')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.questTransitionsSeedCalls, 1);
+      expect(managed.questTransitionsPublishCalls, 1);
+      expect(managed.contentReadCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        fixture.projectRevision + 1,
+      );
+      expect(
+        find.textContaining('Quest states and transitions saved'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-transitions-dialog')),
         findsNothing,
       );
     },
@@ -1625,6 +1732,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
+    this.onQuestTransitionsSeed,
+    this.onQuestTransitionsPublish,
     this.onQuestContextSeed,
     this.onQuestContextPublish,
     this.onVoicePublish,
@@ -1664,6 +1773,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestOutlineEditInput input,
   )?
   onQuestOutlinePublish;
+  final AuthoringRevision3QuestTransitionsSeed Function(
+    _FakeManagedLease lease,
+    String questId,
+    int questRevision,
+    String moduleId,
+    int moduleRevision,
+  )?
+  onQuestTransitionsSeed;
+  final Revision3QuestTransitionsEditPublication Function(
+    _FakeManagedLease lease,
+    Revision3QuestTransitionsEditTechnicalPlan plan,
+  )?
+  onQuestTransitionsPublish;
   final AuthoringRevision3QuestContextSeed Function(
     _FakeManagedLease lease,
     String questId,
@@ -1730,6 +1852,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
+  int questTransitionsSeedCalls = 0;
+  int questTransitionsPublishCalls = 0;
   int questContextSeedCalls = 0;
   int questContextPublishCalls = 0;
   int voicePublishCalls = 0;
@@ -1779,6 +1903,40 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest outline publisher');
     }
     return publish(this, input);
+  }
+
+  @override
+  Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) async {
+    questTransitionsSeedCalls++;
+    final read = onQuestTransitionsSeed;
+    if (read == null) {
+      throw StateError('fake managed lease has no Quest transitions seed');
+    }
+    return read(
+      this,
+      questId,
+      expectedQuestRevision,
+      expectedModuleId,
+      expectedModuleRevision,
+    );
+  }
+
+  @override
+  Future<Revision3QuestTransitionsEditPublication>
+  prepareAndPublishQuestTransitionsEditV1({
+    required Revision3QuestTransitionsEditTechnicalPlan plan,
+  }) async {
+    questTransitionsPublishCalls++;
+    final publish = onQuestTransitionsPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest transitions publisher');
+    }
+    return publish(this, plan);
   }
 
   @override

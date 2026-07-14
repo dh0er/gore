@@ -384,6 +384,7 @@ _questOutlineRequireBasisPair(
   Map<String, Object?> project, {
   required String projectId,
   required String questId,
+  bool allowSemanticPlan = false,
 }) {
   final entities = _authoringRequiredObject(
     project['entities'],
@@ -397,6 +398,23 @@ _questOutlineRequireBasisPair(
     'input',
     'script_module',
   }, 'revision-3 Quest outline Quest data');
+  if (questData['generator_id'] != _authoringRevision3QuestGeneratorId) {
+    throw const FormatException(
+      'authoring revision-3 Quest outline uses an unsupported generator',
+    );
+  }
+  final generatorVersion = _authoringRequiredInt(
+    questData,
+    'generator_version',
+    min: _authoringRevision3QuestGeneratorVersion,
+    max: _authoringRevision3SemanticQuestGeneratorVersion,
+  );
+  if (generatorVersion == _authoringRevision3SemanticQuestGeneratorVersion &&
+      !allowSemanticPlan) {
+    throw const FormatException(
+      'semantic Quest outlines require the stable-slot-aware outline editor v2',
+    );
+  }
   final scriptRef = _authoringRequiredObject(
     questData['script_module'],
     'revision-3 Quest outline script reference',
@@ -419,6 +437,7 @@ _questOutlineRequireBasisPair(
     'revision-3 Quest outline Quest input',
   );
   final hasAdditional = input.containsKey('additional_objective_titles');
+  final hasTransitionPlan = input.containsKey('transition_plan');
   _authoringExactFields(input, <String>{
     'target',
     'quest_id',
@@ -431,6 +450,7 @@ _questOutlineRequireBasisPair(
     'description',
     'objective_title',
     if (hasAdditional) 'additional_objective_titles',
+    if (hasTransitionPlan) 'transition_plan',
     'collision_catalog',
   }, 'revision-3 Quest outline Quest input');
   if (input['quest_id'] != questId ||
@@ -448,6 +468,38 @@ _questOutlineRequireBasisPair(
           context: 'outline basis',
         )
       : const <String>[];
+  final objectiveCount = 1 + additional.length;
+  switch (generatorVersion) {
+    case _authoringRevision3QuestGeneratorVersion:
+      if (hasAdditional || hasTransitionPlan || objectiveCount != 1) {
+        throw const FormatException(
+          'authoring revision-3 Quest v2 outline shape is invalid',
+        );
+      }
+      break;
+    case _authoringRevision3MultiObjectiveQuestGeneratorVersion:
+      if (!hasAdditional || hasTransitionPlan || objectiveCount < 2) {
+        throw const FormatException(
+          'authoring revision-3 Quest v3 outline shape is invalid',
+        );
+      }
+      break;
+    case _authoringRevision3SemanticQuestGeneratorVersion:
+      if (!allowSemanticPlan || !hasTransitionPlan) {
+        throw const FormatException(
+          'authoring revision-3 Quest v4 transition plan is unavailable',
+        );
+      }
+      final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
+        input['transition_plan'],
+      );
+      if (plan.objectiveOrder.length != objectiveCount) {
+        throw const FormatException(
+          'authoring revision-3 Quest v4 plan does not cover every outline title',
+        );
+      }
+      break;
+  }
   return (
     questRevision: _authoringRequiredInt(
       quest.entity,

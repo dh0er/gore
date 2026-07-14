@@ -603,6 +603,7 @@ _questContextRequireBasis(
     project,
     projectId: projectId,
     questId: questId,
+    allowSemanticPlan: true,
   );
   final entities = _authoringRequiredObject(
     project['entities'],

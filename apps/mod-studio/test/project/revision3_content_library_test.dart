@@ -65,12 +65,17 @@ void main() {
 
     expect(find.text('Name & objectives'), findsNothing);
     expect(find.text('Description & connections'), findsNothing);
+    expect(find.text('States & transitions'), findsNothing);
     expect(
       find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
       findsNothing,
     );
     expect(
       find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(Key('revision3-content-edit-quest-transitions-$_questId')),
       findsNothing,
     );
   });
@@ -92,6 +97,7 @@ void main() {
 
     expect(find.text('Name & objectives'), findsOneWidget);
     expect(find.text('Description & connections'), findsOneWidget);
+    expect(find.text('States & transitions'), findsOneWidget);
     expect(find.text('Configure the game installation first'), findsOneWidget);
     expect(
       tester
@@ -105,6 +111,83 @@ void main() {
     await tester.pumpAndSettle();
     expect(outlineCalls, 1);
   });
+
+  testWidgets('Edit Quest routes states and transitions separately', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var transitionCalls = 0;
+    await _pumpLoadedLibrary(
+      tester,
+      editQuestTransitions: (index, quest) async => transitionCalls++,
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('States & transitions'));
+    await tester.pumpAndSettle();
+    expect(transitionCalls, 1);
+  });
+
+  testWidgets(
+    'V4 Quest disables legacy outline while context and transitions stay available',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      var outlineCalls = 0;
+      var contextCalls = 0;
+      await _pumpLoadedLibrary(
+        tester,
+        questGeneratorVersion: 4,
+        editQuestOutline: (index, quest) async => outlineCalls++,
+        editQuestContext: (index, quest) async => contextCalls++,
+        editQuestTransitions: (index, quest) async {},
+      );
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pump();
+      await tester.tap(
+        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .widget<PopupMenuItem<Object?>>(
+              find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
+            )
+            .enabled,
+        isFalse,
+      );
+      expect(
+        find.text('Not available yet after adding custom behavior'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<PopupMenuItem<Object?>>(
+              find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
+            )
+            .enabled,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<PopupMenuItem<Object?>>(
+              find.byKey(
+                Key('revision3-content-edit-quest-transitions-$_questId'),
+              ),
+            )
+            .enabled,
+        isTrue,
+      );
+
+      await tester.tap(find.text('Description & connections'));
+      await tester.pumpAndSettle();
+      expect(outlineCalls, 0);
+      expect(contextCalls, 1);
+    },
+  );
 
   testWidgets('Edit Quest routes description and connections separately', (
     tester,
@@ -305,6 +388,51 @@ void main() {
     expect(find.text(_npcId), findsOneWidget);
   });
 
+  testWidgets('compact Quest sheet closes before each editor callback', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(560, 760));
+    var transitionCalls = 0;
+    var sheetWasVisibleAtCallback = false;
+    await _pumpLoadedLibrary(
+      tester,
+      editQuestTransitions: (index, quest) async {
+        transitionCalls++;
+        sheetWasVisibleAtCallback = find
+            .byKey(const Key('revision3-content-entity-details'))
+            .evaluate()
+            .isNotEmpty;
+      },
+    );
+
+    Future<void> openTransitions() async {
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-content-entity-details')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('States & transitions'));
+      await tester.pumpAndSettle();
+    }
+
+    await openTransitions();
+    expect(transitionCalls, 1);
+    expect(sheetWasVisibleAtCallback, isFalse);
+    expect(
+      find.byKey(const Key('revision3-content-entity-details')),
+      findsNothing,
+    );
+
+    await openTransitions();
+    expect(transitionCalls, 2);
+    expect(sheetWasVisibleAtCallback, isFalse);
+  });
+
   testWidgets('keeps same-role qualified backlinks as distinct siblings', (
     tester,
   ) async {
@@ -454,14 +582,17 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
 
 Future<void> _pumpLoadedLibrary(
   WidgetTester tester, {
+  int questGeneratorVersion = 2,
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
+  Revision3QuestTransitionsEditor? editQuestTransitions,
 }) async {
   await _pumpLibrary(
     tester,
-    load: () async => _fixture(),
+    load: () async => _fixture(questGeneratorVersion: questGeneratorVersion),
     editQuestOutline: editQuestOutline,
     editQuestContext: editQuestContext,
+    editQuestTransitions: editQuestTransitions,
   );
   await tester.pumpAndSettle();
 }
@@ -472,6 +603,7 @@ Future<void> _pumpLibrary(
   int projectRevision = 7,
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
+  Revision3QuestTransitionsEditor? editQuestTransitions,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -483,6 +615,7 @@ Future<void> _pumpLibrary(
         load: load,
         editQuestOutline: editQuestOutline,
         editQuestContext: editQuestContext,
+        editQuestTransitions: editQuestTransitions,
       ),
     ),
   ),
@@ -491,6 +624,7 @@ Future<void> _pumpLibrary(
 Revision3ContentIndex _fixture({
   int revision = 7,
   bool duplicateBacklinks = false,
+  int questGeneratorVersion = 2,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': _projectId,
@@ -586,7 +720,7 @@ Revision3ContentIndex _fixture({
       'origin': <String, Object?>{
         'type': 'generated',
         'generator_id': 'gore-authoring.quest-draft',
-        'generator_version': 2,
+        'generator_version': questGeneratorVersion,
         'owner': <String, Object?>{
           'project_id': _projectId,
           'entity_id': _questId,
@@ -597,7 +731,7 @@ Revision3ContentIndex _fixture({
         'kind': 'script_module',
         'data': <String, Object?>{
           'generator_id': 'gore-authoring.quest-draft',
-          'generator_version': 2,
+          'generator_version': questGeneratorVersion,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'Project/Quests/FindHomer.as',
           'status': <String, Object?>{

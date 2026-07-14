@@ -1256,6 +1256,185 @@ void main() {
   );
 
   test(
+    'Quest transitions seed stays private and edit publishes through full reopen CAS',
+    () async {
+      final fixtureProject = Revision3QuestOutlineFixture();
+      final root = await _projectRoot(fixture, suffix: 'quest_transitions');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: fixtureProject.projectJson,
+      );
+
+      final seed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      expect(seed.projectRevision, fixtureProject.projectRevision);
+      expect(seed.legacySynthetic, isTrue);
+      expect(seed.objectives, hasLength(3));
+      expect(store.questTransitionsPrepareCalls, 0);
+
+      final published = await session.prepareAndPublishQuestTransitionsEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+        expectedTransitionPlanSeal: seed.transitionPlanSeal,
+        transitionPlan: seed.transitionPlan,
+      );
+
+      expect(store.questTransitionsPrepareCalls, 1);
+      expect(store.questTransitionsRequests, hasLength(1));
+      expect(published.projectRevision, fixtureProject.projectRevision + 1);
+      expect(published.questRevision, fixtureProject.questRevision + 1);
+      expect(published.moduleRevision, fixtureProject.moduleRevision + 1);
+      expect(published.previousGeneratorVersion, 3);
+      expect(published.upgradedFromLegacy, isTrue);
+      expect(
+        published.transitionPlanSeal.sha256,
+        seed.transitionPlan.contentSeal.sha256,
+      );
+      expect(
+        published.buildStatus,
+        AuthoringRevision3QuestTransitionsBuildStatus.blocked,
+      );
+      expect(
+        published.runtimeStatus,
+        AuthoringRevision3QuestTransitionsRuntimeStatus.runtimeUnqualified,
+      );
+      expect(
+        published.publicationStatus,
+        AuthoringRevision3QuestTransitionsPublicationStatus.notSupported,
+      );
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, published.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Quest transitions semantic rejection retries but integrity failure poisons',
+    () async {
+      final fixtureProject = Revision3QuestOutlineFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_transitions_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: fixtureProject.projectJson,
+      );
+      final retrySeed = await retrySession.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      retryStore.nextQuestTransitionsError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
+        message: 'fake plan CAS conflict',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
+          transitionPlan: retrySeed.transitionPlan,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.prepareAndPublishQuestTransitionsEditV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+        expectedTransitionPlanSeal: retrySeed.transitionPlanSeal,
+        transitionPlan: retrySeed.transitionPlan,
+      );
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_transitions_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: fixtureProject.projectJson,
+          );
+      final poisonSeed = await poisonSession.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision,
+      );
+      poisonStore.nextQuestTransitionsError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_STORE_INVARIANT',
+        message: 'fake transitions integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
+          transitionPlan: poisonSeed.transitionPlan,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.questTransitionsPrepareCalls;
+      await expectLater(
+        poisonSession.prepareAndPublishQuestTransitionsEditV1(
+          questId: revision3QuestOutlineQuestId,
+          expectedQuestRevision: fixtureProject.questRevision,
+          expectedModuleId: revision3QuestOutlineModuleId,
+          expectedModuleRevision: fixtureProject.moduleRevision,
+          expectedTransitionPlanSeal: poisonSeed.transitionPlanSeal,
+          transitionPlan: poisonSeed.transitionPlan,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.questTransitionsPrepareCalls, calls);
+      await poisonSession.close();
+    },
+  );
+
+  test(
     'Quest context seed stays private and edit publishes through full reopen CAS',
     () async {
       final context = Revision3QuestOutlineFixture();
@@ -2988,6 +3167,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int prepareCalls = 0;
   int questPrepareCalls = 0;
   int questOutlinePrepareCalls = 0;
+  int questTransitionsPrepareCalls = 0;
   int questContextPrepareCalls = 0;
   int npcPrepareCalls = 0;
   int voicePrepareCalls = 0;
@@ -3010,6 +3190,9 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> questCurrentProjects = <String>[];
   final List<AuthoringRevision3QuestDraftRequestV3> questRequests =
       <AuthoringRevision3QuestDraftRequestV3>[];
+  final List<AuthoringRevision3QuestTransitionsEditRequestV1>
+  questTransitionsRequests =
+      <AuthoringRevision3QuestTransitionsEditRequestV1>[];
   final List<String> npcGameRoots = <String>[];
   final List<String> npcCurrentProjects = <String>[];
   final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
@@ -3028,6 +3211,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
   ModFfiException? nextQuestOutlineError;
+  ModFfiException? nextQuestTransitionsError;
   ModFfiException? nextQuestContextError;
   String? nextQuestContextProvenanceMismatch;
   Object? nextNpcError;
@@ -3292,6 +3476,84 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     final candidateHead = register(candidateProject);
     response['head_json'] = candidateHead.canonicalJson;
     return AuthoringRevision3QuestOutlineEditPreparation.fromJson(
+      response,
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestTransitionsEditPreparation>
+  prepareQuestTransitionsEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTransitionsEditRequestV1 request,
+  }) async {
+    questTransitionsPrepareCalls++;
+    questTransitionsRequests.add(request);
+    final injected = nextQuestTransitionsError;
+    nextQuestTransitionsError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_TRANSITIONS_HEAD_CONFLICT',
+        message: 'fake native Quest transitions basis CAS rejected',
+      );
+    }
+    final fixture = Revision3QuestOutlineFixture();
+    if (currentProjectJson != fixture.projectJson) {
+      throw StateError('fake transitions fixture received an unexpected basis');
+    }
+    final candidate = fixture.projectObject();
+    candidate['revision'] = fixture.projectRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+        .cast<String, Object?>();
+    quest['revision'] = fixture.questRevision + 1;
+    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+    final questData = (questPayload['data']! as Map).cast<String, Object?>();
+    questData['generator_version'] = 4;
+    final input = (questData['input']! as Map).cast<String, Object?>();
+    input['transition_plan'] = request.transitionPlan.toJson();
+
+    final module = (entities[revision3QuestOutlineModuleId]! as Map)
+        .cast<String, Object?>();
+    module['revision'] = fixture.moduleRevision + 1;
+    final origin = (module['origin']! as Map).cast<String, Object?>();
+    origin['generator_version'] = 4;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    moduleData['generator_version'] = 4;
+    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
+
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    final response = <String, Object?>{
+      'ok': true,
+      'outcome': 'prepared_unpublished',
+      'basis_head_json': request.expectedHead.canonicalJson,
+      'head_json': candidateHead.canonicalJson,
+      'project_json': candidateProject,
+      'project_id': revision3QuestOutlineProjectId,
+      'revision': fixture.projectRevision + 1,
+      'quest_id': revision3QuestOutlineQuestId,
+      'module_id': revision3QuestOutlineModuleId,
+      'quest_revision': fixture.questRevision + 1,
+      'module_revision': fixture.moduleRevision + 1,
+      'previous_generator_version': request.previousGeneratorVersion,
+      'upgraded_from_legacy': request.upgradesLegacy,
+      'transition_plan_seal': <String, Object?>{
+        'byte_len': request.transitionPlan.contentSeal.byteLength,
+        'sha256': request.transitionPlan.contentSeal.sha256,
+      },
+      'build_status': 'blocked',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    };
+    return AuthoringRevision3QuestTransitionsEditPreparation.fromJson(
       response,
       currentProjectJson: currentProjectJson,
       request: request,

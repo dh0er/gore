@@ -14,6 +14,7 @@ import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
+import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 
@@ -143,6 +144,16 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Future<Revision3QuestOutlineEditPublication>
   prepareAndPublishQuestOutlineEditV1({
     required Revision3QuestOutlineEditInput input,
+  });
+  Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  });
+  Future<Revision3QuestTransitionsEditPublication>
+  prepareAndPublishQuestTransitionsEditV1({
+    required Revision3QuestTransitionsEditTechnicalPlan plan,
   });
   Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
     required String questId,
@@ -330,6 +341,43 @@ final class _ManagedRevision3SessionLease
       moduleId: checkpoint.moduleId,
       questRevision: checkpoint.questRevision,
       moduleRevision: checkpoint.moduleRevision,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) => _session.readQuestTransitionsSeedV1(
+    questId: questId,
+    expectedQuestRevision: expectedQuestRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+  );
+
+  @override
+  Future<Revision3QuestTransitionsEditPublication>
+  prepareAndPublishQuestTransitionsEditV1({
+    required Revision3QuestTransitionsEditTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishQuestTransitionsEditV1(
+      questId: plan.questId,
+      expectedQuestRevision: plan.expectedQuestRevision,
+      expectedModuleId: plan.moduleId,
+      expectedModuleRevision: plan.expectedModuleRevision,
+      expectedTransitionPlanSeal: plan.expectedTransitionPlanSeal,
+      transitionPlan: plan.transitionPlan,
+    );
+    return Revision3QuestTransitionsEditPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      questId: checkpoint.questId,
+      moduleId: checkpoint.moduleId,
+      questRevision: checkpoint.questRevision,
+      moduleRevision: checkpoint.moduleRevision,
+      transitionPlanSeal: checkpoint.transitionPlanSeal,
     );
   }
 
@@ -915,6 +963,132 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3QuestOutlineRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read one effective transition-plan seed from the selected exact-current
+  /// Quest. Canonical project JSON remains private to the managed lease.
+  Future<AuthoringRevision3QuestTransitionsSeed>
+  readCurrentRevision3QuestTransitionsSeed({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest transitions are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestTransitionsRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestTransitionsStaleCheckpointException();
+    }
+    try {
+      final seed = await lease.readQuestTransitionsSeedV1(
+        questId: questId,
+        expectedQuestRevision: expectedQuestRevision,
+        expectedModuleId: expectedModuleId,
+        expectedModuleRevision: expectedModuleRevision,
+      );
+      if (seed.projectId != expectedProjectId ||
+          seed.projectRevision != expectedProjectRevision ||
+          seed.questId != questId ||
+          seed.questRevision != expectedQuestRevision ||
+          seed.moduleId != expectedModuleId ||
+          seed.moduleRevision != expectedModuleRevision) {
+        throw const Revision3QuestTransitionsStaleCheckpointException();
+      }
+      return seed;
+    } on FormatException catch (_, stackTrace) {
+      Error.throwWithStackTrace(
+        const Revision3QuestTransitionsStaleCheckpointException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestTransitionsRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one separately reviewed semantic Quest transition plan without a
+  /// game root. The visible checkpoint, Quest/module revisions and basis plan
+  /// seal are checked before the managed prepare-and-CAS lane is entered.
+  Future<Revision3QuestTransitionsEditPublication>
+  editCurrentRevision3QuestTransitions({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3QuestTransitionsEditTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest transitions are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestTransitionsRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestTransitionsStaleCheckpointException();
+    }
+    try {
+      final publication = await lease.prepareAndPublishQuestTransitionsEditV1(
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.questId != plan.questId ||
+          publication.moduleId != plan.moduleId ||
+          publication.questRevision != plan.expectedQuestRevision + 1 ||
+          publication.moduleRevision != plan.expectedModuleRevision + 1 ||
+          publication.transitionPlanSeal.byteLength !=
+              plan.transitionPlan.contentSeal.byteLength ||
+          publication.transitionPlanSeal.sha256 !=
+              plan.transitionPlan.contentSeal.sha256) {
+        throw const CurrentProjectCoordinatorException(
+          'published Quest transitions disagree with the selected managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestTransitionsRequiresReopenException(),
           stackTrace,
         );
       }

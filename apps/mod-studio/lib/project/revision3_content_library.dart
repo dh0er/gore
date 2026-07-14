@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'revision3_content_index.dart';
@@ -13,17 +15,23 @@ typedef Revision3QuestContextEditor =
       Revision3ContentIndex index,
       Revision3ContentEntity quest,
     );
+typedef Revision3QuestTransitionsEditor =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity quest,
+    );
 
 enum _ContentMode { entities, assets }
 
-enum _QuestEditAction { outline, context }
+enum _QuestEditAction { outline, context, transitions }
+
+const _stableSlotQuestGeneratorVersion = 4;
 
 /// First real managed-R3 content surface.
 ///
 /// The native index proves exact-current project content and reference shape.
-/// Its only write entry point is the explicitly supplied, count-preserving Quest
-/// outline editor; no build, publication, deployment, or runtime authority is
-/// implied.
+/// Its write entry points are explicitly supplied bounded Quest editors; no
+/// build, deployment, or runtime authority is implied.
 class Revision3ContentLibrary extends StatefulWidget {
   const Revision3ContentLibrary({
     required this.projectRoot,
@@ -33,6 +41,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     required this.load,
     this.editQuestOutline,
     this.editQuestContext,
+    this.editQuestTransitions,
     super.key,
   });
 
@@ -43,6 +52,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3ContentIndexLoader load;
   final Revision3QuestOutlineEditor? editQuestOutline;
   final Revision3QuestContextEditor? editQuestContext;
+  final Revision3QuestTransitionsEditor? editQuestTransitions;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -227,10 +237,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         final list = _EntityList(
           entities: visible,
           selectedId: selected?.id,
-          onSelected: (entity) {
+          onSelected: (entity) async {
             setState(() => _selectedEntityId = entity.id);
             if (constraints.maxWidth < 900) {
-              _showDetailsSheet(
+              final editAction = await _showDetailsSheet<_QuestEditAction>(
                 context,
                 semanticsLabel: '${entity.kind.displayName} details',
                 child: _EntityDetails(
@@ -246,12 +256,28 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                   },
                   onEditQuestOutline: widget.editQuestOutline == null
                       ? null
-                      : () => widget.editQuestOutline!(index, entity),
+                      : () async =>
+                            Navigator.of(context).pop(_QuestEditAction.outline),
                   onEditQuestContext: widget.editQuestContext == null
                       ? null
-                      : () => widget.editQuestContext!(index, entity),
+                      : () async =>
+                            Navigator.of(context).pop(_QuestEditAction.context),
+                  onEditQuestTransitions: widget.editQuestTransitions == null
+                      ? null
+                      : () async => Navigator.of(
+                          context,
+                        ).pop(_QuestEditAction.transitions),
                 ),
               );
+              if (!mounted || editAction == null) return;
+              switch (editAction) {
+                case _QuestEditAction.outline:
+                  await widget.editQuestOutline?.call(index, entity);
+                case _QuestEditAction.context:
+                  await widget.editQuestContext?.call(index, entity);
+                case _QuestEditAction.transitions:
+                  await widget.editQuestTransitions?.call(index, entity);
+              }
             }
           },
         );
@@ -278,6 +304,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       onEditQuestContext: widget.editQuestContext == null
                           ? null
                           : () => widget.editQuestContext!(index, selected),
+                      onEditQuestTransitions:
+                          widget.editQuestTransitions == null
+                          ? null
+                          : () => widget.editQuestTransitions!(index, selected),
                     ),
             ),
           ],
@@ -310,16 +340,18 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           onSelected: (asset) {
             setState(() => _selectedAssetSha256 = asset.sha256);
             if (constraints.maxWidth < 900) {
-              _showDetailsSheet(
-                context,
-                semanticsLabel: '${asset.assetClass.displayName} details',
-                child: _AssetDetails(
-                  index: index,
-                  asset: asset,
-                  onOpenEntity: (entityId) {
-                    Navigator.of(context).pop();
-                    _selectEntity(index, entityId);
-                  },
+              unawaited(
+                _showDetailsSheet<void>(
+                  context,
+                  semanticsLabel: '${asset.assetClass.displayName} details',
+                  child: _AssetDetails(
+                    index: index,
+                    asset: asset,
+                    onOpenEntity: (entityId) {
+                      Navigator.of(context).pop();
+                      _selectEntity(index, entityId);
+                    },
+                  ),
                 ),
               );
             }
@@ -347,27 +379,33 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     );
   }
 
-  void _showDetailsSheet(
+  Future<T?> _showDetailsSheet<T>(
     BuildContext context, {
     required String semanticsLabel,
     required Widget child,
-  }) {
-    showModalBottomSheet<void>(
+  }) async {
+    TransitionRoute<T>? sheetRoute;
+    final result = await showModalBottomSheet<T>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Semantics(
-          container: true,
-          explicitChildNodes: true,
-          label: semanticsLabel,
-          child: SizedBox(
-            height: MediaQuery.sizeOf(context).height * 0.78,
-            child: child,
+      builder: (context) {
+        sheetRoute ??= ModalRoute.of(context) as TransitionRoute<T>?;
+        return SafeArea(
+          child: Semantics(
+            container: true,
+            explicitChildNodes: true,
+            label: semanticsLabel,
+            child: SizedBox(
+              height: MediaQuery.sizeOf(context).height * 0.78,
+              child: child,
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
+    await sheetRoute?.completed;
+    return result;
   }
 }
 
@@ -677,6 +715,7 @@ class _EntityDetails extends StatelessWidget {
     required this.onOpenAsset,
     required this.onEditQuestOutline,
     required this.onEditQuestContext,
+    required this.onEditQuestTransitions,
   });
 
   final Revision3ContentIndex index;
@@ -685,10 +724,13 @@ class _EntityDetails extends StatelessWidget {
   final ValueChanged<String> onOpenAsset;
   final Future<void> Function()? onEditQuestOutline;
   final Future<void> Function()? onEditQuestContext;
+  final Future<void> Function()? onEditQuestTransitions;
 
   @override
   Widget build(BuildContext context) {
     final backlinks = index.backlinksToEntity(entity.id);
+    final outlineRequiresV2 = _questOutlineRequiresV2(index, entity);
+    final editQuestOutline = outlineRequiresV2 ? null : onEditQuestOutline;
     return KeyedSubtree(
       key: ValueKey('revision3-content-entity-details-${entity.id}'),
       child: ListView(
@@ -713,14 +755,18 @@ class _EntityDetails extends StatelessWidget {
               child: PopupMenuButton<_QuestEditAction>(
                 key: Key('revision3-content-edit-quest-${entity.id}'),
                 enabled:
-                    onEditQuestOutline != null || onEditQuestContext != null,
+                    editQuestOutline != null ||
+                    onEditQuestContext != null ||
+                    onEditQuestTransitions != null,
                 tooltip: 'Edit Quest',
                 onSelected: (action) async {
                   switch (action) {
                     case _QuestEditAction.outline:
-                      await onEditQuestOutline?.call();
+                      await editQuestOutline?.call();
                     case _QuestEditAction.context:
                       await onEditQuestContext?.call();
+                    case _QuestEditAction.transitions:
+                      await onEditQuestTransitions?.call();
                   }
                 },
                 itemBuilder: (context) => [
@@ -729,11 +775,16 @@ class _EntityDetails extends StatelessWidget {
                       'revision3-content-edit-quest-outline-${entity.id}',
                     ),
                     value: _QuestEditAction.outline,
-                    enabled: onEditQuestOutline != null,
-                    child: const ListTile(
+                    enabled: editQuestOutline != null,
+                    child: ListTile(
                       contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.format_list_bulleted_outlined),
-                      title: Text('Name & objectives'),
+                      leading: const Icon(Icons.format_list_bulleted_outlined),
+                      title: const Text('Name & objectives'),
+                      subtitle: outlineRequiresV2
+                          ? const Text(
+                              'Not available yet after adding custom behavior',
+                            )
+                          : null,
                     ),
                   ),
                   PopupMenuItem(
@@ -749,6 +800,21 @@ class _EntityDetails extends StatelessWidget {
                       subtitle: onEditQuestContext == null
                           ? const Text('Configure the game installation first')
                           : null,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: Key(
+                      'revision3-content-edit-quest-transitions-${entity.id}',
+                    ),
+                    value: _QuestEditAction.transitions,
+                    enabled: onEditQuestTransitions != null,
+                    child: const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.schema_outlined),
+                      title: Text('States & transitions'),
+                      subtitle: Text(
+                        'Edit lifecycle triggers, conditions, and effects',
+                      ),
                     ),
                   ),
                 ],
@@ -1106,6 +1172,30 @@ class _ContentLoadError extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _questOutlineRequiresV2(
+  Revision3ContentIndex index,
+  Revision3ContentEntity quest,
+) {
+  for (final reference in quest.references) {
+    if (reference.role != 'draft_script_module' ||
+        reference.qualifier != null ||
+        reference.resolution != Revision3ContentReferenceResolution.resolved ||
+        reference.target.projectId != index.projectId ||
+        reference.target.expectedKind !=
+            Revision3ContentEntityKind.scriptModule) {
+      continue;
+    }
+    final module = index.entityById(reference.target.entityId);
+    final generatorVersion = module?.origin.generatorVersion;
+    if (module?.kind == Revision3ContentEntityKind.scriptModule &&
+        generatorVersion != null &&
+        generatorVersion >= _stableSlotQuestGeneratorVersion) {
+      return true;
+    }
+  }
+  return false;
 }
 
 IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {

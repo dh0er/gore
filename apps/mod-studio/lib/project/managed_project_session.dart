@@ -142,6 +142,44 @@ final class ManagedRevision3QuestOutlineEditCheckpoint {
   final int moduleRevision;
 }
 
+/// One existing Quest transition plan returned only after exact native
+/// preparation, full candidate reopen, fixed-head CAS publication and a full
+/// published reopen. It remains explicitly build-blocked, runtime-unqualified
+/// and unsupported for native publication.
+final class ManagedRevision3QuestTransitionsEditCheckpoint {
+  const ManagedRevision3QuestTransitionsEditCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.questId,
+    required this.moduleId,
+    required this.questRevision,
+    required this.moduleRevision,
+    required this.previousGeneratorVersion,
+    required this.upgradedFromLegacy,
+    required this.transitionPlanSeal,
+    required this.buildStatus,
+    required this.runtimeStatus,
+    required this.publicationStatus,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String questId;
+  final String moduleId;
+  final int questRevision;
+  final int moduleRevision;
+  final int previousGeneratorVersion;
+  final bool upgradedFromLegacy;
+  final AuthoringDraftContentSeal transitionPlanSeal;
+  final AuthoringRevision3QuestTransitionsBuildStatus buildStatus;
+  final AuthoringRevision3QuestTransitionsRuntimeStatus runtimeStatus;
+  final AuthoringRevision3QuestTransitionsPublicationStatus publicationStatus;
+}
+
 /// One existing Quest context/module pair returned only after fresh-catalog
 /// native preparation, full candidate reopen, fixed-head CAS publication and
 /// full published reopen.
@@ -448,6 +486,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   });
 
+  Future<AuthoringRevision3QuestTransitionsEditPreparation>
+  prepareQuestTransitionsEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTransitionsEditRequestV1 request,
+  });
+
   Future<AuthoringRevision3QuestContextEditPreparation>
   prepareQuestContextEditV1({
     required String root,
@@ -577,6 +622,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3QuestTransitionsEditPreparation>
+  prepareQuestTransitionsEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTransitionsEditRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3QuestTransitionsEditV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -1144,6 +1201,107 @@ class ManagedRevision3AuthoringProjectSession {
               moduleId: prepared.moduleId,
               questRevision: prepared.questRevision,
               moduleRevision: prepared.moduleRevision,
+            ),
+          );
+        },
+      );
+
+  /// Edit one exact-current Quest transition plan without consulting a game
+  /// installation. The effective legacy/V4 seed and its seal are derived from
+  /// the canonical project only after entering the serialized session lane.
+  /// Native code returns an unpublished candidate; the common managed
+  /// checkpoint path performs both full reopens and the fixed-head CAS.
+  Future<ManagedRevision3QuestTransitionsEditCheckpoint>
+  prepareAndPublishQuestTransitionsEditV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringDraftContentSeal expectedTransitionPlanSeal,
+    required AuthoringRevision3QuestTransitionPlanV1 transitionPlan,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3QuestTransitionsEditCheckpoint
+      >(
+        operation: 'prepareAndPublishQuestTransitionsEditV1',
+        handlePrepareError: _core._throwRevision3QuestTransitionsPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest transitions edit has no exact project identity',
+            );
+          }
+          final request =
+              AuthoringRevision3QuestTransitionsEditRequestV1.forProject(
+                expectedHead: basis.head,
+                currentProjectJson: basis.projectJson,
+                questId: questId,
+                expectedQuestRevision: expectedQuestRevision,
+                transitionPlan: transitionPlan,
+              );
+          if (request.moduleId != expectedModuleId ||
+              request.expectedModuleRevision != expectedModuleRevision ||
+              !_sameDraftContentSeal(
+                request.expectedTransitionPlanSeal,
+                expectedTransitionPlanSeal,
+              )) {
+            throw const FormatException(
+              'revision-3 Quest transitions edit does not bind the selected Quest plan/module',
+            );
+          }
+          final prepared = await _store.prepareQuestTransitionsEditV1(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.questId != request.questId ||
+              prepared.moduleId != request.moduleId ||
+              prepared.questRevision != request.expectedQuestRevision + 1 ||
+              prepared.moduleRevision != request.expectedModuleRevision + 1 ||
+              prepared.previousGeneratorVersion !=
+                  request.previousGeneratorVersion ||
+              prepared.upgradedFromLegacy != request.upgradesLegacy ||
+              !_sameDraftContentSeal(
+                prepared.transitionPlanSeal,
+                request.transitionPlan.contentSeal,
+              ) ||
+              prepared.buildStatus !=
+                  AuthoringRevision3QuestTransitionsBuildStatus.blocked ||
+              prepared.runtimeStatus !=
+                  AuthoringRevision3QuestTransitionsRuntimeStatus
+                      .runtimeUnqualified ||
+              prepared.publicationStatus !=
+                  AuthoringRevision3QuestTransitionsPublicationStatus
+                      .notSupported) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest transitions preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3QuestTransitionsEditCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3QuestTransitionsEditCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              questId: prepared.questId,
+              moduleId: prepared.moduleId,
+              questRevision: prepared.questRevision,
+              moduleRevision: prepared.moduleRevision,
+              previousGeneratorVersion: prepared.previousGeneratorVersion,
+              upgradedFromLegacy: prepared.upgradedFromLegacy,
+              transitionPlanSeal: prepared.transitionPlanSeal,
+              buildStatus: prepared.buildStatus,
+              runtimeStatus: prepared.runtimeStatus,
+              publicationStatus: prepared.publicationStatus,
             ),
           );
         },
@@ -1773,6 +1931,27 @@ class ManagedRevision3AuthoringProjectSession {
         },
       );
 
+  /// Derive one private effective transition-plan seed from this session's
+  /// exact canonical project. Legacy plans are synthesized deterministically;
+  /// no project bytes leave the serialized read lane and no candidate is
+  /// prepared or published.
+  Future<AuthoringRevision3QuestTransitionsSeed> readQuestTransitionsSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) => _core.readExact<AuthoringRevision3QuestTransitionsSeed>(
+    (basis) async => AuthoringRevision3QuestTransitionsSeed.forProject(
+      currentProjectJson: basis.projectJson,
+      questId: questId,
+      expectedQuestRevision: expectedQuestRevision,
+      expectedModuleId: expectedModuleId,
+      expectedModuleRevision: expectedModuleRevision,
+    ),
+    operation: 'readQuestTransitionsSeedV1',
+    handleReadError: _core._throwRevision3QuestTransitionsSeedReadError,
+  );
+
   /// Read one private existing-Quest context seed directly from this session's
   /// exact canonical project. The project transport never leaves the session.
   Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
@@ -2354,6 +2533,61 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3QuestTransitionsPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_TRANSITIONS_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3QuestTransitionsPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest transitions preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3QuestTransitionsSeedReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest transitions seed could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3QuestContextSeedReadError(
     Object error,
     StackTrace stackTrace,
@@ -2908,6 +3142,22 @@ bool _revision3QuestOutlinePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_OUTLINE_SHAPE_CONFLICT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_SIGNED_WIRE_LIMIT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3QuestTransitionsPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_NO_CHANGES',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_QUEST_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_REVISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_STORE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_TRANSITIONS_TRANSITION_PLAN_CONFLICT',
 }.contains(code);
 
 bool _revision3QuestContextPrepareErrorIsRetryable(String code) => const {

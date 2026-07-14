@@ -40,6 +40,8 @@ import 'project/revision3_quest_context_authoring.dart';
 import 'project/revision3_quest_context_dialog.dart';
 import 'project/revision3_quest_outline_authoring.dart';
 import 'project/revision3_quest_outline_dialog.dart';
+import 'project/revision3_quest_transitions_authoring.dart';
+import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
@@ -765,6 +767,33 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedHead: currentProject.head,
                 input: input,
               ),
+          loadQuestTransitionsSeed:
+              ({
+                required questId,
+                required expectedQuestRevision,
+                required expectedModuleId,
+                required expectedModuleRevision,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .readCurrentRevision3QuestTransitionsSeed(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    questId: questId,
+                    expectedQuestRevision: expectedQuestRevision,
+                    expectedModuleId: expectedModuleId,
+                    expectedModuleRevision: expectedModuleRevision,
+                  ),
+          editQuestTransitions: ({required plan}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .editCurrentRevision3QuestTransitions(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                plan: plan,
+              ),
           loadQuestContextSeed:
               ({
                 required questId,
@@ -944,6 +973,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.loadQuestCatalog,
     required this.publishQuestDraft,
     required this.editQuestOutline,
+    required this.loadQuestTransitionsSeed,
+    required this.editQuestTransitions,
     required this.loadQuestContextSeed,
     required this.editQuestContext,
   });
@@ -972,6 +1003,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3QuestCatalogLoader loadQuestCatalog;
   final Revision3QuestDraftPublisher publishQuestDraft;
   final Revision3QuestOutlineEditPublisher editQuestOutline;
+  final Revision3QuestTransitionsSeedLoader loadQuestTransitionsSeed;
+  final Revision3QuestTransitionsTechnicalPublisher editQuestTransitions;
   final Revision3QuestContextSeedLoader loadQuestContextSeed;
   final Revision3QuestContextTechnicalPublisher editQuestContext;
 
@@ -1258,6 +1291,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                                       index,
                                       quest,
                                     ),
+                              editQuestTransitions: project.requiresReopen
+                                  ? null
+                                  : (index, quest) =>
+                                        _openQuestTransitionsEditor(
+                                          context,
+                                          index,
+                                          quest,
+                                        ),
                             ),
                             Revision3DataAssetStagePanel(
                               projectRoot: project.root.path,
@@ -1452,6 +1493,35 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       SnackBar(
         content: Text(
           'Quest description and connections saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openQuestTransitionsEditor(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity quest,
+  ) async {
+    if (project.requiresReopen) return;
+    final publication =
+        await showDialog<Revision3QuestTransitionsEditPublication>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => Revision3QuestTransitionsEditDialog(
+            index: index,
+            quest: quest,
+            service: Revision3QuestTransitionsAuthoringService(
+              loadSeed: loadQuestTransitionsSeed,
+              publishTechnicalPlan: editQuestTransitions,
+            ),
+          ),
+        );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Quest states and transitions saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
         ),
       ),
     );

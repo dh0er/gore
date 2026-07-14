@@ -15,6 +15,7 @@ part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
+part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
 part '../project/revision3_voice_take_selection.dart';
@@ -47,6 +48,7 @@ const _authoringRevision3QuestGeneratorId =
     'gore-authoring.draft-quest-skeleton';
 const _authoringRevision3QuestGeneratorVersion = 2;
 const _authoringRevision3MultiObjectiveQuestGeneratorVersion = 3;
+const _authoringRevision3SemanticQuestGeneratorVersion = 4;
 const _maxAuthoringRevision3QuestObjectives = 8;
 const _maxAuthoringRevision3QuestObjectiveTitleBytes = 128;
 const _maxAuthoringRevision3QuestObjectiveTitlesBytes =
@@ -778,6 +780,42 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3QuestContextEditPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one exact-current Quest transition-plan edit without publishing
+  /// the fixed Store head or granting build/runtime authority.
+  Future<AuthoringRevision3QuestTransitionsEditPreparation>
+  authoringStorePrepareRevision3QuestTransitionsEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestTransitionsEditRequestV1 request,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_quest_transitions_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactCurrent(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'quest_transitions_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3QuestTransitionsEditPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

@@ -515,11 +515,13 @@ final class Revision3ContentOrigin {
     required this.type,
     required this.label,
     this.generatedOwner,
+    this.generatorVersion,
   });
 
   final String type;
   final String label;
   final Revision3ContentReferenceTarget? generatedOwner;
+  final int? generatorVersion;
 
   factory Revision3ContentOrigin._fromJson(
     Map<String, Object?> json,
@@ -583,7 +585,10 @@ final class Revision3ContentOrigin {
           json['generator_id'],
           '$context generator_id',
         );
-        _integer(json['generator_version'], '$context generator_version');
+        final generatorVersion = _integer(
+          json['generator_version'],
+          '$context generator_version',
+        );
         final owner = Revision3ContentReferenceTarget._fromJson(
           _object(json['owner'], '$context owner'),
           '$context owner',
@@ -592,6 +597,7 @@ final class Revision3ContentOrigin {
           type: type,
           label: generator,
           generatedOwner: owner,
+          generatorVersion: generatorVersion,
         );
       default:
         throw FormatException('$context has an unsupported type');
