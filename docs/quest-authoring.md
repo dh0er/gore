@@ -148,21 +148,63 @@ Quest can be inserted through the managed store.
 ### Revision-3 offline Draft transaction
 
 Schema revision 3 replaces the oversized embedded collision inventory with a
-content-addressed `QuestCollisionArtifactRef`. The filesystem-free
-`apply_revision3_quest_draft_transaction_v2` transaction accepts only exact
-canonical revision-3 project and request JSON, checks the project CAS fields,
-the referenced AssetStore metadata, the closed parent/giver provenance, and all
-existing Story identities, then atomically inserts one Quest Draft and its
-deterministic ScriptModule. Every rejection leaves the input project unchanged.
+content-addressed `QuestCollisionArtifactRef`. The historical
+`apply_revision3_quest_draft_transaction_v2` established the first-Quest path
+with caller-verified collision input; it is not the transaction used by the
+current native FFI route.
 
-The plain collision catalog passed by the caller is consumed only as generation
-input and must match the artifact reference's generation, source seal, and
-catalog layer exactly. It is not artifact authority. A successful result is
-permanently labelled build-blocked and runtime-unqualified; inspecting its
-source through the revision-3 planner still requires reopening the exact
-artifact and basis snapshot with a fresh verified capability. The transaction
-has no native command or Mod Studio wizard yet and performs no filesystem write,
-compile, package, deploy, launch, or save operation.
+The current filesystem-free
+`apply_revision3_quest_draft_transaction_v3` consumes a fresh prepared collision
+capability bound to the Base Game, trusted catalog, exact current project and
+head, non-Quest basis, prior-Quest evidence, and all collision domains. Its two
+JSON transports must be exact and canonical. Parent and giver are resolved only
+from bounded catalog IDs; generated identities are derived inside the
+transaction. It inserts one more Quest Draft plus deterministic ScriptModule,
+increments the revision once, and returns an externally opaque result only after
+canonical reopen equality. Every rejection leaves the input project unchanged.
+
+The outcome remains permanently build-blocked and runtime-unqualified, grants
+no artifact authority, and requires a fresh capability for source inspection.
+The pure transaction performs no filesystem write, compile, package, deploy,
+launch, or fixed-head publication. The strict native prepare-only FFI route
+below orchestrates this v3 transaction with Store persistence; the Dart
+managed-session transaction and Mod Studio wizard remain missing.
+
+### Native revision-3 prepare-only FFI route
+
+`authoring_store_prepare_revision3_quest_draft_v3` closes the native boundary
+around the repeated-Quest transaction and Store persistence path. Its exact raw
+request has the normal `command`/`payload` envelope; that payload accepts exactly
+`root`, `game_root`, `current_project_json`, and `quest_request_json`. Unknown,
+duplicate, wrong-typed, or oversized fields are rejected, and both embedded
+JSON transports must be exact and canonical.
+
+Native code fully opens the exact published R3 project, rebuilds the trusted
+Story catalog and base-game collision inventory from the deployment-aware
+pristine Shipping cache and current executable/Binds inputs, and binds a fresh
+linear collision capability. It then runs the committed C1 transaction, rechecks
+the game sources, imports the artifact through the C2 no-clobber Store path, and
+prepares and fully reopens the immutable candidate checkpoint. Game inputs are
+checked again before a response is released. The working-store root and semantic
+game installation must remain disjoint in either direction, including at the
+write boundary, and the basis revision must be safe for the signed 64-bit Studio
+wire after its single increment.
+
+The route is deliberately prepare-only. It returns basis/candidate heads,
+canonical candidate project identity, inserted Quest/module IDs, deduplication,
+and only these readiness/authority claims:
+
+- `build_status: blocked`;
+- `runtime_status: runtime_unqualified`;
+- `artifact_authority: not_granted`;
+- `source_inspection: fresh_capability_required`;
+- `publication_status: not_supported`.
+
+It never replaces `gore-project.json`. A late source race can leave only verified
+immutable CAS orphans and returns no stale candidate response. The strict Dart
+DTO/wrapper, one managed-session semantic Quest operation with guarded fixed-head
+publication, and the catalog/wizard/editor UI are still required; this native
+route alone does not make Quest authoring available in Mod Studio or in game.
 
 ## Safe qualification order
 

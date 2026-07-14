@@ -177,6 +177,39 @@ gore asset inspect `
 Always re-inspect before a second edit and save a fresh selector. Reusing the
 old selector fails on the complete pair seal before mutation.
 
+### Native revision-3 project staging boundary
+
+The native libraries now provide a project-owned, prepare-only path for this
+same proven edit. `verify_fixed_leaf_stage_input` consumes a verified
+PatchReceipt-v2 capability, reopens its complete receipt chain, reconstructs
+the target package again from the live IoStore in a private game-disjoint
+directory, reproduces the semantic selector patch, union-probes the live target
+and conversion dependencies, and binds the exact non-empty game executable.
+Receipt text alone cannot construct this opaque input.
+
+`WorkingProjectStore::prepare_revision3_dataasset_stage_v1` then imports the
+patched `.uasset`/`.uexp`, exact USMAP, optional sidecars, and one canonical
+stage manifest into the revision-3 AssetStore/CAS. The manifest media type is
+`application/vnd.gore.dataasset-fixed-leaf-stage+json;version=1`. It stores the
+project/basis identities, target package, generation facts, offset-free
+selector, replacement bytes, component seals, and closed status enums. It does
+not persist receipt bytes, local paths, raw offsets, or an authority-bearing
+file handle.
+
+Prepare, list, and registry-only remove require one exact published head. They
+fully reopen the current project and every unique historical stage basis under
+aggregate count/byte/work budgets, and a prepared candidate is fully reopened
+before return. Stage preparation fails closed on Store/game aliasing and live
+executable or generation drift. No method replaces `gore-project.json`; a
+caller must eventually use the managed session's guarded fixed-head publication
+lane. Races may leave only verified immutable CAS orphans.
+
+Every staged manifest remains explicitly `blocked`, `runtime_unqualified`,
+`not_granted`, and `not_supported`. This native boundary does not add a CLI or
+Mod Studio stage command and grants no build, pack, deploy, runtime, or future
+reinspection authority. Strict FFI/Dart/session wiring, semantic preview/diff/
+undo, build lowering, and post-pack verification are separate work.
+
 ## 6. Pack the patched pair without deploying it
 
 Pack the re-inspected pair back into an additive Zen triplet. As with extract,
