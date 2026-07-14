@@ -12,23 +12,29 @@ treated as deployed compatibility state.
 
 ## Visible Home workflow
 
-With a managed revision-3 project open and a Gothic 1 Remake installation
-configured in Settings, Home exposes three separate actions:
+With a managed revision-3 project open, Home exposes four separate actions.
+Import, installed-target resolution, and bundle construction additionally need
+a Gothic 1 Remake installation configured in Settings; changing an existing
+take selection does not.
 
 1. **Add Voice take** imports one real local Ogg for an existing dialog line and
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-2. **Resolve Voice target** inspects the exact installed locale archive for one
+2. **Manage Voice takes** searches existing dialog lines and lets the author
+   select one already retained Approved candidate for an existing locale slot,
+   or explicitly clear its current selection. It imports, removes, and changes
+   no take or media asset, and it needs no game path.
+3. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-3. **Build Voice bundle** evaluates every current Voice slot and either shows
+4. **Build Voice bundle** evaluates every current Voice slot and either shows
    all structured blockers without creating output, or writes one sealed
    voice-only bundle into a brand-new folder selected by the author. This is an
    offline build; the dialog has no deployment action.
 
-All three actions reload or bind the exact current project checkpoint. A stale
+All four actions reload or bind the exact current project checkpoint. A stale
 dialog, changed project identity, changed canonical head, or session requiring
 reopen fails closed. After a successful authoring publication, Home refreshes
 to the new managed project revision and head.
@@ -58,6 +64,37 @@ Vorbis and Opus metadata can be retained as authored source evidence. The
 current sealed bundle lowerer is qualified only for Vorbis, so selecting an
 Opus take produces an explicit `selected_take_codec_unqualified` build blocker
 instead of guessing compatibility.
+
+## Existing take selection
+
+Take selection is a project-only transaction over one exact existing
+`DialogLine`, locale, and uniquely owned `VoiceSlot`. The friendly dialog shows
+candidates in their authored order, distinguishes duplicate display names,
+marks the current choice, and disables non-Approved candidates. It never
+chooses the first take implicitly. Saving is available only for a real change;
+clearing an existing choice is explicit and warns that Voice bundle builds will
+remain blocked until another Approved take is selected.
+
+The native transaction binds the exact head, project, target, slot revision,
+localization identity, and expected current selection. Selecting requires an
+existing exact-project candidate with the same locale and `Approved` status.
+Only `VoiceSlot.selected`, the slot revision, and the project revision may
+change. Candidate order, every `VoiceTake`, all Ogg assets, target evidence,
+other slots, dialog text, and localization remain byte-equivalent. The native
+route opens the Store with full asset verification, prepares and fully reopens
+an immutable candidate, and checks the fixed head after preparation and again
+after constructing its response; it never publishes that head. The managed
+session alone performs guarded fixed-head publication, repair, and full
+published reopen.
+
+No game root, caller-selected source path or external Ogg input, archive
+access, build output, deployment, save file, or runtime authority participates
+in selection. Existing managed Store Ogg assets are nevertheless reopened and
+fully verified as part of the exact project basis and candidate checks. The
+operation is therefore available even when no game installation is configured.
+Its direct result remains `blocked`, `runtime_unqualified`, and native-
+publication `not_supported`; readiness is always re-derived later by the
+sealed build planner from the complete exact-current Voice graph.
 
 ## Installed target resolution
 
