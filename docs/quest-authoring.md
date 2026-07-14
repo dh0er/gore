@@ -408,6 +408,32 @@ AngelScript, or author dialog, journal, rewards, items, or arbitrary gameplay
 effects. Its visible boundary says that Save creates only an offline project
 checkpoint and does not build, run, deploy, or qualify the Quest in game.
 
+The same dialog also offers **Preview project logic**. This is a pure,
+resettable offline model over the currently visible, including unsaved, plan.
+It uses five conservative, mutually exclusive phases: `Unavailable`,
+`Available`, `Running`, `Succeeded`, and `Failed`. The displayed `Started` and
+`Completed` observations are derived from those phases. The Rust renderer emits
+the corresponding engine state calls independently; this offline truth table
+does not represent or prove simultaneous engine-state combinations outside the
+five phases. A predicate conjunction with no satisfying exclusive phase is
+counted and visibly marked as outside the preview model. It always evaluates
+false in the preview, while its independent calls remain in generated source;
+that warning is not a runtime-validity judgment.
+
+The preview exposes buttons only for edges whose `external_allowed` flag is
+true, evaluates representable typed predicates to a bounded deterministic fixed
+point, and records the resulting model condition/action timeline. Follow-up
+Start is guarded by `!HasBeenStarted()`; Succeed and Fail are guarded by
+`IsRunning()`, matching the calls emitted by the Rust renderer. Objective parent
+completion is modeled as the validated implicit root-success action. A repeated
+or over-budget cascade restores the pre-action lifecycle state. If Reset is
+refused, it also restores the exact prior retained timeline, sequence, and trim
+marker; a successful Reset returns every node to the initial offline state
+before re-evaluating automatic conditions. The preview never opens native code
+or writes a project, game installation, deployment, process, or save. Its
+visible boundary explicitly says this is project-logic feedback, not proof of
+engine predicate polling/handler order or runtime behavior.
+
 The closed plan supports one through eight objectives. Predicates are bounded
 disjunctive normal form: one through eight alternatives, each containing one
 through eight required atoms. Every effect list is bounded to eight entries.

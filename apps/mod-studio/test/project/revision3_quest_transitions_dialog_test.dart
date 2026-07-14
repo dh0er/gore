@@ -131,6 +131,96 @@ void main() {
     );
   });
 
+  testWidgets('offline project preview runs a cascade and resets locally', (
+    tester,
+  ) async {
+    await _open(tester);
+    await tester.tap(
+      find.byKey(const Key('revision3-quest-transitions-sequential-template')),
+    );
+    await tester.pump();
+    final openPreview = find.byKey(
+      const Key('revision3-quest-logic-preview-open'),
+    );
+    await tester.ensureVisible(openPreview);
+    await tester.tap(openPreview);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-quest-logic-preview-dialog')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('does not run the engine'), findsOneWidget);
+    expect(
+      find.textContaining('five conservative, mutually exclusive'),
+      findsOneWidget,
+    );
+    final rootStart = find.byKey(
+      const Key('revision3-quest-logic-preview-trigger-root-start'),
+    );
+    await tester.ensureVisible(rootStart);
+    await tester.tap(rootStart);
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(
+              const Key('revision3-quest-logic-preview-state-root-running'),
+            ),
+          )
+          .data,
+      'Yes',
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(
+              const Key(
+                'revision3-quest-logic-preview-state-objective:1-running',
+              ),
+            ),
+          )
+          .data,
+      'Yes',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('revision3-quest-logic-preview-timeline')),
+        matching: find.textContaining('follow-up action'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-quest-logic-preview-reset')),
+    );
+    await tester.pump();
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(
+              const Key('revision3-quest-logic-preview-state-root-running'),
+            ),
+          )
+          .data,
+      '—',
+    );
+
+    await tester.tap(
+      find.byKey(const Key('revision3-quest-logic-preview-close')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('revision3-quest-transitions-save')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+  });
+
   testWidgets('invalid driver stays in the editor with a useful error', (
     tester,
   ) async {

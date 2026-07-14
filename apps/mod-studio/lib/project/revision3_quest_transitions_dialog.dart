@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
 import 'revision3_content_index.dart';
+import 'revision3_quest_logic_preview.dart';
 import 'revision3_quest_transitions_authoring.dart';
 
 /// Visual, bounded editor for one exact-current Quest behavior plan.
@@ -212,6 +213,20 @@ class _Revision3QuestTransitionsEditDialogState
     }
   }
 
+  Future<void> _openLogicPreview() async {
+    final checkpoint = _checkpoint;
+    final plan = _plan;
+    if (checkpoint == null || plan == null || _busy || _checkpointLocked) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) =>
+          _QuestLogicPreviewDialog(checkpoint: checkpoint, plan: plan),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final checkpoint = _checkpoint;
@@ -287,6 +302,16 @@ class _Revision3QuestTransitionsEditDialogState
                     plan: plan,
                     enabled: enabled,
                     onEdit: _editTransition,
+                  ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const Key('revision3-quest-logic-preview-open'),
+                      onPressed: enabled ? _openLogicPreview : null,
+                      icon: const Icon(Icons.play_circle_outline),
+                      label: const Text('Preview project logic'),
+                    ),
                   ),
                 ],
                 if (_error != null) ...[
@@ -371,6 +396,243 @@ class _Revision3QuestTransitionsEditDialogState
     setState(() => _allowPop = true);
     await WidgetsBinding.instance.endOfFrame;
     if (mounted) Navigator.of(context).pop(result);
+  }
+}
+
+final class _QuestLogicPreviewDialog extends StatefulWidget {
+  const _QuestLogicPreviewDialog({
+    required this.checkpoint,
+    required this.plan,
+  });
+
+  final Revision3QuestTransitionsEditCheckpoint checkpoint;
+  final AuthoringRevision3QuestTransitionPlanV1 plan;
+
+  @override
+  State<_QuestLogicPreviewDialog> createState() =>
+      _QuestLogicPreviewDialogState();
+}
+
+final class _QuestLogicPreviewDialogState
+    extends State<_QuestLogicPreviewDialog> {
+  late final Revision3QuestLogicPreview _preview;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    _preview = Revision3QuestLogicPreview(widget.plan);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final outsideModelCount =
+        _preview.predicateConjunctionsOutsideExclusiveModel;
+    final nodes = <AuthoringRevision3QuestTransitionNodeV1>[
+      const AuthoringRevision3QuestTransitionNodeV1.root(),
+      for (final slot in widget.plan.objectiveOrder)
+        AuthoringRevision3QuestTransitionNodeV1.objective(slot),
+    ];
+    return AlertDialog(
+      key: const Key('revision3-quest-logic-preview-dialog'),
+      title: const Text('Preview Quest project logic'),
+      content: SizedBox(
+        width: 940,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                key: const Key('revision3-quest-logic-preview-boundary'),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  'Project logic preview only. It uses five conservative, mutually exclusive offline phases: Unavailable, Available, Running, Succeeded, and Failed. Started and Completed are derived. Generated engine state calls are independent; combinations outside these phases are not represented or proven. It does not run the engine, prove runtime polling or handler order, build, deploy, touch a save, or qualify this Quest in the game.',
+                ),
+              ),
+              if (outsideModelCount > 0) ...[
+                const SizedBox(height: 10),
+                Container(
+                  key: const Key(
+                    'revision3-quest-logic-preview-model-boundary',
+                  ),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '$outsideModelCount condition alternative${outsideModelCount == 1 ? '' : 's'} cannot be represented by the five exclusive preview phases and therefore always evaluate${outsideModelCount == 1 ? 's' : ''} false here. The renderer still emits the independent engine state calls; this is not a runtime verdict.',
+                  ),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Text(
+                'Lifecycle state',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 6),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  key: const Key('revision3-quest-logic-preview-state-table'),
+                  columns: const [
+                    DataColumn(label: Text('Quest part')),
+                    DataColumn(label: Text('Available')),
+                    DataColumn(label: Text('Running')),
+                    DataColumn(label: Text('Started')),
+                    DataColumn(label: Text('Succeeded')),
+                    DataColumn(label: Text('Failed')),
+                    DataColumn(label: Text('Completed')),
+                  ],
+                  rows: [
+                    for (final node in nodes)
+                      DataRow(
+                        cells: [
+                          DataCell(Text(_nodeLabel(widget.checkpoint, node))),
+                          for (final test
+                              in AuthoringRevision3QuestTransitionStateTestV1
+                                  .values)
+                            DataCell(
+                              Text(
+                                _preview.stateOf(node).matches(test)
+                                    ? 'Yes'
+                                    : '—',
+                                key: Key(
+                                  'revision3-quest-logic-preview-state-${node.stableKey}-${test.wireName}',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'External test triggers',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Only edges explicitly marked as external in this project plan appear here.',
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final trigger in _preview.externalTriggers)
+                    OutlinedButton(
+                      key: Key(
+                        'revision3-quest-logic-preview-trigger-${trigger.node.stableKey}-${trigger.edge.wireName}',
+                      ),
+                      onPressed: trigger.enabled
+                          ? () => _trigger(trigger.node, trigger.edge)
+                          : null,
+                      child: Text(
+                        '${_nodeLabel(widget.checkpoint, trigger.node)} · ${_edgeLabel(trigger.edge)}',
+                      ),
+                    ),
+                ],
+              ),
+              if (_notice != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _notice!,
+                  key: const Key('revision3-quest-logic-preview-notice'),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Text('Timeline', style: Theme.of(context).textTheme.titleMedium),
+              if (_preview.traceWasTrimmed)
+                const Text(
+                  'Older preview events were removed to keep this timeline bounded.',
+                ),
+              Container(
+                key: const Key('revision3-quest-logic-preview-timeline'),
+                constraints: const BoxConstraints(maxHeight: 260),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: _preview.trace.length,
+                  itemBuilder: (context, index) {
+                    final entry = _preview.trace[index];
+                    return ListTile(
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      leading: Text('${entry.sequence}'),
+                      title: Text(_traceLabel(entry)),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton.icon(
+          key: const Key('revision3-quest-logic-preview-reset'),
+          onPressed: _reset,
+          icon: const Icon(Icons.restart_alt),
+          label: const Text('Reset preview'),
+        ),
+        FilledButton(
+          key: const Key('revision3-quest-logic-preview-close'),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+
+  void _trigger(
+    AuthoringRevision3QuestTransitionNodeV1 node,
+    AuthoringRevision3QuestTransitionEdgeV1 edge,
+  ) {
+    final result = _preview.triggerExternal(node, edge);
+    setState(() {
+      _notice = result.status == Revision3QuestLogicPreviewActionStatus.refused
+          ? result.message
+          : null;
+    });
+  }
+
+  void _reset() {
+    final result = _preview.reset();
+    setState(() {
+      _notice = result.status == Revision3QuestLogicPreviewActionStatus.refused
+          ? result.message
+          : null;
+    });
+  }
+
+  String _traceLabel(Revision3QuestLogicPreviewTraceEntry entry) {
+    final node = _nodeLabel(widget.checkpoint, entry.node);
+    final edge = entry.edge == null ? null : _edgeLabel(entry.edge!);
+    final source = entry.source == null
+        ? null
+        : _nodeLabel(widget.checkpoint, entry.source!);
+    return switch (entry.kind) {
+      Revision3QuestLogicPreviewTraceKind.reset => 'Preview reset.',
+      Revision3QuestLogicPreviewTraceKind.external =>
+        'External test trigger: $node · $edge.',
+      Revision3QuestLogicPreviewTraceKind.predicate =>
+        'Automatic condition: $node · $edge.',
+      Revision3QuestLogicPreviewTraceKind.effect =>
+        '$source follow-up action: $node · $edge.',
+      Revision3QuestLogicPreviewTraceKind.parentSuccess =>
+        '$source completed its parent: $node · $edge.',
+      Revision3QuestLogicPreviewTraceKind.ignored =>
+        entry.detail ?? '$node · $edge was skipped.',
+      Revision3QuestLogicPreviewTraceKind.refused =>
+        entry.detail ?? 'The bounded project preview refused this action.',
+    };
   }
 }
 
