@@ -144,10 +144,11 @@ pub use revision3_quest::{
     Revision3QuestGenerationError,
 };
 pub use revision3_quest_source_v2::{
-    PreparedRevision3QuestCollisionSourceV2, Revision3NonQuestCollisionBasisV2,
-    Revision3PriorQuestEvidenceV2, Revision3QuestCollisionSourceErrorV2,
-    MAX_REVISION3_COLLISION_IDENTITIES_V2, MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2,
-    MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2, MAX_REVISION3_PRIOR_QUESTS_V2,
+    PreparedRevision3QuestCollisionInspectionSourceV2, PreparedRevision3QuestCollisionSourceV2,
+    Revision3NonQuestCollisionBasisV2, Revision3PriorQuestEvidenceV2,
+    Revision3QuestCollisionSourceErrorV2, MAX_REVISION3_COLLISION_IDENTITIES_V2,
+    MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2, MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2,
+    MAX_REVISION3_PRIOR_QUESTS_V2,
 };
 pub use revision3_voice_build::{
     plan_revision3_voice_build_v1, Revision3VoiceBuildBlockReasonV1, Revision3VoiceBuildBlockedV1,

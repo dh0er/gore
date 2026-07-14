@@ -2671,6 +2671,174 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Entry {number}'**
   String glossarySegmentEntry(int number);
+
+  /// No description provided for @questJournalAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All quests'**
+  String get questJournalAll;
+
+  /// No description provided for @questJournalOldCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Old Camp'**
+  String get questJournalOldCamp;
+
+  /// No description provided for @questJournalNewCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'New Camp'**
+  String get questJournalNewCamp;
+
+  /// No description provided for @questJournalSwampCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Swamp Camp'**
+  String get questJournalSwampCamp;
+
+  /// No description provided for @questJournalColony.
+  ///
+  /// In en, this message translates to:
+  /// **'The Colony'**
+  String get questJournalColony;
+
+  /// No description provided for @questJournalCompleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed'**
+  String get questJournalCompleted;
+
+  /// No description provided for @questJournalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'In-game journal view. Internal and not-yet-started quest states remain available under All Data.'**
+  String get questJournalHint;
+
+  /// No description provided for @questJournalNoEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'No journal quests match the current filters.'**
+  String get questJournalNoEntries;
+
+  /// No description provided for @glossaryTutorials.
+  ///
+  /// In en, this message translates to:
+  /// **'Tutorials'**
+  String get glossaryTutorials;
+
+  /// No description provided for @tutorialGateNote.
+  ///
+  /// In en, this message translates to:
+  /// **'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.'**
+  String get tutorialGateNote;
+
+  /// No description provided for @tutorialResetChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset tutorial changes'**
+  String get tutorialResetChanges;
+
+  /// No description provided for @tutorialNoGates.
+  ///
+  /// In en, this message translates to:
+  /// **'No tutorial unlock gates are available in this save.'**
+  String get tutorialNoGates;
+
+  /// No description provided for @tutorialGateUnlockCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{unlocked} of {total} tutorial gates unlocked'**
+  String tutorialGateUnlockCount(int unlocked, int total);
+
+  /// No description provided for @tutorialGateCombatBasics.
+  ///
+  /// In en, this message translates to:
+  /// **'Combat basics'**
+  String get tutorialGateCombatBasics;
+
+  /// No description provided for @tutorialGateCrafting.
+  ///
+  /// In en, this message translates to:
+  /// **'Crafting'**
+  String get tutorialGateCrafting;
+
+  /// No description provided for @tutorialGateCrime.
+  ///
+  /// In en, this message translates to:
+  /// **'Crime and consequences'**
+  String get tutorialGateCrime;
+
+  /// No description provided for @tutorialGateDrugs.
+  ///
+  /// In en, this message translates to:
+  /// **'Consumables and effects'**
+  String get tutorialGateDrugs;
+
+  /// No description provided for @tutorialGateLockpicking.
+  ///
+  /// In en, this message translates to:
+  /// **'Lockpicking'**
+  String get tutorialGateLockpicking;
+
+  /// No description provided for @tutorialGateMagic.
+  ///
+  /// In en, this message translates to:
+  /// **'Magic'**
+  String get tutorialGateMagic;
+
+  /// No description provided for @tutorialGateMap.
+  ///
+  /// In en, this message translates to:
+  /// **'Map'**
+  String get tutorialGateMap;
+
+  /// No description provided for @tutorialGateMeleeCombat.
+  ///
+  /// In en, this message translates to:
+  /// **'Melee combat'**
+  String get tutorialGateMeleeCombat;
+
+  /// No description provided for @tutorialGateNavigation.
+  ///
+  /// In en, this message translates to:
+  /// **'Movement and navigation'**
+  String get tutorialGateNavigation;
+
+  /// No description provided for @tutorialGatePerception.
+  ///
+  /// In en, this message translates to:
+  /// **'Perception'**
+  String get tutorialGatePerception;
+
+  /// No description provided for @tutorialGatePlayerProgression.
+  ///
+  /// In en, this message translates to:
+  /// **'Character progression'**
+  String get tutorialGatePlayerProgression;
+
+  /// No description provided for @tutorialGateRanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Ranged combat'**
+  String get tutorialGateRanged;
+
+  /// No description provided for @tutorialGateRiding.
+  ///
+  /// In en, this message translates to:
+  /// **'Riding'**
+  String get tutorialGateRiding;
+
+  /// No description provided for @tutorialGateSleep.
+  ///
+  /// In en, this message translates to:
+  /// **'Sleeping'**
+  String get tutorialGateSleep;
+
+  /// No description provided for @tutorialGateTrading.
+  ///
+  /// In en, this message translates to:
+  /// **'Trading'**
+  String get tutorialGateTrading;
 }
 
 class _AppLocalizationsDelegate

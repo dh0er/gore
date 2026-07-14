@@ -15,6 +15,7 @@ part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
+part '../project/revision3_quest_source_inspection.dart';
 part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
@@ -704,6 +705,44 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3QuestDraftPreparation.fromJson(response);
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Inspect the deterministic generated source for one exact-current
+  /// revision-3 Quest.
+  ///
+  /// Native code reopens the exact fixed head and privately verifies its
+  /// persisted collision evidence against fresh game inputs. The returned
+  /// plan is source-inspection-only: it grants no compile, build, runtime,
+  /// deployment, mutation, or publication authority.
+  Future<AuthoringRevision3QuestSourceInspectionResult>
+  authoringStoreInspectRevision3QuestSourceV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) async {
+    const command = 'authoring_store_inspect_revision3_quest_source_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    final requestedQuestId = _authoringRevision3QuestSourceInspectionEntityId(
+      questId,
+      'questId',
+    );
+    final response = await _call(command, <String, Object?>{
+      'root': root,
+      'game_root': gameRoot,
+      'expected_head_json': expectedHead.canonicalJson,
+      'quest_id': requestedQuestId,
+    });
+    try {
+      return AuthoringRevision3QuestSourceInspectionResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        requestedQuestId: requestedQuestId,
+      );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);
     }

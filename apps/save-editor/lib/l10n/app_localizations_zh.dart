@@ -1435,6 +1435,96 @@ class AppLocalizationsZh extends AppLocalizations {
   String glossarySegmentEntry(int number) {
     return 'Entry $number';
   }
+
+  @override
+  String get questJournalAll => 'All quests';
+
+  @override
+  String get questJournalOldCamp => 'Old Camp';
+
+  @override
+  String get questJournalNewCamp => 'New Camp';
+
+  @override
+  String get questJournalSwampCamp => 'Swamp Camp';
+
+  @override
+  String get questJournalColony => 'The Colony';
+
+  @override
+  String get questJournalCompleted => 'Completed';
+
+  @override
+  String get questJournalHint =>
+      'In-game journal view. Internal and not-yet-started quest states remain available under All Data.';
+
+  @override
+  String get questJournalNoEntries =>
+      'No journal quests match the current filters.';
+
+  @override
+  String get glossaryTutorials => 'Tutorials';
+
+  @override
+  String get tutorialGateNote =>
+      'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.';
+
+  @override
+  String get tutorialResetChanges => 'Reset tutorial changes';
+
+  @override
+  String get tutorialNoGates =>
+      'No tutorial unlock gates are available in this save.';
+
+  @override
+  String tutorialGateUnlockCount(int unlocked, int total) {
+    return '$unlocked of $total tutorial gates unlocked';
+  }
+
+  @override
+  String get tutorialGateCombatBasics => 'Combat basics';
+
+  @override
+  String get tutorialGateCrafting => 'Crafting';
+
+  @override
+  String get tutorialGateCrime => 'Crime and consequences';
+
+  @override
+  String get tutorialGateDrugs => 'Consumables and effects';
+
+  @override
+  String get tutorialGateLockpicking => 'Lockpicking';
+
+  @override
+  String get tutorialGateMagic => 'Magic';
+
+  @override
+  String get tutorialGateMap => 'Map';
+
+  @override
+  String get tutorialGateMeleeCombat => 'Melee combat';
+
+  @override
+  String get tutorialGateNavigation => 'Movement and navigation';
+
+  @override
+  String get tutorialGatePerception => 'Perception';
+
+  @override
+  String get tutorialGatePlayerProgression => 'Character progression';
+
+  @override
+  String get tutorialGateRanged => 'Ranged combat';
+
+  @override
+  String get tutorialGateRiding => 'Riding';
+
+  @override
+  String get tutorialGateSleep => 'Sleeping';
+
+  @override
+  String get tutorialGateTrading => 'Trading';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).

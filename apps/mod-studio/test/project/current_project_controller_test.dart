@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
@@ -574,6 +575,203 @@ void main() {
         throwsA(isA<Revision3ContentRequiresReopenException>()),
       );
       expect(managed.contentReadCalls, 2);
+    },
+  );
+
+  test(
+    'Quest source inspection binds the visible root, identity, revision, and head',
+    () async {
+      const projectId = '41414141414141414141414141414141';
+      const questId = '71717171717171717171717171717171';
+      const gameRoot = r'C:\Games\Gothic Remake';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-inspection'),
+        projectIdValue: projectId,
+        projectRevision: 41,
+        head: _head(41),
+        onQuestInspection: (lease, receivedGameRoot, receivedQuestId) {
+          expect(receivedGameRoot, gameRoot);
+          expect(receivedQuestId, questId);
+          return _controllerQuestInspectionResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            questId: receivedQuestId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final staleRequests =
+          <Future<AuthoringRevision3QuestSourceInspectionResult> Function()>[
+            () => coordinator.inspectCurrentRevision3QuestSource(
+              expectedRoot: 'another-root',
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: gameRoot,
+              questId: questId,
+            ),
+            () => coordinator.inspectCurrentRevision3QuestSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: '42424242424242424242424242424242',
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: gameRoot,
+              questId: questId,
+            ),
+            () => coordinator.inspectCurrentRevision3QuestSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision + 1,
+              expectedHead: visible.head,
+              gameRoot: gameRoot,
+              questId: questId,
+            ),
+            () => coordinator.inspectCurrentRevision3QuestSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: _head(42),
+              gameRoot: gameRoot,
+              questId: questId,
+            ),
+          ];
+      for (final inspect in staleRequests) {
+        await expectLater(
+          inspect(),
+          throwsA(
+            isA<Revision3QuestSourceInspectionStaleCheckpointException>(),
+          ),
+        );
+      }
+      expect(managed.questInspectionCalls, 0);
+
+      final result = await coordinator.inspectCurrentRevision3QuestSource(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        gameRoot: gameRoot,
+        questId: questId,
+      );
+
+      expect(result.projectId, visible.projectId);
+      expect(result.projectRevision, visible.projectRevision);
+      expect(result.head.canonicalJson, visible.head.canonicalJson);
+      expect(result.questId, questId);
+      expect(managed.questInspectionCalls, 1);
+      expect(managed.questInspectionGameRoots, <String>[gameRoot]);
+      expect(managed.questInspectionQuestIds, <String>[questId]);
+      final after = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(after.root.path, visible.root.path);
+      expect(after.projectId, visible.projectId);
+      expect(after.projectRevision, visible.projectRevision);
+      expect(after.head.canonicalJson, visible.head.canonicalJson);
+      expect(after.requiresReopen, isFalse);
+    },
+  );
+
+  test('Quest source inspection maps a mismatched result to stale', () async {
+    const projectId = '43434343434343434343434343434343';
+    const questId = '73737373737373737373737373737373';
+    final managed = _FakeManagedLease(
+      root: Directory('managed-quest-inspection-result-stale'),
+      projectIdValue: projectId,
+      projectRevision: 43,
+      head: _head(43),
+      onQuestInspection: (lease, _, receivedQuestId) =>
+          _controllerQuestInspectionResult(
+            head: _head(44),
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            questId: receivedQuestId,
+          ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.inspectCurrentRevision3QuestSource(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        gameRoot: r'C:\Games\Gothic Remake',
+        questId: questId,
+      ),
+      throwsA(isA<Revision3QuestSourceInspectionStaleCheckpointException>()),
+    );
+
+    expect(managed.questInspectionCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
+    'Quest source inspection maps poisoned lease state to requires-reopen and locks retry',
+    () async {
+      const projectId = '45454545454545454545454545454545';
+      const questId = '75757575757575757575757575757575';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-inspection-reopen'),
+        projectIdValue: projectId,
+        projectRevision: 45,
+        head: _head(45),
+        onQuestInspection: (lease, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected Quest inspection integrity failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<AuthoringRevision3QuestSourceInspectionResult> inspect() =>
+          coordinator.inspectCurrentRevision3QuestSource(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+            questId: questId,
+          );
+
+      await expectLater(
+        inspect(),
+        throwsA(isA<Revision3QuestSourceInspectionRequiresReopenException>()),
+      );
+      expect(managed.questInspectionCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        inspect(),
+        throwsA(isA<Revision3QuestSourceInspectionRequiresReopenException>()),
+      );
+      expect(managed.questInspectionCalls, 1);
     },
   );
 
@@ -2242,6 +2440,12 @@ AuthoringDraftContentSeal _controllerSeal(int bytes, String digit) =>
 
 typedef _VerifyHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _ContentReadHook = FutureOr<void> Function(_FakeManagedLease lease);
+typedef _QuestInspectionHook =
+    FutureOr<AuthoringRevision3QuestSourceInspectionResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      String questId,
+    );
 typedef _QuestPublishHook =
     FutureOr<Revision3QuestDraftPublication> Function(
       _FakeManagedLease lease,
@@ -2335,6 +2539,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.head,
     this.projectIdError,
     this.onVerify,
+    this.onQuestInspection,
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
@@ -2363,6 +2568,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   AuthoringWorkingHead head;
   final _VerifyHook? onVerify;
+  final _QuestInspectionHook? onQuestInspection;
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
   final _QuestOutlinePublishHook? onQuestOutlinePublish;
@@ -2384,6 +2590,9 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   bool requiresReopenValue = false;
   int verifyCalls = 0;
   int contentReadCalls = 0;
+  int questInspectionCalls = 0;
+  final List<String> questInspectionGameRoots = <String>[];
+  final List<String> questInspectionQuestIds = <String>[];
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
@@ -2423,6 +2632,21 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     await onContentRead?.call(this);
     return contentIndex ??
         (throw StateError('fake managed lease has no content index'));
+  }
+
+  @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String gameRoot,
+    required String questId,
+  }) async {
+    questInspectionCalls++;
+    questInspectionGameRoots.add(gameRoot);
+    questInspectionQuestIds.add(questId);
+    final inspect = onQuestInspection;
+    if (inspect == null) {
+      throw StateError('fake managed lease has no Quest source inspector');
+    }
+    return inspect(this, gameRoot, questId);
   }
 
   @override
@@ -2743,6 +2967,105 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String questId,
+}) {
+  const moduleId = '72727272727272727272727272727272';
+  const source = '''class UQuest_GoreControllerInspection : UQuest
+{
+    void OnStart() {}
+}
+''';
+  final sourceBytes = utf8.encode(source);
+  final sourceSha = crypto.sha256.convert(sourceBytes).toString();
+  final projectBytes = utf8.encode(
+    'controller Quest inspection $projectId@$projectRevision',
+  );
+  final projectSeal = <String, Object?>{
+    'byte_len': projectBytes.length,
+    'sha256': crypto.sha256.convert(projectBytes).toString(),
+  };
+  Map<String, Object?> seal(int byteLength, String digit) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': List<String>.filled(64, digit).join(),
+  };
+  Map<String, Object?> typedRef(String id, String kind) => <String, Object?>{
+    'project_id': projectId,
+    'id': id,
+    'expected_kind': kind,
+  };
+  final planJson = jsonEncode(<String, Object?>{
+    'format': 'revision3_quest_source_inspection_plan',
+    'schema_revision': 3,
+    'scope': 'source_inspection_only',
+    'build_status': 'blocked',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+    'provenance': <String, Object?>{
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'target_executable': seal(171698176, '2'),
+      'canonical_project': projectSeal,
+      'collision_basis_head': jsonDecode(head.canonicalJson),
+      'collision_basis_project': seal(1024, '3'),
+      'collision_nonquest_project': seal(900, '4'),
+      'collision_prior_quest_count': 2,
+      'collision_prior_quest_evidence': seal(300, '5'),
+      'collision_artifact': seal(700, '6'),
+      'collision_source': seal(700, '7'),
+    },
+    'module': <String, Object?>{
+      'quest': typedRef(questId, 'quest_draft'),
+      'script_module': typedRef(moduleId, 'script_module'),
+      'draft_input': seal(420, '8'),
+      'persisted_source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': sourceSha,
+      },
+      'generated': <String, Object?>{
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': typedRef(questId, 'quest_draft'),
+        'module_namespace': 'GoreMods.Quests.ControllerInspection',
+        'module_relative_path': 'GoreMods/Quests/ControllerInspection.as',
+        'source': source,
+        'source_sha256': sourceSha,
+        'input_fingerprint': List<String>.filled(64, '9').join(),
+        'status': <String, Object?>{
+          'authoring': 'offline_draft',
+          'runtime': 'runtime_unqualified',
+        },
+      },
+    },
+  });
+  final planBytes = utf8.encode(planJson);
+  return AuthoringRevision3QuestSourceInspectionResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'inspection_only',
+      'head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'project_seal': projectSeal,
+      'quest_id': questId,
+      'plan_json': planJson,
+      'plan_seal': <String, Object?>{
+        'byte_len': planBytes.length,
+        'sha256': crypto.sha256.convert(planBytes).toString(),
+      },
+      'scope': 'source_inspection_only',
+      'build_status': 'blocked',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedQuestId: questId,
+  );
+}
 
 AuthoringRevision3DataAssetStage _dataAssetStage() {
   final fixture = revision3DataAssetNativeGoldenFixture();

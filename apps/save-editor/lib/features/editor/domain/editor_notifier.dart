@@ -1698,6 +1698,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return ProgressionQuestPage.fromJson(data);
   }
 
+  /// Load the tutorial unlock gates that the game presents from its glossary.
+  ///
+  /// The core deliberately exposes these separately from normal journal quests
+  /// and omits the structural `Quest_Tutorials` root. The response otherwise
+  /// uses the same shape as a quest page so the existing typed model and edit
+  /// intent can be reused without leaking tutorials back into the quest pane.
+  Future<ProgressionQuestPage> loadProgressionTutorials({
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'tutorials',
+      'offset': offset,
+      'limit': limit,
+    }, onError: (message) => error = message);
+    if (data == null) return ProgressionQuestPage(error: error);
+    return ProgressionQuestPage.fromJson(data);
+  }
+
   /// Load the complete save-backed glossary in one query. Creature and
   /// location documents are returned as structured quest trees; the raw Hero
   /// segment unlocks in the same response are joined to the bundled NPC

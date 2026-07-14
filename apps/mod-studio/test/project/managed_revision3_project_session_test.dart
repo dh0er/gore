@@ -2352,6 +2352,267 @@ void main() {
   });
 
   test(
+    'Quest source inspection forwards the exact read-only basis without publishing',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'quest_inspection_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 12,
+        name: 'Quest inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      const gameRoot = r'D:\Games\Gothic Remake';
+      const questId = '00000000000000000000000000000071';
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+      final questPrepareCalls = store.questPrepareCalls;
+
+      final result = await session.inspectQuestSourceV1(
+        gameRoot: gameRoot,
+        questId: questId,
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 12);
+      expect(result.questId, questId);
+      expect(result.generatedSource, contains('UQuest_GoreInspection'));
+      expect(store.questInspectionCalls, 1);
+      expect(store.questInspectionRoots, <String>[root.path]);
+      expect(store.questInspectionGameRoots, <String>[gameRoot]);
+      expect(store.questInspectionExpectedHeads, <String>[exactHead]);
+      expect(store.questInspectionQuestIds, <String>[questId]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.questPrepareCalls, questPrepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 12);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Quest source inspection rejects every response basis mismatch fail-closed',
+    () async {
+      for (final mismatch in <String>[
+        'head',
+        'project-id',
+        'revision',
+        'quest',
+        'project-seal',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'quest_inspection_$mismatch',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 13,
+            name: 'Quest inspection $mismatch',
+          ),
+        );
+        final exactHeadBytes = await session.headFile.readAsBytes();
+        final prepareCalls = store.prepareCalls;
+        store.nextQuestInspectionResponseMismatch = mismatch;
+
+        await expectLater(
+          session.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: mismatch,
+        );
+
+        expect(store.questInspectionCalls, 1, reason: mismatch);
+        expect(store.prepareCalls, prepareCalls, reason: mismatch);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(exactHeadBytes),
+          reason: mismatch,
+        );
+        expect(session.projectRevision, 13, reason: mismatch);
+        expect(session.requiresReopen, isTrue, reason: mismatch);
+        await session.close();
+      }
+    },
+  );
+
+  test('Quest source inspection detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'quest_inspection_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(
+        revision: 14,
+        name: 'Quest inspection head race',
+      ),
+    );
+    final prepareCalls = store.prepareCalls;
+    final external = store.register(
+      _projectJson(revision: 91, name: 'External inspection winner'),
+    );
+    store.afterQuestInspection = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.inspectQuestSourceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+      ),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.prepareCalls, prepareCalls);
+    expect(store.questInspectionCalls, 1);
+    expect(session.projectRevision, 14);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.inspectQuestSourceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: '00000000000000000000000000000071',
+      ),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.questInspectionCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'Quest inspection domain errors retry while malformed, integrity, and head conflict poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 15, name: 'Quest inspection retry'),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_QUEST_INSPECTION_COLLISION_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_FAILED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_CHANGED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_MISSING',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNAVAILABLE',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNSAFE',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_INVENTORY_FAILED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_TARGET_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_QUEST_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_RECOVERY_REQUIRED',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_REQUEST_INVALID',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_UNSUPPORTED_GENERATION',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextQuestInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_quest_source_v1',
+          code: code,
+          message: 'fake retryable Quest inspection domain error',
+        );
+        await expectLater(
+          retrySession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(
+        (await retrySession.inspectQuestSourceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          questId: '00000000000000000000000000000071',
+        )).projectRevision,
+        15,
+      );
+      expect(retryStore.questInspectionCalls, retryableCodes.length + 1);
+      await retrySession.close();
+
+      final poisonCodes = <String>[
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_QUEST_INSPECTION_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT',
+      ];
+      var ordinal = 0;
+      for (final code in poisonCodes) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'quest_inspection_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 15 + ordinal,
+                name: 'Quest inspection poison $ordinal',
+              ),
+            );
+        poisonStore.nextQuestInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_quest_source_v1',
+          code: code,
+          message: 'fake fail-closed Quest inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(
+            code == 'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: code,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          poisonSession.inspectQuestSourceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(poisonStore.questInspectionCalls, 1, reason: code);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
     'verifyCurrentHead drift or reopen mismatch poisons the session',
     () async {
       for (final mode in <String>['head-drift', 'reopen-mismatch']) {
@@ -3121,6 +3382,13 @@ typedef _AfterContentRead =
       String projectJson,
     );
 
+typedef _AfterQuestInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
 typedef _AfterDataAssetPrepare =
     FutureOr<void> Function(
       String root,
@@ -3175,6 +3443,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int voiceTargetPrepareCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
+  int questInspectionCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
@@ -3183,6 +3452,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _AfterQuestPrepare? afterQuestPrepare;
   _AfterNpcPrepare? afterNpcPrepare;
   _AfterContentRead? afterContentRead;
+  _AfterQuestInspection? afterQuestInspection;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
   _AfterVoiceBuild? afterVoiceBuild;
@@ -3221,9 +3491,15 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
+  Object? nextQuestInspectionError;
+  String? nextQuestInspectionResponseMismatch;
   Object? nextDataAssetError;
   String? nextDataAssetResponseMismatch;
   final List<String> contentExpectedHeads = <String>[];
+  final List<String> questInspectionRoots = <String>[];
+  final List<String> questInspectionGameRoots = <String>[];
+  final List<String> questInspectionExpectedHeads = <String>[];
+  final List<String> questInspectionQuestIds = <String>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
@@ -3946,6 +4222,63 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) async {
+    questInspectionCalls++;
+    questInspectionRoots.add(root);
+    questInspectionGameRoots.add(gameRoot);
+    questInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    questInspectionQuestIds.add(questId);
+    final injectedError = nextQuestInspectionError;
+    nextQuestInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_quest_source_v1',
+        code: 'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native Quest inspection head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown Quest inspection checkpoint head');
+    }
+    final hook = afterQuestInspection;
+    afterQuestInspection = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextQuestInspectionResponseMismatch;
+    nextQuestInspectionResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final responseHead = mismatch == 'head'
+        ? register(projectJson)
+        : expectedHead;
+    final responseQuestId = mismatch == 'quest'
+        ? '00000000000000000000000000000073'
+        : questId;
+    return _questSourceInspectionResult(
+      head: responseHead,
+      projectJson: projectJson,
+      questId: responseQuestId,
+      projectId: mismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id']! as String,
+      projectRevision: mismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision']! as int,
+      projectSealJson: mismatch == 'project-seal'
+          ? _projectJson(revision: 99, name: 'Mismatched inspection seal')
+          : projectJson,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -4242,6 +4575,106 @@ Map<String, Object?> _contentResponse(
     'runtime_status': 'runtime_unqualified',
     'publication_status': 'not_applicable',
   };
+}
+
+AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required String questId,
+  required String projectId,
+  required int projectRevision,
+  String? projectSealJson,
+}) {
+  const moduleId = '00000000000000000000000000000072';
+  const source = '''class UQuest_GoreInspection : UQuest
+{
+    void OnStart() {}
+}
+''';
+  final sourceBytes = utf8.encode(source);
+  final sourceSha = crypto.sha256.convert(sourceBytes).toString();
+  final sealedProjectJson = projectSealJson ?? projectJson;
+  final projectBytes = utf8.encode(sealedProjectJson);
+  final projectSeal = <String, Object?>{
+    'byte_len': projectBytes.length,
+    'sha256': crypto.sha256.convert(projectBytes).toString(),
+  };
+  Map<String, Object?> seal(int byteLength, String digit) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': List<String>.filled(64, digit).join(),
+  };
+  Map<String, Object?> typedRef(String id, String kind) => <String, Object?>{
+    'project_id': projectId,
+    'id': id,
+    'expected_kind': kind,
+  };
+  final planJson = jsonEncode(<String, Object?>{
+    'format': 'revision3_quest_source_inspection_plan',
+    'schema_revision': 3,
+    'scope': 'source_inspection_only',
+    'build_status': 'blocked',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+    'provenance': <String, Object?>{
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'target_executable': seal(171698176, '2'),
+      'canonical_project': projectSeal,
+      'collision_basis_head': jsonDecode(head.canonicalJson),
+      'collision_basis_project': seal(1024, '3'),
+      'collision_nonquest_project': seal(900, '4'),
+      'collision_prior_quest_count': 2,
+      'collision_prior_quest_evidence': seal(300, '5'),
+      'collision_artifact': seal(700, '6'),
+      'collision_source': seal(700, '7'),
+    },
+    'module': <String, Object?>{
+      'quest': typedRef(questId, 'quest_draft'),
+      'script_module': typedRef(moduleId, 'script_module'),
+      'draft_input': seal(420, '8'),
+      'persisted_source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': sourceSha,
+      },
+      'generated': <String, Object?>{
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': 4,
+        'owner': typedRef(questId, 'quest_draft'),
+        'module_namespace': 'GoreMods.Quests.Inspection',
+        'module_relative_path': 'GoreMods/Quests/Inspection.as',
+        'source': source,
+        'source_sha256': sourceSha,
+        'input_fingerprint': List<String>.filled(64, '9').join(),
+        'status': <String, Object?>{
+          'authoring': 'offline_draft',
+          'runtime': 'runtime_unqualified',
+        },
+      },
+    },
+  });
+  final planBytes = utf8.encode(planJson);
+  return AuthoringRevision3QuestSourceInspectionResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'inspection_only',
+      'head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'project_seal': projectSeal,
+      'quest_id': questId,
+      'plan_json': planJson,
+      'plan_seal': <String, Object?>{
+        'byte_len': planBytes.length,
+        'sha256': crypto.sha256.convert(planBytes).toString(),
+      },
+      'scope': 'source_inspection_only',
+      'build_status': 'blocked',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedQuestId: questId,
+  );
 }
 
 const _questArtifactSha =

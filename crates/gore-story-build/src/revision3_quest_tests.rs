@@ -11,16 +11,21 @@ use gore_authoring::{
     REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
     REVISION3_QUEST_GENERATOR_VERSION,
 };
-use gore_story_inventory::{QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability};
+use gore_story_inventory::{
+    QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability,
+    VerifiedRevision3QuestCollisionInspectionCapabilityV2,
+};
 use sha2::{Digest as _, Sha256};
 
 use crate::revision3_quest::{
-    prepare_revision3_quest_source_inspection, project_revision3_basis_to_revision2,
-    regenerate_revision3_quest_module, revision3_quest_input_fingerprint, PlanFormat,
-    PlanSchemaRevision, PreparedRevision3QuestSourceInspection, QuestInspectionBuildStatus,
-    QuestInspectionPublicationStatus, QuestInspectionRuntimeQualification, QuestInspectionScope,
-    Revision3QuestInspectionError, Revision3QuestInspectionModule,
-    Revision3QuestInspectionProvenance, Revision3QuestSourceInspectionPlanV2,
+    prepare_revision3_quest_source_inspection, prepare_revision3_quest_source_inspection_v3,
+    project_revision3_basis_to_revision2, regenerate_revision3_quest_module,
+    revision3_quest_input_fingerprint, PlanFormat, PlanSchemaRevision,
+    PreparedRevision3QuestSourceInspection, PreparedRevision3QuestSourceInspectionV3,
+    QuestInspectionBuildStatus, QuestInspectionPublicationStatus,
+    QuestInspectionRuntimeQualification, QuestInspectionScope, Revision3QuestInspectionError,
+    Revision3QuestInspectionModule, Revision3QuestInspectionProvenance,
+    Revision3QuestSourceInspectionPlanV2, Revision3QuestSourceInspectionPlanV3,
 };
 
 fn project_id(value: u8) -> ProjectId {
@@ -404,4 +409,17 @@ fn public_lowering_boundary_accepts_only_a_fresh_capability_not_an_artifact() {
         -> Result<PreparedRevision3QuestSourceInspection, Revision3QuestInspectionError> =
         prepare_revision3_quest_source_inspection;
     let _: Option<QuestCollisionCapabilityArtifactV1> = None;
+
+    let _: fn(
+        PreparedRevision3QuestSourceInspectionV3,
+        VerifiedRevision3QuestCollisionInspectionCapabilityV2,
+    ) -> Result<Revision3QuestSourceInspectionPlanV3, Revision3QuestInspectionError> =
+        PreparedRevision3QuestSourceInspectionV3::lower;
+    let _: fn(
+        &gore_authoring::WorkingProjectStore,
+        &str,
+        EntityId,
+    )
+        -> Result<PreparedRevision3QuestSourceInspectionV3, Revision3QuestInspectionError> =
+        prepare_revision3_quest_source_inspection_v3;
 }

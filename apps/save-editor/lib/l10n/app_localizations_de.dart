@@ -1481,4 +1481,94 @@ class AppLocalizationsDe extends AppLocalizations {
   String glossarySegmentEntry(int number) {
     return 'Eintrag $number';
   }
+
+  @override
+  String get questJournalAll => 'Alle Quests';
+
+  @override
+  String get questJournalOldCamp => 'Altes Lager';
+
+  @override
+  String get questJournalNewCamp => 'Neues Lager';
+
+  @override
+  String get questJournalSwampCamp => 'Sumpflager';
+
+  @override
+  String get questJournalColony => 'Die Kolonie';
+
+  @override
+  String get questJournalCompleted => 'Abgeschlossen';
+
+  @override
+  String get questJournalHint =>
+      'Ansicht wie im Spieljournal. Interne und noch nicht gestartete Quest-Zustände bleiben unter „Alle Daten“ verfügbar.';
+
+  @override
+  String get questJournalNoEntries =>
+      'Keine Journal-Quests entsprechen den aktuellen Filtern.';
+
+  @override
+  String get glossaryTutorials => 'Tutorials';
+
+  @override
+  String get tutorialGateNote =>
+      'Diese Zeilen steuern gespeicherte Tutorial-Freischaltungen. Eine Freischaltung entspricht nicht zwingend genau einer einzelnen Tutorial-Seite im Spiel.';
+
+  @override
+  String get tutorialResetChanges => 'Tutorial-Änderungen zurücksetzen';
+
+  @override
+  String get tutorialNoGates =>
+      'In diesem Spielstand sind keine Tutorial-Freischaltungen verfügbar.';
+
+  @override
+  String tutorialGateUnlockCount(int unlocked, int total) {
+    return '$unlocked von $total Tutorial-Freischaltungen aktiv';
+  }
+
+  @override
+  String get tutorialGateCombatBasics => 'Kampfgrundlagen';
+
+  @override
+  String get tutorialGateCrafting => 'Handwerk';
+
+  @override
+  String get tutorialGateCrime => 'Verbrechen und Folgen';
+
+  @override
+  String get tutorialGateDrugs => 'Verbrauchsgegenstände und Effekte';
+
+  @override
+  String get tutorialGateLockpicking => 'Schlösser knacken';
+
+  @override
+  String get tutorialGateMagic => 'Magie';
+
+  @override
+  String get tutorialGateMap => 'Karte';
+
+  @override
+  String get tutorialGateMeleeCombat => 'Nahkampf';
+
+  @override
+  String get tutorialGateNavigation => 'Bewegung und Navigation';
+
+  @override
+  String get tutorialGatePerception => 'Wahrnehmung';
+
+  @override
+  String get tutorialGatePlayerProgression => 'Charakterentwicklung';
+
+  @override
+  String get tutorialGateRanged => 'Fernkampf';
+
+  @override
+  String get tutorialGateRiding => 'Reiten';
+
+  @override
+  String get tutorialGateSleep => 'Schlafen';
+
+  @override
+  String get tutorialGateTrading => 'Handeln';
 }

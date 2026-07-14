@@ -58,7 +58,8 @@ bool _hasLongNumber(String s) {
 /// gore-save's loc/quest coverage examples.
 String _toSnake(String s) {
   final out = StringBuffer();
-  String? last() => out.isEmpty ? null : out.toString().substring(out.length - 1);
+  String? last() =>
+      out.isEmpty ? null : out.toString().substring(out.length - 1);
   var prevLowerOrDigit = false;
   for (final ch in s.split('')) {
     if (ch == '_' || ch == '-') {
@@ -75,12 +76,17 @@ String _toSnake(String s) {
       prevLowerOrDigit = false;
     } else if (isDigit) {
       final l = last();
-      if (l != null && l.compareTo('a') >= 0 && l.compareTo('z') <= 0) out.write('_');
+      if (l != null && l.compareTo('a') >= 0 && l.compareTo('z') <= 0) {
+        out.write('_');
+      }
       out.write(ch);
       prevLowerOrDigit = true;
     } else {
       final l = last();
-      if (isLower && l != null && l.compareTo('0') >= 0 && l.compareTo('9') <= 0) {
+      if (isLower &&
+          l != null &&
+          l.compareTo('0') >= 0 &&
+          l.compareTo('9') <= 0) {
         out.write('_');
       }
       out.write(ch);
@@ -117,9 +123,26 @@ String? localizedQuestName(
   String questId,
 ) {
   if (catalog.isEmpty || questId.isEmpty) return null;
-  final body =
-      (questId.startsWith('Quest_') ? questId.substring(6) : questId).toLowerCase();
+  final body = (questId.startsWith('Quest_') ? questId.substring(6) : questId)
+      .toLowerCase();
   return resolveGameText(catalog, 'quest-$body-name', lang);
+}
+
+/// Localized quest journal description for a quest class id, e.g.
+/// `Quest_OldCamp_OCCHAPTER1_BRINGLIST` maps to
+/// `quest-oldcamp_occhapter1_bringlist-description`.
+///
+/// Main journal quests have descriptions while structural group/chapter rows
+/// and most objectives do not, making this a useful root-quest discriminator.
+String? localizedQuestDescription(
+  Map<String, Map<String, String>> catalog,
+  GameLang lang,
+  String questId,
+) {
+  if (catalog.isEmpty || questId.isEmpty) return null;
+  final body = (questId.startsWith('Quest_') ? questId.substring(6) : questId)
+      .toLowerCase();
+  return resolveGameText(catalog, 'quest-$body-description', lang);
 }
 
 /// Localized text for a dialog-knowledge entry, or null. Handles:
@@ -152,7 +175,13 @@ String? localizedKnowledgeEntry(
       : snake.startsWith('topic_')
       ? snake.substring('topic_'.length)
       : snake;
-  final stems = <String>{snake, 'info_$body', 'dia_$body', 'info_$snake', 'dia_$snake'};
+  final stems = <String>{
+    snake,
+    'info_$body',
+    'dia_$body',
+    'info_$snake',
+    'dia_$snake',
+  };
   for (final stem in stems) {
     final r = _resolveStem(catalog, lang, stem);
     if (r != null) return r;

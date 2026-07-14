@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/l10n/app_localizations.dart';
@@ -11,6 +12,8 @@ import '../domain/glossary_models.dart';
 import '../domain/glossary_npc_catalog.dart';
 import '../domain/glossary_segment_text_catalog.dart';
 import '../domain/npc_actors_page.dart';
+import '../domain/pending_edits.dart';
+import '../domain/progression_models.dart';
 
 enum _GlossarySection {
   oldCamp,
@@ -19,6 +22,7 @@ enum _GlossarySection {
   outsiders,
   creatures,
   locations,
+  tutorials,
 }
 
 enum _NpcFilter { all, traders, teachers, armorers, hostile, dead }
@@ -51,15 +55,44 @@ class GlossaryDetail extends ConsumerStatefulWidget {
 }
 
 class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
+  static const _tutorialPendingKey = 'progression.tutorials';
+  static const _tutorialQuestStates = <String>[
+    'EQuestState::None',
+    'EQuestState::Available',
+    'EQuestState::Running',
+    'EQuestState::Succeeded',
+    'EQuestState::Failed',
+  ];
+  static const _tutorialGateOrder = <String>[
+    'Tut_CombatBasics',
+    'Tut_Crafting',
+    'Tut_Crime',
+    'Tut_Drugs',
+    'Tut_Lockpicking',
+    'Tut_Magic',
+    'Tut_Map',
+    'Tut_MeleeCombat',
+    'Tut_Navigation',
+    'Tut_Perception',
+    'Tut_PlayerProgression',
+    'Tut_Ranged',
+    'Tut_Riding',
+    'Tut_Sleep',
+    'Tut_Trading',
+  ];
+
   final TextEditingController _search = TextEditingController();
   final Map<String, bool> _pending = {};
+  final Map<String, QuestStateChange> _tutorialPending = {};
   void Function()? _removeNotifierListener;
   List<_GlossaryDocument> _documents = const [];
+  List<ProgressionQuest> _tutorials = const [];
   _GlossarySection _section = _GlossarySection.oldCamp;
   _NpcFilter _npcFilter = _NpcFilter.all;
   String _query = '';
   String? _selectedDocumentClass;
   String? _error;
+  String? _tutorialError;
   bool _loading = false;
   bool _characterStatusAvailable = false;
   bool _npcStatusAvailable = false;
@@ -92,7 +125,9 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
         // Clearing the overrides immediately exposed the old document snapshot
         // for a few seconds, making switches and entry counts visibly revert.
         _pending.clear();
+        _tutorialPending.clear();
         _documents = const [];
+        _tutorials = const [];
         _selectedDocumentClass = null;
         _search.clear();
         _query = '';
@@ -111,7 +146,13 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
 
   void _listenToNotifier() {
     _removeNotifierListener = widget.notifier.addListener((_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      final tutorialPending = _registeredTutorialPending(_tutorials);
+      setState(() {
+        _tutorialPending
+          ..clear()
+          ..addAll(tutorialPending);
+      });
     }, fireImmediately: false);
   }
 
@@ -120,10 +161,12 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     setState(() {
       _loading = true;
       _error = null;
+      _tutorialError = null;
     });
     try {
       final results = await Future.wait<Object>([
         widget.notifier.loadGlossary(),
+        widget.notifier.loadProgressionTutorials(),
         (widget.npcCatalogLoader ?? loadGlossaryNpcCatalog)(),
         (widget.segmentTextCatalogLoader ?? loadGlossarySegmentTextCatalog)(),
         widget.notifier.loadAllCharacters(),
@@ -132,17 +175,20 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       if (!mounted || epoch != _loadEpoch) return;
 
       final glossary = results[0] as GlossaryPage;
-      final npcCatalog = results[1] as List<NpcGlossaryCatalogEntry>;
-      final segmentTextCatalog = results[2] as GlossarySegmentTextCatalog;
-      final characters = results[3] as CharacterIndexPage;
-      final npcActors = results[4] as NpcActorsPage;
+      final tutorials = results[1] as ProgressionQuestPage;
+      final npcCatalog = results[2] as List<NpcGlossaryCatalogEntry>;
+      final segmentTextCatalog = results[3] as GlossarySegmentTextCatalog;
+      final characters = results[4] as CharacterIndexPage;
+      final npcActors = results[5] as NpcActorsPage;
       if (glossary.error != null) {
         setState(() {
           _loading = false;
           _error = glossary.error;
           _documents = const [];
+          _tutorials = const [];
           _characterStatusAvailable = false;
           _npcStatusAvailable = false;
+          _tutorialError = tutorials.error;
         });
         return;
       }
@@ -212,6 +258,10 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
           }
         }
       }
+      final tutorialRows = tutorials.error == null
+          ? tutorials.quests.where(_isTutorialGate).toList(growable: false)
+          : const <ProgressionQuest>[];
+      final tutorialPending = _registeredTutorialPending(tutorialRows);
       final warnings = <String>{
         if (characters.error?.trim().isNotEmpty == true) characters.error!,
         if (npcActors.error?.trim().isNotEmpty == true) npcActors.error!,
@@ -219,11 +269,16 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       setState(() {
         _loading = false;
         _documents = documents;
+        _tutorials = tutorialRows;
         _pending
           ..clear()
           ..addAll(pending);
+        _tutorialPending
+          ..clear()
+          ..addAll(tutorialPending);
         _characterStatusAvailable = characters.error == null;
         _npcStatusAvailable = npcActors.error == null;
+        _tutorialError = tutorials.error;
         // Character/NPC status enriches two filters. Keep the glossary usable
         // on a partial failure, but surface it and disable filters whose answer
         // would otherwise be silently incomplete.
@@ -237,11 +292,93 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       setState(() {
         _loading = false;
         _documents = const [];
+        _tutorials = const [];
         _characterStatusAvailable = false;
         _npcStatusAvailable = false;
         _error = error.toString();
+        _tutorialError = error.toString();
       });
     }
+  }
+
+  bool _isTutorialGate(ProgressionQuest quest) =>
+      _tutorialGateId(quest).startsWith('Tut_');
+
+  String _tutorialGateId(ProgressionQuest quest) {
+    if (quest.name.startsWith('Tut_')) return quest.name;
+    const prefix = 'Quest_Tutorials_';
+    if (quest.id.startsWith(prefix)) return quest.id.substring(prefix.length);
+    return quest.name.isNotEmpty ? quest.name : quest.id;
+  }
+
+  Map<String, QuestStateChange> _registeredTutorialPending(
+    List<ProgressionQuest> tutorials,
+  ) {
+    final registered = widget.notifier.pendingEditFor(_tutorialPendingKey);
+    if (registered == null) return const {};
+    final result = <String, QuestStateChange>{};
+    for (final edit in registered.edits) {
+      if (edit['path'] != 'private.typed.setValue') continue;
+      final value = edit['value'];
+      if (value is! Map || value['value'] is! String) continue;
+      final rawPath = value['path'];
+      if (rawPath is! List) continue;
+      final path = rawPath.whereType<String>().toList(growable: false);
+      for (final tutorial in tutorials) {
+        if (!listEquals(path, tutorial.statePath)) continue;
+        result[tutorial.questClass] = QuestStateChange(
+          statePath: tutorial.statePath,
+          state: value['value'] as String,
+        );
+        break;
+      }
+    }
+    return result;
+  }
+
+  String? _effectiveTutorialState(ProgressionQuest tutorial) =>
+      _tutorialPending[tutorial.questClass]?.state ?? tutorial.currentState;
+
+  bool _tutorialUnlocked(ProgressionQuest tutorial) {
+    final state = _effectiveTutorialState(tutorial);
+    return state == 'EQuestState::Running' || state == 'EQuestState::Succeeded';
+  }
+
+  int get _tutorialUnlockedCount => _tutorials.where(_tutorialUnlocked).length;
+
+  void _pushTutorialPending() {
+    if (_tutorialPending.isEmpty) {
+      widget.notifier.clearPendingEdit(_tutorialPendingKey);
+      return;
+    }
+    widget.notifier.setPendingEdit(
+      _tutorialPendingKey,
+      PendingSaveEdit(
+        edits: _tutorialPending.values
+            .map((change) => change.toEditJson())
+            .toList(growable: false),
+      ),
+    );
+  }
+
+  void _setTutorialState(ProgressionQuest tutorial, String? state) {
+    setState(() {
+      if (state == null || state == tutorial.currentState) {
+        _tutorialPending.remove(tutorial.questClass);
+      } else {
+        _tutorialPending[tutorial.questClass] = QuestStateChange(
+          statePath: tutorial.statePath,
+          state: state,
+        );
+      }
+    });
+    _pushTutorialPending();
+  }
+
+  void _resetTutorialPending() {
+    if (_tutorialPending.isEmpty) return;
+    setState(_tutorialPending.clear);
+    widget.notifier.clearPendingEdit(_tutorialPendingKey);
   }
 
   bool _effectiveSegment(_GlossarySegment segment) =>
@@ -309,6 +446,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                 document.section == section && _documentVisible(document),
           )
           .toList(growable: false);
+
+  int _sectionCount(_GlossarySection section) =>
+      section == _GlossarySection.tutorials
+      ? _tutorialUnlockedCount
+      : _visibleInSection(section).length;
 
   List<_GlossaryDocument> _filteredDocuments(
     Map<String, Map<String, String>> catalog,
@@ -474,6 +616,9 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                       )
                     : LayoutBuilder(
                         builder: (context, constraints) {
+                          if (_section == _GlossarySection.tutorials) {
+                            return _buildTutorialLayout(l10n, constraints);
+                          }
                           const categoryWidth = 220.0;
                           const documentWidth = 300.0;
                           const dividerAndSpacingWidth = 50.0;
@@ -606,7 +751,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            trailing: Text('${_visibleInSection(section).length}'),
+            trailing: Text('${_sectionCount(section)}'),
             onTap: _loading ? null : () => _selectSection(section),
           ),
       ],
@@ -636,7 +781,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                     ),
                   ),
                   const SizedBox(width: 6),
-                  Text('${_visibleInSection(section).length}'),
+                  Text('${_sectionCount(section)}'),
                 ],
               ),
             ),
@@ -651,6 +796,197 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       ),
     );
   }
+
+  Widget _buildTutorialLayout(
+    AppLocalizations l10n,
+    BoxConstraints constraints,
+  ) {
+    final list = _buildTutorialGateList(l10n);
+    if (constraints.maxWidth < 640) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildCategoryDropdown(l10n),
+          const SizedBox(height: 8),
+          Expanded(child: list),
+        ],
+      );
+    }
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(width: 220, child: _buildCategoryPicker(l10n)),
+        const SizedBox(width: 12),
+        const VerticalDivider(width: 1),
+        const SizedBox(width: 12),
+        Expanded(child: list),
+      ],
+    );
+  }
+
+  List<ProgressionQuest> _filteredTutorials(AppLocalizations l10n) {
+    final query = _query;
+    final tutorials = _tutorials.where((tutorial) {
+      if (query.isEmpty) return true;
+      return _tutorialGateTitle(l10n, tutorial).toLowerCase().contains(query) ||
+          _tutorialGateId(tutorial).toLowerCase().contains(query) ||
+          tutorial.id.toLowerCase().contains(query);
+    }).toList();
+    tutorials.sort((a, b) {
+      final aIndex = _tutorialGateOrder.indexOf(_tutorialGateId(a));
+      final bIndex = _tutorialGateOrder.indexOf(_tutorialGateId(b));
+      final normalizedA = aIndex < 0 ? _tutorialGateOrder.length : aIndex;
+      final normalizedB = bIndex < 0 ? _tutorialGateOrder.length : bIndex;
+      return normalizedA.compareTo(normalizedB);
+    });
+    return tutorials;
+  }
+
+  Widget _buildTutorialGateList(AppLocalizations l10n) {
+    final tutorials = _filteredTutorials(l10n);
+    return Column(
+      key: const Key('glossary-tutorial-gates'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                l10n.glossaryTutorials,
+                style: widget.theme.textTheme.titleMedium,
+              ),
+            ),
+            if (widget.editable && _tutorialPending.isNotEmpty)
+              IconButton(
+                tooltip: l10n.tutorialResetChanges,
+                onPressed: _loading ? null : _resetTutorialPending,
+                icon: const Icon(Icons.undo_outlined),
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          l10n.tutorialGateNote,
+          style: widget.theme.textTheme.bodySmall?.copyWith(
+            color: widget.theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        if (_tutorialError != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _tutorialError!,
+            style: TextStyle(color: widget.theme.colorScheme.error),
+          ),
+        ],
+        const SizedBox(height: 10),
+        TextField(
+          key: const Key('tutorial-gate-search'),
+          controller: _search,
+          decoration: InputDecoration(
+            labelText: l10n.glossarySearch,
+            prefixIcon: const Icon(Icons.search),
+          ),
+          onChanged: _loading
+              ? null
+              : (value) => setState(() => _query = value.trim().toLowerCase()),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          l10n.tutorialGateUnlockCount(
+            _tutorialUnlockedCount,
+            _tutorials.length,
+          ),
+          style: widget.theme.textTheme.bodySmall?.copyWith(
+            color: widget.theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: tutorials.isEmpty
+              ? _GlossaryEmptyDetail(
+                  message: _tutorials.isEmpty
+                      ? l10n.tutorialNoGates
+                      : l10n.glossaryNoMatch,
+                )
+              : ListView.separated(
+                  key: const Key('tutorial-gate-list'),
+                  itemCount: tutorials.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final tutorial = tutorials[index];
+                    final effectiveState = _effectiveTutorialState(tutorial);
+                    final pending = _tutorialPending.containsKey(
+                      tutorial.questClass,
+                    );
+                    final knownState =
+                        effectiveState != null &&
+                        _tutorialQuestStates.contains(effectiveState);
+                    return ListTile(
+                      key: ValueKey('tutorial-gate-${tutorial.id}'),
+                      dense: true,
+                      leading: Icon(
+                        _tutorialUnlocked(tutorial)
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                      ),
+                      title: Text(_tutorialGateTitle(l10n, tutorial)),
+                      subtitle: pending ? Text(l10n.glossaryPending) : null,
+                      trailing:
+                          widget.editable && tutorial.writable && knownState
+                          ? DropdownButton<String>(
+                              key: ValueKey('tutorial-state-${tutorial.id}'),
+                              value: effectiveState,
+                              underline: const SizedBox.shrink(),
+                              items: [
+                                for (final state in _tutorialQuestStates)
+                                  DropdownMenuItem(
+                                    value: state,
+                                    child: Text(
+                                      _localizedTutorialState(l10n, state),
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (state) =>
+                                  _setTutorialState(tutorial, state),
+                            )
+                          : Text(_localizedTutorialState(l10n, effectiveState)),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  String _tutorialGateTitle(AppLocalizations l10n, ProgressionQuest tutorial) =>
+      switch (_tutorialGateId(tutorial)) {
+        'Tut_CombatBasics' => l10n.tutorialGateCombatBasics,
+        'Tut_Crafting' => l10n.tutorialGateCrafting,
+        'Tut_Crime' => l10n.tutorialGateCrime,
+        'Tut_Drugs' => l10n.tutorialGateDrugs,
+        'Tut_Lockpicking' => l10n.tutorialGateLockpicking,
+        'Tut_Magic' => l10n.tutorialGateMagic,
+        'Tut_Map' => l10n.tutorialGateMap,
+        'Tut_MeleeCombat' => l10n.tutorialGateMeleeCombat,
+        'Tut_Navigation' => l10n.tutorialGateNavigation,
+        'Tut_Perception' => l10n.tutorialGatePerception,
+        'Tut_PlayerProgression' => l10n.tutorialGatePlayerProgression,
+        'Tut_Ranged' => l10n.tutorialGateRanged,
+        'Tut_Riding' => l10n.tutorialGateRiding,
+        'Tut_Sleep' => l10n.tutorialGateSleep,
+        'Tut_Trading' => l10n.tutorialGateTrading,
+        final id => _humanize(id.replaceFirst('Tut_', '')),
+      };
+
+  String _localizedTutorialState(AppLocalizations l10n, String? rawState) =>
+      switch (rawState?.split('::').last) {
+        'None' => l10n.questStateNone,
+        'Available' => l10n.questStateAvailable,
+        'Running' => l10n.questStateRunning,
+        'Succeeded' => l10n.questStateSucceeded,
+        'Failed' => l10n.questStateFailed,
+        _ => l10n.questStateUnknown,
+      };
 
   Widget _buildDocumentList(
     AppLocalizations l10n,
@@ -1322,6 +1658,7 @@ IconData _sectionIcon(_GlossarySection section) => switch (section) {
   _GlossarySection.outsiders => Icons.person_pin_circle_outlined,
   _GlossarySection.creatures => Icons.pets_outlined,
   _GlossarySection.locations => Icons.place_outlined,
+  _GlossarySection.tutorials => Icons.school_outlined,
 };
 
 String _sectionLabel(AppLocalizations l10n, _GlossarySection section) =>
@@ -1332,6 +1669,7 @@ String _sectionLabel(AppLocalizations l10n, _GlossarySection section) =>
       _GlossarySection.outsiders => l10n.glossaryOutsiders,
       _GlossarySection.creatures => l10n.glossaryCreatures,
       _GlossarySection.locations => l10n.glossaryLocations,
+      _GlossarySection.tutorials => l10n.glossaryTutorials,
     };
 
 String _npcFilterLabel(AppLocalizations l10n, _NpcFilter filter) =>

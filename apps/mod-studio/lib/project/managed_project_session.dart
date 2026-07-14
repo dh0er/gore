@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 
 import '../core/mod_ffi.dart';
@@ -501,6 +502,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3QuestContextEditRequestV1 request,
   });
 
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -651,6 +659,19 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) => ffi.authoringStoreInspectRevision3QuestSourceV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    questId: questId,
   );
 
   @override
@@ -1975,6 +1996,47 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3QuestContextSeedReadError,
   );
 
+  /// Reconstruct and verify the generated source for one exact-current Quest.
+  ///
+  /// Native code receives only the Store root, read-only game root, exact head
+  /// and selected Quest ID. This serialized read lane checks the published head
+  /// on both sides and never prepares or publishes a checkpoint.
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String gameRoot,
+    required String questId,
+  }) => _core.readExact<AuthoringRevision3QuestSourceInspectionResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 Quest source inspection has no exact project identity',
+        );
+      }
+      final result = await _store.inspectQuestSourceV1(
+        root: root.path,
+        gameRoot: gameRoot,
+        expectedHead: basis.head,
+        questId: questId,
+      );
+      final projectBytes = utf8.encode(basis.projectJson);
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          result.questId != questId ||
+          result.projectSeal.byteLength != projectBytes.length ||
+          result.projectSeal.sha256 !=
+              crypto.sha256.convert(projectBytes).toString()) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 Quest source inspection disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'inspectQuestSourceV1',
+    handleReadError: _core._throwRevision3QuestSourceInspectionError,
+  );
+
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
   /// The operation shares the session's serialized lane, verifies the fixed head before and after
@@ -2610,6 +2672,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3QuestSourceInspectionError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_INSPECTION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3QuestSourceInspectionErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest source inspection could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT') {
@@ -3188,6 +3286,24 @@ bool _revision3QuestContextPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_CONTEXT_STORE_LIMIT',
   'AUTHORING_REVISION3_QUEST_CONTEXT_TARGET_CONFLICT',
   'AUTHORING_REVISION3_QUEST_CONTEXT_UNSUPPORTED_GENERATION',
+}.contains(code);
+
+bool _revision3QuestSourceInspectionErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_QUEST_INSPECTION_COLLISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_FAILED',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_CHANGED',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_MISSING',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_INVENTORY_FAILED',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_INVALID',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_PROJECT_TARGET_MISMATCH',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_QUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_INSPECTION_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3NpcPrepareErrorIsRetryable(String code) => const {

@@ -19,6 +19,7 @@ import '../domain/editor_notifier.dart';
 import '../domain/knowledge_catalog.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
+import '../domain/quest_journal.dart';
 import 'add_knowledge_entry_dialog.dart';
 import 'npc_relationship_editor.dart';
 
@@ -82,11 +83,13 @@ class _GroupTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.icon,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
@@ -94,6 +97,7 @@ class _GroupTile extends StatelessWidget {
     return ListTile(
       dense: true,
       selected: selected,
+      leading: icon == null ? null : Icon(icon, size: 18),
       title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       selectedTileColor: scheme.primaryContainer,
       selectedColor: scheme.primary,
@@ -243,7 +247,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   String _query = '';
   int _offset = 0;
   String? _stateFilter;
-  String? _groupFilter;
+  QuestJournalSection? _sectionFilter;
   // The core clamps a query's `limit` to 1000, so the full quest list must be
   // pulled page-by-page rather than in one oversized request.
   static const _fetchPageLimit = 1000;
@@ -263,7 +267,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       _query = '';
       _offset = 0;
       _stateFilter = null;
-      _groupFilter = null;
+      _sectionFilter = null;
       _loadAllQuests();
     }
   }
@@ -346,63 +350,74 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
   String _questLabel(ProgressionQuest e) =>
       e.currentState == null ? 'unknown' : shortStateLabel(e.currentState!);
 
-  /// Builds the filtered + faceted + paginated quest view from [_allQuests].
-  /// Faceting mirrors the core: stateCounts ignore the state filter and
-  /// groupCounts ignore the group filter, while the query (id OR localized
-  /// name) and the other filter apply to both.
-  ProgressionQuestPage _computeView(
+  /// Projects the save's flat quest rows into the five sections and recursive
+  /// parent/child hierarchy used by the in-game journal. Pagination always
+  /// operates on root quests, so an objective can never be separated from its
+  /// parent just because a page boundary was crossed.
+  _QuestJournalView _computeView(
     Map<String, Map<String, String>> catalog,
     GameLang lang,
   ) {
-    final q = _query;
-    bool matchesQuery(ProgressionQuest e) {
-      if (q.isEmpty) return true;
-      if (e.questClass.toLowerCase().contains(q)) return true;
-      final name = localizedQuestName(catalog, lang, e.id);
-      return name != null && name.toLowerCase().contains(q);
-    }
+    final hasCatalog = catalog.isNotEmpty;
+    String? descriptionFor(ProgressionQuest quest) =>
+        localizedQuestDescription(catalog, lang, quest.id);
+    final journal = buildQuestJournal(
+      _allQuests,
+      localizedLabel: (quest) => localizedQuestName(catalog, lang, quest.id),
+      localizedDescription: descriptionFor,
+      isJournalQuest: hasCatalog
+          ? (quest) => descriptionFor(quest) != null
+          : null,
+      // Tests and installations without an extracted localization catalog can
+      // still show conservative root rows. With a catalog, descriptions give
+      // us the exact same journal/main-quest distinction as the game.
+      allowRawFallback: !hasCatalog,
+    );
 
-    bool matchesState(ProgressionQuest e) {
+    bool matchesState(QuestJournalNode node) {
       final sf = _stateFilter;
       if (sf == null) return true;
       final lf = sf.toLowerCase();
-      return _questLabel(e).toLowerCase() == lf ||
-          (e.currentState?.toLowerCase() ?? '') == lf;
+      final quest = node.quest;
+      return _questLabel(quest).toLowerCase() == lf ||
+          (quest.currentState?.toLowerCase() ?? '') == lf;
     }
 
-    bool matchesGroup(ProgressionQuest e) {
-      final gf = _groupFilter;
-      return gf == null || e.group.toLowerCase() == gf.toLowerCase();
-    }
+    bool matchesQuery(QuestJournalNode node) => node.matchesQuery(_query);
 
     final stateCounts = <String, int>{};
-    final groupCounts = <String, int>{};
-    for (final e in _allQuests) {
-      if (!matchesQuery(e)) continue;
-      if (matchesGroup(e)) {
-        final l = _questLabel(e);
+    final rootsForStateFacet = _sectionFilter == null
+        ? journal.roots.all
+        : journal.roots.forSection(_sectionFilter!);
+    for (final node in rootsForStateFacet) {
+      if (matchesQuery(node)) {
+        final l = _questLabel(node.quest);
         stateCounts[l] = (stateCounts[l] ?? 0) + 1;
-      }
-      if (matchesState(e)) {
-        groupCounts[e.group] = (groupCounts[e.group] ?? 0) + 1;
       }
     }
 
-    final filtered =
-        _allQuests
-            .where((e) => matchesQuery(e) && matchesState(e) && matchesGroup(e))
-            .toList()
-          ..sort((a, b) => a.questClass.compareTo(b.questClass));
+    final sectionCounts = <QuestJournalSection, int>{
+      for (final section in QuestJournalSection.values)
+        section: journal.roots
+            .forSection(section)
+            .where((node) => matchesQuery(node) && matchesState(node))
+            .length,
+    };
+
+    final sectionRoots = _sectionFilter == null
+        ? journal.roots.all
+        : journal.roots.forSection(_sectionFilter!);
+    final filtered = sectionRoots
+        .where((node) => matchesQuery(node) && matchesState(node))
+        .toList(growable: false);
     final total = filtered.length;
     final offset = _offset < total ? _offset : 0;
-    final pageQuests = filtered.skip(offset).take(_pageSize).toList();
-    return ProgressionQuestPage(
-      quests: pageQuests,
+    return _QuestJournalView(
+      roots: filtered.skip(offset).take(_pageSize).toList(growable: false),
       stateCounts: stateCounts,
-      groupCounts: groupCounts,
+      sectionCounts: sectionCounts,
       total: total,
       offset: offset,
-      limit: _pageSize,
     );
   }
 
@@ -416,12 +431,12 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        // Two-pane row: group picker left, quest content right.
+        // Two-pane row: localized in-game journal sections on the left and
+        // the selected quest tree on the right.
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Left pane: scrollable group picker.
-            SizedBox(width: 190, child: _buildGroupPicker(l10n, page)),
+            SizedBox(width: 210, child: _buildSectionPicker(l10n, page)),
             const SizedBox(width: 12),
             const VerticalDivider(width: 1),
             const SizedBox(width: 12),
@@ -472,11 +487,18 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                     const SizedBox(height: 8),
                     Text(_fetchError!, style: TextStyle(color: scheme.error)),
                   ],
+                  const SizedBox(height: 6),
+                  Text(
+                    l10n.questJournalHint,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                   const SizedBox(height: 8),
-                  // Filter row: status chips only (group selection lives in the
-                  // left pane now).
+                  // Status chips only; journal-section selection lives in the
+                  // left pane.
                   _QuestFilterRow(
-                    page: page,
+                    stateCounts: page.stateCounts,
                     stateFilter: _stateFilter,
                     busy: _loading,
                     onStateChanged: (label) {
@@ -489,7 +511,7 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                   const SizedBox(height: 4),
                   _PaginationBar(
                     offset: page.offset,
-                    count: page.quests.length,
+                    count: page.roots.length,
                     total: page.total,
                     pageSize: _pageSize,
                     busy: _loading,
@@ -502,67 +524,20 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
                   const SizedBox(height: 4),
                   // Quest list — the only scrollable, fills remaining height
                   Expanded(
-                    child: _loading && page.quests.isEmpty
+                    child: _loading && page.roots.isEmpty
                         ? const Center(child: CircularProgressIndicator())
+                        : page.roots.isEmpty
+                        ? Center(child: Text(l10n.questJournalNoEntries))
                         : ListView.separated(
-                            itemCount: page.quests.length,
+                            itemCount: page.roots.length,
                             separatorBuilder: (_, _) =>
                                 const Divider(height: 1),
-                            itemBuilder: (context, index) {
-                              final quest = page.quests[index];
-                              final pendingState =
-                                  _pending[quest.questClass]?.state;
-                              final effectiveState =
-                                  pendingState ?? quest.currentState;
-                              final inKnownStates =
-                                  effectiveState != null &&
-                                  questStates.contains(effectiveState);
-                              return ListTile(
-                                dense: true,
-                                leading: const Icon(Icons.flag_outlined),
-                                title: SelectableText(
-                                  localizedQuestName(
-                                        locCatalog,
-                                        lang,
-                                        quest.id,
-                                      ) ??
-                                      (quest.name.isEmpty
-                                          ? quest.id
-                                          : quest.name),
-                                  maxLines: 1,
-                                ),
-                                subtitle: SelectableText(
-                                  '${quest.group} / ${quest.id}',
-                                  maxLines: 1,
-                                ),
-                                trailing:
-                                    widget.editable &&
-                                        quest.writable &&
-                                        inKnownStates
-                                    ? DropdownButton<String>(
-                                        value: effectiveState,
-                                        underline: const SizedBox.shrink(),
-                                        items: questStates
-                                            .map(
-                                              (s) => DropdownMenuItem(
-                                                value: s,
-                                                child: Text(
-                                                  _localizedState(l10n, s),
-                                                ),
-                                              ),
-                                            )
-                                            .toList(),
-                                        onChanged: (s) =>
-                                            _setQuestState(quest, s),
-                                      )
-                                    : Text(
-                                        _localizedState(
-                                          l10n,
-                                          quest.currentState,
-                                        ),
-                                      ),
-                              );
-                            },
+                            itemBuilder: (context, index) => _buildQuestNode(
+                              context,
+                              l10n,
+                              page.roots[index],
+                              depth: 0,
+                            ),
                           ),
                   ),
                 ],
@@ -574,39 +549,38 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
     );
   }
 
-  /// Left-pane group picker: "All groups" entry plus one tile per group from
-  /// [page.groupCounts], sorted alphabetically. The selected group is kept
-  /// visible (count 0) even if it drops out of the latest counts. Tapping sets
-  /// [_groupFilter] and re-filters client-side.
-  Widget _buildGroupPicker(AppLocalizations l10n, ProgressionQuestPage page) {
-    final sortedGroups = page.groupCounts.keys.toList()..sort();
-    // Keep the selected group present even when its count is now 0.
-    final selected = _groupFilter;
-    if (selected != null && !page.groupCounts.containsKey(selected)) {
-      sortedGroups.add(selected);
-    }
+  /// Localized journal sections matching the five icons/categories in-game.
+  /// Counts represent main quests only; objectives never inflate them.
+  Widget _buildSectionPicker(AppLocalizations l10n, _QuestJournalView page) {
+    final selected = _sectionFilter;
+    final allCount = page.sectionCounts.values.fold<int>(0, (a, b) => a + b);
     return ListView(
       padding: EdgeInsets.zero,
       children: [
         _GroupTile(
-          label: l10n.allGroups,
+          label: l10n.groupWithCount(l10n.questJournalAll, allCount),
+          icon: Icons.menu_book_outlined,
           selected: selected == null,
           onTap: () {
             if (selected == null) return;
             setState(() {
-              _groupFilter = null;
+              _sectionFilter = null;
               _offset = 0;
             });
           },
         ),
-        for (final g in sortedGroups)
+        for (final section in QuestJournalSection.values)
           _GroupTile(
-            label: l10n.groupWithCount(g, page.groupCounts[g] ?? 0),
-            selected: selected == g,
+            label: l10n.groupWithCount(
+              _sectionLabel(l10n, section),
+              page.sectionCounts[section] ?? 0,
+            ),
+            icon: _sectionIcon(section),
+            selected: selected == section,
             onTap: () {
-              if (selected == g) return;
+              if (selected == section) return;
               setState(() {
-                _groupFilter = g;
+                _sectionFilter = section;
                 _offset = 0;
               });
             },
@@ -614,6 +588,118 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       ],
     );
   }
+
+  String _sectionLabel(AppLocalizations l10n, QuestJournalSection section) =>
+      switch (section) {
+        QuestJournalSection.oldCamp => l10n.questJournalOldCamp,
+        QuestJournalSection.newCamp => l10n.questJournalNewCamp,
+        QuestJournalSection.swampCamp => l10n.questJournalSwampCamp,
+        QuestJournalSection.colony => l10n.questJournalColony,
+        QuestJournalSection.completed => l10n.questJournalCompleted,
+      };
+
+  IconData _sectionIcon(QuestJournalSection section) => switch (section) {
+    QuestJournalSection.oldCamp => Icons.fort_outlined,
+    QuestJournalSection.newCamp => Icons.landscape_outlined,
+    QuestJournalSection.swampCamp => Icons.grass_outlined,
+    QuestJournalSection.colony => Icons.person_pin_circle_outlined,
+    QuestJournalSection.completed => Icons.task_alt_outlined,
+  };
+
+  Widget _buildQuestNode(
+    BuildContext context,
+    AppLocalizations l10n,
+    QuestJournalNode node, {
+    required int depth,
+  }) {
+    final trailing = _buildQuestStateControl(l10n, node.quest);
+    final title = SelectableText(node.label, maxLines: 1);
+    final subtitle = _buildQuestSubtitle(context, node);
+    if (node.children.isEmpty) {
+      return ListTile(
+        dense: true,
+        contentPadding: EdgeInsets.only(left: 16 + depth * 24, right: 8),
+        leading: Icon(
+          depth == 0 ? Icons.flag_outlined : Icons.subdirectory_arrow_right,
+          size: 20,
+        ),
+        title: title,
+        subtitle: subtitle,
+        trailing: trailing,
+      );
+    }
+
+    return ExpansionTile(
+      key: ValueKey('quest-tree:${node.quest.questClass}:$_query'),
+      initiallyExpanded: _query.isNotEmpty,
+      controlAffinity: ListTileControlAffinity.leading,
+      tilePadding: EdgeInsets.only(left: 8 + depth * 24, right: 8),
+      childrenPadding: EdgeInsets.zero,
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
+      children: [
+        for (final child in node.children)
+          _buildQuestNode(context, l10n, child, depth: depth + 1),
+      ],
+    );
+  }
+
+  Widget _buildQuestSubtitle(BuildContext context, QuestJournalNode node) {
+    final muted = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (node.description case final description?)
+          Text(description, maxLines: 2, overflow: TextOverflow.ellipsis),
+        SelectableText(node.quest.id, maxLines: 1, style: muted),
+      ],
+    );
+  }
+
+  Widget _buildQuestStateControl(
+    AppLocalizations l10n,
+    ProgressionQuest quest,
+  ) {
+    final pendingState = _pending[quest.questClass]?.state;
+    final effectiveState = pendingState ?? quest.currentState;
+    final inKnownStates =
+        effectiveState != null && questStates.contains(effectiveState);
+    if (widget.editable && quest.writable && inKnownStates) {
+      return DropdownButton<String>(
+        value: effectiveState,
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        items: [
+          for (final state in questStates)
+            DropdownMenuItem(
+              value: state,
+              child: Text(_localizedState(l10n, state)),
+            ),
+        ],
+        onChanged: (state) => _setQuestState(quest, state),
+      );
+    }
+    return Text(_localizedState(l10n, effectiveState));
+  }
+}
+
+class _QuestJournalView {
+  const _QuestJournalView({
+    required this.roots,
+    required this.stateCounts,
+    required this.sectionCounts,
+    required this.total,
+    required this.offset,
+  });
+
+  final List<QuestJournalNode> roots;
+  final Map<String, int> stateCounts;
+  final Map<QuestJournalSection, int> sectionCounts;
+  final int total;
+  final int offset;
 }
 
 // ---------------------------------------------------------------------------
@@ -1860,13 +1946,13 @@ class _FactionsDetailState extends ConsumerState<FactionsDetail> {
 
 class _QuestFilterRow extends StatelessWidget {
   const _QuestFilterRow({
-    required this.page,
+    required this.stateCounts,
     required this.stateFilter,
     required this.busy,
     required this.onStateChanged,
   });
 
-  final ProgressionQuestPage page;
+  final Map<String, int> stateCounts;
   final String? stateFilter;
   final bool busy;
   final void Function(String label) onStateChanged;
@@ -1878,14 +1964,14 @@ class _QuestFilterRow extends StatelessWidget {
     // (so a selected chip whose count dropped to 0 stays visible for deselect).
     final chips = [
       for (final label in _filterStateLabels)
-        if ((page.stateCounts[label] ?? 0) > 0 || stateFilter == label)
+        if ((stateCounts[label] ?? 0) > 0 || stateFilter == label)
           FilterChip(
             label: Text(
               l10n.stateLabelWithCount(
                 _localizedShortLabel(l10n, label),
-                stateFilter == label && (page.stateCounts[label] ?? 0) == 0
+                stateFilter == label && (stateCounts[label] ?? 0) == 0
                     ? 0
-                    : page.stateCounts[label] ?? 0,
+                    : stateCounts[label] ?? 0,
               ),
             ),
             selected: stateFilter == label,

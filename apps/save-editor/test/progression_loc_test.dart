@@ -10,6 +10,9 @@ void main() {
     'info_stt_311_fisk_exit': {'english': 'See you, Fisk.'},
     'info_npcexit': {'english': 'The NPC leaves.'},
     'quest-banditscamp_banditstrust-name': {'english': 'The Bandits Trust'},
+    'quest-banditscamp_banditstrust-description': {
+      'english': 'Earn the trust of the bandits.',
+    },
     'quest-banditscamp_banditstrust_banditstrust_obj_back-name': {
       'english': 'Go back',
     },
@@ -49,13 +52,21 @@ void main() {
     });
 
     test('numeric node id → null', () {
-      expect(localizedKnowledgeEntry(catalog, lang, 'Topic_Diego_209799'), isNull);
-      expect(localizedKnowledgeEntry(catalog, lang, 'ChoiceDiego214558'), isNull);
+      expect(
+        localizedKnowledgeEntry(catalog, lang, 'Topic_Diego_209799'),
+        isNull,
+      );
+      expect(
+        localizedKnowledgeEntry(catalog, lang, 'ChoiceDiego214558'),
+        isNull,
+      );
     });
 
     test('empty catalog → null', () {
-      expect(localizedKnowledgeEntry(const {}, lang, 'ChoiceDiegoExitGamestart'),
-          isNull);
+      expect(
+        localizedKnowledgeEntry(const {}, lang, 'ChoiceDiegoExitGamestart'),
+        isNull,
+      );
     });
   });
 
@@ -80,6 +91,24 @@ void main() {
 
     test('unknown quest → null', () {
       expect(localizedQuestName(catalog, lang, 'Quest_Nope'), isNull);
+    });
+  });
+
+  group('localizedQuestDescription', () {
+    test('quest class id → quest-<body>-description', () {
+      expect(
+        localizedQuestDescription(
+          catalog,
+          lang,
+          'Quest_BanditsCamp_BANDITSTRUST',
+        ),
+        'Earn the trust of the bandits.',
+      );
+    });
+
+    test('unknown or empty quest → null', () {
+      expect(localizedQuestDescription(catalog, lang, 'Quest_Nope'), isNull);
+      expect(localizedQuestDescription(catalog, lang, ''), isNull);
     });
   });
 }

@@ -20,10 +20,15 @@ typedef Revision3QuestTransitionsEditor =
       Revision3ContentIndex index,
       Revision3ContentEntity quest,
     );
+typedef Revision3QuestSourceInspector =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity quest,
+    );
 
 enum _ContentMode { entities, assets }
 
-enum _QuestEditAction { outline, context, transitions }
+enum _QuestEditAction { outline, context, transitions, sourceInspection }
 
 const _stableSlotQuestGeneratorVersion = 4;
 
@@ -42,6 +47,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editQuestOutline,
     this.editQuestContext,
     this.editQuestTransitions,
+    this.inspectQuestSource,
     super.key,
   });
 
@@ -53,6 +59,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3QuestOutlineEditor? editQuestOutline;
   final Revision3QuestContextEditor? editQuestContext;
   final Revision3QuestTransitionsEditor? editQuestTransitions;
+  final Revision3QuestSourceInspector? inspectQuestSource;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -267,6 +274,11 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       : () async => Navigator.of(
                           context,
                         ).pop(_QuestEditAction.transitions),
+                  onInspectQuestSource: widget.inspectQuestSource == null
+                      ? null
+                      : () async => Navigator.of(
+                          context,
+                        ).pop(_QuestEditAction.sourceInspection),
                 ),
               );
               if (!mounted || editAction == null) return;
@@ -277,6 +289,8 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                   await widget.editQuestContext?.call(index, entity);
                 case _QuestEditAction.transitions:
                   await widget.editQuestTransitions?.call(index, entity);
+                case _QuestEditAction.sourceInspection:
+                  await widget.inspectQuestSource?.call(index, entity);
               }
             }
           },
@@ -308,6 +322,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                           widget.editQuestTransitions == null
                           ? null
                           : () => widget.editQuestTransitions!(index, selected),
+                      onInspectQuestSource: widget.inspectQuestSource == null
+                          ? null
+                          : () => widget.inspectQuestSource!(index, selected),
                     ),
             ),
           ],
@@ -716,6 +733,7 @@ class _EntityDetails extends StatelessWidget {
     required this.onEditQuestOutline,
     required this.onEditQuestContext,
     required this.onEditQuestTransitions,
+    required this.onInspectQuestSource,
   });
 
   final Revision3ContentIndex index;
@@ -725,6 +743,7 @@ class _EntityDetails extends StatelessWidget {
   final Future<void> Function()? onEditQuestOutline;
   final Future<void> Function()? onEditQuestContext;
   final Future<void> Function()? onEditQuestTransitions;
+  final Future<void> Function()? onInspectQuestSource;
 
   @override
   Widget build(BuildContext context) {
@@ -757,8 +776,9 @@ class _EntityDetails extends StatelessWidget {
                 enabled:
                     editQuestOutline != null ||
                     onEditQuestContext != null ||
-                    onEditQuestTransitions != null,
-                tooltip: 'Edit Quest',
+                    onEditQuestTransitions != null ||
+                    onInspectQuestSource != null,
+                tooltip: 'Quest tools',
                 onSelected: (action) async {
                   switch (action) {
                     case _QuestEditAction.outline:
@@ -767,6 +787,8 @@ class _EntityDetails extends StatelessWidget {
                       await onEditQuestContext?.call();
                     case _QuestEditAction.transitions:
                       await onEditQuestTransitions?.call();
+                    case _QuestEditAction.sourceInspection:
+                      await onInspectQuestSource?.call();
                   }
                 },
                 itemBuilder: (context) => [
@@ -785,6 +807,25 @@ class _EntityDetails extends StatelessWidget {
                               'Not available yet after adding custom behavior',
                             )
                           : null,
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: Key(
+                      'revision3-content-inspect-quest-source-${entity.id}',
+                    ),
+                    value: _QuestEditAction.sourceInspection,
+                    enabled: onInspectQuestSource != null,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.fact_check_outlined),
+                      title: const Text('Source & checks'),
+                      subtitle: onInspectQuestSource == null
+                          ? const Text(
+                              'Configure the game installation to verify source',
+                            )
+                          : const Text(
+                              'Verify the generated script and its source inputs',
+                            ),
                     ),
                   ),
                   PopupMenuItem(
@@ -827,7 +868,7 @@ class _EntityDetails extends StatelessWidget {
                       children: [
                         Icon(Icons.edit_note_outlined),
                         SizedBox(width: 8),
-                        Text('Edit Quest'),
+                        Text('Quest tools'),
                       ],
                     ),
                   ),

@@ -67,6 +67,50 @@ void main() {
     expect(noGroups.groupCounts, isEmpty);
   });
 
+  test('tutorial gate page reuses the quest page shape without a root row', () {
+    final page = ProgressionQuestPage.fromJson({
+      'section': 'tutorials',
+      'total': 2,
+      'offset': 0,
+      'limit': 100,
+      'quests': [
+        {
+          'questClass': '/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics',
+          'id': 'Quest_Tutorials_Tut_CombatBasics',
+          'group': 'Tutorials',
+          'name': 'Tut_CombatBasics',
+          'currentState': 'EQuestState::Running',
+          'statePath': [
+            'QuestDataByClass',
+            '{/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics}',
+            'CurrentState',
+          ],
+          'writable': true,
+        },
+        {
+          'questClass': '/Script/Angelscript.Quest_Tutorials_Tut_Map',
+          'id': 'Quest_Tutorials_Tut_Map',
+          'group': 'Tutorials',
+          'name': 'Tut_Map',
+          'currentState': 'EQuestState::Available',
+          'statePath': [
+            'QuestDataByClass',
+            '{/Script/Angelscript.Quest_Tutorials_Tut_Map}',
+            'CurrentState',
+          ],
+          'writable': true,
+        },
+      ],
+    });
+
+    expect(page.quests, hasLength(2));
+    expect(page.quests.map((quest) => quest.name), [
+      'Tut_CombatBasics',
+      'Tut_Map',
+    ]);
+    expect(page.quests.any((quest) => quest.id == 'Quest_Tutorials'), isFalse);
+  });
+
   test('edit intents emit core edit json', () {
     final questEdit = QuestStateChange(
       statePath: const ['QuestDataByClass', '{X}', 'CurrentState'],

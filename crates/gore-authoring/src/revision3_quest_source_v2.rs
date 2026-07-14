@@ -155,6 +155,74 @@ pub struct PreparedRevision3QuestCollisionSourceV2 {
     prior_quests: BTreeMap<EntityId, Revision3PriorQuestEvidenceV2>,
 }
 
+/// Opaque, inspection-only collision evidence reconstructed from one immutable historical head.
+///
+/// This deliberately has a distinct type from [`PreparedRevision3QuestCollisionSourceV2`]. It
+/// cannot be converted into exact-current authoring authority, and is accepted only by the
+/// inventory crate's linear inspection verifier. The retained source remains fully sealed and
+/// structurally identical to the source that originally produced a version-2 artifact.
+pub struct PreparedRevision3QuestCollisionInspectionSourceV2 {
+    source: PreparedRevision3QuestCollisionSourceV2,
+}
+
+impl fmt::Debug for PreparedRevision3QuestCollisionInspectionSourceV2 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedRevision3QuestCollisionInspectionSourceV2")
+            .field("historical_head", self.source.current_head())
+            .field("project_id", &self.source.project_id())
+            .field("project_revision", &self.source.project_revision())
+            .field("prior_quest_count", &self.source.prior_quest_count())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedRevision3QuestCollisionInspectionSourceV2 {
+    pub(crate) fn new(source: PreparedRevision3QuestCollisionSourceV2) -> Self {
+        Self { source }
+    }
+
+    pub fn historical_head(&self) -> &WorkingHead {
+        self.source.current_head()
+    }
+
+    pub fn historical_project(&self) -> &ContentSeal {
+        self.source.current_project()
+    }
+
+    pub fn project_id(&self) -> ProjectId {
+        self.source.project_id()
+    }
+
+    pub fn project_revision(&self) -> u64 {
+        self.source.project_revision()
+    }
+
+    pub fn target(&self) -> &GameGenerationAnchor {
+        self.source.target()
+    }
+
+    pub fn nonquest_basis(&self) -> &Revision3NonQuestCollisionBasisV2 {
+        self.source.nonquest_basis()
+    }
+
+    pub fn prior_quest_count(&self) -> usize {
+        self.source.prior_quest_count()
+    }
+
+    pub fn prior_quest_count_u64(&self) -> u64 {
+        self.source.prior_quest_count_u64()
+    }
+
+    pub fn prior_quest_evidence(&self) -> &ContentSeal {
+        self.source.prior_quest_evidence()
+    }
+
+    pub fn prior_quests(&self) -> &BTreeMap<EntityId, Revision3PriorQuestEvidenceV2> {
+        self.source.prior_quests()
+    }
+}
+
 impl fmt::Debug for PreparedRevision3QuestCollisionSourceV2 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1100,6 +1168,8 @@ mod tests {
     #[test]
     fn source_capsules_and_evidence_records_are_not_cloneable_authority_tokens() {
         let _ = <PreparedRevision3QuestCollisionSourceV2 as AmbiguousIfClone<_>>::marker as fn();
+        let _ = <PreparedRevision3QuestCollisionInspectionSourceV2 as AmbiguousIfClone<_>>::marker
+            as fn();
         let _ = <Revision3NonQuestCollisionBasisV2 as AmbiguousIfClone<_>>::marker as fn();
         let _ = <Revision3PriorQuestEvidenceV2 as AmbiguousIfClone<_>>::marker as fn();
         let _prepare: fn(
@@ -1109,6 +1179,13 @@ mod tests {
             PreparedRevision3QuestCollisionSourceV2,
             Revision3QuestCollisionSourceErrorV2,
         > = crate::WorkingProjectStore::prepare_current_revision3_quest_collision_source_v2;
+        let _inspect: fn(
+            &crate::WorkingProjectStore,
+            &WorkingHead,
+        ) -> Result<
+            PreparedRevision3QuestCollisionInspectionSourceV2,
+            Revision3QuestCollisionSourceErrorV2,
+        > = crate::WorkingProjectStore::prepare_revision3_quest_collision_inspection_source_v2;
     }
 
     #[test]

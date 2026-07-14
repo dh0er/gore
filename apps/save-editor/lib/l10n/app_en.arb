@@ -838,5 +838,43 @@
         "type": "int"
       }
     }
-  }
+  },
+  "questJournalAll": "All quests",
+  "questJournalOldCamp": "Old Camp",
+  "questJournalNewCamp": "New Camp",
+  "questJournalSwampCamp": "Swamp Camp",
+  "questJournalColony": "The Colony",
+  "questJournalCompleted": "Completed",
+  "questJournalHint": "In-game journal view. Internal and not-yet-started quest states remain available under All Data.",
+  "questJournalNoEntries": "No journal quests match the current filters.",
+  "glossaryTutorials": "Tutorials",
+  "tutorialGateNote": "These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.",
+  "tutorialResetChanges": "Reset tutorial changes",
+  "tutorialNoGates": "No tutorial unlock gates are available in this save.",
+  "tutorialGateUnlockCount": "{unlocked} of {total} tutorial gates unlocked",
+  "@tutorialGateUnlockCount": {
+    "placeholders": {
+      "unlocked": {
+        "type": "int"
+      },
+      "total": {
+        "type": "int"
+      }
+    }
+  },
+  "tutorialGateCombatBasics": "Combat basics",
+  "tutorialGateCrafting": "Crafting",
+  "tutorialGateCrime": "Crime and consequences",
+  "tutorialGateDrugs": "Consumables and effects",
+  "tutorialGateLockpicking": "Lockpicking",
+  "tutorialGateMagic": "Magic",
+  "tutorialGateMap": "Map",
+  "tutorialGateMeleeCombat": "Melee combat",
+  "tutorialGateNavigation": "Movement and navigation",
+  "tutorialGatePerception": "Perception",
+  "tutorialGatePlayerProgression": "Character progression",
+  "tutorialGateRanged": "Ranged combat",
+  "tutorialGateRiding": "Riding",
+  "tutorialGateSleep": "Sleeping",
+  "tutorialGateTrading": "Trading"
 }

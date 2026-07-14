@@ -131,6 +131,37 @@ void main() {
     expect(transitionCalls, 1);
   });
 
+  testWidgets('Source & checks routes the selected exact Quest separately', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var inspectionCalls = 0;
+    String? inspectedQuest;
+    await _pumpLoadedLibrary(
+      tester,
+      inspectQuestSource: (index, quest) async {
+        inspectionCalls++;
+        expect(index.projectId, _projectId);
+        inspectedQuest = quest.id;
+      },
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
+    await tester.pumpAndSettle();
+
+    final action = find.byKey(
+      Key('revision3-content-inspect-quest-source-$_questId'),
+    );
+    expect(action, findsOneWidget);
+    expect(tester.widget<PopupMenuItem<Object?>>(action).enabled, isTrue);
+    await tester.tap(find.text('Source & checks'));
+    await tester.pumpAndSettle();
+
+    expect(inspectionCalls, 1);
+    expect(inspectedQuest, _questId);
+  });
+
   testWidgets(
     'V4 Quest disables legacy outline while context and transitions stay available',
     (tester) async {
@@ -586,6 +617,7 @@ Future<void> _pumpLoadedLibrary(
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
+  Revision3QuestSourceInspector? inspectQuestSource,
 }) async {
   await _pumpLibrary(
     tester,
@@ -593,6 +625,7 @@ Future<void> _pumpLoadedLibrary(
     editQuestOutline: editQuestOutline,
     editQuestContext: editQuestContext,
     editQuestTransitions: editQuestTransitions,
+    inspectQuestSource: inspectQuestSource,
   );
   await tester.pumpAndSettle();
 }
@@ -604,6 +637,7 @@ Future<void> _pumpLibrary(
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
+  Revision3QuestSourceInspector? inspectQuestSource,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -616,6 +650,7 @@ Future<void> _pumpLibrary(
         editQuestOutline: editQuestOutline,
         editQuestContext: editQuestContext,
         editQuestTransitions: editQuestTransitions,
+        inspectQuestSource: inspectQuestSource,
       ),
     ),
   ),

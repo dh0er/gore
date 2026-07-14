@@ -209,3 +209,22 @@ semantic NPC editor, generated production build output, class residence,
 discovery, spawn support, or runtime qualification. The retained live FFI test
 remains environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI
 fixtures do not substitute for that pinned-game proof.
+
+## Native source/readiness inspection foundation
+
+`build_revision3_npc_source_inspection_plan_v1` is a pure, read-only native
+foundation for an eventual existing-NPC profile and Problems surface. It
+accepts exact canonical revision-3 project JSON plus one NPC entity ID, verifies
+the selected NPC/ScriptModule closure and persisted parent provenance triple,
+and requires exact regeneration of generator, owner, origin, module path,
+source SHA-256, and input fingerprint. Other project content, including
+generator-V4 Quests, remains present in the exact input but is neither widened
+nor copied into the bounded NPC plan.
+
+The plan reports `compiler_status: not_run`, `build_status: blocked`,
+`runtime_qualification: runtime_unqualified`, and unsupported spawn/publication
+with fixed structured diagnostics. Its serializer enforces the entity and
+four-MiB plan envelopes before allocating the canonical result. It has no Store,
+FFI, Studio, compiler, game-root, build, spawn, deployment, or publication
+entry point yet. Successful source regeneration is therefore not evidence of
+class residence, discovery, spawning, distinct runtime state, or save safety.

@@ -3428,7 +3428,8 @@ fn search_typed_properties(
 }
 
 /// Structured progression queries over the decoded private payload. Sections:
-/// "quests" (QuestDataByClass entries with setValue-addressable state paths),
+/// "quests" (journal QuestDataByClass entries with setValue-addressable state
+/// paths), "tutorials" (the in-game glossary's tutorial leaves),
 /// "glossary" (the creature/location quest trees joined with the Hero's
 /// document-segment unlock events), "knowledge" (per-NPC dialog knowledge
 /// sets), "events" (per-character memorized event arrays). Uses the shared
@@ -3521,6 +3522,14 @@ fn query_progression(
     let root = properties::parse_private_root(&decoded)?;
     match section {
         "quests" => progression_quests(
+            &root,
+            &query,
+            state_filter.as_deref(),
+            group_filter.as_deref(),
+            offset,
+            limit,
+        ),
+        "tutorials" => progression_tutorials(
             &root,
             &query,
             state_filter.as_deref(),
@@ -3985,6 +3994,23 @@ fn glossary_category_for_group(group: &str) -> Option<&'static str> {
 
 fn is_glossary_quest_group(group: &str) -> bool {
     glossary_category_for_group(group).is_some()
+}
+
+/// Tutorials are persisted in `QuestDataByClass`, but the game presents them
+/// under the glossary rather than in the quest journal. The `Quest_Tutorials`
+/// entry is only the subtree root; actual tutorial pages use
+/// `Quest_Tutorials_Tut_*`.
+fn is_tutorial_quest_group(group: &str) -> bool {
+    group == "Tutorials"
+}
+
+fn is_tutorial_quest_leaf(class_path: &str) -> bool {
+    class_path
+        .rsplit('.')
+        .next()
+        .unwrap_or(class_path)
+        .strip_prefix("Quest_Tutorials_Tut_")
+        .is_some_and(|name| !name.is_empty())
 }
 
 /// Render an Unreal soft-class reference without losing its asset/class name.
@@ -4506,6 +4532,51 @@ fn progression_quests(
     offset: usize,
     limit: usize,
 ) -> Result<Value, CoreError> {
+    progression_quest_page(
+        root,
+        "quests",
+        query,
+        state_filter,
+        group_filter,
+        offset,
+        limit,
+        |_, group| !is_glossary_quest_group(group) && !is_tutorial_quest_group(group),
+    )
+}
+
+fn progression_tutorials(
+    root: &properties::RootObject,
+    query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    progression_quest_page(
+        root,
+        "tutorials",
+        query,
+        state_filter,
+        group_filter,
+        offset,
+        limit,
+        |class_path, _| is_tutorial_quest_leaf(class_path),
+    )
+}
+
+/// Build the shared `ProgressionQuestPage` JSON shape for either journal
+/// quests or tutorial leaves. Keeping filtering in one pipeline guarantees
+/// identical state/group faceting, paging, edit paths, and writability.
+fn progression_quest_page(
+    root: &properties::RootObject,
+    section: &str,
+    query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+    include: impl Fn(&str, &str) -> bool,
+) -> Result<Value, CoreError> {
     let (base_path, map_prop) = properties::find_property_by_name(root, "QuestDataByClass")
         .ok_or_else(|| {
             CoreError::Parse("QuestDataByClass not found in the decoded payload".to_string())
@@ -4541,7 +4612,7 @@ fn progression_quests(
             .unwrap_or("unknown")
             .to_string();
         let (id, group, name) = quest_id_group_name(class_path);
-        if is_glossary_quest_group(&group) {
+        if !include(class_path, &group) {
             continue;
         }
         all.push(Entry {
@@ -4621,7 +4692,7 @@ fn progression_quests(
         })
         .collect::<Vec<_>>();
     Ok(json!({
-        "section": "quests",
+        "section": section,
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -4924,10 +4995,13 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
     if let Some((_, prop)) = properties::find_property_by_name(root, "QuestDataByClass") {
         if let properties::PropertyValue::Map { entries, .. } = &prop.value {
             for (key, value) in entries {
-                let is_glossary = map_key_string(key)
-                    .map(quest_id_group_name)
-                    .is_some_and(|(_, group, _)| is_glossary_quest_group(&group));
-                if is_glossary {
+                let is_non_journal =
+                    map_key_string(key)
+                        .map(quest_id_group_name)
+                        .is_some_and(|(_, group, _)| {
+                            is_glossary_quest_group(&group) || is_tutorial_quest_group(&group)
+                        });
+                if is_non_journal {
                     continue;
                 }
                 quest_total += 1;
@@ -14510,6 +14584,33 @@ mod tests {
         payload
     }
 
+    fn tutorial_progression_payload() -> Vec<u8> {
+        let quest_map = quest_map_property(&[
+            (
+                "/Script/Angelscript.Quest_OldCamp_SLEEPER",
+                "EQuestState::Running",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics",
+                "EQuestState::Succeeded",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials_Tut_Movement",
+                "EQuestState::Running",
+            ),
+        ]);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
     fn progression_fixture(
         file_name: &str,
         private_payload: Vec<u8>,
@@ -14881,6 +14982,76 @@ mod tests {
         let overview = summarize_private_progression_overview(Some(&root));
         assert_eq!(overview["questTotal"], 1);
         assert_eq!(overview["questStates"], json!({ "Running": 1 }));
+    }
+
+    #[test]
+    fn tutorials_have_their_own_page_and_are_excluded_from_quests_and_overview() {
+        let private_payload = tutorial_progression_payload();
+        let root = properties::parse_private_root(&private_payload).unwrap();
+        let (_dir, path, backend) = progression_fixture("G1R-tutorials.sav", private_payload);
+
+        let quests =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
+        assert_eq!(quests["total"], 1);
+        assert_eq!(quests["quests"][0]["group"], "OldCamp");
+        assert_eq!(quests["groupCounts"], json!({ "OldCamp": 1 }));
+        assert_eq!(quests["stateCounts"], json!({ "Running": 1 }));
+
+        let overview = summarize_private_progression_overview(Some(&root));
+        assert_eq!(overview["questTotal"], 1);
+        assert_eq!(overview["questStates"], json!({ "Running": 1 }));
+
+        let tutorials =
+            query_progression(&path, &json!({ "section": "tutorials" }), Some(&backend)).unwrap();
+        assert_eq!(tutorials["section"], "tutorials");
+        assert_eq!(tutorials["total"], 2);
+        assert_eq!(tutorials["count"], 2);
+        assert_eq!(
+            tutorials["stateCounts"],
+            json!({ "Running": 1, "Succeeded": 1 })
+        );
+        assert_eq!(tutorials["groupCounts"], json!({ "Tutorials": 2 }));
+        assert!(
+            tutorials["quests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|quest| { quest["questClass"] != "/Script/Angelscript.Quest_Tutorials" })
+        );
+
+        let combat = &tutorials["quests"][0];
+        assert_eq!(
+            combat["questClass"],
+            "/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics"
+        );
+        assert_eq!(combat["id"], "Quest_Tutorials_Tut_CombatBasics");
+        assert_eq!(combat["group"], "Tutorials");
+        assert_eq!(combat["name"], "Tut_CombatBasics");
+        assert_eq!(combat["currentState"], "EQuestState::Succeeded");
+        assert_eq!(
+            combat["statePath"],
+            json!([
+                "QuestDataByClass",
+                "{/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics}",
+                "CurrentState"
+            ])
+        );
+        assert_eq!(combat["writable"], true);
+
+        // Tutorial pages use the same faceted state filtering as quest pages.
+        let succeeded = query_progression(
+            &path,
+            &json!({ "section": "tutorials", "state": "Succeeded" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(succeeded["total"], 1);
+        assert_eq!(succeeded["quests"][0]["name"], "Tut_CombatBasics");
+        assert_eq!(
+            succeeded["stateCounts"],
+            json!({ "Running": 1, "Succeeded": 1 })
+        );
+        assert_eq!(succeeded["groupCounts"], json!({ "Tutorials": 1 }));
     }
 
     fn glossary_segment_edit(

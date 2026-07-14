@@ -2488,6 +2488,52 @@ void main() {
     },
   );
 
+  test(
+    'loadProgressionTutorials queries the dedicated tutorials section',
+    () async {
+      final core = _RecordingCoreService(
+        progressionData: {
+          'section': 'tutorials',
+          'total': 1,
+          'offset': 0,
+          'limit': 100,
+          'count': 1,
+          'quests': [
+            {
+              'questClass':
+                  '/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics',
+              'id': 'Quest_Tutorials_Tut_CombatBasics',
+              'group': 'Tutorials',
+              'name': 'Tut_CombatBasics',
+              'currentState': 'EQuestState::Running',
+              'statePath': [
+                'QuestDataByClass',
+                '{/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics}',
+                'CurrentState',
+              ],
+              'writable': true,
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+      final page = await notifier.loadProgressionTutorials();
+
+      expect(page.error, isNull);
+      expect(page.quests.single.name, 'Tut_CombatBasics');
+      final call = core.requests.lastWhere(
+        (request) => request.command == 'query_progression',
+      );
+      expect(call.payload['section'], 'tutorials');
+      expect(call.payload['offset'], 0);
+      expect(call.payload['limit'], 100);
+      expect(call.payload.containsKey('query'), isFalse);
+      expect(call.payload.containsKey('group'), isFalse);
+    },
+  );
+
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.
