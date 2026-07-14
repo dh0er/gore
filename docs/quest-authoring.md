@@ -87,15 +87,23 @@ functions offline. Its discovery proof upgrades new quest **class discovery**
 from hypothesis to a supported narrow mechanism, but it does not upgrade the
 candidate's transition/effect behavior to production-ready.
 
-## Discovery-only Draft generator
+## Discovery-only Draft generators
 
-`gore-authoring` now exposes `DraftQuestSkeletonV1`, a bounded, offline-only
-generator for the smallest useful quest Draft. It emits exactly one
-`UG1RQuest` root and one subobjective, their generated defaults, and two
-read-only lookup helpers. The fixed shape deliberately contains no transition
-predicate or action, dialog selection, effect, reward, journal operation,
-failure path, filesystem write, compiler invocation, game launch, or save
-operation.
+`gore-authoring` retains the byte-frozen `DraftQuestSkeletonV1` for the smallest
+useful Quest Draft: exactly one `UG1RQuest` root and one objective. The additive
+`DraftQuestSkeletonV2` keeps that first objective's technical identities, then
+emits two through eight ordered objective classes with deterministic
+class/getter names. It regenerates the complete multi-objective source so only
+the final generated objective has `bSucceedParent = true`; the separate V1
+single-objective output remains byte-frozen. This represents author order and
+completion shape; it does not claim that runtime transitions enforce the order.
+
+Both generators are bounded and offline-only. They deliberately contain no
+transition predicate or action, dialog selection, effect, reward, journal
+operation, failure path, filesystem write, compiler invocation, game launch,
+or save operation. Objective titles are canonical, byte-bounded, and unique
+case-insensitively. Every generated class and getter is checked against the
+sealed collision catalog, including all additional objectives.
 
 Generation requires the target game generation plus catalog-layer, generation,
 and source-seal anchors for the giver, parent quest, and collision inventory.
@@ -153,6 +161,16 @@ content-addressed `QuestCollisionArtifactRef`. The historical
 with caller-verified collision input; it is not the transaction used by the
 current native FFI route.
 
+Existing single-objective revision-3 projects retain project-level Quest
+generator version 2 and omit `additional_objective_titles`, so their canonical
+JSON and generated source remain byte-identical. New ordered multi-objective
+Drafts use project-level Quest generator version 3, persist that optional list,
+and regenerate the complete ordered source. The request parser validates the
+objective-list shape and the transaction derives the generator version from
+whether that list is empty. Persisted version/list mismatches fail closed during
+project validation, regeneration, build inspection, Store persistence, and Dart
+candidate validation.
+
 The current filesystem-free
 `apply_revision3_quest_draft_transaction_v3` consumes a fresh prepared collision
 capability bound to the Base Game, trusted catalog, exact current project and
@@ -168,9 +186,9 @@ no artifact authority, and requires a fresh capability for source inspection.
 The pure transaction performs no filesystem write, compile, package, deploy,
 launch, or fixed-head publication. The strict native prepare-only FFI route
 below orchestrates this v3 transaction with Store persistence. A strict Dart
-wrapper and managed-session transaction now consume that candidate and publish
-it through the guarded fixed-head lane; the Mod Studio catalog/wizard/editor
-remains missing.
+wrapper and managed-session transaction consume that candidate and publish it
+through the guarded fixed-head lane; the managed content library and bounded
+Quest wizard expose the resulting semantic Draft.
 
 ### Native revision-3 prepare-only FFI route
 
@@ -210,28 +228,32 @@ and every signed-wire number before publishing by exact fixed-head byte CAS.
 They fully reopen the published checkpoint and poison the session if publication
 becomes uncertain.
 
-The managed revision-3 Home surface now exposes the first bounded friendly
-Quest wizard over this operation. It accepts a name, description, first
-objective, Quest family, and giver; users never enter entity IDs, namespaces,
-symbols, or paths. Family/giver choices come from a freshly rebuilt Story
-catalog when the dialog opens and are refreshed again immediately before the
-native transaction. Technical identities are derived deterministically from
-the exact managed checkpoint, and the coordinator rejects an advanced project
-as a stale wizard that must be closed and reopened. A successful publication
-refreshes the visible project revision and exact-current content library.
+The managed revision-3 Home surface exposes a bounded friendly Quest wizard
+over this operation. It accepts a name, description, one through eight ordered
+objectives, Quest family, and giver; objectives can be added, removed, and moved
+without entering entity IDs, namespaces, symbols, or paths. Family/giver
+choices come from a freshly rebuilt Story catalog when the dialog opens and are
+refreshed again immediately before the native transaction. Technical identities
+are derived deterministically from the managed project ID, current revision,
+and authored intent. Separately, the coordinator rejects a different root or
+an advanced canonical head as a stale wizard that must be closed and reopened.
+A successful publication
+refreshes the visible project revision and exact-current content library, where
+every objective participates in search.
 
-This is a one-shell Draft workflow, not the semantic Quest catalog, outline,
-state graph, conditions/effects editor, journal/reward workflow, compiler, or
-runtime qualification. The first generator's plain-text subset is validated in
-the form, and the UI continues to show `blocked` and `runtime_unqualified`
-without compile, deploy, game-install, or save-file claims.
+This is an ordered objective-outline Draft workflow, not a state graph,
+conditions/effects editor, journal/reward workflow, compiler, or runtime
+qualification. The generator's plain-text subset is validated in the form, and
+the UI continues to show `blocked` and `runtime_unqualified` without compile,
+deploy, game-install, or save-file claims.
 
 ### Managed revision-3 Studio transaction boundary
 
-`ManagedRevision3AuthoringProjectSession` builds the native request from its
-own exact opened checkpoint inside the serialized session lane. Callers provide
-only friendly Quest intent plus the game root; they cannot substitute a project
-basis, candidate head, collision evidence, generated module, or artifact seal.
+`ManagedRevision3AuthoringProjectSession` builds the native request from its own
+exact opened working-store root and checkpoint inside the serialized session
+lane. Callers provide only friendly Quest intent plus the game root; they cannot
+substitute a project basis, candidate head, collision evidence, generated
+module, or artifact seal.
 The Dart response parser is closed and duplicate-safe, canonicalizes every
 embedded transport, recursively rejects numbers outside the signed 64-bit wire,
 and checks the complete deterministic Quest/module relationship rather than

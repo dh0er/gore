@@ -106,12 +106,13 @@ leaf facts, and keeps large result lists lazy.
 The DataAsset Lab itself remains deliberately evidence-only. It has no patch,
 project-save, pack, deploy, or runtime-qualification control, and native paths
 or raw offsets are never returned in its result. Use the receipt-bound CLI
-workflow below for the currently supported copy-on-write patch operation. A
-separate managed revision-3 project view can now import the resulting verified
-PatchReceipt into its stage registry; that does not turn the Lab into a semantic
-editor or grant build/deploy authority. Any future semantic editor must preserve
-these exact selector and provenance gates rather than treating a successfully
-opened package as general write support.
+workflow below for the standalone copy-on-write operation. A separate managed
+revision-3 project view can import the resulting verified PatchReceipt into its
+stage registry. The same view now offers a first typed value-edit workflow for
+one Lab result, without weakening the Lab's read-only contract. That workflow
+still requires a separately produced, exact ExtractReceipt-v2; it does not
+extract a package, infer provenance, or turn successful inspection into general
+write authority.
 
 ## 3. Prepare one raw fixed-width replacement
 
@@ -222,29 +223,77 @@ even though embedded `serde_json::Value` objects arrive with sorted map keys,
 reconstruct the exact nested working-head order, reject non-signed-wire numbers
 and expanded status claims, and close candidate/AssetStore bindings.
 
-`ManagedRevision3AuthoringProjectSession` publishes prepare and remove
-candidates through the same serialized full-reopen, crash-repair, exact
-fixed-head byte-CAS, and post-publication reopen lane used by other revision-3
-mutations. Listing is an exact-head serialized read. Head drift never clobbers
-the winner; malformed or integrity-uncertain results poison the session, while
-bounded local-input/response-limit failures remain retryable after the disk
-head is rechecked.
+### Direct typed fixed-leaf staging
 
-Managed revision-3 Home now exposes that exact registry as **Verified DataAsset
+`authoring_store_prepare_revision3_dataasset_edit_v1` removes the need to author
+an intermediate PatchReceipt independently; it does **not** remove the extraction
+proof requirement. Its exact request combines one current managed-project head,
+a separately produced ExtractReceipt-v2 path, the confirmed `/Game` target from
+that receipt, one offset-free selector returned by `dataasset_fixed_inspect_v1`,
+and one strictly typed semantic replacement. Supported values are Bool, bounded
+signed and unsigned integers, finite 32-/64-bit floats, linear RGBA, and
+four-component vectors. Integers travel as exact decimal strings; native code
+performs the authoritative little-endian encoding and requires the replacement
+kind and byte width to equal the selector.
+
+Before authoring, the read-only
+`authoring_read_dataasset_extract_receipt_v2` command fully verifies the selected
+ExtractReceipt and returns only a bounded summary: its exact `/Game` target,
+package-component seals, USMAP seal, and component lengths. The Studio requires
+those package and schema facts to match the Lab inspection. It also shows the
+receipt's target and requires an explicit confirmation because two byte-identical
+cooked packages can still represent different in-game targets. The summary
+returns no local receipt path, raw offset, selector bytes, or replacement value.
+
+Native code reopens the bounded, no-follow ExtractReceipt chain and exact
+pair/USMAP/sidecars, then creates a private game-disjoint PatchReceipt-v2 pair
+only for the duration of the call. That private chain passes the unchanged full
+PatchReceipt verifier: semantic rewalk, fresh live conversion, executable seal,
+generation probes, and Store/source-root disjointness. Temporary artifacts are
+deleted before return. The response is the ordinary closed prepare-only R3
+stage/candidate/head result; it contains no receipt path, temporary path, raw
+offset, or extra build/publication authority. Native code additionally returns
+an `intent_binding_sha256` over the confirmed target, canonical offset-free
+selector, and exact encoded replacement bytes. The strict Dart wrapper computes
+the same domain-separated digest and accepts the candidate only when its target,
+stage manifest, and digest preserve that exact user intent.
+
+The Dart semantic model round-trips the canonical selector schema from the
+strict inspector DTO instead of maintaining a second selector wire. Its guided
+panel searches only `editable=true` leaves, presents typed controls, shows a
+friendly Before/After preview, verifies the separately selected ExtractReceipt,
+shows and confirms its exact target, and delegates one stage transaction. Wrong
+or stale receipts are intentionally not guessed: native verification rejects
+any package, schema, generation, target, or intent mismatch. The workflow is
+wired through the shared managed session and Home DataAsset surface; successful
+publication advances and reloads the exact managed project checkpoint.
+
+`ManagedRevision3AuthoringProjectSession` publishes receipt-import, typed-edit,
+and remove candidates through the same serialized full-reopen, crash-repair,
+exact fixed-head byte-CAS, and post-publication reopen lane used by other
+revision-3 mutations. Listing is an exact-head serialized read. Head drift never
+clobbers the winner; malformed or integrity-uncertain results poison the
+session, while bounded local-input failures remain retryable after the disk head
+is rechecked.
+
+Managed revision-3 Home exposes the exact registry as **Verified DataAsset
 edits**. The author can search friendly asset names or `/Game` paths, inspect
-bounded verified facts, import a PatchReceipt JSON through a file picker, and
-remove an entry from the project registry after confirmation. Initial or failed
-exact-head loading, checkpoint drift, and `requiresReopen` lock mutation. Add and
-remove are bound to the exact project root, project ID, revision, and head; each
-successful mutation advances and reloads the visible project checkpoint. A
+bounded verified facts, create the first typed fixed-leaf edit through the
+summary/confirmation/preview flow, import a PatchReceipt JSON through the expert
+file picker, and remove an entry from the project registry after confirmation.
+Initial or failed exact-head loading, checkpoint drift, and `requiresReopen`
+lock mutation. Every mutation is bound to the exact project root, project ID,
+revision, and head; each success advances and reloads the visible checkpoint. A
 registry removal does not modify the source receipt or game installation.
 
-This visible surface manages independently receipt-verified fixed-size edits;
-it is not yet a semantic value editor. It grants no build, pack, deploy,
-gameplay, runtime, or future-reinspection authority. Semantic schema/forms,
-authoring a value directly in Studio, preview/diff/undo, build lowering,
-post-pack verification, structural edits, and the sealed Unreal handoff remain
-separate work.
+The visible registry manages independently receipt-verified fixed-size edits;
+the new semantic component is the first typed value-editor slice, not a general
+DataAsset editor. Neither grants build, pack, deploy, gameplay, runtime, or
+future-reinspection authority. Reviewed gameplay-domain schemas and units,
+multi-edit transactions, undo, build lowering, post-pack verification,
+structural edits, and the sealed Unreal handoff remain separate work. The typed
+workflow writes only immutable objects and the guarded fixed head inside the
+managed project; it never writes the installed game or any save file.
 
 ## 6. Pack the patched pair without deploying it
 
