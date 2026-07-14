@@ -8,10 +8,13 @@ import 'package:gore_mod/project/revision3_content_library.dart';
 const _projectId = '11111111111111111111111111111111';
 const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
+const _moduleId = '44444444444444444444444444444444';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _assetSha =
     'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const _artifactSha =
+    'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
 
 void main() {
   testWidgets('shows loading and exact-current content at desktop width', (
@@ -29,7 +32,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Fixture project'), findsOneWidget);
-    expect(find.text('2 entities / 1 assets / revision 7'), findsOneWidget);
+    expect(find.text('3 entities / 2 assets / revision 7'), findsOneWidget);
     expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsOneWidget);
     expect(
       find.byKey(Key('revision3-content-entity-$_questId')),
@@ -110,6 +113,85 @@ void main() {
     );
   });
 
+  testWidgets('navigates outgoing references and derived backlinks', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLoadedLibrary(tester);
+
+    await tester.tap(
+      find.byKey(const Key('revision3-content-filter-quest_draft')),
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+
+    await tester.tap(find.text('draft script module'));
+    await tester.pump();
+    expect(
+      find.byKey(Key('revision3-content-entity-$_moduleId')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('revision3-content-entity-details-$_moduleId')),
+      findsOneWidget,
+    );
+
+    await tester.drag(
+      find.byKey(const Key('revision3-content-entity-details')),
+      const Offset(0, -500),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const Key(
+          'revision3-content-backlink-$_moduleId-$_questId-draft_script_module-0',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('revision3-content-entity-details-$_questId')),
+      findsOneWidget,
+    );
+
+    await tester.drag(
+      find.byKey(const Key('revision3-content-entity-details')),
+      const Offset(0, -250),
+    );
+    await tester.pump();
+    await tester.tap(find.text('quest collision artifact'));
+    await tester.pump();
+    expect(
+      find.byKey(Key('revision3-content-asset-$_artifactSha')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('revision3-content-asset-details-$_artifactSha'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.drag(
+      find.byKey(const Key('revision3-content-asset-details')),
+      const Offset(0, -350),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const Key(
+          'revision3-content-asset-backlink-$_artifactSha-$_questId-quest_collision_artifact-0',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('revision3-content-entity-details-$_questId')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('opens details from the compact one-pane layout', (tester) async {
     await _setSurfaceSize(tester, const Size(560, 760));
     await _pumpLoadedLibrary(tester);
@@ -128,6 +210,43 @@ void main() {
     );
     expect(find.text('Stable ID'), findsOneWidget);
     expect(find.text(_npcId), findsOneWidget);
+  });
+
+  testWidgets('keeps same-role qualified backlinks as distinct siblings', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLibrary(
+      tester,
+      load: () async => _fixture(duplicateBacklinks: true),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await tester.drag(
+      find.byKey(const Key('revision3-content-entity-details')),
+      const Offset(0, -650),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-content-backlink-$_questId-$_moduleId-origin_owner-0',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-content-backlink-$_questId-$_moduleId-origin_owner-2',
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('shows a friendly error and retries the exact reopen', (
@@ -215,7 +334,7 @@ void main() {
     rebuild(() => revision = 8);
     await tester.pumpAndSettle();
     expect(calls, 2);
-    expect(find.text('2 entities / 1 assets / revision 8'), findsOneWidget);
+    expect(find.text('3 entities / 2 assets / revision 8'), findsOneWidget);
   });
 }
 
@@ -245,72 +364,169 @@ Future<void> _pumpLibrary(
   ),
 );
 
-Revision3ContentIndex _fixture({int revision = 7}) =>
-    Revision3ContentIndex.fromJsonObject(<String, Object?>{
-      'schema_revision': 1,
-      'project_id': _projectId,
-      'project_revision': revision,
-      'project_name': 'Fixture project',
-      'project_version': '0.1.0',
-      'project_author': 'GORE',
-      'target': <String, Object?>{
-        'executable': <String, Object?>{'byte_len': 123, 'sha256': _targetSha},
+Revision3ContentIndex _fixture({
+  int revision = 7,
+  bool duplicateBacklinks = false,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': _projectId,
+  'project_revision': revision,
+  'project_name': 'Fixture project',
+  'project_version': '0.1.0',
+  'project_author': 'GORE',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{'byte_len': 123, 'sha256': _targetSha},
+  },
+  'authoring_locales': <Object?>['de', 'en'],
+  'entity_counts': <String, Object?>{
+    'npc_draft': 1,
+    'quest_draft': 1,
+    'script_module': 1,
+  },
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': _npcId,
+      'kind': 'npc_draft',
+      'display_name': 'Gate Guard',
+      'revision': 0,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_GATE_GUARD',
       },
-      'authoring_locales': <Object?>['de', 'en'],
-      'entity_counts': <String, Object?>{'npc_draft': 1, 'quest_draft': 1},
-      'entities': <Object?>[
-        <String, Object?>{
-          'id': _npcId,
-          'kind': 'npc_draft',
-          'display_name': 'Gate Guard',
-          'revision': 0,
-          'origin': <String, Object?>{
-            'type': 'new',
-            'authored_runtime_id': 'GORE_GATE_GUARD',
-          },
-          'summary': <String, Object?>{
-            'kind': 'npc_draft',
-            'data': <String, Object?>{
-              'unique_name': 'GORE_GATE_GUARD',
-              'module_namespace': 'PROJECT.NPCS.GATEGUARD',
-              'parent_character_definition': 'UCharacterDefinition_Asghan',
-              'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
-              'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
-            },
-          },
-          'references': <Object?>[],
-          'asset_references': <Object?>[],
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': 'GORE_GATE_GUARD',
+          'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+          'parent_character_definition': 'UCharacterDefinition_Asghan',
+          'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
+          'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
         },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': _questId,
+      'kind': 'quest_draft',
+      'display_name': 'Find Homer',
+      'revision': 1,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_FIND_HOMER',
+      },
+      'summary': <String, Object?>{
+        'kind': 'quest_draft',
+        'data': <String, Object?>{
+          'technical_id': 'GORE_FIND_HOMER',
+          'title': 'Find Homer',
+          'objective_title': 'Ask Asghan about Homer',
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'parent_runtime_class': 'B_Quest_FindHomer_C',
+          'giver_runtime_unique_name': 'ASGHAN',
+        },
+      },
+      'references': <Object?>[
         <String, Object?>{
-          'id': _questId,
-          'kind': 'quest_draft',
-          'display_name': 'Find Homer',
-          'revision': 1,
-          'origin': <String, Object?>{
-            'type': 'new',
-            'authored_runtime_id': 'GORE_FIND_HOMER',
+          'role': 'draft_script_module',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': _projectId,
+            'entity_id': _moduleId,
+            'expected_kind': 'script_module',
           },
-          'summary': <String, Object?>{
-            'kind': 'quest_draft',
-            'data': <String, Object?>{
-              'technical_id': 'GORE_FIND_HOMER',
-              'title': 'Find Homer',
-              'objective_title': 'Ask Asghan about Homer',
-              'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
-              'parent_runtime_class': 'B_Quest_FindHomer_C',
-              'giver_runtime_unique_name': 'ASGHAN',
-            },
-          },
-          'references': <Object?>[],
-          'asset_references': <Object?>[],
+          'resolution': 'resolved',
         },
       ],
-      'assets': <Object?>[
+      'asset_references': <Object?>[
         <String, Object?>{
-          'sha256': _assetSha,
-          'byte_len': 4096,
-          'media_type': 'audio/ogg',
-          'class': 'voice_audio',
+          'role': 'quest_collision_artifact',
+          'sha256': _artifactSha,
+          'byte_len': 8192,
+          'logical_name': null,
+          'expected_media_type':
+              'application/vnd.gore.quest-collision-capability+json;version=2',
+          'resolution': 'resolved',
         },
       ],
-    });
+    },
+    <String, Object?>{
+      'id': _moduleId,
+      'kind': 'script_module',
+      'display_name': 'Find Homer source',
+      'revision': 0,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': 'gore-authoring.quest-draft',
+        'generator_version': 2,
+        'owner': <String, Object?>{
+          'project_id': _projectId,
+          'entity_id': _questId,
+          'expected_kind': 'quest_draft',
+        },
+      },
+      'summary': <String, Object?>{
+        'kind': 'script_module',
+        'data': <String, Object?>{
+          'generator_id': 'gore-authoring.quest-draft',
+          'generator_version': 2,
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'module_relative_path': 'Project/Quests/FindHomer.as',
+          'status': <String, Object?>{
+            'authoring': 'offline_draft',
+            'runtime': 'runtime_unqualified',
+          },
+        },
+      },
+      'references': <Object?>[
+        <String, Object?>{
+          'role': 'origin_owner',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': _projectId,
+            'entity_id': _questId,
+            'expected_kind': 'quest_draft',
+          },
+          'resolution': 'resolved',
+        },
+        <String, Object?>{
+          'role': 'script_owner',
+          'qualifier': null,
+          'target': <String, Object?>{
+            'project_id': _projectId,
+            'entity_id': _questId,
+            'expected_kind': 'quest_draft',
+          },
+          'resolution': 'resolved',
+        },
+        if (duplicateBacklinks)
+          <String, Object?>{
+            'role': 'origin_owner',
+            'qualifier': 'alternate',
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': _questId,
+              'expected_kind': 'quest_draft',
+            },
+            'resolution': 'resolved',
+          },
+      ],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[
+    <String, Object?>{
+      'sha256': _assetSha,
+      'byte_len': 4096,
+      'media_type': 'audio/ogg',
+      'class': 'voice_audio',
+    },
+    <String, Object?>{
+      'sha256': _artifactSha,
+      'byte_len': 8192,
+      'media_type':
+          'application/vnd.gore.quest-collision-capability+json;version=2',
+      'class': 'quest_collision_artifact',
+    },
+  ],
+});

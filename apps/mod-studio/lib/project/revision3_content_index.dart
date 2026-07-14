@@ -85,7 +85,7 @@ enum Revision3ContentAssetClass {
 }
 
 final class Revision3ContentIndex {
-  const Revision3ContentIndex._({
+  Revision3ContentIndex._({
     required this.projectId,
     required this.projectRevision,
     required this.projectName,
@@ -111,6 +111,86 @@ final class Revision3ContentIndex {
 
   int get problemCount =>
       entities.fold<int>(0, (total, entity) => total + entity.problemCount);
+
+  late final Map<String, Revision3ContentEntity> _entitiesById =
+      Map<String, Revision3ContentEntity>.unmodifiable({
+        for (final entity in entities) entity.id: entity,
+      });
+  late final Map<String, Revision3ContentAsset> _assetsBySha256 =
+      Map<String, Revision3ContentAsset>.unmodifiable({
+        for (final asset in assets) asset.sha256: asset,
+      });
+  late final Map<String, List<Revision3ContentEntityBacklink>>
+  _entityBacklinks = _buildEntityBacklinks();
+  late final Map<String, List<Revision3ContentAssetBacklink>> _assetBacklinks =
+      _buildAssetBacklinks();
+
+  Revision3ContentEntity? entityById(String entityId) =>
+      _entitiesById[entityId];
+
+  Revision3ContentAsset? assetBySha256(String sha256) =>
+      _assetsBySha256[sha256];
+
+  List<Revision3ContentEntityBacklink> backlinksToEntity(String entityId) =>
+      _entityBacklinks[entityId] ?? const <Revision3ContentEntityBacklink>[];
+
+  List<Revision3ContentAssetBacklink> backlinksToAsset(String sha256) =>
+      _assetBacklinks[sha256] ?? const <Revision3ContentAssetBacklink>[];
+
+  Map<String, List<Revision3ContentEntityBacklink>> _buildEntityBacklinks() {
+    final backlinks = <String, List<Revision3ContentEntityBacklink>>{};
+    for (final source in entities) {
+      for (final reference in source.references) {
+        if (reference.target.projectId != projectId ||
+            !_entitiesById.containsKey(reference.target.entityId)) {
+          continue;
+        }
+        backlinks
+            .putIfAbsent(
+              reference.target.entityId,
+              () => <Revision3ContentEntityBacklink>[],
+            )
+            .add(
+              Revision3ContentEntityBacklink(
+                source: source,
+                reference: reference,
+              ),
+            );
+      }
+    }
+    return Map<String, List<Revision3ContentEntityBacklink>>.unmodifiable({
+      for (final entry in backlinks.entries)
+        entry.key: List<Revision3ContentEntityBacklink>.unmodifiable(
+          entry.value,
+        ),
+    });
+  }
+
+  Map<String, List<Revision3ContentAssetBacklink>> _buildAssetBacklinks() {
+    final backlinks = <String, List<Revision3ContentAssetBacklink>>{};
+    for (final source in entities) {
+      for (final reference in source.assetReferences) {
+        if (!_assetsBySha256.containsKey(reference.sha256)) continue;
+        backlinks
+            .putIfAbsent(
+              reference.sha256,
+              () => <Revision3ContentAssetBacklink>[],
+            )
+            .add(
+              Revision3ContentAssetBacklink(
+                source: source,
+                reference: reference,
+              ),
+            );
+      }
+    }
+    return Map<String, List<Revision3ContentAssetBacklink>>.unmodifiable({
+      for (final entry in backlinks.entries)
+        entry.key: List<Revision3ContentAssetBacklink>.unmodifiable(
+          entry.value,
+        ),
+    });
+  }
 
   factory Revision3ContentIndex.fromJsonObject(Map<String, Object?> json) {
     _requireKeys(json, const <String>[
@@ -283,6 +363,28 @@ final class Revision3ContentIndex {
       assets: List<Revision3ContentAsset>.unmodifiable(assets),
     );
   }
+}
+
+/// One reverse edge derived from a validated typed entity reference.
+final class Revision3ContentEntityBacklink {
+  const Revision3ContentEntityBacklink({
+    required this.source,
+    required this.reference,
+  });
+
+  final Revision3ContentEntity source;
+  final Revision3ContentReference reference;
+}
+
+/// One reverse edge derived from a validated AssetStore reference.
+final class Revision3ContentAssetBacklink {
+  const Revision3ContentAssetBacklink({
+    required this.source,
+    required this.reference,
+  });
+
+  final Revision3ContentEntity source;
+  final Revision3ContentAssetReference reference;
 }
 
 final class Revision3ContentEntity {

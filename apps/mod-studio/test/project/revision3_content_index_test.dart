@@ -7,6 +7,8 @@ const _projectId = '11111111111111111111111111111111';
 const _npcId = '22222222222222222222222222222222';
 const _moduleId = '33333333333333333333333333333333';
 const _sha = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _assetSha =
+    'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
 Map<String, Object?> _target(String sha) => <String, Object?>{
   'executable': <String, Object?>{'byte_len': 123, 'sha256': sha},
@@ -127,6 +129,69 @@ void main() {
     expect(index.entities.first.summary.primaryIdentity, 'GORE_GATE_GUARD');
     expect(index.entities.first.matches('asghan'), isTrue);
     expect(index.entities.last.matches('secretgeneratedbody'), isFalse);
+  });
+
+  test('derives immutable entity backlinks from validated references', () {
+    final index = Revision3ContentIndex.fromJsonObject(_fixture());
+
+    expect(index.entityById(_npcId)?.displayName, 'Gate Guard');
+    expect(
+      index.entityById(_moduleId)?.kind,
+      Revision3ContentEntityKind.scriptModule,
+    );
+    expect(index.entityById('ffffffffffffffffffffffffffffffff'), isNull);
+
+    final moduleBacklinks = index.backlinksToEntity(_moduleId);
+    expect(moduleBacklinks, hasLength(1));
+    expect(moduleBacklinks.single.source.id, _npcId);
+    expect(moduleBacklinks.single.reference.role, 'draft_script_module');
+
+    final npcBacklinks = index.backlinksToEntity(_npcId);
+    expect(npcBacklinks, hasLength(2));
+    expect(npcBacklinks.map((backlink) => backlink.reference.role), <String>[
+      'origin_owner',
+      'script_owner',
+    ]);
+    expect(
+      () => moduleBacklinks.add(moduleBacklinks.single),
+      throwsUnsupportedError,
+    );
+    expect(index.backlinksToAsset(_sha), isEmpty);
+  });
+
+  test('derives immutable asset backlinks from validated references', () {
+    final fixture = _clone(_fixture());
+    final entities = fixture['entities']! as List<Object?>;
+    final npc = entities.first! as Map<String, Object?>;
+    npc['asset_references'] = <Object?>[
+      <String, Object?>{
+        'role': 'voice_audio',
+        'sha256': _assetSha,
+        'byte_len': 1024,
+        'logical_name': 'gate_guard_greeting.ogg',
+        'expected_media_type': 'audio/ogg',
+        'resolution': 'resolved',
+      },
+    ];
+    fixture['assets'] = <Object?>[
+      <String, Object?>{
+        'sha256': _assetSha,
+        'byte_len': 1024,
+        'media_type': 'audio/ogg',
+        'class': 'voice_audio',
+      },
+    ];
+
+    final index = Revision3ContentIndex.fromJsonObject(fixture);
+    expect(index.assetBySha256(_assetSha)?.byteLength, 1024);
+    expect(index.assetBySha256(_sha), isNull);
+
+    final backlinks = index.backlinksToAsset(_assetSha);
+    expect(backlinks, hasLength(1));
+    expect(backlinks.single.source.id, _npcId);
+    expect(backlinks.single.reference.role, 'voice_audio');
+    expect(backlinks.single.reference.logicalName, 'gate_guard_greeting.ogg');
+    expect(() => backlinks.add(backlinks.single), throwsUnsupportedError);
   });
 
   test(

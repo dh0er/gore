@@ -118,6 +118,25 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     return index.assets.firstOrNull?.sha256;
   }
 
+  void _selectEntity(Revision3ContentIndex index, String entityId) {
+    if (index.entityById(entityId) == null) return;
+    if (_search.text.isNotEmpty) _search.clear();
+    setState(() {
+      _mode = _ContentMode.entities;
+      _kind = null;
+      _selectedEntityId = entityId;
+    });
+  }
+
+  void _selectAsset(Revision3ContentIndex index, String sha256) {
+    if (index.assetBySha256(sha256) == null) return;
+    if (_search.text.isNotEmpty) _search.clear();
+    setState(() {
+      _mode = _ContentMode.assets;
+      _selectedAssetSha256 = sha256;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final index = _index;
@@ -185,7 +204,18 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               _showDetailsSheet(
                 context,
                 semanticsLabel: '${entity.kind.displayName} details',
-                child: _EntityDetails(entity: entity),
+                child: _EntityDetails(
+                  index: index,
+                  entity: entity,
+                  onOpenEntity: (entityId) {
+                    Navigator.of(context).pop();
+                    _selectEntity(index, entityId);
+                  },
+                  onOpenAsset: (sha256) {
+                    Navigator.of(context).pop();
+                    _selectAsset(index, sha256);
+                  },
+                ),
               );
             }
           },
@@ -201,7 +231,13 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               flex: 2,
               child: selected == null
                   ? const _EmptyDetails(label: 'Select project content')
-                  : _EntityDetails(entity: selected),
+                  : _EntityDetails(
+                      index: index,
+                      entity: selected,
+                      onOpenEntity: (entityId) =>
+                          _selectEntity(index, entityId),
+                      onOpenAsset: (sha256) => _selectAsset(index, sha256),
+                    ),
             ),
           ],
         );
@@ -236,7 +272,14 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               _showDetailsSheet(
                 context,
                 semanticsLabel: '${asset.assetClass.displayName} details',
-                child: _AssetDetails(asset: asset),
+                child: _AssetDetails(
+                  index: index,
+                  asset: asset,
+                  onOpenEntity: (entityId) {
+                    Navigator.of(context).pop();
+                    _selectEntity(index, entityId);
+                  },
+                ),
               );
             }
           },
@@ -250,7 +293,12 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               flex: 2,
               child: selected == null
                   ? const _EmptyDetails(label: 'Select a project asset')
-                  : _AssetDetails(asset: selected),
+                  : _AssetDetails(
+                      index: index,
+                      asset: selected,
+                      onOpenEntity: (entityId) =>
+                          _selectEntity(index, entityId),
+                    ),
             ),
           ],
         );
@@ -581,71 +629,130 @@ class _EntityList extends StatelessWidget {
 }
 
 class _EntityDetails extends StatelessWidget {
-  const _EntityDetails({required this.entity});
+  const _EntityDetails({
+    required this.index,
+    required this.entity,
+    required this.onOpenEntity,
+    required this.onOpenAsset,
+  });
 
+  final Revision3ContentIndex index;
   final Revision3ContentEntity entity;
+  final ValueChanged<String> onOpenEntity;
+  final ValueChanged<String> onOpenAsset;
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const Key('revision3-content-entity-details'),
-    padding: const EdgeInsets.all(20),
-    children: [
-      Icon(_kindIcon(entity.kind), size: 36),
-      const SizedBox(height: 12),
-      Semantics(
-        header: true,
-        child: Text(
-          entity.displayName.isEmpty
-              ? entity.summary.primaryIdentity
-              : entity.displayName,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
-      ),
-      Text(entity.kind.displayName),
-      const Divider(height: 28),
-      _Detail(
-        label: 'Semantic identity',
-        value: entity.summary.primaryIdentity,
-      ),
-      _Detail(label: 'Details', value: entity.summary.secondaryText),
-      _Detail(
-        label: 'Origin',
-        value: '${entity.origin.type}: ${entity.origin.label}',
-      ),
-      _Detail(label: 'Entity revision', value: '${entity.revision}'),
-      _Detail(label: 'Stable ID', value: entity.id, selectable: true),
-      const Divider(height: 28),
-      Text('References', style: Theme.of(context).textTheme.titleMedium),
-      const SizedBox(height: 8),
-      if (entity.references.isEmpty && entity.assetReferences.isEmpty)
-        const Text('No projected references')
-      else ...[
-        for (final reference in entity.references)
-          _ReferenceTile(
-            icon:
-                reference.resolution ==
-                    Revision3ContentReferenceResolution.resolved
-                ? Icons.link
-                : Icons.link_off,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle:
-                '${reference.target.expectedKind.displayName} / ${reference.target.entityId}',
-            ok:
-                reference.resolution ==
-                Revision3ContentReferenceResolution.resolved,
+  Widget build(BuildContext context) {
+    final backlinks = index.backlinksToEntity(entity.id);
+    return KeyedSubtree(
+      key: ValueKey('revision3-content-entity-details-${entity.id}'),
+      child: ListView(
+        key: const Key('revision3-content-entity-details'),
+        padding: const EdgeInsets.all(20),
+        children: [
+          Icon(_kindIcon(entity.kind), size: 36),
+          const SizedBox(height: 12),
+          Semantics(
+            header: true,
+            child: Text(
+              _entityTitle(entity),
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
           ),
-        for (final reference in entity.assetReferences)
-          _ReferenceTile(
-            icon: Icons.inventory_2_outlined,
-            title: reference.role.replaceAll('_', ' '),
-            subtitle: reference.logicalName ?? reference.sha256,
-            ok:
-                reference.resolution ==
-                Revision3ContentAssetReferenceResolution.resolved,
+          Text(entity.kind.displayName),
+          const Divider(height: 28),
+          _Detail(
+            label: 'Semantic identity',
+            value: entity.summary.primaryIdentity,
           ),
-      ],
-    ],
-  );
+          _Detail(label: 'Details', value: entity.summary.secondaryText),
+          _Detail(
+            label: 'Origin',
+            value: '${entity.origin.type}: ${entity.origin.label}',
+          ),
+          _Detail(label: 'Entity revision', value: '${entity.revision}'),
+          _Detail(label: 'Stable ID', value: entity.id, selectable: true),
+          const Divider(height: 28),
+          Text('References', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 8),
+          if (entity.references.isEmpty && entity.assetReferences.isEmpty)
+            const Text('No projected references')
+          else ...[
+            for (final reference in entity.references)
+              _ReferenceTile(
+                icon:
+                    reference.resolution ==
+                        Revision3ContentReferenceResolution.resolved
+                    ? Icons.link
+                    : Icons.link_off,
+                title: reference.role.replaceAll('_', ' '),
+                subtitle:
+                    '${reference.target.expectedKind.displayName} / ${reference.target.entityId}',
+                ok:
+                    reference.resolution ==
+                    Revision3ContentReferenceResolution.resolved,
+                onTap:
+                    reference.resolution ==
+                            Revision3ContentReferenceResolution.resolved &&
+                        reference.target.projectId == index.projectId &&
+                        index.entityById(reference.target.entityId) != null
+                    ? () => onOpenEntity(reference.target.entityId)
+                    : null,
+              ),
+            for (final reference in entity.assetReferences)
+              _ReferenceTile(
+                icon: Icons.inventory_2_outlined,
+                title: reference.role.replaceAll('_', ' '),
+                subtitle: reference.logicalName ?? reference.sha256,
+                ok:
+                    reference.resolution ==
+                    Revision3ContentAssetReferenceResolution.resolved,
+                onTap:
+                    reference.resolution ==
+                            Revision3ContentAssetReferenceResolution.resolved &&
+                        index.assetBySha256(reference.sha256) != null
+                    ? () => onOpenAsset(reference.sha256)
+                    : null,
+              ),
+          ],
+          const Divider(height: 28),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Used by',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Text('${backlinks.length}'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (backlinks.isEmpty)
+            const Text('No incoming project references')
+          else
+            for (
+              var backlinkIndex = 0;
+              backlinkIndex < backlinks.length;
+              backlinkIndex++
+            )
+              _ReferenceTile(
+                key: Key(
+                  'revision3-content-backlink-${entity.id}-${backlinks[backlinkIndex].source.id}-${backlinks[backlinkIndex].reference.role}-$backlinkIndex',
+                ),
+                icon: _kindIcon(backlinks[backlinkIndex].source.kind),
+                title: _entityTitle(backlinks[backlinkIndex].source),
+                subtitle:
+                    '${backlinks[backlinkIndex].reference.role.replaceAll('_', ' ')} / ${backlinks[backlinkIndex].source.kind.displayName}',
+                ok:
+                    backlinks[backlinkIndex].reference.resolution ==
+                    Revision3ContentReferenceResolution.resolved,
+                onTap: () => onOpenEntity(backlinks[backlinkIndex].source.id),
+              ),
+        ],
+      ),
+    );
+  }
 }
 
 class _AssetList extends StatelessWidget {
@@ -695,30 +802,76 @@ class _AssetList extends StatelessWidget {
 }
 
 class _AssetDetails extends StatelessWidget {
-  const _AssetDetails({required this.asset});
+  const _AssetDetails({
+    required this.index,
+    required this.asset,
+    required this.onOpenEntity,
+  });
 
+  final Revision3ContentIndex index;
   final Revision3ContentAsset asset;
+  final ValueChanged<String> onOpenEntity;
 
   @override
-  Widget build(BuildContext context) => ListView(
-    key: const Key('revision3-content-asset-details'),
-    padding: const EdgeInsets.all(20),
-    children: [
-      const Icon(Icons.inventory_2_outlined, size: 36),
-      const SizedBox(height: 12),
-      Semantics(
-        header: true,
-        child: Text(
-          asset.assetClass.displayName,
-          style: Theme.of(context).textTheme.titleLarge,
-        ),
+  Widget build(BuildContext context) {
+    final backlinks = index.backlinksToAsset(asset.sha256);
+    return KeyedSubtree(
+      key: ValueKey('revision3-content-asset-details-${asset.sha256}'),
+      child: ListView(
+        key: const Key('revision3-content-asset-details'),
+        padding: const EdgeInsets.all(20),
+        children: [
+          const Icon(Icons.inventory_2_outlined, size: 36),
+          const SizedBox(height: 12),
+          Semantics(
+            header: true,
+            child: Text(
+              asset.assetClass.displayName,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
+          const Divider(height: 28),
+          _Detail(label: 'Media type', value: asset.mediaType),
+          _Detail(label: 'Size', value: _formatBytes(asset.byteLength)),
+          _Detail(label: 'SHA-256', value: asset.sha256, selectable: true),
+          const Divider(height: 28),
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Used by',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              Text('${backlinks.length}'),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (backlinks.isEmpty)
+            const Text('No incoming project references')
+          else
+            for (
+              var backlinkIndex = 0;
+              backlinkIndex < backlinks.length;
+              backlinkIndex++
+            )
+              _ReferenceTile(
+                key: Key(
+                  'revision3-content-asset-backlink-${asset.sha256}-${backlinks[backlinkIndex].source.id}-${backlinks[backlinkIndex].reference.role}-$backlinkIndex',
+                ),
+                icon: _kindIcon(backlinks[backlinkIndex].source.kind),
+                title: _entityTitle(backlinks[backlinkIndex].source),
+                subtitle:
+                    '${backlinks[backlinkIndex].reference.role.replaceAll('_', ' ')} / ${backlinks[backlinkIndex].source.kind.displayName}',
+                ok:
+                    backlinks[backlinkIndex].reference.resolution ==
+                    Revision3ContentAssetReferenceResolution.resolved,
+                onTap: () => onOpenEntity(backlinks[backlinkIndex].source.id),
+              ),
+        ],
       ),
-      const Divider(height: 28),
-      _Detail(label: 'Media type', value: asset.mediaType),
-      _Detail(label: 'Size', value: _formatBytes(asset.byteLength)),
-      _Detail(label: 'SHA-256', value: asset.sha256, selectable: true),
-    ],
-  );
+    );
+  }
 }
 
 class _ReferenceTile extends StatelessWidget {
@@ -727,12 +880,15 @@ class _ReferenceTile extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.ok,
+    this.onTap,
+    super.key,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final bool ok;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => ListTile(
@@ -741,7 +897,13 @@ class _ReferenceTile extends StatelessWidget {
     leading: Icon(icon, color: ok ? null : Theme.of(context).colorScheme.error),
     title: Text(title),
     subtitle: Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis),
-    trailing: Icon(ok ? Icons.check : Icons.error_outline, size: 18),
+    trailing: Icon(
+      onTap != null
+          ? Icons.arrow_forward
+          : (ok ? Icons.check : Icons.error_outline),
+      size: 18,
+    ),
+    onTap: onTap,
   );
 }
 
@@ -846,6 +1008,10 @@ IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {
   Revision3ContentEntityKind.questDraft => Icons.assignment_outlined,
   Revision3ContentEntityKind.scriptModule => Icons.code,
 };
+
+String _entityTitle(Revision3ContentEntity entity) => entity.displayName.isEmpty
+    ? entity.summary.primaryIdentity
+    : entity.displayName;
 
 String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
