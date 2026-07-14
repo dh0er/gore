@@ -10,6 +10,8 @@ import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/core/providers.dart';
+import 'package:gore_mod/dataasset/ui/dataasset_lab.dart';
+import 'package:gore_mod/dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
@@ -19,9 +21,12 @@ import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_voice_content_fixture.dart';
+import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
   testWidgets(
@@ -303,6 +308,146 @@ void main() {
   );
 
   testWidgets(
+    'visible managed Voice wizard forwards the configured safety game root',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-authoring'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePublish: (lease, requestedGameRoot, plan) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(plan.lineId, revision3VoiceContentLineId);
+          expect(plan.slotId, revision3VoiceContentSlotId);
+          expect(plan.logicalName, 'asghan.ogg');
+          expect(plan.text, isNull);
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTakePublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            lineId: plan.lineId,
+            slotId: plan.slotId,
+            takeId: plan.takeId,
+            slotCreated: plan.expectsSlotCreated,
+            selected: plan.selectTake,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final voiceButton = find.byKey(const Key('managed-add-voice-take'));
+      expect(voiceButton, findsOneWidget);
+      expect(tester.widget<FilledButton>(voiceButton).onPressed, isNotNull);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('managed-create-npc-draft')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+
+      await tester.tap(voiceButton);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('revision3-voice-line-search')),
+        'GRD_263_ASGHAN',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.text(
+          'Asghan — Mine entrance question · GRD_263_ASGHAN_OPEN_INFO_06_02',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-voice-source')),
+        r'C:\Voice\asghan.ogg',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-voice-take-name')),
+        'Asghan take',
+      );
+      await tester.ensureVisible(
+        find.byKey(const Key('revision3-voice-submit')),
+      );
+      await tester.tap(find.byKey(const Key('revision3-voice-submit')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voicePublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(find.text('8'), findsWidgets);
+      expect(
+        find.textContaining('Voice take saved in project revision 8'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('revision3-voice-wizard')), findsNothing);
+      expect(find.text('Build / Deploy'), findsNothing);
+    },
+  );
+
+  testWidgets('managed Voice action is disabled without the safety game root', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-needs-game-root'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (_) => revision3VoiceContentIndexFixture(),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+
+    final voiceButton = find.byKey(const Key('managed-add-voice-take'));
+    expect(tester.widget<FilledButton>(voiceButton).onPressed, isNull);
+    expect(
+      find.text(
+        'Configure the Gothic 1 Remake installation in Settings to add Voice takes or create NPC and Quest drafts.',
+      ),
+      findsOneWidget,
+    );
+    expect(managed.voicePublishCalls, 0);
+  });
+
+  testWidgets(
     'visible DataAsset registry adds and removes through exact managed checkpoints',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -413,6 +558,146 @@ void main() {
         find.byKey(const Key('revision3-dataasset-stage-empty')),
         findsOneWidget,
       );
+      expect(find.text('Build / Deploy'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'visible DataAsset value wizard publishes typed edit and reloads exact head',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3DataAssetNativeGoldenFixture();
+      final stage = AuthoringRevision3DataAssetStageListResult.fromJson(
+        fixture.listResponse(),
+        expectedHead: fixture.stagedHead,
+      ).stages.single;
+      var stages = <AuthoringRevision3DataAssetStage>[];
+      DataAssetSemanticEditIntent? publishedIntent;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dataasset-semantic-authoring'),
+        projectId: stage.projectId,
+        projectRevision: 4,
+        head: fixture.basisHead,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onDataAssetList: (_) => List.unmodifiable(stages),
+        onDataAssetSemanticPublish: (lease, intent) {
+          publishedIntent = intent;
+          lease.projectRevision = 5;
+          lease.head = fixture.stagedHead;
+          stages = <AuthoringRevision3DataAssetStage>[stage];
+          return Revision3DataAssetStagePublication(
+            projectId: lease.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 0,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        inspectDataAssetSemanticEdit:
+            ({required uassetPath, required usmapPath, exportIndex}) async {
+              expect(uassetPath, r'C:\proof\TestAsset.uasset');
+              expect(usmapPath, r'C:\proof\Mappings.usmap');
+              return DataAssetInspection.fromJson(
+                validDataAssetInspectionResponse(),
+              );
+            },
+        pickDataAssetSemanticUasset: () async => r'C:\proof\TestAsset.uasset',
+        pickDataAssetSemanticUsmap: () async => r'C:\proof\Mappings.usmap',
+        pickDataAssetExtractReceipt: () async =>
+            r'C:\proof\extract-receipt.v2.json',
+        inspectDataAssetExtractReceipt: (_) async =>
+            DataAssetExtractReceiptSummary.fromJson(
+              validDataAssetExtractReceiptSummaryResponse(
+                targetPath: '/Game/TestAsset',
+              ),
+            ),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+      );
+      await tester.pumpAndSettle();
+
+      final create = find.byKey(
+        const Key('revision3-dataasset-semantic-create'),
+      );
+      expect(create, findsOneWidget);
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('dataasset-semantic-wizard')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('dataasset-pick-uasset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-pick-usmap')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-inspect')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('dataasset-semantic-editor')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('dataasset-semantic-pick-receipt')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('/Game/TestAsset'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const Key('dataasset-semantic-confirm-target')),
+      );
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('dataasset-semantic-value')),
+        '2',
+      );
+      final editorScroll = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byKey(const Key('dataasset-semantic-editor')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      editorScroll.position.jumpTo(editorScroll.position.maxScrollExtent);
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('dataasset-semantic-preview')));
+      await tester.pumpAndSettle();
+      expect(find.text('Before: 1'), findsOneWidget);
+      expect(find.text('After: 2'), findsOneWidget);
+      editorScroll.position.jumpTo(editorScroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dataasset-semantic-stage')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dataasset-semantic-stage')));
+      await tester.pumpAndSettle();
+
+      expect(managed.dataAssetSemanticPublishCalls, 1);
+      expect(managed.dataAssetListCalls, 2);
+      expect(
+        publishedIntent?.toNativeFields()['extract_receipt_path'],
+        r'C:\proof\extract-receipt.v2.json',
+      );
+      expect(publishedIntent?.expectedTargetPath, '/Game/TestAsset');
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 5);
+      expect(state.head.canonicalJson, fixture.stagedHead.canonicalJson);
+      expect(find.byKey(const Key('dataasset-semantic-wizard')), findsNothing);
+      expect(find.text('TestAsset'), findsOneWidget);
       expect(find.text('Build / Deploy'), findsNothing);
     },
   );
@@ -649,6 +934,11 @@ ProviderContainer _container({
   Revision3NpcCatalogLoader? loadNpcCatalog,
   Revision3NpcArchetypeChooser? chooseNpcArchetype,
   Revision3DataAssetPatchReceiptPicker? pickDataAssetPatchReceipt,
+  DataAssetInspector? inspectDataAssetSemanticEdit,
+  DataAssetFilePicker? pickDataAssetSemanticUasset,
+  DataAssetFilePicker? pickDataAssetSemanticUsmap,
+  DataAssetExtractReceiptPicker? pickDataAssetExtractReceipt,
+  DataAssetExtractReceiptInspector? inspectDataAssetExtractReceipt,
   Revision3QuestCatalogLoader? loadQuestCatalog,
 }) => ProviderContainer(
   overrides: [
@@ -673,6 +963,25 @@ ProviderContainer _container({
       managedRevision3DataAssetPatchReceiptPickerProvider.overrideWithValue(
         pickDataAssetPatchReceipt,
       ),
+    if (inspectDataAssetSemanticEdit != null)
+      managedRevision3DataAssetSemanticInspectorProvider.overrideWithValue(
+        inspectDataAssetSemanticEdit,
+      ),
+    if (pickDataAssetSemanticUasset != null)
+      managedRevision3DataAssetSemanticUassetPickerProvider.overrideWithValue(
+        pickDataAssetSemanticUasset,
+      ),
+    if (pickDataAssetSemanticUsmap != null)
+      managedRevision3DataAssetSemanticUsmapPickerProvider.overrideWithValue(
+        pickDataAssetSemanticUsmap,
+      ),
+    if (pickDataAssetExtractReceipt != null)
+      managedRevision3DataAssetExtractReceiptPickerProvider.overrideWithValue(
+        pickDataAssetExtractReceipt,
+      ),
+    if (inspectDataAssetExtractReceipt != null)
+      managedRevision3DataAssetExtractReceiptInspectorProvider
+          .overrideWithValue(inspectDataAssetExtractReceipt),
     if (loadQuestCatalog != null)
       revision3QuestCatalogLoaderProvider.overrideWithValue(loadQuestCatalog),
   ],
@@ -754,8 +1063,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.verificationError,
     this.onNpcPublish,
     this.onQuestPublish,
+    this.onVoicePublish,
     this.onDataAssetList,
     this.onDataAssetPublish,
+    this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
     this.contentIndexBuilder,
   });
@@ -781,6 +1092,12 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestDraftAuthoringInput input,
   )?
   onQuestPublish;
+  final Revision3VoiceTakePublication Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    Revision3VoiceTakeTechnicalPlan plan,
+  )?
+  onVoicePublish;
   final List<AuthoringRevision3DataAssetStage> Function(
     _FakeManagedLease lease,
   )?
@@ -790,6 +1107,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     String patchReceiptPath,
   )?
   onDataAssetPublish;
+  final Revision3DataAssetStagePublication Function(
+    _FakeManagedLease lease,
+    DataAssetSemanticEditIntent intent,
+  )?
+  onDataAssetSemanticPublish;
   final Revision3DataAssetStageRemovalPublication Function(
     _FakeManagedLease lease,
     String targetPath,
@@ -802,8 +1124,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int contentReadCalls = 0;
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int voicePublishCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
+  int dataAssetSemanticPublishCalls = 0;
   int dataAssetRemoveCalls = 0;
   int closeCalls = 0;
 
@@ -847,6 +1171,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
+    required String gameRoot,
+    required Revision3VoiceTakeTechnicalPlan plan,
+  }) async {
+    voicePublishCalls++;
+    final publish = onVoicePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice publisher');
+    }
+    return publish(this, gameRoot, plan);
+  }
+
+  @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
     dataAssetListCalls++;
     return onDataAssetList?.call(this) ?? const [];
@@ -862,6 +1199,20 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no DataAsset publisher');
     }
     return publish(this, patchReceiptPath);
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetEditV1({
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    dataAssetSemanticPublishCalls++;
+    final publish = onDataAssetSemanticPublish;
+    if (publish == null) {
+      throw StateError(
+        'fake managed lease has no semantic DataAsset publisher',
+      );
+    }
+    return publish(this, intent);
   }
 
   @override

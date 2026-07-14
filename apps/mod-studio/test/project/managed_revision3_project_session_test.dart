@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
@@ -12,9 +13,11 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:path/path.dart' as p;
 
+import '../dataasset/dataasset_test_fixtures.dart';
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
+import '../support/revision3_voice_fixture.dart';
 
 void main() {
   late Directory fixture;
@@ -264,7 +267,13 @@ void main() {
         questId: '00000000000000000000000000000071',
         scriptModuleId: '00000000000000000000000000000072',
         displayName: 'Managed Quest 1',
-        intent: _questIntent(1),
+        intent: _questIntent(
+          1,
+          additionalObjectiveTitles: const <String>[
+            'Inspect the gate',
+            'Report to Asghan',
+          ],
+        ),
       );
       final second = session.prepareAndPublishQuestDraftV3(
         gameRoot: r'D:\Games\Gothic Remake',
@@ -282,6 +291,16 @@ void main() {
       expect(store.questCurrentProjects[0], original);
       expect(store.questRequests[0].expectedHead.canonicalJson, originalHead);
       expect(store.questRequests[0].expectedRevision, 0);
+      expect(store.questRequests[0].intent.additionalObjectiveTitles, <String>[
+        'Inspect the gate',
+        'Report to Asghan',
+      ]);
+      expect(
+        results[0].projectJson,
+        contains(
+          '"additional_objective_titles":["Inspect the gate","Report to Asghan"]',
+        ),
+      );
       expect(
         store.questRequests[1].expectedHead.canonicalJson,
         results[0].head.canonicalJson,
@@ -398,6 +417,249 @@ void main() {
       expect(reopened.projectJson, results[1].projectJson);
       expect(reopened.projectRevision, 2);
       await reopened.close();
+    },
+  );
+
+  test(
+    'Voice transaction binds the exact lane and publishes only after two full reopens',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_publish');
+      final store = _FakeRevision3Store();
+      final original = revision3VoiceFixtureProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final basisHead = session.head.canonicalJson;
+      final genericPrepares = store.prepareCalls;
+
+      final result = await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: r'D:\Recordings\asghan.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan DE Take 1',
+        logicalName: 'GRD_263_ASGHAN_OPEN_INFO_06_02.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.recorded,
+      );
+
+      expect(store.prepareCalls, genericPrepares);
+      expect(store.voicePrepareCalls, 1);
+      expect(store.voiceGameRoots, <String>[r'D:\Games\Gothic Remake']);
+      expect(store.voiceSources, <String>[r'D:\Recordings\asghan.ogg']);
+      expect(store.voiceCurrentProjects, <String>[original]);
+      expect(store.voiceRequests.single.expectedHead.canonicalJson, basisHead);
+      expect(store.voiceRequests.single.expectedRevision, 7);
+      expect(result.projectRevision, 8);
+      expect(result.projectId, revision3VoiceFixtureProjectId);
+      expect(result.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(result.takeId, revision3VoiceFixtureTakeId);
+      expect(result.slotCreated, isTrue);
+      expect(result.selected, isFalse);
+      expect(result.asset.sha256, revision3VoiceFixtureAssetSha256);
+      expect(session.projectJson, result.projectJson);
+      expect(session.head.canonicalJson, result.head.canonicalJson);
+      expect(await session.headFile.readAsString(), result.head.canonicalJson);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, result.projectJson);
+      expect(reopened.projectRevision, 8);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Voice local and source rejections retry without changing the exact head',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_errors');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      await expectLater(
+        session.prepareAndPublishVoiceTakeV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          source: 'take.ogg',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          takeId: revision3VoiceFixtureTakeId,
+          locale: 'de',
+          text: 'Du willst in die Mine?',
+          takeDisplayName: 'Asghan DE Take 1',
+          logicalName: 'asghan.ogg',
+          status: AuthoringRevision3VoiceTakeStatus.reviewed,
+          selectTake: true,
+        ),
+        throwsFormatException,
+      );
+      expect(store.voicePrepareCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+
+      const retryableCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS',
+        'AUTHORING_REVISION3_VOICE_INPUT_MISSING',
+        'AUTHORING_REVISION3_VOICE_INPUT_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_INPUT_UNSAFE',
+        'AUTHORING_REVISION3_VOICE_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_OGG_INVALID',
+        'AUTHORING_REVISION3_VOICE_INPUT_CHANGED',
+      ];
+      for (final code in retryableCodes) {
+        store.nextVoiceError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_v1',
+          code: code,
+          message: 'fake retryable Voice source rejection',
+        );
+        await expectLater(
+          session.prepareAndPublishVoiceTakeV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            source: 'take.ogg',
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            takeId: revision3VoiceFixtureTakeId,
+            locale: 'de',
+            takeDisplayName: 'Asghan DE Take 1',
+            logicalName: 'asghan.ogg',
+            status: AuthoringRevision3VoiceTakeStatus.recorded,
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(fixedHead),
+          reason: code,
+        );
+      }
+
+      final result = await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: 'take.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan DE Take 1',
+        logicalName: 'asghan.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.recorded,
+      );
+      expect(result.projectRevision, 8);
+      expect(store.voicePrepareCalls, retryableCodes.length + 1);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice collision, response, and Store invariants poison the session',
+    () async {
+      const poisonCodes = <String>[
+        'AUTHORING_REVISION3_VOICE_COLLISION',
+        'AUTHORING_REVISION3_VOICE_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_STORE_SEAL_MISMATCH',
+      ];
+      for (final code in poisonCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        final fixedHead = await session.headFile.readAsBytes();
+        store.nextVoiceError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_v1',
+          code: code,
+          message: 'fake non-retryable Voice invariant',
+        );
+
+        await expectLater(
+          session.prepareAndPublishVoiceTakeV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            source: 'take.ogg',
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            takeId: revision3VoiceFixtureTakeId,
+            locale: 'de',
+            takeDisplayName: 'Asghan DE Take 1',
+            logicalName: 'asghan.ogg',
+            status: AuthoringRevision3VoiceTakeStatus.recorded,
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        expect(
+          await session.headFile.readAsBytes(),
+          orderedEquals(fixedHead),
+          reason: code,
+        );
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'Voice exhausted revision counter poisons the managed session',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_revision_limit');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+      store.nextVoiceError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_v1',
+        code: 'AUTHORING_REVISION3_VOICE_REVISION_LIMIT',
+        message: 'fake exhausted revision counter',
+      );
+
+      await expectLater(
+        session.prepareAndPublishVoiceTakeV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          source: 'take.ogg',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          takeId: revision3VoiceFixtureTakeId,
+          locale: 'de',
+          takeDisplayName: 'Asghan DE Take 1',
+          logicalName: 'asghan.ogg',
+          status: AuthoringRevision3VoiceTakeStatus.recorded,
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.voicePrepareCalls, 1);
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
     },
   );
 
@@ -768,6 +1030,134 @@ void main() {
       expect(session.projectJson, original);
       expect(session.requiresReopen, isTrue);
       await session.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit publishes through guarded full reopen and lists exact stage',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_edit');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset value edit'),
+      );
+      final headOpens = store.headVerifications.length;
+      final intent = _semanticDataAssetIntent();
+
+      final published = await session.prepareAndPublishDataAssetEditV1(
+        intent: intent,
+      );
+
+      expect(store.dataAssetEditPrepareCalls, 1);
+      expect(store.dataAssetEditIntents.single, same(intent));
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, revision3DataAssetTargetPath);
+      expect(published.stage.selectorKind, 'int32');
+      expect(published.stage.replacementByteLength, 4);
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final listed = await session.listDataAssetStagesV1();
+      expect(listed, hasLength(1));
+      expect(listed.single.targetPath, intent.expectedTargetPath);
+      expect(await session.headFile.readAsBytes(), exactHeadBytes);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit head drift preserves winner and requires reopen',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_edit_race');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'DataAsset edit race');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final external = _projectJson(
+        revision: 77,
+        name: 'External semantic edit winner',
+      );
+      final externalHead = store.register(external);
+      store.afterDataAssetPrepare = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'semantic DataAsset edit keeps input failures retryable and poisons binding drift',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_edit_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset edit retry'),
+      );
+      retryStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_EDIT_INVALID',
+        message: 'fake semantic input rejection',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(retrySession.projectRevision, 0);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_edit_binding_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'DataAsset edit binding poison',
+            ),
+          );
+      final exactHead = await poisonSession.headFile.readAsBytes();
+      poisonStore.nextDataAssetResponseMismatch = 'intent-binding';
+      await expectLater(
+        poisonSession.prepareAndPublishDataAssetEditV1(
+          intent: _semanticDataAssetIntent(),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(await poisonSession.headFile.readAsBytes(), exactHead);
+      expect(poisonSession.projectRevision, 0);
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
     },
   );
 
@@ -1435,12 +1825,7 @@ void main() {
             displayName: 'Managed Quest 1',
             intent: _questIntent(1),
           ),
-          throwsA(
-            anyOf(
-              isA<FormatException>(),
-              isA<ManagedProjectVerificationException>(),
-            ),
-          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
           reason: mismatch,
         );
         expect(
@@ -1449,17 +1834,32 @@ void main() {
           reason: mismatch,
         );
         expect(session.projectJson, original, reason: mismatch);
-        expect(session.requiresReopen, isFalse, reason: mismatch);
+        final poisoned = mismatch != 'candidate-reopen';
+        expect(session.requiresReopen, poisoned, reason: mismatch);
         expect(store.prepareCalls, genericPrepares, reason: mismatch);
 
-        final published = await session.prepareAndPublishQuestDraftV3(
-          gameRoot: r'D:\Games\Gothic Remake',
-          questId: '00000000000000000000000000000071',
-          scriptModuleId: '00000000000000000000000000000072',
-          displayName: 'Managed Quest 1',
-          intent: _questIntent(1),
-        );
-        expect(session.head.canonicalJson, published.head.canonicalJson);
+        if (poisoned) {
+          await expectLater(
+            session.prepareAndPublishQuestDraftV3(
+              gameRoot: r'D:\Games\Gothic Remake',
+              questId: '00000000000000000000000000000071',
+              scriptModuleId: '00000000000000000000000000000072',
+              displayName: 'Managed Quest 1',
+              intent: _questIntent(1),
+            ),
+            throwsA(isA<ManagedProjectVerificationException>()),
+            reason: mismatch,
+          );
+        } else {
+          final published = await session.prepareAndPublishQuestDraftV3(
+            gameRoot: r'D:\Games\Gothic Remake',
+            questId: '00000000000000000000000000000071',
+            scriptModuleId: '00000000000000000000000000000072',
+            displayName: 'Managed Quest 1',
+            intent: _questIntent(1),
+          );
+          expect(session.head.canonicalJson, published.head.canonicalJson);
+        }
         await session.close();
       }
     },
@@ -1515,6 +1915,11 @@ void main() {
       for (final errorCode in <String>[
         'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT',
         'AUTHORING_REVISION3_QUEST_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_QUEST_INVARIANT',
+        'AUTHORING_REVISION3_QUEST_TRANSACTION_FAILED',
+        'AUTHORING_REVISION3_QUEST_PERSISTENCE_FAILED',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_QUEST_FUTURE_UNKNOWN',
       ]) {
         final root = await _projectRoot(
           fixture,
@@ -1768,6 +2173,22 @@ typedef _AfterDataAssetPrepare =
 typedef _AfterDataAssetList =
     FutureOr<void> Function(String root, AuthoringWorkingHead expectedHead);
 
+DataAssetSemanticEditIntent _semanticDataAssetIntent() {
+  final response = validDataAssetInspectionResponse();
+  (response['binding']! as Map<String, Object?>)['usmap_sha256'] = '3' * 64;
+  dataAssetSelector(response)['usmap_sha256'] = '3' * 64;
+  final inspection = DataAssetInspection.fromJson(response);
+  return DataAssetSemanticValueEditor.fromLeaf(
+        inspection.exports.single.leaves.single,
+      )
+      .previewScalar(
+        extractReceiptPath: r'C:\proof\extract-receipt.v2.json',
+        expectedTargetPath: revision3DataAssetTargetPath,
+        value: '2',
+      )
+      .intent;
+}
+
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final Map<String, String> _projectsByHead = <String, String>{};
   final List<AuthoringAssetVerification> openVerifications =
@@ -1779,8 +2200,10 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int prepareCalls = 0;
   int questPrepareCalls = 0;
   int npcPrepareCalls = 0;
+  int voicePrepareCalls = 0;
   int contentReadCalls = 0;
   int dataAssetPrepareCalls = 0;
+  int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetRemoveCalls = 0;
   _AfterPrepare? afterPrepare;
@@ -1797,9 +2220,15 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> npcCurrentProjects = <String>[];
   final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
       <AuthoringRevision3NpcDraftRequestV1>[];
+  final List<String> voiceSources = <String>[];
+  final List<String> voiceGameRoots = <String>[];
+  final List<String> voiceCurrentProjects = <String>[];
+  final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
+      <AuthoringRevision3VoiceTakeRequestV1>[];
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
   Object? nextNpcError;
+  Object? nextVoiceError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
   Object? nextDataAssetError;
@@ -1810,6 +2239,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   String? nextHeadProjectOverride;
   final Map<String, Revision3DataAssetFixture> _dataAssetByHead =
       <String, Revision3DataAssetFixture>{};
+  final List<DataAssetSemanticEditIntent> dataAssetEditIntents =
+      <DataAssetSemanticEditIntent>[];
 
   AuthoringWorkingHead register(String projectJson) {
     _sequence++;
@@ -1998,16 +2429,25 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     } else if (mismatch == 'module-id') {
       responseModuleId = request.questId;
     }
-    return AuthoringRevision3QuestDraftPreparation.fromJson(
-      _questPreparedResponse(
-        basisHead: basisHead,
-        candidateHead: candidateHead,
-        candidateProjectJson: candidateProject,
-        revision: responseRevision,
-        questId: responseQuestId,
-        scriptModuleId: responseModuleId,
-      ),
-    );
+    try {
+      return AuthoringRevision3QuestDraftPreparation.fromJson(
+        _questPreparedResponse(
+          basisHead: basisHead,
+          candidateHead: candidateHead,
+          candidateProjectJson: candidateProject,
+          revision: responseRevision,
+          questId: responseQuestId,
+          scriptModuleId: responseModuleId,
+        ),
+      );
+    } on FormatException catch (error) {
+      if (mismatch == null) rethrow;
+      throw ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_draft_v3',
+        code: ModFfiException.malformedNativeResponseCode,
+        message: error.message.toString(),
+      );
+    }
   }
 
   @override
@@ -2050,6 +2490,45 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       fixture.candidateProjectJson,
     );
     return AuthoringRevision3NpcDraftPreparation.fromJson(
+      fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
+    required String root,
+    required String gameRoot,
+    required String source,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRequestV1 request,
+  }) async {
+    voicePrepareCalls++;
+    voiceGameRoots.add(gameRoot);
+    voiceSources.add(source);
+    voiceCurrentProjects.add(currentProjectJson);
+    voiceRequests.add(request);
+    final injectedError = nextVoiceError;
+    nextVoiceError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_v1',
+        code: 'AUTHORING_REVISION3_VOICE_HEAD_CONFLICT',
+        message: 'fake native Voice basis CAS rejected',
+      );
+    }
+    final fixture = Revision3VoiceFixture.fromBasis(
+      basisHead: request.expectedHead,
+      basisProjectJson: currentProjectJson,
+      request: request,
+    );
+    _projectsByHead[fixture.candidateHead.canonicalJson] =
+        fixture.candidateProjectJson;
+    return AuthoringRevision3VoiceTakePreparation.fromJson(
       fixture.response(),
       currentProjectJson: currentProjectJson,
       request: request,
@@ -2135,6 +2614,54 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetEditV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    dataAssetEditPrepareCalls++;
+    dataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset edit basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: intent.selector.toJson(),
+      replacementHex: _semanticReplacementHex(intent),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = intent.intentBindingSha256;
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    if (mismatch == 'intent-binding') {
+      response['intent_binding_sha256'] = 'f' * 64;
+    }
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedIntentBindingSha256: intent.intentBindingSha256,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -2214,6 +2741,68 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       requestedTargetPath: targetPath,
     );
   }
+}
+
+String _semanticReplacementHex(DataAssetSemanticEditIntent intent) {
+  final wire = intent.replacement.toJson();
+  final kind = wire['kind']! as String;
+  final bytes = switch (kind) {
+    'bool' => <int>[(wire['value']! as bool) ? 1 : 0],
+    'byte' => _semanticIntegerBytes(wire['decimal']! as String, 1),
+    'int8' => _semanticIntegerBytes(wire['decimal']! as String, 1),
+    'int16' => _semanticIntegerBytes(wire['decimal']! as String, 2),
+    'int32' => _semanticIntegerBytes(wire['decimal']! as String, 4),
+    'int64' => _semanticIntegerBytes(wire['decimal']! as String, 8),
+    'uint16' => _semanticIntegerBytes(wire['decimal']! as String, 2),
+    'uint32' => _semanticIntegerBytes(wire['decimal']! as String, 4),
+    'uint64' => _semanticIntegerBytes(wire['decimal']! as String, 8),
+    'float32' => _semanticFloatBytes(<String>[
+      wire['decimal']! as String,
+    ], singlePrecision: true),
+    'float64' => _semanticFloatBytes(<String>[
+      wire['decimal']! as String,
+    ], singlePrecision: false),
+    'linear_color_f32x4' => _semanticFloatBytes(<String>[
+      wire['r']! as String,
+      wire['g']! as String,
+      wire['b']! as String,
+      wire['a']! as String,
+    ], singlePrecision: true),
+    'vector4_f64x4' => _semanticFloatBytes(<String>[
+      wire['x']! as String,
+      wire['y']! as String,
+      wire['z']! as String,
+      wire['w']! as String,
+    ], singlePrecision: false),
+    _ => throw StateError('unsupported fake semantic replacement $kind'),
+  };
+  return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}
+
+List<int> _semanticIntegerBytes(String decimal, int width) {
+  var value = BigInt.parse(decimal);
+  if (value.isNegative) value += BigInt.one << (width * 8);
+  return List<int>.generate(
+    width,
+    (index) => ((value >> (index * 8)) & BigInt.from(0xff)).toInt(),
+  );
+}
+
+List<int> _semanticFloatBytes(
+  List<String> values, {
+  required bool singlePrecision,
+}) {
+  final width = singlePrecision ? 4 : 8;
+  final data = ByteData(width * values.length);
+  for (var index = 0; index < values.length; index++) {
+    final value = double.parse(values[index]);
+    if (singlePrecision) {
+      data.setFloat32(index * width, value, Endian.little);
+    } else {
+      data.setFloat64(index * width, value, Endian.little);
+    }
+  }
+  return data.buffer.asUint8List();
 }
 
 Future<Directory> _projectRoot(Directory fixture, {String suffix = ''}) async {
@@ -2320,6 +2909,8 @@ Map<String, Object?> _questInput({
   'title': request.intent.title,
   'description': request.intent.description,
   'objective_title': request.intent.objectiveTitle,
+  if (request.intent.additionalObjectiveTitles.isNotEmpty)
+    'additional_objective_titles': request.intent.additionalObjectiveTitles,
   'collision_catalog': <String, Object?>{
     'generation': target,
     'catalog_layer':
@@ -2341,34 +2932,42 @@ Map<String, Object?> _questEntity({
   required String projectId,
   required AuthoringRevision3QuestDraftRequestV3 request,
   required Map<String, Object?> input,
-}) => <String, Object?>{
-  'id': request.questId,
-  'display_name': request.displayName,
-  'origin': <String, Object?>{
-    'type': 'new',
-    'authored_runtime_id': request.intent.technicalId,
-  },
-  'revision': 0,
-  'payload': <String, Object?>{
-    'kind': 'quest_draft',
-    'data': <String, Object?>{
-      'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 2,
-      'input': input,
-      'script_module': <String, Object?>{
-        'project_id': projectId,
-        'id': request.scriptModuleId,
-        'expected_kind': 'script_module',
+}) {
+  final generatorVersion = request.intent.additionalObjectiveTitles.isEmpty
+      ? 2
+      : 3;
+  return <String, Object?>{
+    'id': request.questId,
+    'display_name': request.displayName,
+    'origin': <String, Object?>{
+      'type': 'new',
+      'authored_runtime_id': request.intent.technicalId,
+    },
+    'revision': 0,
+    'payload': <String, Object?>{
+      'kind': 'quest_draft',
+      'data': <String, Object?>{
+        'generator_id': 'gore-authoring.draft-quest-skeleton',
+        'generator_version': generatorVersion,
+        'input': input,
+        'script_module': <String, Object?>{
+          'project_id': projectId,
+          'id': request.scriptModuleId,
+          'expected_kind': 'script_module',
+        },
       },
     },
-  },
-};
+  };
+}
 
 Map<String, Object?> _questModuleEntity({
   required String projectId,
   required AuthoringRevision3QuestDraftRequestV3 request,
   required Map<String, Object?> input,
 }) {
+  final generatorVersion = request.intent.additionalObjectiveTitles.isEmpty
+      ? 2
+      : 3;
   final source = revision3QuestGeneratedSource(
     technicalId: request.intent.technicalId,
     textHelper: request.intent.textHelper,
@@ -2377,6 +2976,7 @@ Map<String, Object?> _questModuleEntity({
     title: request.intent.title,
     description: request.intent.description,
     objectiveTitle: request.intent.objectiveTitle,
+    additionalObjectiveTitles: request.intent.additionalObjectiveTitles,
   );
   return <String, Object?>{
     'id': request.scriptModuleId,
@@ -2384,7 +2984,7 @@ Map<String, Object?> _questModuleEntity({
     'origin': <String, Object?>{
       'type': 'generated',
       'generator_id': 'gore-authoring.draft-quest-skeleton',
-      'generator_version': 2,
+      'generator_version': generatorVersion,
       'owner': <String, Object?>{
         'project_id': projectId,
         'id': request.questId,
@@ -2396,7 +2996,7 @@ Map<String, Object?> _questModuleEntity({
       'kind': 'script_module',
       'data': <String, Object?>{
         'generator_id': 'gore-authoring.draft-quest-skeleton',
-        'generator_version': 2,
+        'generator_version': generatorVersion,
         'owner': <String, Object?>{
           'project_id': projectId,
           'id': request.questId,
@@ -2441,17 +3041,20 @@ Map<String, Object?> _questPreparedResponse({
   'publication_status': 'not_supported',
 };
 
-AuthoringRevision3QuestDraftIntentV3 _questIntent(int ordinal) =>
-    AuthoringRevision3QuestDraftIntentV3(
-      moduleNamespace: 'GoreMods.Quests.Managed$ordinal',
-      technicalId: 'GORE_MANAGED_QUEST_$ordinal',
-      textHelper: 'GoreManagedQuest${ordinal}Text',
-      parentCatalogId: 'g1r:quest-parent:swampcamp_scchapter2',
-      giverCatalogId: 'g1r:npc:om_grd_asghan_263',
-      title: 'Managed Quest $ordinal',
-      description: 'Exercise safe managed Quest publication.',
-      objectiveTitle: 'Finish Managed Quest $ordinal',
-    );
+AuthoringRevision3QuestDraftIntentV3 _questIntent(
+  int ordinal, {
+  List<String> additionalObjectiveTitles = const <String>[],
+}) => AuthoringRevision3QuestDraftIntentV3(
+  moduleNamespace: 'GoreMods.Quests.Managed$ordinal',
+  technicalId: 'GORE_MANAGED_QUEST_$ordinal',
+  textHelper: 'GoreManagedQuest${ordinal}Text',
+  parentCatalogId: 'g1r:quest-parent:swampcamp_scchapter2',
+  giverCatalogId: 'g1r:npc:om_grd_asghan_263',
+  title: 'Managed Quest $ordinal',
+  description: 'Exercise safe managed Quest publication.',
+  objectiveTitle: 'Finish Managed Quest $ordinal',
+  additionalObjectiveTitles: additionalObjectiveTitles,
+);
 
 AuthoringRevision3NpcDraftIntentV1 _npcIntent(int ordinal) =>
     AuthoringRevision3NpcDraftIntentV1(

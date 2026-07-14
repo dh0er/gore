@@ -12,6 +12,9 @@ const _maxChoiceDisplayNameBytes = 256;
 const _maxQuestTitleBytes = 128;
 const _maxQuestDescriptionBytes = 512;
 const _maxQuestObjectiveBytes = 128;
+const _maxQuestObjectives = 8;
+const _maxQuestObjectiveTitlesBytes =
+    _maxQuestObjectives * _maxQuestObjectiveBytes;
 
 final _projectIdPattern = RegExp(r'^[0-9a-f]{32}$');
 
@@ -125,6 +128,7 @@ final class Revision3QuestDraftAuthoringInput {
     required this.title,
     required this.description,
     required this.objectiveTitle,
+    required this.additionalObjectiveTitles,
   });
 
   factory Revision3QuestDraftAuthoringInput({
@@ -133,38 +137,74 @@ final class Revision3QuestDraftAuthoringInput {
     required String title,
     required String description,
     required String objectiveTitle,
-  }) => Revision3QuestDraftAuthoringInput._(
-    parentCatalogId: _boundedCatalogText(
-      parentCatalogId,
-      _maxCatalogIdBytes,
-      'Quest family',
-    ),
-    giverCatalogId: _boundedCatalogText(
-      giverCatalogId,
-      _maxCatalogIdBytes,
-      'Quest giver',
-    ),
-    title: _friendlyQuestText(title, _maxQuestTitleBytes, 'Quest name'),
-    description: _friendlyQuestText(
-      description,
-      _maxQuestDescriptionBytes,
-      'Quest description',
-    ),
-    objectiveTitle: _friendlyQuestText(
+    List<String> additionalObjectiveTitles = const <String>[],
+  }) {
+    final first = _friendlyQuestText(
       objectiveTitle,
       _maxQuestObjectiveBytes,
-      'First objective',
-    ),
-  );
+      'Objective 1',
+    );
+    if (additionalObjectiveTitles.length >= _maxQuestObjectives) {
+      throw const FormatException('A Quest can contain at most 8 objectives.');
+    }
+    final additional = <String>[];
+    final folded = <String>{first.toLowerCase()};
+    var totalBytes = utf8.encode(first).length;
+    for (var index = 0; index < additionalObjectiveTitles.length; index++) {
+      final value = _friendlyQuestText(
+        additionalObjectiveTitles[index],
+        _maxQuestObjectiveBytes,
+        'Objective ${index + 2}',
+      );
+      totalBytes += utf8.encode(value).length;
+      if (totalBytes > _maxQuestObjectiveTitlesBytes) {
+        throw const FormatException('Quest objectives are too long together.');
+      }
+      if (!folded.add(value.toLowerCase())) {
+        throw FormatException(
+          'Objective ${index + 2} duplicates another objective.',
+        );
+      }
+      additional.add(value);
+    }
+    return Revision3QuestDraftAuthoringInput._(
+      parentCatalogId: _boundedCatalogText(
+        parentCatalogId,
+        _maxCatalogIdBytes,
+        'Quest family',
+      ),
+      giverCatalogId: _boundedCatalogText(
+        giverCatalogId,
+        _maxCatalogIdBytes,
+        'Quest giver',
+      ),
+      title: _friendlyQuestText(title, _maxQuestTitleBytes, 'Quest name'),
+      description: _friendlyQuestText(
+        description,
+        _maxQuestDescriptionBytes,
+        'Quest description',
+      ),
+      objectiveTitle: first,
+      additionalObjectiveTitles: List<String>.unmodifiable(additional),
+    );
+  }
 
   final String parentCatalogId;
   final String giverCatalogId;
   final String title;
   final String description;
   final String objectiveTitle;
+  final List<String> additionalObjectiveTitles;
+
+  List<String> get objectiveTitles => List<String>.unmodifiable(<String>[
+    objectiveTitle,
+    ...additionalObjectiveTitles,
+  ]);
 }
 
-/// Internal technical request derived from one exact current-project basis.
+/// Internal technical request derived from the current project ID/revision and
+/// authored intent. The coordinator separately binds publication to the exact
+/// project root and canonical head.
 final class Revision3QuestDraftTechnicalPlan {
   const Revision3QuestDraftTechnicalPlan._({
     required this.questId,
@@ -194,6 +234,8 @@ final class Revision3QuestDraftTechnicalPlan {
       'title': input.title,
       'description': input.description,
       'objective_title': input.objectiveTitle,
+      if (input.additionalObjectiveTitles.isNotEmpty)
+        'additional_objective_titles': input.additionalObjectiveTitles,
     });
     final nameDigest = sha256
         .convert(utf8.encode('gore-mod-studio.r3-quest-names-v1\u0000$seed'))
@@ -224,6 +266,7 @@ final class Revision3QuestDraftTechnicalPlan {
         title: input.title,
         description: input.description,
         objectiveTitle: input.objectiveTitle,
+        additionalObjectiveTitles: input.additionalObjectiveTitles,
       ),
     );
   }

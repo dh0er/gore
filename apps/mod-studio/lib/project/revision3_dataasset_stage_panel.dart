@@ -2,13 +2,16 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
+import '../dataasset/ui/dataasset_lab.dart';
+import '../dataasset/ui/dataasset_semantic_edit_panel.dart';
+import '../dataasset/ui/dataasset_semantic_edit_wizard.dart';
 import 'revision3_dataasset_authoring.dart';
 
 /// Visible management surface for receipt-verified DataAsset edits already
 /// supported by the managed revision-3 session.
 ///
-/// This panel imports and removes project registry entries only. It is not a
-/// semantic value editor and exposes no build, pack, deploy, or gameplay action.
+/// This panel guides typed value edits and also imports/removes verified expert
+/// proofs. It exposes no build, pack, deploy, or gameplay action.
 class Revision3DataAssetStagePanel extends StatefulWidget {
   const Revision3DataAssetStagePanel({
     required this.projectRoot,
@@ -19,6 +22,12 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
     required this.publish,
     required this.remove,
     this.pickPatchReceipt,
+    this.publishSemanticEdit,
+    this.semanticInspector,
+    this.semanticUassetPicker,
+    this.semanticUsmapPicker,
+    this.semanticExtractReceiptPicker,
+    this.semanticExtractReceiptInspector,
     super.key,
   });
 
@@ -30,6 +39,12 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final Revision3DataAssetStagePublisher publish;
   final Revision3DataAssetStageRemover remove;
   final Revision3DataAssetPatchReceiptPicker? pickPatchReceipt;
+  final DataAssetSemanticStagePublisher? publishSemanticEdit;
+  final DataAssetInspector? semanticInspector;
+  final DataAssetFilePicker? semanticUassetPicker;
+  final DataAssetFilePicker? semanticUsmapPicker;
+  final DataAssetExtractReceiptPicker? semanticExtractReceiptPicker;
+  final DataAssetExtractReceiptInspector? semanticExtractReceiptInspector;
 
   @override
   State<Revision3DataAssetStagePanel> createState() =>
@@ -45,12 +60,14 @@ class _Revision3DataAssetStagePanelState
   bool _loading = false;
   bool _picking = false;
   bool _mutating = false;
+  bool _semanticEditorOpen = false;
+  bool _semanticCheckpointStale = false;
   bool _confirmationOpen = false;
   bool _locked = false;
   int _loadEpoch = 0;
   int _actionEpoch = 0;
 
-  bool get _busy => _picking || _mutating;
+  bool get _busy => _picking || _mutating || _semanticEditorOpen;
   bool get _registryReady => _stages != null && !_loading && _loadError == null;
 
   @override
@@ -79,6 +96,8 @@ class _Revision3DataAssetStagePanelState
       _locked = false;
       _picking = false;
       _mutating = false;
+      _semanticEditorOpen = false;
+      _semanticCheckpointStale = false;
       _confirmationOpen = false;
       _reload(clearCurrent: true);
     }
@@ -118,6 +137,7 @@ class _Revision3DataAssetStagePanelState
       setState(() {
         _stages = List<AuthoringRevision3DataAssetStage>.unmodifiable(stages);
         _loading = false;
+        _semanticCheckpointStale = false;
       });
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
@@ -206,6 +226,69 @@ class _Revision3DataAssetStagePanelState
         _actionError = revision3DataAssetFriendlyError(error);
         if (error is Revision3DataAssetRequiresReopenException) _locked = true;
       });
+    }
+  }
+
+  Future<void> _openSemanticEditor() async {
+    final publish = widget.publishSemanticEdit;
+    final receiptInspector = widget.semanticExtractReceiptInspector;
+    if (_busy ||
+        _locked ||
+        !_registryReady ||
+        publish == null ||
+        receiptInspector == null) {
+      return;
+    }
+    final projectRoot = widget.projectRoot;
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectHeadJson = widget.projectHead.canonicalJson;
+    setState(() {
+      _semanticEditorOpen = true;
+      _actionError = null;
+    });
+    final result = await showDialog<Object?>(
+      context: context,
+      builder: (context) => DataAssetSemanticEditWizardDialog(
+        publish: publish,
+        extractReceiptInspector: receiptInspector,
+        inspector: widget.semanticInspector,
+        uassetPicker: widget.semanticUassetPicker,
+        usmapPicker: widget.semanticUsmapPicker,
+        extractReceiptPicker: widget.semanticExtractReceiptPicker,
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _semanticEditorOpen = false);
+    if (!_sameCheckpoint(
+      projectRoot,
+      projectId,
+      projectRevision,
+      projectHeadJson,
+    )) {
+      return;
+    }
+    switch (result) {
+      case DataAssetSemanticStagePublication publication:
+        _showSuccess(
+          'Verified value edit saved in project revision ${publication.revision}. It is not available to build or test in-game yet.',
+        );
+      case DataAssetSemanticStageUnavailableException error:
+        setState(() {
+          _actionError = error.message;
+          if (error.reason ==
+              DataAssetSemanticStageUnavailableReason.staleCheckpoint) {
+            _semanticCheckpointStale = true;
+          }
+          if (error.reason ==
+              DataAssetSemanticStageUnavailableReason.requiresReopen) {
+            _locked = true;
+          }
+        });
+      case null:
+        break;
+      default:
+        throw StateError('unexpected DataAsset value editor result');
     }
   }
 
@@ -365,6 +448,22 @@ class _Revision3DataAssetStagePanelState
                 onPressed: _busy || _loading || _locked ? null : _reload,
                 icon: const Icon(Icons.refresh),
               ),
+              if (widget.publishSemanticEdit != null) ...[
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  key: const Key('revision3-dataasset-semantic-create'),
+                  onPressed:
+                      _busy ||
+                          _locked ||
+                          _semanticCheckpointStale ||
+                          widget.semanticExtractReceiptInspector == null ||
+                          !_registryReady
+                      ? null
+                      : _openSemanticEditor,
+                  icon: const Icon(Icons.tune_outlined),
+                  label: const Text('Create value edit...'),
+                ),
+              ],
               const SizedBox(width: 8),
               FilledButton.icon(
                 key: const Key('revision3-dataasset-stage-add'),
@@ -377,7 +476,9 @@ class _Revision3DataAssetStagePanelState
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
                     : const Icon(Icons.add),
-                label: Text(_picking ? 'Choosing...' : 'Add verified edit...'),
+                label: Text(
+                  _picking ? 'Choosing...' : 'Import verified proof...',
+                ),
               ),
             ],
           ),
@@ -481,7 +582,7 @@ class _DataAssetBoundaryNotice extends StatelessWidget {
             child: Text(
               locked
                   ? 'Exact verification is unavailable. Reopen the managed project before continuing.'
-                  : 'This list contains receipt-verified fixed-size edits saved in the project. They are not yet included in builds, deployable, or qualified for gameplay. Adding or removing an entry does not write to the game installation.',
+                  : 'This list contains proven fixed-size value edits saved in the project. Create value edit guides you through inspection and an exact extraction proof; Import verified proof accepts an existing guarded PatchReceipt-v2. Neither path writes to the game installation, and these edits are not yet included in builds, deployable, or qualified for gameplay.',
               style: TextStyle(
                 color: locked
                     ? scheme.onErrorContainer
@@ -601,7 +702,7 @@ class _DataAssetEmptyState extends StatelessWidget {
           Text('No verified DataAsset edits in this project.'),
           SizedBox(height: 6),
           Text(
-            'Use Add verified edit to choose a receipt created by the guarded gore asset patch-fixed workflow.',
+            'Use Create value edit for the guided inspect, preview, and exact ExtractReceipt-v2 workflow. Import verified proof is the expert alternative for an existing guarded PatchReceipt-v2.',
             textAlign: TextAlign.center,
           ),
         ],

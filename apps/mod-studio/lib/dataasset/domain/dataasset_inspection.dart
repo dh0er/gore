@@ -236,6 +236,11 @@ final class DataAssetPackageSeal {
   final String uassetSha256;
   final String uexpSha256;
 
+  Map<String, Object> toJson() => <String, Object>{
+    'uasset_sha256': uassetSha256,
+    'uexp_sha256': uexpSha256,
+  };
+
   factory DataAssetPackageSeal._parse(Map<String, Object?> json) {
     _exact(json, const {'uasset_sha256', 'uexp_sha256'}, 'package seal');
     return DataAssetPackageSeal._(
@@ -604,6 +609,25 @@ final class FixedLeafSelector {
 
   String get pathLabel => path.map((step) => step.label).join(' / ');
 
+  /// Re-emits the exact closed native selector schema after strict parsing.
+  /// Semantic authoring must use this canonical projection instead of
+  /// duplicating the selector wire in individual editors.
+  Map<String, Object?> toJson() => <String, Object?>{
+    'format': format,
+    'profile': profile,
+    'package_seal': packageSeal.toJson(),
+    'usmap_sha256': usmapSha256,
+    'export_index': exportIndex,
+    'object_name': objectName,
+    'class_path': classPath,
+    'component': component,
+    'export_sha256': exportSha256,
+    'role': role.wireName,
+    'kind': kind.wireName,
+    'path': path.map((step) => step.toJson()).toList(growable: false),
+    'expected_hex': expectedHex,
+  };
+
   factory FixedLeafSelector._parse(
     Map<String, Object?> json, {
     required _ParseBudget budget,
@@ -722,6 +746,41 @@ final class FixedLeafSelectorStep {
     FixedLeafStepKind.removedMapKey => 'removed key ${key!.shortHash}',
   };
 
+  Map<String, Object?> toJson() => switch (kind) {
+    FixedLeafStepKind.property => <String, Object?>{
+      'step': 'property',
+      'schema_index': schemaIndex,
+      'property_name': propertyName,
+      'array_index': arrayIndex,
+      'array_dimension': arrayDimension,
+      'declaring_schema_name': declaringSchemaName,
+      'declaring_module_path': declaringModulePath,
+      'property_type': propertyType!.toJson(),
+    },
+    FixedLeafStepKind.structure => <String, Object?>{
+      'step': 'struct',
+      'name': name,
+      'schema_name': schemaName,
+    },
+    FixedLeafStepKind.map => <String, Object?>{
+      'step': 'map',
+      'key_type': keyType!.toJson(),
+      'value_type': valueType!.toJson(),
+    },
+    FixedLeafStepKind.mapEntryValue => <String, Object?>{
+      'step': 'map_entry_value',
+      'key': key!.toJson(),
+    },
+    FixedLeafStepKind.mapEntryKey => <String, Object?>{
+      'step': 'map_entry_key',
+      'key': key!.toJson(),
+    },
+    FixedLeafStepKind.removedMapKey => <String, Object?>{
+      'step': 'removed_map_key',
+      'key': key!.toJson(),
+    },
+  };
+
   factory FixedLeafSelectorStep._parse(
     Map<String, Object?> json, {
     required _ParseBudget budget,
@@ -824,6 +883,12 @@ final class FixedLeafMapKeyIdentity {
   final String sha256;
   String get shortHash => sha256.substring(0, 8);
 
+  Map<String, Object?> toJson() => <String, Object?>{
+    'kind': kind?.wireName,
+    'byte_length': byteLength,
+    'sha256': sha256,
+  };
+
   factory FixedLeafMapKeyIdentity._parse(Map<String, Object?> json) {
     _exact(json, const {'kind', 'byte_length', 'sha256'}, 'map key identity');
     final rawKind = json['kind'];
@@ -892,6 +957,30 @@ final class FixedLeafWireType {
   final FixedLeafWireType? key;
   final FixedLeafWireType? value;
   final String? name;
+
+  Map<String, Object?> toJson() => switch (kind) {
+    FixedLeafWireTypeKind.array || FixedLeafWireTypeKind.optional =>
+      <String, Object?>{'type': kind.wireName, 'inner': inner!.toJson()},
+    FixedLeafWireTypeKind.structure => <String, Object?>{
+      'type': kind.wireName,
+      'name': name,
+    },
+    FixedLeafWireTypeKind.map => <String, Object?>{
+      'type': kind.wireName,
+      'key': key!.toJson(),
+      'value': value!.toJson(),
+    },
+    FixedLeafWireTypeKind.set => <String, Object?>{
+      'type': kind.wireName,
+      'key': key!.toJson(),
+    },
+    FixedLeafWireTypeKind.enumeration => <String, Object?>{
+      'type': kind.wireName,
+      'inner': inner!.toJson(),
+      'name': name,
+    },
+    _ => <String, Object?>{'type': kind.wireName},
+  };
 
   factory FixedLeafWireType._parse(
     Map<String, Object?> json, {

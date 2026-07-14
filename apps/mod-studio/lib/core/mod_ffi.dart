@@ -4,13 +4,16 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../dataasset/domain/dataasset_inspection.dart';
+import '../dataasset/domain/dataasset_semantic_edit.dart';
 import '../project/revision3_content_index.dart';
 import 'core_service.dart';
 
 export '../dataasset/domain/dataasset_inspection.dart';
+export '../dataasset/domain/dataasset_semantic_edit.dart';
 
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_voice_take.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
@@ -25,6 +28,10 @@ const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringRevision3ContentIndexJsonBytes = 32 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetResponseBytes = 64 * 1024 * 1024;
+const _maxAuthoringRevision3DataAssetEditRequestBytes =
+    _maxDataAssetPathBytes * 8 +
+    _maxAuthoringHeadJsonBytes * 2 +
+    8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetStages = 1024;
 const _maxAuthoringRevision3DataAssetManifestBytes = 8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetManifestStringBytes = 32 * 1024;
@@ -34,6 +41,12 @@ const _maxAuthoringRevision3QuestCollisionArtifactBytes = 24 * 1024 * 1024;
 const _authoringRevision3QuestGeneratorId =
     'gore-authoring.draft-quest-skeleton';
 const _authoringRevision3QuestGeneratorVersion = 2;
+const _authoringRevision3MultiObjectiveQuestGeneratorVersion = 3;
+const _maxAuthoringRevision3QuestObjectives = 8;
+const _maxAuthoringRevision3QuestObjectiveTitleBytes = 128;
+const _maxAuthoringRevision3QuestObjectiveTitlesBytes =
+    _maxAuthoringRevision3QuestObjectives *
+    _maxAuthoringRevision3QuestObjectiveTitleBytes;
 const _authoringRevision3QuestCollisionCatalogLayer =
     'base-game-plus-exact-revision3-project.story-collisions.v2';
 const _authoringRevision3QuestCollisionMediaType =
@@ -682,7 +695,11 @@ class ModFfi {
       'quest_request_json': questRequestJson,
       'root': root,
     });
-    return AuthoringRevision3QuestDraftPreparation.fromJson(response);
+    try {
+      return AuthoringRevision3QuestDraftPreparation.fromJson(response);
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
   }
 
   /// Prepare one revision-3 NPC Draft and its deterministic ScriptModule without publishing the
@@ -735,6 +752,59 @@ class ModFfi {
     }
   }
 
+  /// Import one validated Ogg take for an existing revision-3 dialog line/locale and prepare an
+  /// unpublished VoiceSlot/VoiceTake candidate.
+  ///
+  /// Native code binds the request to the exact fixed head and project, installs only immutable
+  /// CAS objects, and fully reopens the candidate. This wrapper grants no archive-target, build,
+  /// runtime, deployment, or native publication authority.
+  Future<AuthoringRevision3VoiceTakePreparation>
+  authoringStorePrepareRevision3VoiceTakeV1({
+    required String root,
+    required String gameRoot,
+    required String source,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_take_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3Path(source, 'source');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    _authoringRevision3VoicePrepareEnvelopePreflight(
+      command,
+      currentProjectJson,
+      gameRoot,
+      root,
+      source,
+      request.canonicalJson,
+    );
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'root': root,
+      'source': source,
+      'voice_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakePreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Verify one PatchReceipt-v2 chain and prepare a fixed-leaf DataAsset stage without
   /// publishing the fixed revision-3 head.
   ///
@@ -763,6 +833,68 @@ class ModFfi {
       response,
       expectedHead: expectedHead,
     );
+  }
+
+  /// Strictly reopen one ExtractReceipt-v2 and return only the target plus
+  /// package/USMAP facts needed to bind a visible inspection before authoring.
+  Future<DataAssetExtractReceiptSummary>
+  authoringReadDataAssetExtractReceiptV2({
+    required String extractReceiptPath,
+  }) async {
+    const command = 'authoring_read_dataasset_extract_receipt_v2';
+    _authoringRevision3Path(extractReceiptPath, 'extractReceiptPath');
+    final response = await _call(command, <String, Object?>{
+      'extract_receipt_path': extractReceiptPath,
+    });
+    try {
+      return DataAssetExtractReceiptSummary.fromJson(response);
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one typed, selector-bound fixed-leaf edit directly from an exact
+  /// ExtractReceipt-v2 proof without publishing the fixed revision-3 head.
+  ///
+  /// Raw offsets and replacement bytes never cross this Dart boundary. Native
+  /// code encodes the semantic replacement, reconstructs a private receipt
+  /// chain, reverifies the live game generation, and returns only the same
+  /// closed unpublished stage DTO as the PatchReceipt-v2 import route.
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  authoringStorePrepareRevision3DataAssetEditV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_dataasset_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(intent.extractReceiptPath, 'extractReceiptPath');
+    final payload = <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      ...intent.toNativeFields(),
+      'root': root,
+    };
+    _authoringRevision3DataAssetEditEnvelopePreflight(command, payload);
+    final response = await _call(command, payload);
+    try {
+      final prepared = AuthoringRevision3DataAssetStagePreparation.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedIntentBindingSha256: intent.intentBindingSha256,
+      );
+      final selector = intent.selector;
+      if (prepared.stage.targetPath != intent.expectedTargetPath ||
+          prepared.stage.selectorKind != selector.kind.wireName ||
+          prepared.stage.selectorPathDepth != selector.path.length ||
+          prepared.stage.replacementByteLength != selector.kind.width) {
+        throw const FormatException(
+          'prepared stage does not match the typed selector shape',
+        );
+      }
+      return prepared;
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
   }
 
   /// List all verified fixed-leaf DataAsset stages at one exact published revision-3 head.
@@ -1261,6 +1393,25 @@ void _authoringRevision3DataAssetEnvelopePreflight(
       value,
       name,
       encodedBytes,
+    );
+  }
+}
+
+void _authoringRevision3DataAssetEditEnvelopePreflight(
+  String command,
+  Map<String, Object?> payload,
+) {
+  final wire = jsonEncode(<String, Object?>{
+    'command': command,
+    'payload': payload,
+  });
+  final byteLength = utf8.encode(wire).length;
+  if (byteLength > _maxAuthoringRevision3DataAssetEditRequestBytes) {
+    throw ArgumentError.value(
+      '<$byteLength UTF-8 bytes>',
+      'intent',
+      'escaped command envelope exceeds the '
+          '$_maxAuthoringRevision3DataAssetEditRequestBytes-byte native limit',
     );
   }
 }
@@ -7747,6 +7898,7 @@ final class AuthoringRevision3QuestDraftIntentV3 {
     required this.title,
     required this.description,
     required this.objectiveTitle,
+    required this.additionalObjectiveTitles,
   });
 
   factory AuthoringRevision3QuestDraftIntentV3({
@@ -7758,6 +7910,7 @@ final class AuthoringRevision3QuestDraftIntentV3 {
     required String title,
     required String description,
     required String objectiveTitle,
+    List<String> additionalObjectiveTitles = const <String>[],
   }) => AuthoringRevision3QuestDraftIntentV3.fromJson(<String, Object?>{
     'module_namespace': moduleNamespace,
     'technical_id': technicalId,
@@ -7767,6 +7920,8 @@ final class AuthoringRevision3QuestDraftIntentV3 {
     'title': title,
     'description': description,
     'objective_title': objectiveTitle,
+    if (additionalObjectiveTitles.isNotEmpty)
+      'additional_objective_titles': additionalObjectiveTitles,
   });
 
   final String moduleNamespace;
@@ -7777,11 +7932,13 @@ final class AuthoringRevision3QuestDraftIntentV3 {
   final String title;
   final String description;
   final String objectiveTitle;
+  final List<String> additionalObjectiveTitles;
 
   factory AuthoringRevision3QuestDraftIntentV3.fromJson(
     Map<String, Object?> json,
   ) {
-    _authoringExactFields(json, const {
+    final hasAdditional = json.containsKey('additional_objective_titles');
+    _authoringExactFields(json, <String>{
       'module_namespace',
       'technical_id',
       'text_helper',
@@ -7790,8 +7947,9 @@ final class AuthoringRevision3QuestDraftIntentV3 {
       'title',
       'description',
       'objective_title',
+      if (hasAdditional) 'additional_objective_titles',
     }, 'revision-3 Quest intent');
-    _authoringRequireRevision3QuestFieldOrder(json, const <String>[
+    _authoringRequireRevision3QuestFieldOrder(json, <String>[
       'module_namespace',
       'technical_id',
       'text_helper',
@@ -7800,7 +7958,24 @@ final class AuthoringRevision3QuestDraftIntentV3 {
       'title',
       'description',
       'objective_title',
+      if (hasAdditional) 'additional_objective_titles',
     ], 'intent');
+    final objectiveTitle = _authoringRevision3QuestRequestString(
+      json,
+      'objective_title',
+    );
+    _authoringRevision3QuestValidateObjectiveTitle(
+      objectiveTitle,
+      'request objective 1',
+    );
+    final additionalObjectiveTitles = hasAdditional
+        ? _authoringRevision3QuestObjectiveTitleList(
+            json['additional_objective_titles'],
+            firstTitle: objectiveTitle,
+            requireAdditional: true,
+            context: 'request',
+          )
+        : const <String>[];
     return AuthoringRevision3QuestDraftIntentV3._(
       moduleNamespace: _authoringRevision3QuestRequestString(
         json,
@@ -7818,10 +7993,8 @@ final class AuthoringRevision3QuestDraftIntentV3 {
       ),
       title: _authoringRevision3QuestRequestString(json, 'title'),
       description: _authoringRevision3QuestRequestString(json, 'description'),
-      objectiveTitle: _authoringRevision3QuestRequestString(
-        json,
-        'objective_title',
-      ),
+      objectiveTitle: objectiveTitle,
+      additionalObjectiveTitles: additionalObjectiveTitles,
     );
   }
 
@@ -7834,6 +8007,8 @@ final class AuthoringRevision3QuestDraftIntentV3 {
     'title': title,
     'description': description,
     'objective_title': objectiveTitle,
+    if (additionalObjectiveTitles.isNotEmpty)
+      'additional_objective_titles': additionalObjectiveTitles,
   };
 }
 
@@ -7998,6 +8173,7 @@ final class AuthoringRevision3QuestDraftPreparation {
     required this.title,
     required this.description,
     required this.objectiveTitle,
+    required this.additionalObjectiveTitles,
     required this.artifactDeduplicated,
     required this.buildStatus,
     required this.runtimeStatus,
@@ -8020,6 +8196,7 @@ final class AuthoringRevision3QuestDraftPreparation {
   final String title;
   final String description;
   final String objectiveTitle;
+  final List<String> additionalObjectiveTitles;
   final bool artifactDeduplicated;
   final AuthoringRevision3QuestBuildStatus buildStatus;
   final AuthoringRevision3QuestRuntimeStatus runtimeStatus;
@@ -8119,6 +8296,7 @@ final class AuthoringRevision3QuestDraftPreparation {
       title: candidate.title,
       description: candidate.description,
       objectiveTitle: candidate.objectiveTitle,
+      additionalObjectiveTitles: candidate.additionalObjectiveTitles,
       artifactDeduplicated: _authoringRequiredBool(
         json,
         'artifact_deduplicated',
@@ -8184,6 +8362,66 @@ String _authoringRevision3QuestRequestString(
   return value;
 }
 
+List<String> _authoringRevision3QuestObjectiveTitleList(
+  Object? value, {
+  required String firstTitle,
+  required bool requireAdditional,
+  required String context,
+}) {
+  if (value is! List<Object?> ||
+      (requireAdditional && value.isEmpty) ||
+      value.length >= _maxAuthoringRevision3QuestObjectives) {
+    throw FormatException(
+      'authoring revision-3 Quest $context objective list is not bounded',
+    );
+  }
+  final output = <String>[];
+  final folded = <String>{firstTitle.toLowerCase()};
+  var totalBytes = utf8.encode(firstTitle).length;
+  for (var index = 0; index < value.length; index++) {
+    final title = value[index];
+    if (title is! String) {
+      throw FormatException(
+        'authoring revision-3 Quest $context objective ${index + 2} is not text',
+      );
+    }
+    _authoringRevision3QuestValidateObjectiveTitle(
+      title,
+      '$context objective ${index + 2}',
+    );
+    totalBytes += utf8.encode(title).length;
+    if (totalBytes > _maxAuthoringRevision3QuestObjectiveTitlesBytes ||
+        !folded.add(title.toLowerCase())) {
+      throw FormatException(
+        'authoring revision-3 Quest $context objective list is duplicate or too large',
+      );
+    }
+    output.add(title);
+  }
+  return List<String>.unmodifiable(output);
+}
+
+void _authoringRevision3QuestValidateObjectiveTitle(
+  String value,
+  String context,
+) {
+  if (value.isEmpty ||
+      value.trim() != value ||
+      utf8.encode(value).length >
+          _maxAuthoringRevision3QuestObjectiveTitleBytes) {
+    throw FormatException(
+      'authoring revision-3 Quest $context is not bounded canonical text',
+    );
+  }
+  for (final rune in value.runes) {
+    if (rune < 0x20 || rune > 0x7e || rune == 0x22 || rune == 0x5c) {
+      throw FormatException(
+        'authoring revision-3 Quest $context contains unsupported text',
+      );
+    }
+  }
+}
+
 void _authoringRequireRevision3QuestFieldOrder(
   Map<String, Object?> json,
   List<String> expected,
@@ -8223,6 +8461,7 @@ String _authoringRevision3QuestEntityId(
   String title,
   String description,
   String objectiveTitle,
+  List<String> additionalObjectiveTitles,
 })
 _authoringRequireRevision3QuestCandidatePair(
   String projectJson, {
@@ -8261,12 +8500,27 @@ _authoringRequireRevision3QuestCandidatePair(
     'input',
     'script_module',
   ], 'candidate Quest data');
-  _authoringRequireRevision3QuestGenerator(questData, 'Quest');
+  final generatorVersion = _authoringRequireRevision3QuestGenerator(
+    questData,
+    'Quest',
+  );
   final questInput = _authoringRequiredObject(
     questData['input'],
     'revision-3 Quest candidate Quest input',
   );
-  _authoringExactFields(questInput, const {
+  final hasAdditionalObjectives = questInput.containsKey(
+    'additional_objective_titles',
+  );
+  if ((generatorVersion == _authoringRevision3QuestGeneratorVersion &&
+          hasAdditionalObjectives) ||
+      (generatorVersion ==
+              _authoringRevision3MultiObjectiveQuestGeneratorVersion &&
+          !hasAdditionalObjectives)) {
+    throw const FormatException(
+      'authoring revision-3 Quest objective shape disagrees with its generator version',
+    );
+  }
+  _authoringExactFields(questInput, <String>{
     'target',
     'quest_id',
     'module_namespace',
@@ -8277,9 +8531,10 @@ _authoringRequireRevision3QuestCandidatePair(
     'title',
     'description',
     'objective_title',
+    if (hasAdditionalObjectives) 'additional_objective_titles',
     'collision_catalog',
   }, 'revision-3 Quest candidate Quest input');
-  _authoringRequireRevision3QuestFieldOrder(questInput, const <String>[
+  _authoringRequireRevision3QuestFieldOrder(questInput, <String>[
     'target',
     'quest_id',
     'module_namespace',
@@ -8290,6 +8545,7 @@ _authoringRequireRevision3QuestCandidatePair(
     'title',
     'description',
     'objective_title',
+    if (hasAdditionalObjectives) 'additional_objective_titles',
     'collision_catalog',
   ], 'candidate Quest input');
   if (questInput['quest_id'] != questId) {
@@ -8327,6 +8583,18 @@ _authoringRequireRevision3QuestCandidatePair(
     questInput,
     'objective_title',
   );
+  _authoringRevision3QuestValidateObjectiveTitle(
+    objectiveTitle,
+    'candidate objective 1',
+  );
+  final additionalObjectiveTitles = hasAdditionalObjectives
+      ? _authoringRevision3QuestObjectiveTitleList(
+          questInput['additional_objective_titles'],
+          firstTitle: objectiveTitle,
+          requireAdditional: true,
+          context: 'candidate',
+        )
+      : const <String>[];
   _authoringRequireRevision3QuestResolvedCatalogValue(
     questInput['parent_quest'],
     target: target,
@@ -8476,7 +8744,11 @@ _authoringRequireRevision3QuestCandidatePair(
     'input_fingerprint',
     'status',
   ], 'candidate ScriptModule data');
-  _authoringRequireRevision3QuestGenerator(moduleData, 'ScriptModule');
+  _authoringRequireRevision3QuestGenerator(
+    moduleData,
+    'ScriptModule',
+    expectedVersion: generatorVersion,
+  );
   _authoringRequireRevision3QuestTypedRef(
     moduleData['owner'],
     projectId: projectId,
@@ -8529,7 +8801,11 @@ _authoringRequireRevision3QuestCandidatePair(
       'authoring revision-3 Quest candidate ScriptModule origin is unsupported',
     );
   }
-  _authoringRequireRevision3QuestGenerator(moduleOrigin, 'ScriptModule origin');
+  _authoringRequireRevision3QuestGenerator(
+    moduleOrigin,
+    'ScriptModule origin',
+    expectedVersion: generatorVersion,
+  );
   _authoringRequireRevision3QuestTypedRef(
     moduleOrigin['owner'],
     projectId: projectId,
@@ -8563,6 +8839,7 @@ _authoringRequireRevision3QuestCandidatePair(
     title: title,
     description: description,
     objectiveTitle: objectiveTitle,
+    additionalObjectiveTitles: additionalObjectiveTitles,
   );
 }
 
@@ -8610,16 +8887,21 @@ _authoringRevision3QuestCandidateEntityData(
   );
 }
 
-void _authoringRequireRevision3QuestGenerator(
+int _authoringRequireRevision3QuestGenerator(
   Map<String, Object?> json,
-  String context,
-) {
+  String context, {
+  int? expectedVersion,
+}) {
+  final version = json['generator_version'];
   if (json['generator_id'] != _authoringRevision3QuestGeneratorId ||
-      json['generator_version'] != _authoringRevision3QuestGeneratorVersion) {
+      (version != _authoringRevision3QuestGeneratorVersion &&
+          version != _authoringRevision3MultiObjectiveQuestGeneratorVersion) ||
+      (expectedVersion != null && version != expectedVersion)) {
     throw FormatException(
       'authoring revision-3 Quest candidate $context generator is unsupported',
     );
   }
+  return version as int;
 }
 
 ({int byteLength, String sha256}) _authoringRequireRevision3QuestContentSeal(

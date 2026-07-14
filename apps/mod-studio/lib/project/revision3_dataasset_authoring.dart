@@ -97,10 +97,12 @@ String revision3DataAssetFriendlyError(Object error) {
   if (error is ModFfiException) {
     return switch (error.code) {
       'AUTHORING_REVISION3_DATAASSET_INPUT_MISSING' =>
-        'The selected verified edit file no longer exists.',
+        'The selected DataAsset proof file no longer exists.',
       'AUTHORING_REVISION3_DATAASSET_INPUT_UNSAFE' ||
       'AUTHORING_REVISION3_DATAASSET_INPUT_INVALID' =>
-        'The selected file is not a complete verified DataAsset edit for this game version.',
+        'The selected file is not a complete verified DataAsset proof for this game version.',
+      'AUTHORING_REVISION3_DATAASSET_EDIT_INVALID' =>
+        'The value or extraction proof no longer matches the inspected DataAsset. Inspect it again and retry.',
       'AUTHORING_REVISION3_DATAASSET_EXECUTABLE_MISMATCH' =>
         'This verified edit belongs to a different game version.',
       'AUTHORING_REVISION3_DATAASSET_TARGET_EXISTS' =>

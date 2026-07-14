@@ -22,6 +22,8 @@ final class Revision3DataAssetFixture {
     required AuthoringWorkingHead basisHead,
     required String basisProjectJson,
     String targetPath = revision3DataAssetTargetPath,
+    Map<String, Object?>? selector,
+    String replacementHex = '02000000',
     void Function(Map<String, Object?> manifest)? mutateManifest,
   }) {
     final basis = jsonDecode(basisProjectJson) as Map<String, Object?>;
@@ -29,7 +31,7 @@ final class Revision3DataAssetFixture {
     final basisRevision = basis['revision']! as int;
     final target = (basis['target']! as Map).cast<String, Object?>();
     final generation = _generation(targetPath);
-    final selector = _selector();
+    final effectiveSelector = selector ?? _selector();
     final patchedUasset = _seal(10, '1');
     final patchedUexp = _seal(20, '2');
     final usmap = _seal(30, '3');
@@ -42,8 +44,8 @@ final class Revision3DataAssetFixture {
       'staged_project_revision': basisRevision + 1,
       'target_path': targetPath,
       'generation': generation,
-      'selector': selector,
-      'replacement_hex': '02000000',
+      'selector': effectiveSelector,
+      'replacement_hex': replacementHex,
       'patched_uasset': patchedUasset,
       'patched_uexp': patchedUexp,
       'usmap': usmap,

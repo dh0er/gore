@@ -62,7 +62,9 @@ Map<String, Object?> _resolvedQuestValue({
     'runtime_unique_name': 'OM_GRD_Asghan_263',
 };
 
-Map<String, Object?> _validQuestInput() => <String, Object?>{
+Map<String, Object?> _validQuestInput({
+  List<String> additionalObjectiveTitles = const <String>[],
+}) => <String, Object?>{
   'target': _generation(),
   'quest_id': _questId,
   'module_namespace': 'GoreMods.Quests.Adapter',
@@ -73,6 +75,8 @@ Map<String, Object?> _validQuestInput() => <String, Object?>{
   'title': 'Adapter Quest',
   'description': 'Prepare one structural Quest candidate.',
   'objective_title': 'Finish Adapter Quest',
+  if (additionalObjectiveTitles.isNotEmpty)
+    'additional_objective_titles': additionalObjectiveTitles,
   'collision_catalog': <String, Object?>{
     'generation': _generation(),
     'catalog_layer':
@@ -87,20 +91,27 @@ String _questInputFingerprint(Map<String, Object?> input) {
   return revision3QuestInputFingerprint(input);
 }
 
-AuthoringRevision3QuestDraftIntentV3 _validQuestIntent() =>
-    AuthoringRevision3QuestDraftIntentV3(
-      moduleNamespace: 'GoreMods.Quests.Adapter',
-      technicalId: 'GORE_ADAPTER_QUEST',
-      textHelper: 'GoreAdapterQuestText',
-      parentCatalogId: 'g1r:quest-parent:swampcamp_scchapter2',
-      giverCatalogId: 'g1r:npc:om_grd_asghan_263',
-      title: 'Adapter Quest',
-      description: 'Prepare one structural Quest candidate.',
-      objectiveTitle: 'Finish Adapter Quest',
-    );
+AuthoringRevision3QuestDraftIntentV3 _validQuestIntent({
+  List<String> additionalObjectiveTitles = const <String>[],
+}) => AuthoringRevision3QuestDraftIntentV3(
+  moduleNamespace: 'GoreMods.Quests.Adapter',
+  technicalId: 'GORE_ADAPTER_QUEST',
+  textHelper: 'GoreAdapterQuestText',
+  parentCatalogId: 'g1r:quest-parent:swampcamp_scchapter2',
+  giverCatalogId: 'g1r:npc:om_grd_asghan_263',
+  title: 'Adapter Quest',
+  description: 'Prepare one structural Quest candidate.',
+  objectiveTitle: 'Finish Adapter Quest',
+  additionalObjectiveTitles: additionalObjectiveTitles,
+);
 
-String _validQuestCandidateProjectJson() {
-  final input = _validQuestInput();
+String _validQuestCandidateProjectJson({
+  List<String> additionalObjectiveTitles = const <String>[],
+}) {
+  final input = _validQuestInput(
+    additionalObjectiveTitles: additionalObjectiveTitles,
+  );
+  final generatorVersion = additionalObjectiveTitles.isEmpty ? 2 : 3;
   final source = revision3QuestGeneratedSource(
     technicalId: 'GORE_ADAPTER_QUEST',
     textHelper: 'GoreAdapterQuestText',
@@ -109,6 +120,7 @@ String _validQuestCandidateProjectJson() {
     title: 'Adapter Quest',
     description: 'Prepare one structural Quest candidate.',
     objectiveTitle: 'Finish Adapter Quest',
+    additionalObjectiveTitles: additionalObjectiveTitles,
   );
   return jsonEncode(<String, Object?>{
     'format': 2,
@@ -135,7 +147,7 @@ String _validQuestCandidateProjectJson() {
           'kind': 'quest_draft',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 2,
+            'generator_version': generatorVersion,
             'input': input,
             'script_module': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
@@ -151,7 +163,7 @@ String _validQuestCandidateProjectJson() {
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 2,
+          'generator_version': generatorVersion,
           'owner': <String, Object?>{
             'project_id': '00000000000000000000000000000003',
             'id': _questId,
@@ -163,7 +175,7 @@ String _validQuestCandidateProjectJson() {
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 2,
+            'generator_version': generatorVersion,
             'owner': <String, Object?>{
               'project_id': '00000000000000000000000000000003',
               'id': _questId,
@@ -216,12 +228,16 @@ String _mutatedQuestCandidateProjectJson(
   return jsonEncode(project);
 }
 
-Map<String, Object?> _validQuestPreparedResponse() => <String, Object?>{
+Map<String, Object?> _validQuestPreparedResponse({
+  List<String> additionalObjectiveTitles = const <String>[],
+}) => <String, Object?>{
   'ok': true,
   'outcome': 'prepared_unpublished',
   'basis_head_json': _validHeadJson(),
   'head_json': _validCandidateHeadJson(),
-  'project_json': _validQuestCandidateProjectJson(),
+  'project_json': _validQuestCandidateProjectJson(
+    additionalObjectiveTitles: additionalObjectiveTitles,
+  ),
   'revision': 8,
   'quest_id': _questId,
   'script_module_id': _scriptModuleId,
@@ -245,11 +261,17 @@ void main() {
         'authoring_store_open_revision3_head_bytes',
         'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
         'authoring_store_prepare_revision3_checkpoint',
+        'authoring_store_prepare_revision3_dataasset_edit_v1',
         'authoring_store_prepare_revision3_dataasset_stage_v1',
         'authoring_store_prepare_revision3_npc_draft_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
+        'authoring_store_prepare_revision3_voice_take_v1',
         'authoring_store_read_revision3_content_index_v1',
       ],
+    );
+    expect(
+      requiredStudioCoreCommands,
+      contains('authoring_read_dataasset_extract_receipt_v2'),
     );
   });
 
@@ -542,6 +564,28 @@ void main() {
         'quest_request_json': request.canonicalJson,
         'root': root,
       });
+
+      final malformedCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_prepare_revision3_quest_draft_v3':
+              _validQuestPreparedResponse()..['build_status'] = 'ready',
+        },
+      );
+      await expectLater(
+        ModFfi(malformedCore).authoringStorePrepareRevision3QuestDraftV3(
+          root: root,
+          gameRoot: gameRoot,
+          currentProjectJson: _validRevision3ProjectJson(),
+          questRequestJson: request.canonicalJson,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            ModFfiException.malformedNativeResponseCode,
+          ),
+        ),
+      );
     },
   );
 
@@ -596,6 +640,63 @@ void main() {
       );
     }
   });
+
+  test(
+    'revision-3 Quest DTO persists a bounded ordered multi-objective extension',
+    () {
+      final objectives = <String>['Inspect the gate', 'Report to Asghan'];
+      final request = AuthoringRevision3QuestDraftRequestV3(
+        expectedHead: AuthoringWorkingHead.fromCanonicalJson(_validHeadJson()),
+        expectedProjectId: '00000000000000000000000000000003',
+        expectedRevision: 7,
+        questId: _questId,
+        scriptModuleId: _scriptModuleId,
+        displayName: 'Adapter Quest',
+        intent: _validQuestIntent(additionalObjectiveTitles: objectives),
+      );
+      expect(
+        request.canonicalJson,
+        contains(
+          '"objective_title":"Finish Adapter Quest",'
+          '"additional_objective_titles":["Inspect the gate","Report to Asghan"]',
+        ),
+      );
+      final reopened = AuthoringRevision3QuestDraftRequestV3.fromCanonicalJson(
+        request.canonicalJson,
+      );
+      expect(reopened.intent.additionalObjectiveTitles, objectives);
+
+      final prepared = AuthoringRevision3QuestDraftPreparation.fromJson(
+        _validQuestPreparedResponse(additionalObjectiveTitles: objectives),
+      );
+      expect(prepared.additionalObjectiveTitles, objectives);
+      expect(
+        () => prepared.additionalObjectiveTitles.add('Mutate'),
+        throwsUnsupportedError,
+      );
+
+      final decoded = jsonDecode(request.canonicalJson) as Map<String, Object?>;
+      final invalidLists = <List<Object?>>[
+        <Object?>[],
+        <Object?>['finish adapter quest'],
+        <Object?>[' Inspect the gate'],
+        List<Object?>.filled(8, 'Too many'),
+        <Object?>['Inspect the gate', 7],
+      ];
+      for (final invalid in invalidLists) {
+        final candidate =
+            jsonDecode(jsonEncode(decoded)) as Map<String, Object?>;
+        final intent = candidate['intent'] as Map<String, Object?>;
+        intent['additional_objective_titles'] = invalid;
+        expect(
+          () => AuthoringRevision3QuestDraftRequestV3.fromCanonicalJson(
+            jsonEncode(candidate),
+          ),
+          throwsFormatException,
+        );
+      }
+    },
+  );
 
   test('revision-3 Quest preparation rejects loose claims and broken pairs', () {
     final mutations = <void Function(Map<String, Object?>)>[

@@ -29,7 +29,9 @@ class _Revision3QuestWizardDialogState
   final _formKey = GlobalKey<FormState>();
   final _title = TextEditingController();
   final _description = TextEditingController();
-  final _objective = TextEditingController();
+  final List<TextEditingController> _objectives = <TextEditingController>[
+    TextEditingController(),
+  ];
 
   Revision3QuestCatalog? _catalog;
   String? _parentCatalogId;
@@ -60,7 +62,9 @@ class _Revision3QuestWizardDialogState
     _loadGeneration += 1;
     _title.dispose();
     _description.dispose();
-    _objective.dispose();
+    for (final objective in _objectives) {
+      objective.dispose();
+    }
     super.dispose();
   }
 
@@ -128,7 +132,11 @@ class _Revision3QuestWizardDialogState
       giverCatalogId: giverCatalogId,
       title: _title.text,
       description: _description.text,
-      objectiveTitle: _objective.text,
+      objectiveTitle: _objectives.first.text,
+      additionalObjectiveTitles: _objectives
+          .skip(1)
+          .map((controller) => controller.text)
+          .toList(growable: false),
     );
     setState(() {
       _publishing = true;
@@ -196,6 +204,44 @@ class _Revision3QuestWizardDialogState
         });
       }
     }
+  }
+
+  void _addObjective() {
+    if (_objectives.length >= 8 || _publishing) return;
+    setState(() => _objectives.add(TextEditingController()));
+  }
+
+  void _removeObjective(int index) {
+    if (_objectives.length <= 1 || _publishing) return;
+    final removed = _objectives.removeAt(index);
+    removed.dispose();
+    setState(() {});
+  }
+
+  void _moveObjective(int index, int delta) {
+    final target = index + delta;
+    if (_publishing || target < 0 || target >= _objectives.length) return;
+    setState(() {
+      final controller = _objectives.removeAt(index);
+      _objectives.insert(target, controller);
+    });
+  }
+
+  String? _validateObjective(String? value, int index) {
+    final error = _validateQuestText(
+      value,
+      label: 'Enter objective ${index + 1}',
+      maxBytes: 128,
+    );
+    if (error != null) return error;
+    final normalized = value!.trim().toLowerCase();
+    for (var other = 0; other < _objectives.length; other++) {
+      if (other != index &&
+          _objectives[other].text.trim().toLowerCase() == normalized) {
+        return 'Each objective must be different';
+      }
+    }
+    return null;
   }
 
   @override
@@ -339,23 +385,79 @@ class _Revision3QuestWizardDialogState
             ),
           ),
           const SizedBox(height: 10),
-          TextFormField(
-            key: const Key('revision3-quest-objective'),
-            controller: _objective,
-            enabled: enabled,
-            maxLength: 128,
-            textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(
-              labelText: 'First objective',
-              hintText: 'Ask the guards what happened',
-              helperText:
-                  'The first draft contains one manually triggered objective.',
-              border: OutlineInputBorder(),
+          Text('Objectives', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 4),
+          const Text(
+            'Add up to eight steps. Their order is saved in the project; runtime transitions are not yet qualified.',
+          ),
+          const SizedBox(height: 10),
+          for (var index = 0; index < _objectives.length; index++) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    key: Key(
+                      index == 0
+                          ? 'revision3-quest-objective'
+                          : 'revision3-quest-objective-$index',
+                    ),
+                    controller: _objectives[index],
+                    enabled: enabled,
+                    maxLength: 128,
+                    textInputAction: TextInputAction.next,
+                    decoration: InputDecoration(
+                      labelText: 'Objective ${index + 1}',
+                      hintText: index == 0
+                          ? 'Ask the guards what happened'
+                          : 'Describe the next step',
+                      border: const OutlineInputBorder(),
+                    ),
+                    validator: (value) => _validateObjective(value, index),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Column(
+                  children: [
+                    IconButton(
+                      key: Key('revision3-quest-objective-up-$index'),
+                      tooltip: 'Move objective up',
+                      onPressed: enabled && index > 0
+                          ? () => _moveObjective(index, -1)
+                          : null,
+                      icon: const Icon(Icons.arrow_upward),
+                    ),
+                    IconButton(
+                      key: Key('revision3-quest-objective-down-$index'),
+                      tooltip: 'Move objective down',
+                      onPressed: enabled && index + 1 < _objectives.length
+                          ? () => _moveObjective(index, 1)
+                          : null,
+                      icon: const Icon(Icons.arrow_downward),
+                    ),
+                    IconButton(
+                      key: Key('revision3-quest-objective-remove-$index'),
+                      tooltip: 'Remove objective',
+                      onPressed: enabled && _objectives.length > 1
+                          ? () => _removeObjective(index)
+                          : null,
+                      icon: const Icon(Icons.remove_circle_outline),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            validator: (value) => _validateQuestText(
-              value,
-              label: 'Enter the first objective',
-              maxBytes: 128,
+            const SizedBox(height: 6),
+          ],
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const Key('revision3-quest-objective-add'),
+              onPressed: enabled && _objectives.length < 8
+                  ? _addObjective
+                  : null,
+              icon: const Icon(Icons.add),
+              label: const Text('Add objective'),
             ),
           ),
           const SizedBox(height: 18),
@@ -455,7 +557,7 @@ class _DraftBoundaryBanner extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'This saves a Quest shell and one objective into the managed project. It does not compile, deploy, write game files, change a save, or prove that the Quest works at runtime.',
+              'This saves a Quest shell and its ordered objectives into the managed project. It does not compile, deploy, write game files, change a save, or prove that the Quest works at runtime.',
               style: TextStyle(color: scheme.onSecondaryContainer),
             ),
           ],

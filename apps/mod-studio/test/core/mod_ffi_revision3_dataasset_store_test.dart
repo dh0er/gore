@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 
+import '../dataasset/dataasset_test_fixtures.dart';
 import '../support/revision3_dataasset_fixture.dart';
 
 String _basisProjectJson() => jsonEncode(<String, Object?>{
@@ -29,6 +30,8 @@ String _basisProjectJson() => jsonEncode(<String, Object?>{
 
 Revision3DataAssetFixture _fixture({
   String targetPath = revision3DataAssetTargetPath,
+  Map<String, Object?>? selector,
+  String replacementHex = '02000000',
   void Function(Map<String, Object?> manifest)? mutateManifest,
 }) {
   final project = _basisProjectJson();
@@ -36,8 +39,27 @@ Revision3DataAssetFixture _fixture({
     basisHead: revision3DataAssetHeadForProject(project),
     basisProjectJson: project,
     targetPath: targetPath,
+    selector: selector,
+    replacementHex: replacementHex,
     mutateManifest: mutateManifest,
   );
+}
+
+DataAssetSemanticEditIntent _semanticIntent() {
+  final response = validDataAssetInspectionResponse();
+  final binding = (response['binding']! as Map).cast<String, Object?>();
+  binding['usmap_sha256'] = '3' * 64;
+  dataAssetSelector(response)['usmap_sha256'] = '3' * 64;
+  final inspection = DataAssetInspection.fromJson(response);
+  return DataAssetSemanticValueEditor.fromLeaf(
+        inspection.exports.single.leaves.single,
+      )
+      .previewScalar(
+        extractReceiptPath: r'C:\Receipts\extract-receipt.v2.json',
+        expectedTargetPath: revision3DataAssetTargetPath,
+        value: '2',
+      )
+      .intent;
 }
 
 Map<String, Object?> _generation(Map<String, Object?> manifest) =>
@@ -466,6 +488,111 @@ void main() {
           throwsFormatException,
         );
       }
+    },
+  );
+
+  test(
+    'semantic wrapper verifies receipt summary and exact intent binding without raw wire exposure',
+    () async {
+      final intent = _semanticIntent();
+      final fixture = _fixture(
+        selector: intent.selector.toJson(),
+        replacementHex: '02000000',
+      );
+      final preparedResponse = fixture.prepareResponse()
+        ..['intent_binding_sha256'] = intent.intentBindingSha256;
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_read_dataasset_extract_receipt_v2':
+              validDataAssetExtractReceiptSummaryResponse(
+                targetPath: revision3DataAssetTargetPath,
+              ),
+          'authoring_store_prepare_revision3_dataasset_edit_v1':
+              preparedResponse,
+        },
+      );
+      final ffi = ModFfi(core);
+
+      final receipt = await ffi.authoringReadDataAssetExtractReceiptV2(
+        extractReceiptPath: intent.extractReceiptPath,
+      );
+      final prepared = await ffi.authoringStorePrepareRevision3DataAssetEditV1(
+        root: r'C:\Mods\Semantic.goreproj',
+        expectedHead: fixture.basisHead,
+        intent: intent,
+      );
+
+      expect(receipt.targetPath, revision3DataAssetTargetPath);
+      expect(prepared.stage.targetPath, revision3DataAssetTargetPath);
+      expect(prepared.stage.selectorKind, 'int32');
+      expect(core.calls[0].payload, <String, Object?>{
+        'extract_receipt_path': intent.extractReceiptPath,
+      });
+      expect(core.calls[1].payload, <String, Object?>{
+        'expected_head_json': fixture.basisHead.canonicalJson,
+        'extract_receipt_path': intent.extractReceiptPath,
+        'expected_target_path': revision3DataAssetTargetPath,
+        'selector': intent.selector.toJson(),
+        'replacement': <String, Object?>{'kind': 'int32', 'decimal': '2'},
+        'root': r'C:\Mods\Semantic.goreproj',
+      });
+      final publicProjection = jsonEncode(<String, Object?>{
+        'target': prepared.stage.targetPath,
+        'kind': prepared.stage.selectorKind,
+        'width': prepared.stage.replacementByteLength,
+      });
+      expect(publicProjection, isNot(contains('replacement_hex')));
+      expect(publicProjection, isNot(contains('absolute_offset')));
+    },
+  );
+
+  test(
+    'semantic preparation rejects same-shape selector drift and response digest drift',
+    () async {
+      final intent = _semanticIntent();
+      final drifted = _fixture(
+        selector: <String, Object?>{
+          ...intent.selector.toJson(),
+          'object_name': 'DifferentSameShape',
+        },
+        replacementHex: '02000000',
+      );
+      final driftedResponse = drifted.prepareResponse()
+        ..['intent_binding_sha256'] = intent.intentBindingSha256;
+      final selectorCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_prepare_revision3_dataasset_edit_v1':
+              driftedResponse,
+        },
+      );
+      await expectLater(
+        ModFfi(selectorCore).authoringStorePrepareRevision3DataAssetEditV1(
+          root: r'C:\Mods\Semantic.goreproj',
+          expectedHead: drifted.basisHead,
+          intent: intent,
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+
+      final exact = _fixture(
+        selector: intent.selector.toJson(),
+        replacementHex: '02000000',
+      );
+      final digestResponse = exact.prepareResponse()
+        ..['intent_binding_sha256'] = 'f' * 64;
+      final digestCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_prepare_revision3_dataasset_edit_v1': digestResponse,
+        },
+      );
+      await expectLater(
+        ModFfi(digestCore).authoringStorePrepareRevision3DataAssetEditV1(
+          root: r'C:\Mods\Semantic.goreproj',
+          expectedHead: exact.basisHead,
+          intent: intent,
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
     },
   );
 

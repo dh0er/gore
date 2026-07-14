@@ -68,6 +68,7 @@ final class AuthoringRevision3DataAssetStage {
     required this.selectorKind,
     required this.selectorPathDepth,
     required this.replacementByteLength,
+    required this._intentBindingSha256,
     required this.patchedUasset,
     required this.patchedUexp,
     required this.usmap,
@@ -90,6 +91,7 @@ final class AuthoringRevision3DataAssetStage {
   final String selectorKind;
   final int selectorPathDepth;
   final int replacementByteLength;
+  final String _intentBindingSha256;
   final AuthoringRevision3DataAssetContentSeal patchedUasset;
   final AuthoringRevision3DataAssetContentSeal patchedUexp;
   final AuthoringRevision3DataAssetContentSeal usmap;
@@ -139,6 +141,7 @@ final class AuthoringRevision3DataAssetStage {
       selectorKind: parsed.selectorKind,
       selectorPathDepth: parsed.selectorPathDepth,
       replacementByteLength: parsed.replacementByteLength,
+      intentBindingSha256: parsed.intentBindingSha256,
       patchedUasset: parsed.patchedUasset,
       patchedUexp: parsed.patchedUexp,
       usmap: parsed.usmap,
@@ -187,8 +190,9 @@ final class AuthoringRevision3DataAssetStagePreparation {
   factory AuthoringRevision3DataAssetStagePreparation.fromJson(
     Map<String, Object?> json, {
     required AuthoringWorkingHead expectedHead,
+    String? expectedIntentBindingSha256,
   }) {
-    _dataAssetResponsePreflight(json, const <String>{
+    _dataAssetResponsePreflight(json, <String>{
       'ok',
       'outcome',
       'basis_head_json',
@@ -201,6 +205,7 @@ final class AuthoringRevision3DataAssetStagePreparation {
       'runtime_status',
       'artifact_authority',
       'publication_status',
+      if (expectedIntentBindingSha256 != null) 'intent_binding_sha256',
     }, 'revision-3 DataAsset preparation response');
     if (json['ok'] != true || json['outcome'] != 'prepared_unpublished') {
       throw const FormatException(
@@ -227,6 +232,21 @@ final class AuthoringRevision3DataAssetStagePreparation {
       json['stage'],
       'revision-3 DataAsset prepared stage',
     );
+    if (expectedIntentBindingSha256 != null) {
+      final actualBinding = _dataAssetString(
+        json,
+        'intent_binding_sha256',
+        'revision-3 DataAsset preparation response',
+        maxBytes: 64,
+      );
+      if (!_authoringSha256Pattern.hasMatch(actualBinding) ||
+          actualBinding != expectedIntentBindingSha256 ||
+          stage._intentBindingSha256 != expectedIntentBindingSha256) {
+        throw const FormatException(
+          'authoring revision-3 DataAsset response changed the exact typed edit binding',
+        );
+      }
+    }
     if (stage.projectId != candidate.projectId ||
         !stage.projectTargetExecutable._same(candidate.targetExecutable) ||
         stage.basisHead.canonicalJson != basisHead.canonicalJson ||
@@ -492,6 +512,7 @@ typedef _DataAssetManifestProjection = ({
   String selectorKind,
   int selectorPathDepth,
   int replacementByteLength,
+  String intentBindingSha256,
   AuthoringRevision3DataAssetContentSeal patchedUasset,
   AuthoringRevision3DataAssetContentSeal patchedUexp,
   AuthoringRevision3DataAssetContentSeal usmap,
@@ -944,6 +965,11 @@ _DataAssetManifestProjection _dataAssetManifest(
     selectorKind: selector.kind,
     selectorPathDepth: selector.pathDepth,
     replacementByteLength: selector.width,
+    intentBindingSha256: _dataAssetIntentBindingSha256(
+      targetPath,
+      selector.storageJson,
+      replacementHex,
+    ),
     patchedUasset: patchedUasset,
     patchedUexp: patchedUexp,
     usmap: usmap,
@@ -956,6 +982,39 @@ _DataAssetManifestProjection _dataAssetManifest(
     publicationStatus: statuses.publication,
     storageJson: storageJson,
   );
+}
+
+String _dataAssetIntentBindingSha256(
+  String targetPath,
+  Map<String, Object?> selector,
+  String replacementHex,
+) {
+  final bytes = BytesBuilder(copy: false)
+    ..add(
+      utf8.encode('gore.authoring.r3-dataasset-edit.intent-binding.v1\u0000'),
+    );
+  for (final value in <List<int>>[
+    utf8.encode(targetPath),
+    utf8.encode(jsonEncode(selector)),
+    _dataAssetDecodeCanonicalHex(replacementHex),
+  ]) {
+    final length = ByteData(8)..setUint64(0, value.length, Endian.little);
+    bytes
+      ..add(length.buffer.asUint8List())
+      ..add(value);
+  }
+  return crypto.sha256.convert(bytes.takeBytes()).toString();
+}
+
+Uint8List _dataAssetDecodeCanonicalHex(String value) {
+  final result = Uint8List(value.length ~/ 2);
+  for (var index = 0; index < result.length; index++) {
+    result[index] = int.parse(
+      value.substring(index * 2, index * 2 + 2),
+      radix: 16,
+    );
+  }
+  return result;
 }
 
 typedef _DataAssetGeneration = ({

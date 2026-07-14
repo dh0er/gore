@@ -239,6 +239,53 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
   });
+
+  testWidgets('authors, reorders, and persists multiple friendly objectives', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    Revision3QuestDraftAuthoringInput? published;
+    await _openWizard(
+      tester,
+      loadCatalog: (_) async => _catalog(),
+      publish: ({required gameRoot, required input}) async {
+        published = input;
+        return _publication();
+      },
+    );
+    await tester.pumpAndSettle();
+    await _fillForm(tester);
+
+    final add = find.byKey(const Key('revision3-quest-objective-add'));
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pump();
+    await tester.ensureVisible(add);
+    await tester.tap(add);
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('revision3-quest-objective-1')),
+      'Inspect the old gate',
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-quest-objective-2')),
+      'Report the secured gate',
+    );
+    final moveThirdUp = find.byKey(const Key('revision3-quest-objective-up-2'));
+    await tester.ensureVisible(moveThirdUp);
+    await tester.tap(moveThirdUp);
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+    await tester.pumpAndSettle();
+
+    expect(published?.objectiveTitles, <String>[
+      'Ask Asghan about Homer',
+      'Report the secured gate',
+      'Inspect the old gate',
+    ]);
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+  });
 }
 
 Future<void> _setSurface(WidgetTester tester) async {

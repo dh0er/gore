@@ -95,3 +95,21 @@ Map<String, Object?> dataAssetLeaf(Map<String, Object?> response) =>
 
 Map<String, Object?> dataAssetSelector(Map<String, Object?> response) =>
     (dataAssetLeaf(response)['selector'] as Map).cast<String, Object?>();
+
+Map<String, Object?> validDataAssetExtractReceiptSummaryResponse({
+  String targetPath = '/Game/Data/DA_Test',
+}) => <String, Object?>{
+  'ok': true,
+  'format': 'gore.dataasset.extract-receipt-summary.v1',
+  'target_path': targetPath,
+  'package_seal': <String, Object?>{
+    'uasset_sha256': 'a' * 64,
+    'uexp_sha256': 'b' * 64,
+  },
+  'usmap_sha256': 'c' * 64,
+  'input': <String, Object?>{
+    'uasset_length': 128,
+    'uexp_length': 64,
+    'usmap_length': 256,
+  },
+};

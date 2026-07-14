@@ -12,14 +12,18 @@ enum _ContentMode { entities, assets }
 /// reference shape, but does not grant build, publication, deployment, or runtime authority.
 class Revision3ContentLibrary extends StatefulWidget {
   const Revision3ContentLibrary({
+    required this.projectRoot,
     required this.projectId,
     required this.projectRevision,
+    required this.projectHeadCanonicalJson,
     required this.load,
     super.key,
   });
 
+  final String projectRoot;
   final String projectId;
   final int projectRevision;
+  final String projectHeadCanonicalJson;
   final Revision3ContentIndexLoader load;
 
   @override
@@ -48,8 +52,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   @override
   void didUpdateWidget(covariant Revision3ContentLibrary oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectId != widget.projectId ||
-        oldWidget.projectRevision != widget.projectRevision) {
+    if (oldWidget.projectRoot != widget.projectRoot ||
+        oldWidget.projectId != widget.projectId ||
+        oldWidget.projectRevision != widget.projectRevision ||
+        oldWidget.projectHeadCanonicalJson != widget.projectHeadCanonicalJson) {
       _search.clear();
       _mode = _ContentMode.entities;
       _kind = null;

@@ -66,6 +66,19 @@ void main() {
 
     await tester.tap(find.byTooltip('Clear search'));
     await tester.pump();
+    await tester.enterText(
+      find.byKey(const Key('revision3-content-search')),
+      'Report the secured gate',
+    );
+    await tester.pump();
+    expect(
+      find.byKey(Key('revision3-content-entity-$_questId')),
+      findsOneWidget,
+    );
+    expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsNothing);
+
+    await tester.tap(find.byTooltip('Clear search'));
+    await tester.pump();
     await tester.tap(
       find.byKey(const Key('revision3-content-filter-quest_draft')),
     );
@@ -303,6 +316,8 @@ void main() {
     await _setSurfaceSize(tester, const Size(1000, 700));
     var calls = 0;
     var revision = 7;
+    var root = 'managed-root-a';
+    var head = 'canonical-head-a';
     late StateSetter rebuild;
 
     await tester.pumpWidget(
@@ -312,8 +327,10 @@ void main() {
             rebuild = setState;
             return Scaffold(
               body: Revision3ContentLibrary(
+                projectRoot: root,
                 projectId: _projectId,
                 projectRevision: revision,
+                projectHeadCanonicalJson: head,
                 load: () async {
                   calls += 1;
                   return _fixture(revision: revision);
@@ -331,9 +348,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(calls, 1);
 
+    rebuild(() => head = 'canonical-head-b');
+    await tester.pumpAndSettle();
+    expect(calls, 2, reason: 'same ID/revision but a new exact head reloads');
+
+    rebuild(() => root = 'managed-root-b');
+    await tester.pumpAndSettle();
+    expect(
+      calls,
+      3,
+      reason: 'same ID/revision/head under another root reloads',
+    );
+
     rebuild(() => revision = 8);
     await tester.pumpAndSettle();
-    expect(calls, 2);
+    expect(calls, 4);
     expect(find.text('3 entities / 2 assets / revision 8'), findsOneWidget);
   });
 }
@@ -356,8 +385,10 @@ Future<void> _pumpLibrary(
   MaterialApp(
     home: Scaffold(
       body: Revision3ContentLibrary(
+        projectRoot: 'managed-root',
         projectId: _projectId,
         projectRevision: projectRevision,
+        projectHeadCanonicalJson: 'canonical-head-$projectRevision',
         load: load,
       ),
     ),
@@ -421,6 +452,10 @@ Revision3ContentIndex _fixture({
           'technical_id': 'GORE_FIND_HOMER',
           'title': 'Find Homer',
           'objective_title': 'Ask Asghan about Homer',
+          'additional_objective_titles': <String>[
+            'Inspect the old gate',
+            'Report the secured gate',
+          ],
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'parent_runtime_class': 'B_Quest_FindHomer_C',
           'giver_runtime_unique_name': 'ASGHAN',

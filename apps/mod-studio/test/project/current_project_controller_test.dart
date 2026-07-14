@@ -11,8 +11,11 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_voice_content_fixture.dart';
+import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
   test(
@@ -601,8 +604,10 @@ void main() {
       await coordinator.openManagedRevision3(managed.root);
 
       final published = await coordinator.createCurrentRevision3QuestDraft(
+        expectedRoot: managed.root.path,
         expectedProjectId: projectId,
         expectedProjectRevision: 15,
+        expectedHead: _head(15),
         gameRoot: r'C:\Games\Gothic Remake',
         input: _questInput(),
       );
@@ -617,7 +622,7 @@ void main() {
   );
 
   test(
-    'Quest publication rejects a stale wizard before touching the lease',
+    'Quest publication rejects same-id/revision different-head wizard before touching the lease',
     () async {
       final managed = _FakeManagedLease(
         root: Directory('managed-stale-quest'),
@@ -636,8 +641,10 @@ void main() {
 
       await expectLater(
         coordinator.createCurrentRevision3QuestDraft(
+          expectedRoot: managed.root.path,
           expectedProjectId: managed.projectId,
-          expectedProjectRevision: 15,
+          expectedProjectRevision: 16,
+          expectedHead: _head(15),
           gameRoot: r'C:\Games\Gothic Remake',
           input: _questInput(),
         ),
@@ -676,8 +683,10 @@ void main() {
 
       Future<void> publish() async {
         await coordinator.createCurrentRevision3QuestDraft(
+          expectedRoot: managed.root.path,
           expectedProjectId: managed.projectId,
           expectedProjectRevision: 17,
+          expectedHead: _head(17),
           gameRoot: r'C:\Games\Gothic Remake',
           input: _questInput(),
         );
@@ -884,6 +893,130 @@ void main() {
   );
 
   test(
+    'Voice publication is exact-checkpoint bound and refreshes R3 state',
+    () async {
+      final plan = _voicePlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoicePublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          expect(received, same(plan));
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTakePublication(
+            projectId: revision3VoiceContentProjectId,
+            projectRevision: 8,
+            lineId: received.lineId,
+            slotId: received.slotId,
+            takeId: received.takeId,
+            slotCreated: received.expectsSlotCreated,
+            selected: received.selectTake,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.addCurrentRevision3VoiceTake(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(6),
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakeStaleCheckpointException>()),
+      );
+      expect(managed.voicePublishCalls, 0);
+
+      await expectLater(
+        coordinator.addCurrentRevision3VoiceTake(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          gameRoot: '',
+          plan: plan,
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.voicePublishCalls, 0);
+
+      final publication = await coordinator.addCurrentRevision3VoiceTake(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        gameRoot: r'C:\Games\Gothic Remake',
+        plan: plan,
+      );
+      expect(publication.takeId, plan.takeId);
+      expect(managed.voicePublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test('poisoned Voice failure locks retries behind requires-reopen', () async {
+    final plan = _voicePlan();
+    final managed = _FakeManagedLease(
+      root: Directory('managed-poisoned-voice'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      onVoicePublish: (lease, _, _) {
+        lease.requiresReopenValue = true;
+        throw StateError('injected Voice publication verification failure');
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    Future<void> publish() async {
+      await coordinator.addCurrentRevision3VoiceTake(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        gameRoot: r'C:\Games\Gothic Remake',
+        plan: plan,
+      );
+    }
+
+    await expectLater(
+      publish(),
+      throwsA(isA<Revision3VoiceTakeRequiresReopenException>()),
+    );
+    expect(managed.voicePublishCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isTrue,
+    );
+    await expectLater(
+      publish(),
+      throwsA(isA<Revision3VoiceTakeRequiresReopenException>()),
+    );
+    expect(managed.voicePublishCalls, 1);
+  });
+
+  test(
     'DataAsset list is exact-checkpoint bound before lease access',
     () async {
       final stage = _dataAssetStage();
@@ -1015,6 +1148,70 @@ void main() {
             .projectRevision,
         6,
       );
+    },
+  );
+
+  test(
+    'typed DataAsset value edit is exact-checkpoint bound and refreshes state',
+    () async {
+      final stage = _dataAssetStage();
+      final intent = _dataAssetSemanticIntent();
+      late _FakeManagedLease managed;
+      managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-semantic'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: _head(4),
+        onDataAssetSemanticPublish: (lease, received) {
+          expect(received, same(intent));
+          expect(
+            received.toNativeFields()['extract_receipt_path'],
+            r'C:\proof\extract-receipt.v2.json',
+          );
+          lease.projectRevision = 5;
+          lease.head = _head(5);
+          return Revision3DataAssetStagePublication(
+            projectId: stage.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 0,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final published = await coordinator.addCurrentRevision3DataAssetEdit(
+        expectedRoot: managed.root.path,
+        expectedProjectId: stage.projectId,
+        expectedProjectRevision: 4,
+        expectedHead: _head(4),
+        intent: intent,
+      );
+
+      expect(published.stage, same(stage));
+      expect(managed.dataAssetSemanticPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 5);
+      expect(state.head.canonicalJson, _head(5).canonicalJson);
+
+      await expectLater(
+        coordinator.addCurrentRevision3DataAssetEdit(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 4,
+          expectedHead: _head(4),
+          intent: intent,
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      expect(managed.dataAssetSemanticPublishCalls, 1);
     },
   );
 
@@ -1212,10 +1409,21 @@ typedef _NpcPublishHook =
       String gameRoot,
       Revision3NpcDraftAuthoringInput input,
     );
+typedef _VoicePublishHook =
+    FutureOr<Revision3VoiceTakePublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      Revision3VoiceTakeTechnicalPlan plan,
+    );
 typedef _DataAssetPublishHook =
     FutureOr<Revision3DataAssetStagePublication> Function(
       _FakeManagedLease lease,
       String patchReceiptPath,
+    );
+typedef _DataAssetSemanticPublishHook =
+    FutureOr<Revision3DataAssetStagePublication> Function(
+      _FakeManagedLease lease,
+      DataAssetSemanticEditIntent intent,
     );
 typedef _DataAssetRemoveHook =
     FutureOr<Revision3DataAssetStageRemovalPublication> Function(
@@ -1233,7 +1441,9 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onVerify,
     this.onNpcPublish,
     this.onQuestPublish,
+    this.onVoicePublish,
     this.onDataAssetPublish,
+    this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
     this.dataAssetStages = const [],
     this.contentIndex,
@@ -1251,7 +1461,9 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _VerifyHook? onVerify;
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
+  final _VoicePublishHook? onVoicePublish;
   final _DataAssetPublishHook? onDataAssetPublish;
+  final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
   final List<AuthoringRevision3DataAssetStage> dataAssetStages;
   final Revision3ContentIndex? contentIndex;
@@ -1262,8 +1474,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int contentReadCalls = 0;
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int voicePublishCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
+  int dataAssetSemanticPublishCalls = 0;
   int dataAssetRemoveCalls = 0;
   int closeCalls = 0;
 
@@ -1318,6 +1532,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
+    required String gameRoot,
+    required Revision3VoiceTakeTechnicalPlan plan,
+  }) async {
+    voicePublishCalls++;
+    final publish = onVoicePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice publisher');
+    }
+    return publish(this, gameRoot, plan);
+  }
+
+  @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
     dataAssetListCalls++;
     return dataAssetStages;
@@ -1333,6 +1560,20 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no DataAsset publisher');
     }
     return publish(this, patchReceiptPath);
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetEditV1({
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    dataAssetSemanticPublishCalls++;
+    final publish = onDataAssetSemanticPublish;
+    if (publish == null) {
+      throw StateError(
+        'fake managed lease has no semantic DataAsset publisher',
+      );
+    }
+    return publish(this, intent);
   }
 
   @override
@@ -1354,6 +1595,22 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('injected close failure');
     }
   }
+}
+
+Revision3VoiceTakeTechnicalPlan _voicePlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(),
+  );
+  return Revision3VoiceTakeTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    input: Revision3VoiceTakeAuthoringInput(
+      lineId: revision3VoiceContentLineId,
+      locale: 'de',
+      sourcePath: r'C:\Voice\asghan.ogg',
+      takeDisplayName: 'Asghan take',
+      status: AuthoringRevision3VoiceTakeStatus.recorded,
+    ),
+  );
 }
 
 AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
@@ -1394,6 +1651,21 @@ AuthoringRevision3DataAssetStage _dataAssetStage() {
     fixture.listResponse(),
     expectedHead: fixture.stagedHead,
   ).stages.single;
+}
+
+DataAssetSemanticEditIntent _dataAssetSemanticIntent() {
+  final inspection = DataAssetInspection.fromJson(
+    validDataAssetInspectionResponse(),
+  );
+  return DataAssetSemanticValueEditor.fromLeaf(
+        inspection.exports.single.leaves.single,
+      )
+      .previewScalar(
+        extractReceiptPath: r'C:\proof\extract-receipt.v2.json',
+        expectedTargetPath: '/Game/TestAsset',
+        value: '2',
+      )
+      .intent;
 }
 
 Revision3QuestDraftAuthoringInput _questInput() =>

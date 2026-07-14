@@ -146,6 +146,45 @@ final class ManagedRevision3NpcDraftCheckpoint {
   final String parentCatalogId;
 }
 
+/// One imported VoiceTake returned only after its native candidate was fully reopened,
+/// fixed-head CAS published, and fully reopened again. The slot remains target-unresolved and
+/// this value grants no archive-member, build, runtime, deployment, or native-publication claim.
+final class ManagedRevision3VoiceTakeCheckpoint {
+  const ManagedRevision3VoiceTakeCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.localizationId,
+    required this.slotId,
+    required this.takeId,
+    required this.locale,
+    required this.takeStatus,
+    required this.slotCreated,
+    required this.selected,
+    required this.asset,
+    required this.ogg,
+    required this.assetDeduplicated,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String localizationId;
+  final String slotId;
+  final String takeId;
+  final String locale;
+  final AuthoringRevision3VoiceTakeStatus takeStatus;
+  final bool slotCreated;
+  final bool selected;
+  final AuthoringRevision3VoiceAsset asset;
+  final AuthoringRevision3VoiceOggMetadata ogg;
+  final bool assetDeduplicated;
+}
+
 /// One DataAsset stage returned only after its candidate was fully reopened, fixed-head CAS
 /// published, and fully reopened again. It carries no build, runtime, pack, deploy, or native
 /// publication claim.
@@ -290,6 +329,14 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3NpcDraftRequestV1 request,
   });
 
+  Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
+    required String root,
+    required String gameRoot,
+    required String source,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRequestV1 request,
+  });
+
   Future<AuthoringRevision3ContentIndexResult> readContentIndex({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -299,6 +346,12 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String root,
     required AuthoringWorkingHead expectedHead,
     required String patchReceiptPath,
+  });
+
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetEditV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
   });
 
   Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
@@ -375,6 +428,21 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
+    required String root,
+    required String gameRoot,
+    required String source,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3VoiceTakeV1(
+    root: root,
+    gameRoot: gameRoot,
+    source: source,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
   Future<AuthoringRevision3ContentIndexResult> readContentIndex({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -392,6 +460,17 @@ final class ModFfiManagedRevision3AuthoringStore
     root: root,
     expectedHead: expectedHead,
     patchReceiptPath: patchReceiptPath,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetEditV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
+  }) => ffi.authoringStorePrepareRevision3DataAssetEditV1(
+    root: root,
+    expectedHead: expectedHead,
+    intent: intent,
   );
 
   @override
@@ -742,7 +821,11 @@ class ManagedRevision3AuthoringProjectSession {
               prepared.textHelper != request.intent.textHelper ||
               prepared.title != request.intent.title ||
               prepared.description != request.intent.description ||
-              prepared.objectiveTitle != request.intent.objectiveTitle) {
+              prepared.objectiveTitle != request.intent.objectiveTitle ||
+              !_sameOrderedStrings(
+                prepared.additionalObjectiveTitles,
+                request.intent.additionalObjectiveTitles,
+              )) {
             throw const ManagedProjectVerificationException(
               'revision-3 Quest preparation disagrees with its exact session basis or request',
             );
@@ -836,14 +919,136 @@ class ManagedRevision3AuthoringProjectSession {
         },
       );
 
+  /// Import and publish one revision-3 Ogg-backed VoiceTake for an existing line/locale.
+  ///
+  /// All request bindings are derived only after entering the serialized session lane. Native
+  /// preparation may install immutable CAS objects but cannot replace the fixed head. The
+  /// candidate is fully reopened before guarded publication and the published generation is
+  /// fully reopened again before this method returns.
+  Future<ManagedRevision3VoiceTakeCheckpoint> prepareAndPublishVoiceTakeV1({
+    required String gameRoot,
+    required String source,
+    required String lineId,
+    required String slotId,
+    required String takeId,
+    required String locale,
+    String? text,
+    required String takeDisplayName,
+    required String logicalName,
+    required AuthoringRevision3VoiceTakeStatus status,
+    bool selectTake = false,
+  }) => _core
+      ._publishPreparedRevision3Checkpoint<ManagedRevision3VoiceTakeCheckpoint>(
+        operation: 'prepareAndPublishVoiceTakeV1',
+        handlePrepareError: _core._throwRevision3VoicePrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice transaction has no exact project identity',
+            );
+          }
+          final request = AuthoringRevision3VoiceTakeRequestV1.forProject(
+            expectedHead: basis.head,
+            currentProjectJson: basis.projectJson,
+            lineId: lineId,
+            slotId: slotId,
+            takeId: takeId,
+            locale: locale,
+            text: text,
+            takeDisplayName: takeDisplayName,
+            logicalName: logicalName,
+            status: status,
+            selectTake: selectTake,
+          );
+          final prepared = await _store.prepareVoiceTakeV1(
+            root: root.path,
+            gameRoot: gameRoot,
+            source: source,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.lineId != request.lineId ||
+              prepared.slotId != request.slotId ||
+              prepared.takeId != request.takeId ||
+              prepared.locale != request.locale ||
+              prepared.takeStatus != request.status ||
+              prepared.selected != request.selectTake ||
+              prepared.asset.logicalName != request.logicalName) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3VoiceTakeCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3VoiceTakeCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              lineId: prepared.lineId,
+              localizationId: prepared.localizationId,
+              slotId: prepared.slotId,
+              takeId: prepared.takeId,
+              locale: prepared.locale,
+              takeStatus: prepared.takeStatus,
+              slotCreated: prepared.slotCreated,
+              selected: prepared.selected,
+              asset: prepared.asset,
+              ogg: prepared.ogg,
+              assetDeduplicated: prepared.assetDeduplicated,
+            ),
+          );
+        },
+      );
+
   /// Verify a PatchReceipt-v2 input and publish its closed fixed-leaf DataAsset stage through the
   /// session's existing full-reopen, crash-repair and exact byte-CAS lane.
   Future<ManagedRevision3DataAssetStageCheckpoint>
   prepareAndPublishDataAssetStageV1({required String patchReceiptPath}) =>
+      _prepareAndPublishDataAssetStage(
+        operation: 'prepareAndPublishDataAssetStageV1',
+        prepare: (basis) => _store.prepareDataAssetStageV1(
+          root: root.path,
+          expectedHead: basis.head,
+          patchReceiptPath: patchReceiptPath,
+        ),
+      );
+
+  /// Encode and verify one typed fixed-leaf value against its exact
+  /// ExtractReceipt-v2, then publish the closed stage through the same guarded
+  /// full-reopen and fixed-head byte-CAS lane as receipt imports.
+  Future<ManagedRevision3DataAssetStageCheckpoint>
+  prepareAndPublishDataAssetEditV1({
+    required DataAssetSemanticEditIntent intent,
+  }) => _prepareAndPublishDataAssetStage(
+    operation: 'prepareAndPublishDataAssetEditV1',
+    prepare: (basis) => _store.prepareDataAssetEditV1(
+      root: root.path,
+      expectedHead: basis.head,
+      intent: intent,
+    ),
+  );
+
+  Future<ManagedRevision3DataAssetStageCheckpoint>
+  _prepareAndPublishDataAssetStage({
+    required String operation,
+    required Future<AuthoringRevision3DataAssetStagePreparation> Function(
+      _ManagedOpenedCheckpoint basis,
+    )
+    prepare,
+  }) =>
       _core._publishPreparedRevision3Checkpoint<
         ManagedRevision3DataAssetStageCheckpoint
       >(
-        operation: 'prepareAndPublishDataAssetStageV1',
+        operation: operation,
         handlePrepareError: _core._throwRevision3DataAssetError,
         prepare: (basis) async {
           final projectId = basis.projectId;
@@ -853,11 +1058,7 @@ class ManagedRevision3AuthoringProjectSession {
               'revision-3 DataAsset transaction has no exact project identity',
             );
           }
-          final prepared = await _store.prepareDataAssetStageV1(
-            root: root.path,
-            expectedHead: basis.head,
-            patchReceiptPath: patchReceiptPath,
-          );
+          final prepared = await prepare(basis);
           final stage = prepared.stage;
           if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
               prepared.projectId != projectId ||
@@ -1005,6 +1206,14 @@ class ManagedRevision3AuthoringProjectSession {
   Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
 
   Future<void> close() => _core.close();
+}
+
+bool _sameOrderedStrings(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
 }
 
 class _ManagedProjectSessionCore {
@@ -1367,19 +1576,32 @@ class _ManagedProjectSessionCore {
           stackTrace,
         );
       }
-      if (_revision3QuestPrepareErrorRequiresReopen(error.code)) {
-        _requiresReopen = true;
-        Error.throwWithStackTrace(
-          ManagedProjectVerificationException(error.message),
-          stackTrace,
-        );
+      if (_revision3QuestPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
       }
+      // Every integrity code, malformed native response, and future unknown
+      // code fails closed until it is deliberately classified.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      // Local request construction fails before native work begins. Production
+      // native response-shape failures use MALFORMED_NATIVE_RESPONSE instead.
       Error.throwWithStackTrace(error, stackTrace);
     }
-    // Preserve the Quest lane's established behavior for local request construction and the
-    // session's own explicit verification exceptions. The exact disk head was checked again by
-    // the caller before reaching this handler.
-    Error.throwWithStackTrace(error, stackTrace);
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
   }
 
   Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
@@ -1422,6 +1644,44 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoicePrepareError(Object error, StackTrace stackTrace) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoicePrepareErrorIsRetryable(error.code)) {
+        // Input, semantic, capacity, and source-stability failures are safe to retry after the
+        // caller's exact fixed-head recheck. Native preparation can leave only immutable CAS
+        // orphans and never publishes the fixed head.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      // Fail closed for every Store/integrity code and every future unknown native code.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      // These are local request-construction/preflight failures before native work begins.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DataAssetError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT') {
@@ -1431,17 +1691,20 @@ class _ManagedProjectSessionCore {
           stackTrace,
         );
       }
-      if (_revision3DataAssetErrorRequiresReopen(error.code)) {
-        _requiresReopen = true;
-        Error.throwWithStackTrace(
-          ManagedProjectVerificationException(error.message),
-          stackTrace,
-        );
+      if (_revision3DataAssetErrorIsRetryable(error.code)) {
+        // Bounded input, semantic, capacity, live-generation, and target
+        // conflicts occur before fixed-head publication. After the exact disk
+        // head recheck above, the caller may correct the input and retry.
+        Error.throwWithStackTrace(error, stackTrace);
       }
-      // Resource/input/capacity/semantic failures, including RESPONSE_LIMIT, are retryable after
-      // the exact fixed head has been rechecked above. Native preparation may leave only safe
-      // immutable CAS orphans.
-      Error.throwWithStackTrace(error, stackTrace);
+      // Fail closed for every Store/integrity code and every future unknown
+      // native code. New failures must be deliberately classified before a
+      // poisoned session may retry them.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
     }
     if (error is ArgumentError) {
       // ModFfi's allocation-free path/envelope preflight is entirely local and occurs before the
@@ -1720,17 +1983,26 @@ bool _prepareErrorRequiresReopen(String code) => const {
   'AUTHORING_STORE_ROOT_MISSING',
 }.contains(code);
 
-bool _revision3QuestPrepareErrorRequiresReopen(String code) => const {
-  'AUTHORING_REVISION3_QUEST_HEAD_MISSING',
-  'AUTHORING_REVISION3_QUEST_PROJECT_INVALID',
-  'AUTHORING_REVISION3_QUEST_STORE_COLLISION',
-  'AUTHORING_REVISION3_QUEST_STORE_INVARIANT',
-  'AUTHORING_REVISION3_QUEST_STORE_IO',
-  'AUTHORING_REVISION3_QUEST_STORE_JSON_INVALID',
-  'AUTHORING_REVISION3_QUEST_STORE_OBJECT_MISSING',
-  'AUTHORING_REVISION3_QUEST_STORE_PATH_UNSAFE',
-  'AUTHORING_REVISION3_QUEST_STORE_ROOT_MISSING',
-  'AUTHORING_REVISION3_QUEST_STORE_SEAL_MISMATCH',
+bool _revision3QuestPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_QUEST_ARTIFACT_FAILED',
+  'AUTHORING_REVISION3_QUEST_CAPABILITY_FAILED',
+  'AUTHORING_REVISION3_QUEST_COLLISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_INPUT_CHANGED',
+  'AUTHORING_REVISION3_QUEST_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_INPUT_MISSING',
+  'AUTHORING_REVISION3_QUEST_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_QUEST_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_QUEST_INVENTORY_FAILED',
+  'AUTHORING_REVISION3_QUEST_PRISTINE_UNAVAILABLE',
+  'AUTHORING_REVISION3_QUEST_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_PROJECT_TARGET_MISMATCH',
+  'AUTHORING_REVISION3_QUEST_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_QUEST_REJECTED',
+  'AUTHORING_REVISION3_QUEST_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_STORE_GAME_ALIAS',
+  'AUTHORING_REVISION3_QUEST_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
@@ -1756,6 +2028,20 @@ bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_NPC_UNSUPPORTED_GENERATION',
 }.contains(code);
 
+bool _revision3VoicePrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE',
+  'AUTHORING_REVISION3_VOICE_INPUT_CHANGED',
+  'AUTHORING_REVISION3_VOICE_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_INPUT_MISSING',
+  'AUTHORING_REVISION3_VOICE_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_VOICE_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_VOICE_INTENT_INVALID',
+  'AUTHORING_REVISION3_VOICE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_OGG_INVALID',
+  'AUTHORING_REVISION3_VOICE_STATUS_INVALID',
+  'AUTHORING_REVISION3_VOICE_STORE_GAME_ALIAS',
+}.contains(code);
+
 bool _revision3ContentReadErrorRequiresReopen(String code) => const {
   ModFfiException.malformedNativeResponseCode,
   'AUTHORING_REVISION3_CONTENT_HEAD_INVALID',
@@ -1773,25 +2059,18 @@ bool _revision3ContentReadErrorRequiresReopen(String code) => const {
   'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
 }.contains(code);
 
-bool _revision3DataAssetErrorRequiresReopen(String code) => const {
-  ModFfiException.malformedNativeResponseCode,
-  'AUTHORING_REVISION3_DATAASSET_HEAD_INVALID',
-  'AUTHORING_REVISION3_DATAASSET_HEAD_LIMIT',
-  'AUTHORING_REVISION3_DATAASSET_HEAD_MISSING',
-  'AUTHORING_REVISION3_DATAASSET_HEAD_NONCANONICAL',
-  'AUTHORING_REVISION3_DATAASSET_INVARIANT',
-  'AUTHORING_REVISION3_DATAASSET_MANIFEST_INVALID',
-  'AUTHORING_REVISION3_DATAASSET_PROJECT_INVALID',
-  'AUTHORING_REVISION3_DATAASSET_REQUEST_INVALID',
-  'AUTHORING_REVISION3_DATAASSET_STORE_COLLISION',
-  'AUTHORING_REVISION3_DATAASSET_STORE_INVARIANT',
-  'AUTHORING_REVISION3_DATAASSET_STORE_IO',
-  'AUTHORING_REVISION3_DATAASSET_STORE_JSON_INVALID',
-  'AUTHORING_REVISION3_DATAASSET_STORE_LIMIT',
-  'AUTHORING_REVISION3_DATAASSET_STORE_OBJECT_MISSING',
-  'AUTHORING_REVISION3_DATAASSET_STORE_PATH_UNSAFE',
-  'AUTHORING_REVISION3_DATAASSET_STORE_ROOT_MISSING',
-  'AUTHORING_REVISION3_DATAASSET_STORE_SEAL_MISMATCH',
+bool _revision3DataAssetErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_DATAASSET_EDIT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_EXECUTABLE_MISMATCH',
+  'AUTHORING_REVISION3_DATAASSET_INPUT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_INPUT_MISSING',
+  'AUTHORING_REVISION3_DATAASSET_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_DATAASSET_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_REVISION_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_TARGET_EXISTS',
+  'AUTHORING_REVISION3_DATAASSET_TARGET_MISSING',
 }.contains(code);
 
 Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {

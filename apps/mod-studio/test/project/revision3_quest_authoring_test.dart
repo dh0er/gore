@@ -5,7 +5,7 @@ const _projectId = '11111111111111111111111111111111';
 
 void main() {
   test(
-    'derives deterministic technical identities from an exact checkpoint',
+    'derives deterministic technical identities from project revision and intent',
     () {
       final input = Revision3QuestDraftAuthoringInput(
         parentCatalogId: 'chapter-one',
@@ -52,7 +52,7 @@ void main() {
     },
   );
 
-  test('rejects text the bounded first Quest generator cannot represent', () {
+  test('rejects text the bounded Quest generators cannot represent', () {
     expect(
       () => Revision3QuestDraftAuthoringInput(
         parentCatalogId: 'chapter-one',
@@ -82,6 +82,77 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test(
+    'keeps ordered objectives bounded, unique, immutable, and identity-bound',
+    () {
+      final input = Revision3QuestDraftAuthoringInput(
+        parentCatalogId: 'chapter-one',
+        giverCatalogId: 'asghan',
+        title: 'Find Homer',
+        description: 'Ask around the old camp.',
+        objectiveTitle: 'Speak to Asghan',
+        additionalObjectiveTitles: const <String>[
+          'Inspect the old gate',
+          'Report the secured gate',
+        ],
+      );
+      expect(input.objectiveTitles, <String>[
+        'Speak to Asghan',
+        'Inspect the old gate',
+        'Report the secured gate',
+      ]);
+      expect(input.additionalObjectiveTitles, <String>[
+        'Inspect the old gate',
+        'Report the secured gate',
+      ]);
+      expect(
+        () => input.additionalObjectiveTitles.add('Mutate'),
+        throwsUnsupportedError,
+      );
+      final multi = Revision3QuestDraftTechnicalPlan.forCheckpoint(
+        projectId: _projectId,
+        projectRevision: 7,
+        input: input,
+      );
+      final single = Revision3QuestDraftTechnicalPlan.forCheckpoint(
+        projectId: _projectId,
+        projectRevision: 7,
+        input: _input(),
+      );
+      expect(multi.questId, isNot(single.questId));
+      expect(
+        multi.intent.additionalObjectiveTitles,
+        input.additionalObjectiveTitles,
+      );
+
+      expect(
+        () => Revision3QuestDraftAuthoringInput(
+          parentCatalogId: 'chapter-one',
+          giverCatalogId: 'asghan',
+          title: 'Duplicate',
+          description: 'Description',
+          objectiveTitle: 'Speak to Asghan',
+          additionalObjectiveTitles: const <String>['speak to asghan'],
+        ),
+        throwsFormatException,
+      );
+      expect(
+        () => Revision3QuestDraftAuthoringInput(
+          parentCatalogId: 'chapter-one',
+          giverCatalogId: 'asghan',
+          title: 'Too many',
+          description: 'Description',
+          objectiveTitle: 'First',
+          additionalObjectiveTitles: List<String>.generate(
+            8,
+            (index) => 'Objective ${index + 2}',
+          ),
+        ),
+        throwsFormatException,
+      );
+    },
+  );
 
   test('catalog projection requires nonempty unique picker identities', () {
     final parent = Revision3QuestCatalogChoice(

@@ -336,6 +336,8 @@ final class Revision3ContentIndex {
           'generated content entity ${entity.id} has no exact origin_owner reference',
         );
       }
+      _validateDialogLineProjectionFacts(entity);
+      _validateVoiceSlotProjectionFacts(entity);
     }
 
     return Revision3ContentIndex._(
@@ -591,16 +593,84 @@ final class Revision3ContentOrigin {
   }
 }
 
+enum Revision3ContentVoiceTargetResolution {
+  unresolved,
+  ambiguous,
+  resolved;
+
+  static Revision3ContentVoiceTargetResolution parse(
+    Object? value,
+    String context,
+  ) => Revision3ContentVoiceTargetResolution.values.byName(
+    _enumString(value, const {'unresolved', 'ambiguous', 'resolved'}, context),
+  );
+}
+
+/// Structured VoiceSlot facts retained from the validated wire projection.
+/// UI and authoring logic must not recover these facts from presentation text.
+final class Revision3ContentVoiceSlotSummary {
+  const Revision3ContentVoiceSlotSummary({
+    required this.targetResolution,
+    required this.candidateCount,
+    required this.hasSelectedTake,
+  });
+
+  final Revision3ContentVoiceTargetResolution targetResolution;
+  final int candidateCount;
+  final bool hasSelectedTake;
+}
+
+enum Revision3ContentVoiceTakeStatus {
+  draft,
+  recorded,
+  reviewed,
+  approved;
+
+  static Revision3ContentVoiceTakeStatus parse(Object? value, String context) =>
+      Revision3ContentVoiceTakeStatus.values.byName(
+        _enumString(value, const {
+          'draft',
+          'recorded',
+          'reviewed',
+          'approved',
+        }, context),
+      );
+}
+
+/// Structured VoiceTake facts used for fail-closed authoring decisions.
+final class Revision3ContentVoiceTakeSummary {
+  const Revision3ContentVoiceTakeSummary({
+    required this.locale,
+    required this.status,
+  });
+
+  final String locale;
+  final Revision3ContentVoiceTakeStatus status;
+}
+
+/// Structured DialogLine facts bound to its exact projected slot references.
+final class Revision3ContentDialogLineSummary {
+  const Revision3ContentDialogLineSummary({required this.voiceSlotLocales});
+
+  final List<String> voiceSlotLocales;
+}
+
 final class Revision3ContentSummary {
   const Revision3ContentSummary._({
     required this.primaryIdentity,
     required this.secondaryText,
     required this.searchTerms,
+    required this.dialogLine,
+    required this.voiceSlot,
+    required this.voiceTake,
   });
 
   final String primaryIdentity;
   final String secondaryText;
   final List<String> searchTerms;
+  final Revision3ContentDialogLineSummary? dialogLine;
+  final Revision3ContentVoiceSlotSummary? voiceSlot;
+  final Revision3ContentVoiceTakeSummary? voiceTake;
 
   factory Revision3ContentSummary._fromJson(
     Map<String, Object?> json,
@@ -616,6 +686,9 @@ final class Revision3ContentSummary {
     String primary;
     String secondary;
     final terms = <String>[];
+    Revision3ContentDialogLineSummary? dialogLine;
+    Revision3ContentVoiceSlotSummary? voiceSlot;
+    Revision3ContentVoiceTakeSummary? voiceTake;
     switch (entityKind) {
       case Revision3ContentEntityKind.localizationEntry:
         _requireKeys(data, const ['loc_id', 'locales'], '$context data');
@@ -645,6 +718,14 @@ final class Revision3ContentSummary {
           maxStringBytes: 64,
         );
         _requireSortedUnique(locales, '$context voice_slot_locales');
+        if (locales.any((locale) => !_contentLocaleIsCanonical(locale))) {
+          throw FormatException(
+            '$context voice_slot_locales contains a non-canonical locale',
+          );
+        }
+        dialogLine = Revision3ContentDialogLineSummary(
+          voiceSlotLocales: List<String>.unmodifiable(locales),
+        );
         primary = speaker ?? 'Dialog line';
         secondary = locales.isEmpty
             ? 'No voice slots'
@@ -659,11 +740,10 @@ final class Revision3ContentSummary {
           'has_selected_take',
         ], '$context data');
         primary = _locale(data['locale'], '$context locale');
-        final resolution = _enumString(data['target_resolution'], const {
-          'unresolved',
-          'ambiguous',
-          'resolved',
-        }, '$context target_resolution');
+        final resolution = Revision3ContentVoiceTargetResolution.parse(
+          data['target_resolution'],
+          '$context target_resolution',
+        );
         final candidates = _integer(
           data['candidate_count'],
           '$context candidate_count',
@@ -672,8 +752,13 @@ final class Revision3ContentSummary {
           data['has_selected_take'],
           '$context has_selected_take',
         );
+        voiceSlot = Revision3ContentVoiceSlotSummary(
+          targetResolution: resolution,
+          candidateCount: candidates,
+          hasSelectedTake: selected,
+        );
         secondary =
-            '$resolution · $candidates take${candidates == 1 ? '' : 's'}${selected ? ' · selected' : ''}';
+            '${resolution.name} · $candidates take${candidates == 1 ? '' : 's'}${selected ? ' · selected' : ''}';
       case Revision3ContentEntityKind.voiceTake:
         _requireKeys(data, const [
           'locale',
@@ -683,12 +768,10 @@ final class Revision3ContentSummary {
           'sample_rate',
         ], '$context data');
         primary = _locale(data['locale'], '$context locale');
-        final status = _enumString(data['status'], const {
-          'draft',
-          'recorded',
-          'reviewed',
-          'approved',
-        }, '$context status');
+        final status = Revision3ContentVoiceTakeStatus.parse(
+          data['status'],
+          '$context status',
+        );
         final codec = _enumString(data['codec'], const {
           'vorbis',
           'opus',
@@ -698,8 +781,12 @@ final class Revision3ContentSummary {
           data['sample_rate'],
           '$context sample_rate',
         );
-        secondary = '$status · $codec · ${channels}ch · $sampleRate Hz';
-        terms.addAll([status, codec]);
+        voiceTake = Revision3ContentVoiceTakeSummary(
+          locale: primary,
+          status: status,
+        );
+        secondary = '${status.name} · $codec · ${channels}ch · $sampleRate Hz';
+        terms.addAll([status.name, codec]);
       case Revision3ContentEntityKind.npcDraft:
         _requireKeys(data, const [
           'unique_name',
@@ -730,10 +817,14 @@ final class Revision3ContentSummary {
         secondary = namespace;
         terms.addAll([namespace, ...parents]);
       case Revision3ContentEntityKind.questDraft:
-        _requireKeys(data, const [
+        final hasAdditionalObjectives = data.containsKey(
+          'additional_objective_titles',
+        );
+        _requireKeys(data, <String>[
           'technical_id',
           'title',
           'objective_title',
+          if (hasAdditionalObjectives) 'additional_objective_titles',
           'module_namespace',
           'parent_runtime_class',
           'giver_runtime_unique_name',
@@ -749,6 +840,29 @@ final class Revision3ContentSummary {
           '$context objective_title',
           allowEmpty: true,
         );
+        final additionalObjectives = hasAdditionalObjectives
+            ? _stringList(
+                data['additional_objective_titles'],
+                '$context additional_objective_titles',
+                maxItems: 7,
+                maxStringBytes: 128,
+              )
+            : const <String>[];
+        if (hasAdditionalObjectives && additionalObjectives.isEmpty) {
+          throw FormatException('$context has an empty objective extension');
+        }
+        final foldedObjectives = <String>{objective.toLowerCase()};
+        var objectiveBytes = utf8.encode(objective).length;
+        for (final additional in additionalObjectives) {
+          objectiveBytes += utf8.encode(additional).length;
+          if (additional.trim() != additional ||
+              objectiveBytes > 1024 ||
+              !foldedObjectives.add(additional.toLowerCase())) {
+            throw FormatException(
+              '$context has duplicate or non-canonical objectives',
+            );
+          }
+        }
         final namespace = _string(
           data['module_namespace'],
           '$context module_namespace',
@@ -762,7 +876,14 @@ final class Revision3ContentSummary {
           '$context giver_runtime_unique_name',
         );
         secondary = title.isEmpty ? objective : title;
-        terms.addAll([title, objective, namespace, parent, giver]);
+        terms.addAll([
+          title,
+          objective,
+          ...additionalObjectives,
+          namespace,
+          parent,
+          giver,
+        ]);
       case Revision3ContentEntityKind.scriptModule:
         _requireKeys(data, const [
           'generator_id',
@@ -796,7 +917,166 @@ final class Revision3ContentSummary {
       primaryIdentity: primary,
       secondaryText: secondary,
       searchTerms: List<String>.unmodifiable([primary, secondary, ...terms]),
+      dialogLine: dialogLine,
+      voiceSlot: voiceSlot,
+      voiceTake: voiceTake,
     );
+  }
+}
+
+void _validateDialogLineProjectionFacts(Revision3ContentEntity entity) {
+  if (entity.kind != Revision3ContentEntityKind.dialogLine) return;
+  final facts = entity.summary.dialogLine;
+  if (facts == null) {
+    throw FormatException(
+      'content DialogLine ${entity.id} has no structured summary',
+    );
+  }
+
+  final localizationReferences = <Revision3ContentReference>[];
+  final slotReferences = <Revision3ContentReference>[];
+  final owner = entity.origin.generatedOwner;
+  var ownerReferences = 0;
+  for (final reference in entity.references) {
+    switch (reference.role) {
+      case 'origin_owner':
+        ownerReferences++;
+        if (owner == null ||
+            reference.qualifier != null ||
+            reference.target != owner) {
+          throw FormatException(
+            'content DialogLine ${entity.id} has a malformed origin owner',
+          );
+        }
+        break;
+      case 'dialog_localization':
+        localizationReferences.add(reference);
+        break;
+      case 'dialog_voice_slot':
+        slotReferences.add(reference);
+        break;
+      default:
+        throw FormatException(
+          'content DialogLine ${entity.id} has a role from another entity kind',
+        );
+    }
+  }
+  if (ownerReferences != (owner == null ? 0 : 1)) {
+    throw FormatException(
+      'content DialogLine ${entity.id} has an invalid origin owner count',
+    );
+  }
+  if (localizationReferences.length != 1) {
+    throw FormatException(
+      'content DialogLine ${entity.id} must have one localization reference',
+    );
+  }
+  final localization = localizationReferences.single;
+  if (localization.qualifier != null ||
+      localization.target.expectedKind !=
+          Revision3ContentEntityKind.localizationEntry) {
+    throw FormatException(
+      'content DialogLine ${entity.id} has a malformed localization reference',
+    );
+  }
+
+  final projectedLocales = <String>[];
+  final uniqueLocales = <String>{};
+  for (final reference in slotReferences) {
+    final locale = reference.qualifier;
+    if (locale == null ||
+        !_contentLocaleIsCanonical(locale) ||
+        reference.target.expectedKind != Revision3ContentEntityKind.voiceSlot ||
+        !uniqueLocales.add(locale)) {
+      throw FormatException(
+        'content DialogLine ${entity.id} has a malformed or duplicate VoiceSlot reference',
+      );
+    }
+    projectedLocales.add(locale);
+  }
+  if (!_equalStringLists(facts.voiceSlotLocales, projectedLocales)) {
+    throw FormatException(
+      'content DialogLine ${entity.id} VoiceSlot locales disagree with its references',
+    );
+  }
+}
+
+void _validateVoiceSlotProjectionFacts(Revision3ContentEntity entity) {
+  if (entity.kind != Revision3ContentEntityKind.voiceSlot) return;
+  final facts = entity.summary.voiceSlot;
+  if (facts == null) {
+    throw FormatException(
+      'content VoiceSlot ${entity.id} has no structured summary',
+    );
+  }
+  final candidates = <Revision3ContentReference>[];
+  final selected = <Revision3ContentReference>[];
+  final owner = entity.origin.generatedOwner;
+  var ownerReferences = 0;
+  for (final reference in entity.references) {
+    switch (reference.role) {
+      case 'origin_owner':
+        ownerReferences++;
+        if (owner == null ||
+            reference.qualifier != null ||
+            reference.target != owner) {
+          throw FormatException(
+            'content VoiceSlot ${entity.id} has a malformed origin owner',
+          );
+        }
+        break;
+      case 'voice_candidate':
+        candidates.add(reference);
+        break;
+      case 'voice_selected':
+        selected.add(reference);
+        break;
+      default:
+        throw FormatException(
+          'content VoiceSlot ${entity.id} has a role from another entity kind',
+        );
+    }
+  }
+  if (ownerReferences != (owner == null ? 0 : 1)) {
+    throw FormatException(
+      'content VoiceSlot ${entity.id} has an invalid origin owner count',
+    );
+  }
+  if (facts.candidateCount != candidates.length) {
+    throw FormatException(
+      'content VoiceSlot ${entity.id} candidate_count disagrees with its references',
+    );
+  }
+  final candidateTargets = <String>{};
+  for (final candidate in candidates) {
+    if (candidate.qualifier != null ||
+        candidate.target.expectedKind != Revision3ContentEntityKind.voiceTake) {
+      throw FormatException(
+        'content VoiceSlot ${entity.id} has a malformed candidate reference',
+      );
+    }
+    final key =
+        '${candidate.target.projectId}\u0000${candidate.target.entityId}';
+    if (!candidateTargets.add(key)) {
+      throw FormatException(
+        'content VoiceSlot ${entity.id} has duplicate candidate references',
+      );
+    }
+  }
+  if (selected.length > 1 || facts.hasSelectedTake != (selected.length == 1)) {
+    throw FormatException(
+      'content VoiceSlot ${entity.id} selected-take facts disagree with its references',
+    );
+  }
+  if (selected case [final chosen]) {
+    final key = '${chosen.target.projectId}\u0000${chosen.target.entityId}';
+    if (chosen.qualifier != null ||
+        chosen.target.expectedKind != Revision3ContentEntityKind.voiceTake ||
+        !candidateTargets.contains(key)) {
+      throw FormatException(
+        'content VoiceSlot ${entity.id} selected take is not an exact candidate',
+      );
+    }
   }
 }
 
@@ -1130,6 +1410,32 @@ String _sha(Object? value, String context) {
 String _locale(Object? value, String context) =>
     _string(value, context, maxBytes: 64);
 
+bool _contentLocaleIsCanonical(String value) {
+  if (value.isEmpty ||
+      value.length > 35 ||
+      value.codeUnits.any((unit) => unit > 0x7f)) {
+    return false;
+  }
+  final segments = value.split('-');
+  if (!RegExp(r'^[a-z]{2,8}$').hasMatch(segments.first)) return false;
+  final canonical = StringBuffer(segments.first);
+  for (final segment in segments.skip(1)) {
+    if (!RegExp(r'^[A-Za-z0-9]{1,8}$').hasMatch(segment)) return false;
+    canonical.write('-');
+    if (segment.length == 4 && RegExp(r'^[A-Za-z]+$').hasMatch(segment)) {
+      canonical.write(
+        '${segment[0].toUpperCase()}${segment.substring(1).toLowerCase()}',
+      );
+    } else if (segment.length == 2 &&
+        RegExp(r'^[A-Za-z]+$').hasMatch(segment)) {
+      canonical.write(segment.toUpperCase());
+    } else {
+      canonical.write(segment.toLowerCase());
+    }
+  }
+  return canonical.toString() == value;
+}
+
 int _integer(Object? value, String context) {
   if (value is! int || value < 0 || value > _signedWireMax) {
     throw FormatException('$context is not a signed-wire-safe integer');
@@ -1167,6 +1473,14 @@ void _requireSortedUnique(List<String> values, String context) {
       throw FormatException('$context is not unique canonical order');
     }
   }
+}
+
+bool _equalStringLists(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
 }
 
 extension _IndexedIterable<E> on Iterable<E> {

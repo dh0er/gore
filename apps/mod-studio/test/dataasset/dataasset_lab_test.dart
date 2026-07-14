@@ -86,6 +86,32 @@ void main() {
     expect(find.text('walked'), findsWidgets);
   });
 
+  testWidgets(
+    'reports only a completed strictly parsed inspection to a parent flow',
+    (tester) async {
+      DataAssetInspection? completed;
+      await pumpLab(
+        tester,
+        DataAssetLab(
+          uassetPicker: () async => 'selected.uasset',
+          usmapPicker: () async => 'selected.usmap',
+          inspector:
+              ({required uassetPath, required usmapPath, exportIndex}) async =>
+                  DataAssetInspection.fromJson(
+                    validDataAssetInspectionResponse(),
+                  ),
+          onInspectionReady: (inspection) => completed = inspection,
+        ),
+      );
+
+      expect(completed, isNull);
+      await _chooseBoth(tester);
+      await tester.tap(find.byKey(const Key('dataasset-inspect')));
+      await tester.pumpAndSettle();
+      expect(completed?.exports.single.objectName, 'DA_Test');
+    },
+  );
+
   testWidgets('latest request wins when an older inspection finishes last', (
     tester,
   ) async {

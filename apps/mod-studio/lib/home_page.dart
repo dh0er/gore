@@ -17,6 +17,7 @@ import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
 import 'dataasset/ui/dataasset_lab.dart';
+import 'dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
 import 'editor/domain/overrides_notifier.dart';
@@ -35,6 +36,8 @@ import 'project/revision3_npc_authoring.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_wizard.dart';
+import 'project/revision3_voice_authoring.dart';
+import 'project/revision3_voice_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
@@ -64,6 +67,31 @@ final managedRevision3NpcArchetypeChooserProvider =
 /// Normal app use delegates to the platform file picker owned by the panel.
 final managedRevision3DataAssetPatchReceiptPickerProvider =
     Provider<Revision3DataAssetPatchReceiptPicker?>((ref) => null);
+
+/// Optional seams for the guided managed-R3 DataAsset value wizard. Normal
+/// app use keeps the native inspector and platform file pickers owned by the
+/// wizard; tests and alternate shells can replace them independently.
+final managedRevision3DataAssetSemanticInspectorProvider =
+    Provider<DataAssetInspector?>((ref) => null);
+final managedRevision3DataAssetSemanticUassetPickerProvider =
+    Provider<DataAssetFilePicker?>((ref) => null);
+final managedRevision3DataAssetSemanticUsmapPickerProvider =
+    Provider<DataAssetFilePicker?>((ref) => null);
+final managedRevision3DataAssetExtractReceiptPickerProvider =
+    Provider<DataAssetExtractReceiptPicker?>((ref) => null);
+
+/// Native, read-only verification boundary for the selected ExtractReceipt.
+/// It exposes only the exact target and input seals needed to bind the guided
+/// edit to the inspection; raw selector/value bytes stay inside the native
+/// preparation lane.
+final managedRevision3DataAssetExtractReceiptInspectorProvider =
+    Provider<DataAssetExtractReceiptInspector>(
+      (ref) =>
+          (extractReceiptPath) => ModFfi(ref.read(coreServiceProvider))
+              .authoringReadDataAssetExtractReceiptV2(
+                extractReceiptPath: extractReceiptPath,
+              ),
+    );
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
 const _texturesTabIndex = 3;
@@ -547,6 +575,29 @@ class _HomePageState extends ConsumerState<HomePage>
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          publishVoiceTake:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final configuredGameRoot = gameRoot;
+                if (configuredGameRoot == null) {
+                  throw StateError(
+                    'Configure the Gothic 1 Remake installation before adding a Voice take.',
+                  );
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .addCurrentRevision3VoiceTake(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: currentProject.head,
+                      gameRoot: configuredGameRoot,
+                      plan: plan,
+                    );
+              },
           loadDataAssetStages: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .listCurrentRevision3DataAssetStages(
@@ -564,6 +615,27 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedHead: currentProject.head,
                 patchReceiptPath: patchReceiptPath,
               ),
+          publishDataAssetSemanticEdit: (intent) async {
+            try {
+              final publication = await ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .addCurrentRevision3DataAssetEdit(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    intent: intent,
+                  );
+              return DataAssetSemanticStagePublication(
+                targetPath: publication.stage.targetPath,
+                revision: publication.projectRevision,
+              );
+            } on Revision3DataAssetStaleCheckpointException {
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+            } on Revision3DataAssetRequiresReopenException {
+              throw const DataAssetSemanticStageUnavailableException.requiresReopen();
+            }
+          },
           removeDataAssetStage: ({required targetPath}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .removeCurrentRevision3DataAssetStage(
@@ -575,6 +647,21 @@ class _HomePageState extends ConsumerState<HomePage>
               ),
           pickDataAssetPatchReceipt: ref.read(
             managedRevision3DataAssetPatchReceiptPickerProvider,
+          ),
+          inspectDataAssetSemanticEdit: ref.read(
+            managedRevision3DataAssetSemanticInspectorProvider,
+          ),
+          pickDataAssetSemanticUasset: ref.read(
+            managedRevision3DataAssetSemanticUassetPickerProvider,
+          ),
+          pickDataAssetSemanticUsmap: ref.read(
+            managedRevision3DataAssetSemanticUsmapPickerProvider,
+          ),
+          pickDataAssetExtractReceipt: ref.read(
+            managedRevision3DataAssetExtractReceiptPickerProvider,
+          ),
+          inspectDataAssetExtractReceipt: ref.read(
+            managedRevision3DataAssetExtractReceiptInspectorProvider,
           ),
           loadNpcCatalog: ref.read(revision3NpcCatalogLoaderProvider),
           chooseNpcArchetype: ref.read(
@@ -594,8 +681,10 @@ class _HomePageState extends ConsumerState<HomePage>
           publishQuestDraft: ({required gameRoot, required input}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .createCurrentRevision3QuestDraft(
+                expectedRoot: currentProject.root.path,
                 expectedProjectId: currentProject.projectId,
                 expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
                 gameRoot: gameRoot,
                 input: input,
               ),
@@ -724,10 +813,17 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.project,
     required this.gameRoot,
     required this.loadContentIndex,
+    required this.publishVoiceTake,
     required this.loadDataAssetStages,
     required this.publishDataAssetStage,
+    required this.publishDataAssetSemanticEdit,
     required this.removeDataAssetStage,
     required this.pickDataAssetPatchReceipt,
+    required this.inspectDataAssetSemanticEdit,
+    required this.pickDataAssetSemanticUasset,
+    required this.pickDataAssetSemanticUsmap,
+    required this.pickDataAssetExtractReceipt,
+    required this.inspectDataAssetExtractReceipt,
     required this.loadNpcCatalog,
     required this.chooseNpcArchetype,
     required this.publishNpcDraft,
@@ -738,10 +834,17 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3DataAssetStageLoader loadDataAssetStages;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
+  final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
   final Revision3DataAssetStageRemover removeDataAssetStage;
   final Revision3DataAssetPatchReceiptPicker? pickDataAssetPatchReceipt;
+  final DataAssetInspector? inspectDataAssetSemanticEdit;
+  final DataAssetFilePicker? pickDataAssetSemanticUasset;
+  final DataAssetFilePicker? pickDataAssetSemanticUsmap;
+  final DataAssetExtractReceiptPicker? pickDataAssetExtractReceipt;
+  final DataAssetExtractReceiptInspector inspectDataAssetExtractReceipt;
   final Revision3NpcCatalogLoader loadNpcCatalog;
   final Revision3NpcArchetypeChooser? chooseNpcArchetype;
   final Revision3NpcDraftPublisher publishNpcDraft;
@@ -789,6 +892,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                           label: const Text('Settings'),
                         ),
                         FilledButton.icon(
+                          key: const Key('managed-add-voice-take'),
+                          onPressed: project.requiresReopen || gameRoot == null
+                              ? null
+                              : () => _openVoiceWizard(context),
+                          icon: const Icon(Icons.record_voice_over_outlined),
+                          label: const Text('Add Voice take'),
+                        ),
+                        FilledButton.icon(
                           key: const Key('managed-create-npc-draft'),
                           onPressed: project.requiresReopen || gameRoot == null
                               ? null
@@ -832,7 +943,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 if (gameRoot == null && !project.requiresReopen) ...[
                   const SizedBox(height: 8),
                   const Text(
-                    'Configure the Gothic 1 Remake installation in Settings to create NPC or Quest drafts.',
+                    'Configure the Gothic 1 Remake installation in Settings to add Voice takes or create NPC and Quest drafts.',
                     key: Key('managed-quest-game-required'),
                   ),
                 ],
@@ -959,8 +1070,11 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                         child: TabBarView(
                           children: [
                             Revision3ContentLibrary(
+                              projectRoot: project.root.path,
                               projectId: project.projectId,
                               projectRevision: project.projectRevision,
+                              projectHeadCanonicalJson:
+                                  project.head.canonicalJson,
                               load: loadContentIndex,
                             ),
                             Revision3DataAssetStagePanel(
@@ -970,8 +1084,16 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                               projectHead: project.head,
                               load: loadDataAssetStages,
                               publish: publishDataAssetStage,
+                              publishSemanticEdit: publishDataAssetSemanticEdit,
                               remove: removeDataAssetStage,
                               pickPatchReceipt: pickDataAssetPatchReceipt,
+                              semanticInspector: inspectDataAssetSemanticEdit,
+                              semanticUassetPicker: pickDataAssetSemanticUasset,
+                              semanticUsmapPicker: pickDataAssetSemanticUsmap,
+                              semanticExtractReceiptPicker:
+                                  pickDataAssetExtractReceipt,
+                              semanticExtractReceiptInspector:
+                                  inspectDataAssetExtractReceipt,
                             ),
                           ],
                         ),
@@ -981,6 +1103,27 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+
+  Future<void> _openVoiceWizard(BuildContext context) async {
+    if (gameRoot == null || project.requiresReopen) return;
+    final publication = await showDialog<Revision3VoiceTakePublication>(
+      context: context,
+      builder: (context) => Revision3VoiceTakeDialog(
+        service: Revision3VoiceAuthoringService(
+          loadContentIndex: loadContentIndex,
+          publishTechnicalPlan: publishVoiceTake,
+        ),
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Voice take saved in project revision ${publication.projectRevision}. It is saved to the project only and is not yet usable in game.',
+        ),
+      ),
     );
   }
 

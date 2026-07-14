@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_dataasset_stage_panel.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../dataasset/dataasset_test_fixtures.dart';
 
 const _projectRoot = r'C:\projects\managed-r3';
 
@@ -46,6 +48,158 @@ void main() {
     expect(find.text('Build / Deploy'), findsNothing);
     expect(find.text('Test in game'), findsNothing);
   });
+
+  testWidgets(
+    'stale semantic wizard closes and stays latched until an exact reload',
+    (tester) async {
+      await _pumpPanel(
+        tester,
+        Revision3DataAssetStagePanel(
+          projectRoot: _projectRoot,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHead: fixture.stagedHead,
+          load: () async => const [],
+          publish: _unexpectedPublish,
+          remove: _unexpectedRemove,
+          publishSemanticEdit: (_) async =>
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint(),
+          semanticUassetPicker: () async => r'C:\proof\TestAsset.uasset',
+          semanticUsmapPicker: () async => r'C:\proof\Mappings.usmap',
+          semanticExtractReceiptPicker: () async =>
+              r'C:\proof\extract-receipt.v2.json',
+          semanticExtractReceiptInspector: _matchingReceiptInspector,
+          semanticInspector:
+              ({required uassetPath, required usmapPath, exportIndex}) async =>
+                  DataAssetInspection.fromJson(
+                    validDataAssetInspectionResponse(),
+                  ),
+        ),
+      );
+
+      final create = find.byKey(
+        const Key('revision3-dataasset-semantic-create'),
+      );
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-pick-uasset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-pick-usmap')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('dataasset-inspect')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('dataasset-semantic-pick-receipt')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('dataasset-semantic-confirm-target')),
+      );
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('dataasset-semantic-value')),
+        '2',
+      );
+      final editorScroll = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byKey(const Key('dataasset-semantic-editor')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      editorScroll.position.jumpTo(editorScroll.position.maxScrollExtent);
+      await tester.pump();
+      await tester.ensureVisible(
+        find.byKey(const Key('dataasset-semantic-preview')),
+      );
+      await tester.tap(find.byKey(const Key('dataasset-semantic-preview')));
+      await tester.pump();
+      editorScroll.position.jumpTo(editorScroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dataasset-semantic-stage')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('dataasset-semantic-stage')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('dataasset-semantic-wizard')), findsNothing);
+      expect(find.textContaining('project changed'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(create).onPressed, isNull);
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-stage-refresh')),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<OutlinedButton>(create).onPressed, isNotNull);
+    },
+  );
+
+  testWidgets(
+    'late stale result from an old head cannot relatch the newer checkpoint',
+    (tester) async {
+      final publication = Completer<DataAssetSemanticStagePublication>();
+      var head = fixture.stagedHead;
+      late StateSetter rebuild;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('same-semantic-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: 5,
+                  projectHead: head,
+                  load: () async => const [],
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  publishSemanticEdit: (_) => publication.future,
+                  semanticUassetPicker: () async =>
+                      r'C:\proof\TestAsset.uasset',
+                  semanticUsmapPicker: () async => r'C:\proof\Mappings.usmap',
+                  semanticExtractReceiptPicker: () async =>
+                      r'C:\proof\extract-receipt.v2.json',
+                  semanticExtractReceiptInspector: _matchingReceiptInspector,
+                  semanticInspector:
+                      ({
+                        required uassetPath,
+                        required usmapPath,
+                        exportIndex,
+                      }) async => DataAssetInspection.fromJson(
+                        validDataAssetInspectionResponse(),
+                      ),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await _startSemanticPublication(tester);
+      expect(
+        find.byKey(const Key('dataasset-semantic-progress')),
+        findsOneWidget,
+      );
+      rebuild(() => head = fixture.removedHead);
+      await tester.pump();
+      await tester.pump();
+
+      publication.completeError(
+        const DataAssetSemanticStageUnavailableException.staleCheckpoint(),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('dataasset-semantic-wizard')), findsNothing);
+      expect(find.textContaining('project changed'), findsNothing);
+      final create = find.byKey(
+        const Key('revision3-dataasset-semantic-create'),
+      );
+      expect(tester.widget<OutlinedButton>(create).onPressed, isNotNull);
+    },
+  );
 
   testWidgets('renders friendly stage facts without receipt or raw offsets', (
     tester,
@@ -438,3 +592,48 @@ Future<Revision3DataAssetStagePublication> _unexpectedPublish({
 Future<Revision3DataAssetStageRemovalPublication> _unexpectedRemove({
   required String targetPath,
 }) => throw StateError('unexpected DataAsset removal');
+
+Future<DataAssetExtractReceiptSummary> _matchingReceiptInspector(
+  String _,
+) async => DataAssetExtractReceiptSummary.fromJson(
+  validDataAssetExtractReceiptSummaryResponse(),
+);
+
+Future<void> _startSemanticPublication(WidgetTester tester) async {
+  await tester.tap(
+    find.byKey(const Key('revision3-dataasset-semantic-create')),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-pick-uasset')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-pick-usmap')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-inspect')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-semantic-pick-receipt')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-semantic-confirm-target')));
+  await tester.pump();
+  await tester.enterText(
+    find.byKey(const Key('dataasset-semantic-value')),
+    '2',
+  );
+  final scroll = tester.state<ScrollableState>(
+    find
+        .descendant(
+          of: find.byKey(const Key('dataasset-semantic-editor')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  scroll.position.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pump();
+  await tester.tap(find.byKey(const Key('dataasset-semantic-preview')));
+  await tester.pump();
+  scroll.position.jumpTo(scroll.position.maxScrollExtent);
+  await tester.pumpAndSettle();
+  final stage = find.byKey(const Key('dataasset-semantic-stage'));
+  await tester.ensureVisible(stage);
+  await tester.tap(stage);
+  await tester.pump();
+}

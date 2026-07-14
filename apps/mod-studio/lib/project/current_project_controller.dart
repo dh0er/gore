@@ -12,6 +12,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
+import 'revision3_voice_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
 
@@ -140,9 +141,16 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required Revision3NpcDraftAuthoringInput input,
   });
+  Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
+    required String gameRoot,
+    required Revision3VoiceTakeTechnicalPlan plan,
+  });
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1();
   Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
     required String patchReceiptPath,
+  });
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetEditV1({
+    required DataAssetSemanticEditIntent intent,
   });
   Future<Revision3DataAssetStageRemovalPublication>
   prepareAndPublishRemoveDataAssetStageV1({required String targetPath});
@@ -295,6 +303,35 @@ final class _ManagedRevision3SessionLease
   }
 
   @override
+  Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
+    required String gameRoot,
+    required Revision3VoiceTakeTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishVoiceTakeV1(
+      gameRoot: gameRoot,
+      source: plan.sourcePath,
+      lineId: plan.lineId,
+      slotId: plan.slotId,
+      takeId: plan.takeId,
+      locale: plan.locale,
+      text: plan.text,
+      takeDisplayName: plan.takeDisplayName,
+      logicalName: plan.logicalName,
+      status: plan.status,
+      selectTake: plan.selectTake,
+    );
+    return Revision3VoiceTakePublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      slotId: checkpoint.slotId,
+      takeId: checkpoint.takeId,
+      slotCreated: checkpoint.slotCreated,
+      selected: checkpoint.selected,
+    );
+  }
+
+  @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() =>
       _session.listDataAssetStagesV1();
 
@@ -304,6 +341,21 @@ final class _ManagedRevision3SessionLease
   }) async {
     final checkpoint = await _session.prepareAndPublishDataAssetStageV1(
       patchReceiptPath: patchReceiptPath,
+    );
+    return Revision3DataAssetStagePublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      stage: checkpoint.stage,
+      deduplicatedBlobs: checkpoint.deduplicatedBlobs,
+    );
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetEditV1({
+    required DataAssetSemanticEditIntent intent,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishDataAssetEditV1(
+      intent: intent,
     );
     return Revision3DataAssetStagePublication(
       projectId: checkpoint.projectId,
@@ -586,8 +638,10 @@ final class CurrentProjectCoordinator
   /// catalog scan. A project switch or intervening revision therefore fails
   /// closed instead of applying the form to another checkpoint.
   Future<Revision3QuestDraftPublication> createCurrentRevision3QuestDraft({
+    required String expectedRoot,
     required String expectedProjectId,
     required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
   }) => _enqueue(() async {
@@ -602,8 +656,10 @@ final class CurrentProjectCoordinator
     if (lease.requiresReopen) {
       throw const Revision3QuestDraftRequiresReopenException();
     }
-    if (lease.projectId != expectedProjectId ||
-        lease.projectRevision != expectedProjectRevision) {
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
       throw const Revision3QuestDraftStaleCheckpointException();
     }
     if (gameRoot.isEmpty) {
@@ -691,6 +747,74 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3NpcDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Import one Ogg-backed Voice take into one exact current managed R3
+  /// checkpoint. The plan comes from a freshly projected ContentIndex and
+  /// contains no build, deployment, game-write, save-write, or runtime claim.
+  /// The configured game root is only a forbidden Store-root safety boundary,
+  /// not a catalog/content input.
+  Future<Revision3VoiceTakePublication> addCurrentRevision3VoiceTake({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required Revision3VoiceTakeTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice takes are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakeRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakeStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for Voice take authoring',
+      );
+    }
+
+    try {
+      final publication = await lease.prepareAndPublishVoiceTakeV1(
+        gameRoot: gameRoot,
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.slotId != plan.slotId ||
+          publication.takeId != plan.takeId ||
+          publication.slotCreated != plan.expectsSlotCreated ||
+          publication.selected != plan.selectTake) {
+        throw const CurrentProjectCoordinatorException(
+          'published Voice take disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeRequiresReopenException(),
           stackTrace,
         );
       }
@@ -795,6 +919,64 @@ final class CurrentProjectCoordinator
               publication.projectRevision) {
         throw const CurrentProjectCoordinatorException(
           'published DataAsset edit disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Create one typed value edit from an inspected fixed-leaf selector and
+  /// its exact ExtractReceipt-v2. The managed lease performs native semantic
+  /// encoding and proof verification before the same exact-head publication
+  /// lane used by receipt imports. No game or save file is written.
+  Future<Revision3DataAssetStagePublication> addCurrentRevision3DataAssetEdit({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetSemanticEditIntent intent,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'DataAsset edits are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    try {
+      final publication = await lease.prepareAndPublishDataAssetEditV1(
+        intent: intent,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.stage.projectId != expectedProjectId ||
+          publication.stage.targetPath != intent.expectedTargetPath ||
+          publication.stage.stagedProjectRevision !=
+              publication.projectRevision) {
+        throw const CurrentProjectCoordinatorException(
+          'published DataAsset value edit disagrees with the current managed checkpoint',
         );
       }
       return publication;

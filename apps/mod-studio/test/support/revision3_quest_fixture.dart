@@ -22,6 +22,7 @@ String revision3QuestGeneratedSource({
   required String title,
   required String description,
   required String objectiveTitle,
+  List<String> additionalObjectiveTitles = const <String>[],
 }) {
   final pascal = technicalId
       .split('_')
@@ -34,6 +35,84 @@ String revision3QuestGeneratedSource({
   final objective = 'UQuest_${technicalId}_OBJ_DONE';
   final rootGetter = 'Get$pascal';
   final objectiveGetter = 'Get${pascal}Objective';
+  if (additionalObjectiveTitles.isNotEmpty) {
+    final output = StringBuffer('''FText $textHelper(const FName Text)
+{
+    FString Value = Text.ToString();
+    return FText::FromString(Value);
+}
+
+class $root : UG1RQuest
+{
+    default ParentQuestClass = $parentRuntimeClass::StaticClass();
+    default QuestKind = EQuestKind::Side;
+    default InvolvedCharacters.Add(n"Hero");
+    default InvolvedCharacters.Add(n"$giverRuntimeUniqueName");
+    default QuestGiverCharacterUniqueName = n"$giverRuntimeUniqueName";
+    default NameText = $textHelper(n"$title");
+    default DescriptionText = $textHelper(
+        n"$description"
+    );
+    default bExternalStartTrigger = true;
+}
+
+$root $rootGetter()
+{
+    UQuestSubsystem Subsystem = UQuestSubsystem::Get();
+    if (Subsystem == nullptr)
+        return nullptr;
+
+    TSubclassOf<UQuest> QuestClass =
+        TSubclassOf<UQuest>($root::StaticClass());
+    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);
+    if (Quest == nullptr)
+        return nullptr;
+
+    return Cast<$root>(Quest);
+}
+
+''');
+    final titles = <String>[objectiveTitle, ...additionalObjectiveTitles];
+    for (var index = 0; index < titles.length; index++) {
+      final ordinal = index + 1;
+      final objectiveClass = ordinal == 1
+          ? objective
+          : 'UQuest_${technicalId}_OBJ_$ordinal';
+      final getter = ordinal == 1
+          ? objectiveGetter
+          : '$objectiveGetter$ordinal';
+      output.write('''class $objectiveClass : UG1RQuest
+{
+    default ParentQuestClass = $root::StaticClass();
+    default QuestKind = EQuestKind::Subobjective;
+    default NameText = $textHelper(n"${titles[index]}");
+    default bExternalStartTrigger = true;
+    default bExternalSuccessTrigger = true;
+''');
+      if (ordinal == titles.length) {
+        output.write('    default bSucceedParent = true;\n');
+      }
+      output.write('''}
+
+$objectiveClass $getter()
+{
+    UQuestSubsystem Subsystem = UQuestSubsystem::Get();
+    if (Subsystem == nullptr)
+        return nullptr;
+
+    TSubclassOf<UQuest> QuestClass =
+        TSubclassOf<UQuest>($objectiveClass::StaticClass());
+    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);
+    if (Quest == nullptr)
+        return nullptr;
+
+    return Cast<$objectiveClass>(Quest);
+}
+''');
+      if (ordinal != titles.length) output.writeln();
+    }
+    return output.toString();
+  }
   return '''FText $textHelper(const FName Text)
 {
     FString Value = Text.ToString();

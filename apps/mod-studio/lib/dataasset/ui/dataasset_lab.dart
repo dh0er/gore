@@ -15,6 +15,8 @@ typedef DataAssetInspector =
       int? exportIndex,
     });
 typedef DataAssetFilePicker = Future<String?> Function();
+typedef DataAssetInspectionListener =
+    void Function(DataAssetInspection inspection);
 
 /// Bounded, read-only UI over `dataasset_fixed_inspect_v1`.
 ///
@@ -26,11 +28,13 @@ class DataAssetLab extends ConsumerStatefulWidget {
     this.inspector,
     this.uassetPicker,
     this.usmapPicker,
+    this.onInspectionReady,
   });
 
   final DataAssetInspector? inspector;
   final DataAssetFilePicker? uassetPicker;
   final DataAssetFilePicker? usmapPicker;
+  final DataAssetInspectionListener? onInspectionReady;
 
   @override
   ConsumerState<DataAssetLab> createState() => _DataAssetLabState();
@@ -137,6 +141,7 @@ class _DataAssetLabState extends ConsumerState<DataAssetLab> {
         _inspection = inspection;
         _busy = false;
       });
+      widget.onInspectionReady?.call(inspection);
     } catch (error) {
       if (!mounted || requestEpoch != _requestEpoch) return;
       setState(() {
