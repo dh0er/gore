@@ -569,6 +569,18 @@ complete diagnostics, build lowering, deployment, and runtime test workflow are
 not part of this slice. The deterministic generator itself does not invoke the
 compiler or compose a cache.
 
+The native compiler now has a separate bounded structured-report API that
+retains diagnostics-capture disposition and file/line/column/severity/message
+records without reparsing formatted compiler errors. True hook/signature/
+preflight absence uses the normal compiler fallback exactly once. If the first
+generator already completed, `UnavailableWithoutFallback` uses that result and
+does not start a second process. Invalid capture becomes `CaptureInvalid` and
+rejects an otherwise usable cache; an unconfirmed process exit remains
+fail-closed, preserves recovery state, and exposes no possibly live capture.
+This is the prerequisite for a future explicit **Run compiler check** action.
+It is not yet wired to the exact-current Quest FFI or Studio and therefore does
+not change any Quest readiness status in this document.
+
 Offline compiler/compose/reopen evidence now covers the listed lifecycle
 field/hook/handler/getter/call shapes, but not one exact renderer-produced
 fixture spanning every state-test expression. The managed Quest project also

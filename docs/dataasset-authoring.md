@@ -366,29 +366,52 @@ Map keys, object/package references, `FName` values, variable-width values,
 collection shape changes, header changes, and unknown wire forms remain
 unsupported.
 
-## Installed package-index foundation
+## Installed package browser
 
-The native `gore-tex` package-index foundation discovers candidate `/Game`
+The native `gore-tex` installed-package snapshot discovers candidate `/Game`
 packages from IoStore Directory Index metadata without parsing Zen package
 headers or reading any `ExportBundleData` payload. It scans physical chunk
-metadata under a hard, caller-tightenable budget, reproduces first-winner
+metadata under hard, caller-tightenable budgets, reproduces first-winner
 priority locally, and accepts only canonical package chunk index 0 with a
 winner-specific `../../../G1R/Content/*.uasset` path whose derived package ID
 matches the chunk ID. Candidates are sorted deterministically.
 
+The path-based boundary is Windows-only. Before Retoc opens the composite
+container, it validates the canonical G1R layout, exact project-bound Shipping
+executable, bounded direct Paks inventory, mount pairs, unsafe links/reparse
+points, case collisions, nested mountables, and ambiguous sibling priority
+keys. It retains exact executable, mount-inventory, package-index, and complete
+source-snapshot seals and revalidates the live installation before returning.
+UTOC and PAK contents are hashed. UCAS files deliberately retain only held
+identity, length, and modification evidence; they are not content-hashed. The
+composite source-snapshot seal covers the executable, mount inventory, and
+canonical candidate index only. It does not bind one selected package's bytes,
+USMAP, sidecars, or project head.
+Other platforms fail with `PLATFORM_UNSUPPORTED` before inspecting the supplied
+tree; this avoids claiming pathname-snapshot guarantees that the current Unix
+backend cannot provide.
+
 Missing or noncanonical Directory Index paths, noncanonical ExportBundle chunk
 IDs, and package-ID mismatches produce an explicit `partial_index` with reason
-counts. Ambiguous sibling container names that collapse to the same Retoc
-priority key are rejected rather than choosing a filesystem-enumeration winner.
-The current foundation operates on an already opened IoStore; the future
-path-based installed browser must also preflight sibling filenames before
-opening the composite container.
+counts. The closed revision-3 FFI command binds that one read to the exact
+managed project head and target executable. The command is
+`authoring_store_read_revision3_dataasset_package_index_v1`; its closed result
+states `audit_only`, `metadata_candidates_only`, `not_read`, `not_supported`,
+`not_evaluated`, `runtime_unqualified`, and `not_granted`. Its strict
+Dart/session/controller lane exposes the snapshot through Mod Studio's
+**Browse installed packages** dialog: authors get debounced search, at most 100
+lazy rendered matches, complete/partial status, a manual `/Game` fallback, and
+advanced seals and counters. Refresh always requests a new exact snapshot. The
+manual field validates canonical syntax only; it proves neither that a package
+exists nor that it belongs to the returned snapshot. The current dialog is
+copy-only and does not select a candidate into the edit pipeline.
 
-This is not yet an FFI command or Studio browser. A candidate path grants no
-package contents, class, schema, selector, extraction, patch, build, or runtime
-authority. Selection must still be followed by fresh exact extraction and the
-existing sealed inspection/edit pipeline. Manual `/Game` input remains the
-fallback until that complete browser and path-free live-snapshot CAS are wired.
+A candidate path remains discovery metadata only. The browser grants no package
+contents, class, schema, selector, extraction, patch, mutation, build,
+publication, or runtime authority, and neither the project nor game installation
+is written. Selection must still be followed by fresh exact extraction and the
+existing sealed inspection/edit pipeline; wiring that transition is the next
+normal-user DataAsset slice.
 
 ## Receipts, source proofs, and limits
 

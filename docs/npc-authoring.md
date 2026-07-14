@@ -210,10 +210,10 @@ discovery, spawn support, or runtime qualification. The retained live FFI test
 remains environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI
 fixtures do not substitute for that pinned-game proof.
 
-## Native source/readiness inspection foundation
+## Managed source/readiness profile
 
-`build_revision3_npc_source_inspection_plan_v1` is a pure, read-only native
-foundation for an eventual existing-NPC profile and Problems surface. It
+`build_revision3_npc_source_inspection_plan_v1` is the pure, read-only native
+foundation for the existing-NPC profile. It
 accepts exact canonical revision-3 project JSON plus one NPC entity ID, verifies
 the selected NPC/ScriptModule closure and persisted parent provenance triple,
 and requires exact regeneration of generator, owner, origin, module path,
@@ -221,10 +221,32 @@ source SHA-256, and input fingerprint. Other project content, including
 generator-V4 Quests, remains present in the exact input but is neither widened
 nor copied into the bounded NPC plan.
 
+The exact Store-bound FFI command
+`authoring_store_inspect_revision3_npc_source_v1` accepts only the Store root,
+canonical expected head, and selected NPC ID. It fully opens the current Store
+before and after plan construction, binds the canonical project and plan seals,
+and accepts no game-root or compiler request. It returns no canonical project
+JSON, Store/absolute host path, or reusable authority; the bounded plan
+intentionally includes the canonical module-relative `.as` path and generated
+source for read-only inspection. The managed session runs it through the
+serialized exact-read lane and checks the published head on both sides.
+Local/content errors are retryable only while that head remains exact; Store or
+response integrity uncertainty requires reopen.
+
+Mod Studio exposes the result under **NPC tools -> Profile & checks** for an
+already-authored managed NPC Draft. The normal view shows saved-source,
+persisted-parent, and exact-project checks plus the four remaining blockers.
+Advanced disclosure shows the generated AngelScript, module and entity IDs,
+parent classes, runtime name, and seals. The action works without a configured
+game installation because it verifies only persisted project evidence; it does
+not freshly qualify those parents against installed game files.
+
 The plan reports `compiler_status: not_run`, `build_status: blocked`,
 `runtime_qualification: runtime_unqualified`, and unsupported spawn/publication
-with fixed structured diagnostics. Its serializer enforces the entity and
-four-MiB plan envelopes before allocating the canonical result. It has no Store,
-FFI, Studio, compiler, game-root, build, spawn, deployment, or publication
-entry point yet. Successful source regeneration is therefore not evidence of
-class residence, discovery, spawning, distinct runtime state, or save safety.
+with four fixed readiness-blocker diagnostics. The outer result is likewise
+closed to `inspection_only`, `source_readiness_inspection_only`, and
+`persisted_and_regenerated_exact`. Its serializer enforces the entity and
+four-MiB plan envelopes before allocating the canonical result. The exposed
+route has no compiler, build, spawn, deployment, mutation, or publication entry
+point. Successful source regeneration is therefore not evidence of class
+residence, discovery, spawning, distinct runtime state, or save safety.
