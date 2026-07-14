@@ -114,6 +114,26 @@ still requires a separately produced, exact ExtractReceipt-v2; it does not
 extract a package, infer provenance, or turn successful inspection into general
 write authority.
 
+Managed revision-3 projects also provide a search-first **Browse installed
+packages** surface. Its package inventory is tied to the exact project head and
+installed executable generation. Search filtering retains each candidate's
+original sealed ordinal; the inspection request sends that ordinal and the
+expected inventory seals, never a caller-selected package path or output path.
+Native code rebuilds the complete installed snapshot, resolves the candidate
+server-side, selects and guards the installed generation USMAP, converts the
+package to bounded in-memory `.uasset`/`.uexp` bytes, and feeds those bytes into
+the same fixed-leaf inspector used by the Lab. No extracted files are published.
+
+The resulting dialog is read-only and shows the ordinary strict inspection
+report. Refreshing the package inventory invalidates an in-flight selection.
+The manual `/Game` field remains syntax-and-copy only and cannot be inspected,
+because it has no sealed package candidate. This slice does not create an
+ExtractReceipt, enable Save, stage a project edit, pack, deploy, touch the game
+installation or a save, or qualify runtime behavior. Promoting an inspected
+installed package into the typed edit transaction remains a separate capability
+that must preserve the selected package/USMAP proof and the existing exact-head
+publication boundary.
+
 ## 3. Prepare one raw fixed-width replacement
 
 The selector's `expected_hex` is the complete current on-wire value. Supply it

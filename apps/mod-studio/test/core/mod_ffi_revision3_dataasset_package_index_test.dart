@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 
+import '../dataasset/dataasset_test_fixtures.dart';
+
 const _root = r'C:\Projects\DataAssetBrowser.goreproj';
 const _gameRoot = r'C:\Games\Gothic 1 Remake';
 const _projectId = '31313131313131313131313131313131';
@@ -95,6 +97,37 @@ Map<String, Object?> _response({String? indexJson}) {
   };
 }
 
+Map<String, Object?> _installedInspectionResponse({
+  int ordinal = 1,
+  Map<String, Object?>? inspection,
+}) {
+  final snapshot = _response();
+  final index =
+      jsonDecode(snapshot['package_index_json']! as String)
+          as Map<String, Object?>;
+  final candidate =
+      (index['candidates']! as List<Object?>)[ordinal]! as Map<String, Object?>;
+  return <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_ordinal': ordinal,
+    'head_json': snapshot['head_json'],
+    'inspection': inspection ?? validDataAssetInspectionResponse(),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'inspection_only',
+    'package_id_hex': candidate['package_id_hex'],
+    'package_index_seal': snapshot['package_index_seal'],
+    'project_id': snapshot['project_id'],
+    'project_revision': snapshot['project_revision'],
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+    'source_snapshot_seal': snapshot['source_snapshot_seal'],
+    'target_path': candidate['target_path'],
+  };
+}
+
 Future<void> _expectMalformed(Map<String, Object?> response) async {
   final core = FakeGoreCoreFfiService(
     responses: <String, Map<String, Object?>>{
@@ -118,10 +151,14 @@ Future<void> _expectMalformed(Map<String, Object?> response) async {
 }
 
 void main() {
-  test('Studio handshake requires the sorted package-index command', () {
+  test('Studio handshake requires the sorted installed DataAsset commands', () {
     expect(
       requiredStudioCoreCommands,
       contains('authoring_store_read_revision3_dataasset_package_index_v1'),
+    );
+    expect(
+      requiredStudioCoreCommands,
+      contains('authoring_store_inspect_revision3_installed_dataasset_v1'),
     );
     expect(
       requiredStudioCoreCommands,
@@ -161,6 +198,10 @@ void main() {
       expect(
         result.index.candidates.map((candidate) => candidate.targetPath),
         <String>['/Game/Characters/DA_Asghan', '/Game/Characters/DA_Viper'],
+      );
+      expect(
+        result.index.candidates.map((candidate) => candidate.ordinal),
+        <int>[0, 1],
       );
       expect(
         result.exportBundlePayloadStatus,
@@ -304,5 +345,140 @@ void main() {
       await expectLater(operation(), throwsA(isA<ArgumentError>()));
     }
     expect(core.calls, isEmpty);
+  });
+
+  test(
+    'installed inspection sends only sealed ordinal authority and parses nested evidence',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_read_revision3_dataasset_package_index_v1':
+              _response(),
+          'authoring_store_inspect_revision3_installed_dataasset_v1':
+              _installedInspectionResponse(),
+        },
+      );
+      final ffi = ModFfi(core);
+      final head = AuthoringWorkingHead.fromCanonicalJson(_headJson());
+      final snapshot = await ffi
+          .authoringStoreReadRevision3DataAssetPackageIndexV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+          );
+      final candidate = snapshot.index.candidates[1];
+
+      final result = await ffi
+          .authoringStoreInspectRevision3InstalledDataAssetV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+            expectedSnapshot: snapshot,
+            candidate: candidate,
+          );
+
+      expect(core.calls.last.payload, <String, Object?>{
+        'candidate_ordinal': 1,
+        'expected_head_json': _headJson(),
+        'expected_package_index_seal': _response()['package_index_seal'],
+        'expected_source_snapshot_seal': _response()['source_snapshot_seal'],
+        'game_root': _gameRoot,
+        'root': _root,
+      });
+      expect(core.calls.last.payload, isNot(contains('target_path')));
+      expect(core.calls.last.payload, isNot(contains('package_id_hex')));
+      expect(result.candidateOrdinal, 1);
+      expect(result.targetPath, '/Game/Characters/DA_Viper');
+      expect(result.inspection.summary.editableLeaves, 1);
+      expect(
+        result.authorityStatus,
+        AuthoringRevision3InstalledDataAssetAuthorityStatus.notGranted,
+      );
+    },
+  );
+
+  test('installed inspection rejects candidate and response drift', () async {
+    Future<AuthoringRevision3DataAssetPackageIndexResult> snapshotFor(
+      FakeGoreCoreFfiService core,
+    ) => ModFfi(core).authoringStoreReadRevision3DataAssetPackageIndexV1(
+      root: _root,
+      gameRoot: _gameRoot,
+      expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+    );
+
+    final firstCore = FakeGoreCoreFfiService(
+      responses: <String, Map<String, Object?>>{
+        'authoring_store_read_revision3_dataasset_package_index_v1':
+            _response(),
+      },
+    );
+    final secondCore = FakeGoreCoreFfiService(
+      responses: <String, Map<String, Object?>>{
+        'authoring_store_read_revision3_dataasset_package_index_v1':
+            _response(),
+      },
+    );
+    final first = await snapshotFor(firstCore);
+    final second = await snapshotFor(secondCore);
+    await expectLater(
+      ModFfi(secondCore).authoringStoreInspectRevision3InstalledDataAssetV1(
+        root: _root,
+        gameRoot: _gameRoot,
+        expectedHead: second.head,
+        expectedSnapshot: second,
+        candidate: first.index.candidates.first,
+      ),
+      throwsArgumentError,
+    );
+    expect(secondCore.calls, hasLength(1));
+
+    final mutations = <void Function(Map<String, Object?>)>[
+      (response) => response['candidate_ordinal'] = 0,
+      (response) => response['target_path'] = '/Game/Forged',
+      (response) => response['package_id_hex'] = '0' * 16,
+      (response) => response['package_index_seal'] = _digitSeal(1, 'e'),
+      (response) => response['source_snapshot_seal'] = _digitSeal(1, 'f'),
+      (response) => response['authority_status'] = 'granted',
+      (response) =>
+          (response['inspection']! as Map<String, Object?>)['ok'] = false,
+      (response) => response['inspection'] = validDataAssetInspectionResponse(
+        exportIndex: 1,
+        packageExports: 2,
+      ),
+    ];
+    for (final mutate in mutations) {
+      final response = _installedInspectionResponse();
+      mutate(response);
+      final core = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_read_revision3_dataasset_package_index_v1':
+              _response(),
+          'authoring_store_inspect_revision3_installed_dataasset_v1': response,
+        },
+      );
+      final ffi = ModFfi(core);
+      final snapshot = await ffi
+          .authoringStoreReadRevision3DataAssetPackageIndexV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: AuthoringWorkingHead.fromCanonicalJson(_headJson()),
+          );
+      await expectLater(
+        ffi.authoringStoreInspectRevision3InstalledDataAssetV1(
+          root: _root,
+          gameRoot: _gameRoot,
+          expectedHead: snapshot.head,
+          expectedSnapshot: snapshot,
+          candidate: snapshot.index.candidates[1],
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            ModFfiException.malformedNativeResponseCode,
+          ),
+        ),
+      );
+    }
   });
 }

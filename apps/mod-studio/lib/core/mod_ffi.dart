@@ -13,6 +13,7 @@ export '../dataasset/domain/dataasset_semantic_edit.dart';
 
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_dataasset_package_index.dart';
+part '../project/revision3_installed_dataasset_inspection.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_source_inspection.dart';
 part '../project/revision3_quest_context.dart';
@@ -809,6 +810,75 @@ class ModFfi {
       return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
         response,
         expectedHead: expectedHead,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Inspect one package selected by its original ordinal from an exact
+  /// installed package snapshot. Native code rebuilds and compares that
+  /// snapshot before it resolves the target; no caller-supplied `/Game` path,
+  /// extraction path, edit, build, or deployment authority crosses the wire.
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  authoringStoreInspectRevision3InstalledDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) async {
+    const command = 'authoring_store_inspect_revision3_installed_dataasset_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    if (expectedSnapshot.head.canonicalJson != expectedHead.canonicalJson ||
+        candidate.ordinal < 0 ||
+        candidate.ordinal >= expectedSnapshot.index.candidates.length ||
+        !identical(
+          candidate,
+          expectedSnapshot.index.candidates[candidate.ordinal],
+        )) {
+      throw ArgumentError(
+        'candidate must come from the exact installed DataAsset snapshot',
+        'candidate',
+      );
+    }
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('candidateOrdinal', candidate.ordinal.toString()),
+      ('expectedHead', expectedHead.canonicalJson),
+      (
+        'expectedPackageIndexByteLength',
+        expectedSnapshot.packageIndexSeal.byteLength.toString(),
+      ),
+      ('expectedPackageIndexSha256', expectedSnapshot.packageIndexSeal.sha256),
+      (
+        'expectedSourceSnapshotByteLength',
+        expectedSnapshot.sourceSnapshotSeal.byteLength.toString(),
+      ),
+      (
+        'expectedSourceSnapshotSha256',
+        expectedSnapshot.sourceSnapshotSeal.sha256,
+      ),
+      ('gameRoot', gameRoot),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'candidate_ordinal': candidate.ordinal,
+      'expected_head_json': expectedHead.canonicalJson,
+      'expected_package_index_seal': _installedDataAssetSealJson(
+        expectedSnapshot.packageIndexSeal,
+      ),
+      'expected_source_snapshot_seal': _installedDataAssetSealJson(
+        expectedSnapshot.sourceSnapshotSeal,
+      ),
+      'game_root': gameRoot,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+        response,
+        expectedSnapshot: expectedSnapshot,
+        requestedOrdinal: candidate.ordinal,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

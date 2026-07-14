@@ -1158,6 +1158,260 @@ void main() {
   );
 
   test(
+    'installed DataAsset inspection binds visible identity, snapshot, and original candidate',
+    () async {
+      const projectId = '54545454545454545454545454545454';
+      late AuthoringRevision3DataAssetPackageIndexResult exactSnapshot;
+      late AuthoringRevision3DataAssetPackageCandidate exactCandidate;
+      final managed = _FakeManagedLease(
+        root: Directory('managed-installed-dataasset-inspection'),
+        projectIdValue: projectId,
+        projectRevision: 54,
+        head: _head(54),
+        onDataAssetPackageIndexRead: (lease, _) =>
+            _controllerDataAssetPackageIndexResult(
+              head: lease.head,
+              projectId: lease.projectId,
+              projectRevision: lease.projectRevision,
+            ),
+        onInstalledDataAssetInspection: (lease, gameRoot, snapshot, candidate) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          expect(identical(snapshot, exactSnapshot), isTrue);
+          expect(identical(candidate, exactCandidate), isTrue);
+          return _controllerInstalledDataAssetInspectionResult(
+            expectedSnapshot: snapshot,
+            candidate: candidate,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      exactSnapshot = await coordinator
+          .readCurrentRevision3DataAssetPackageIndex(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+          );
+      exactCandidate = exactSnapshot.index.candidates.single;
+      final otherSnapshot = _controllerDataAssetPackageIndexResult(
+        head: visible.head,
+        projectId: visible.projectId,
+        projectRevision: visible.projectRevision,
+      );
+
+      for (final inspect
+          in <
+            Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+            Function()
+          >[
+            () => coordinator.inspectCurrentRevision3InstalledDataAsset(
+              expectedRoot: 'another-root',
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: r'C:\Games\Gothic Remake',
+              expectedSnapshot: exactSnapshot,
+              candidate: exactCandidate,
+            ),
+            () => coordinator.inspectCurrentRevision3InstalledDataAsset(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: r'C:\Games\Gothic Remake',
+              expectedSnapshot: exactSnapshot,
+              candidate: otherSnapshot.index.candidates.single,
+            ),
+          ]) {
+        await expectLater(
+          inspect(),
+          throwsA(
+            isA<
+              Revision3InstalledDataAssetInspectionStaleCheckpointException
+            >(),
+          ),
+        );
+      }
+      expect(managed.installedDataAssetInspectionCalls, 0);
+
+      final result = await coordinator
+          .inspectCurrentRevision3InstalledDataAsset(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+            expectedSnapshot: exactSnapshot,
+            candidate: exactCandidate,
+          );
+
+      expect(result.projectId, visible.projectId);
+      expect(result.projectRevision, visible.projectRevision);
+      expect(result.candidateOrdinal, exactCandidate.ordinal);
+      expect(managed.installedDataAssetInspectionCalls, 1);
+      expect(managed.installedDataAssetInspectionGameRoots, <String>[
+        r'C:\Games\Gothic Remake',
+      ]);
+      expect(
+        identical(
+          managed.installedDataAssetInspectionSnapshots.single,
+          exactSnapshot,
+        ),
+        isTrue,
+      );
+      expect(
+        identical(
+          managed.installedDataAssetInspectionCandidates.single,
+          exactCandidate,
+        ),
+        isTrue,
+      );
+    },
+  );
+
+  test('installed DataAsset result identity drift maps to stale', () async {
+    const projectId = '55555555555555555555555555555555';
+    final managed = _FakeManagedLease(
+      root: Directory('managed-installed-dataasset-result-stale'),
+      projectIdValue: projectId,
+      projectRevision: 55,
+      head: _head(55),
+      onDataAssetPackageIndexRead: (lease, _) =>
+          _controllerDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          ),
+      onInstalledDataAssetInspection: (lease, _, snapshot, candidate) {
+        final drifted = _controllerDataAssetPackageIndexResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision + 1,
+        );
+        return _controllerInstalledDataAssetInspectionResult(
+          expectedSnapshot: drifted,
+          candidate: drifted.index.candidates[candidate.ordinal],
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+    final snapshot = await coordinator
+        .readCurrentRevision3DataAssetPackageIndex(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          gameRoot: r'C:\Games\Gothic Remake',
+        );
+
+    await expectLater(
+      coordinator.inspectCurrentRevision3InstalledDataAsset(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        gameRoot: r'C:\Games\Gothic Remake',
+        expectedSnapshot: snapshot,
+        candidate: snapshot.index.candidates.single,
+      ),
+      throwsA(
+        isA<Revision3InstalledDataAssetInspectionStaleCheckpointException>(),
+      ),
+    );
+    expect(managed.installedDataAssetInspectionCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
+    'installed DataAsset inspection maps poisoned lease state to requires-reopen',
+    () async {
+      const projectId = '56565656565656565656565656565656';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-installed-dataasset-reopen'),
+        projectIdValue: projectId,
+        projectRevision: 56,
+        head: _head(56),
+        onDataAssetPackageIndexRead: (lease, _) =>
+            _controllerDataAssetPackageIndexResult(
+              head: lease.head,
+              projectId: lease.projectId,
+              projectRevision: lease.projectRevision,
+            ),
+        onInstalledDataAssetInspection: (lease, _, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected installed DataAsset inspection failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      final snapshot = await coordinator
+          .readCurrentRevision3DataAssetPackageIndex(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+          );
+      final candidate = snapshot.index.candidates.single;
+
+      Future<AuthoringRevision3InstalledDataAssetInspectionResult> inspect() =>
+          coordinator.inspectCurrentRevision3InstalledDataAsset(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+            expectedSnapshot: snapshot,
+            candidate: candidate,
+          );
+
+      await expectLater(
+        inspect(),
+        throwsA(
+          isA<Revision3InstalledDataAssetInspectionRequiresReopenException>(),
+        ),
+      );
+      expect(managed.installedDataAssetInspectionCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        inspect(),
+        throwsA(
+          isA<Revision3InstalledDataAssetInspectionRequiresReopenException>(),
+        ),
+      );
+      expect(managed.installedDataAssetInspectionCalls, 1);
+    },
+  );
+
+  test(
     'Quest publication is exact-basis bound and refreshes R3 state',
     () async {
       final projectId = '15151515151515151515151515151515';
@@ -2922,6 +3176,13 @@ typedef _DataAssetPackageIndexReadHook =
       _FakeManagedLease lease,
       String gameRoot,
     );
+typedef _InstalledDataAssetInspectionHook =
+    FutureOr<AuthoringRevision3InstalledDataAssetInspectionResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+      AuthoringRevision3DataAssetPackageCandidate candidate,
+    );
 
 final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   _FakeManagedLease({
@@ -2948,6 +3209,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
     this.onDataAssetPackageIndexRead,
+    this.onInstalledDataAssetInspection,
     this.dataAssetStages = const [],
     this.contentIndex,
     this.closeFailuresRemaining = 0,
@@ -2979,6 +3241,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
   final _DataAssetPackageIndexReadHook? onDataAssetPackageIndexRead;
+  final _InstalledDataAssetInspectionHook? onInstalledDataAssetInspection;
   final List<AuthoringRevision3DataAssetStage> dataAssetStages;
   final Revision3ContentIndex? contentIndex;
   _ContentReadHook? onContentRead;
@@ -3008,6 +3271,14 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int dataAssetRemoveCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
+  int installedDataAssetInspectionCalls = 0;
+  final List<String> installedDataAssetInspectionGameRoots = <String>[];
+  final List<AuthoringRevision3DataAssetPackageIndexResult>
+  installedDataAssetInspectionSnapshots =
+      <AuthoringRevision3DataAssetPackageIndexResult>[];
+  final List<AuthoringRevision3DataAssetPackageCandidate>
+  installedDataAssetInspectionCandidates =
+      <AuthoringRevision3DataAssetPackageCandidate>[];
   int closeCalls = 0;
 
   @override
@@ -3072,6 +3343,26 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no DataAsset package index');
     }
     return read(this, gameRoot);
+  }
+
+  @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) async {
+    installedDataAssetInspectionCalls++;
+    installedDataAssetInspectionGameRoots.add(gameRoot);
+    installedDataAssetInspectionSnapshots.add(expectedSnapshot);
+    installedDataAssetInspectionCandidates.add(candidate);
+    final inspect = onInstalledDataAssetInspection;
+    if (inspect == null) {
+      throw StateError(
+        'fake managed lease has no installed DataAsset inspector',
+      );
+    }
+    return inspect(this, gameRoot, expectedSnapshot, candidate);
   }
 
   @override
@@ -3448,6 +3739,40 @@ _controllerDataAssetPackageIndexResult({
     expectedHead: head,
   );
 }
+
+AuthoringRevision3InstalledDataAssetInspectionResult
+_controllerInstalledDataAssetInspectionResult({
+  required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+}) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+  <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_ordinal': candidate.ordinal,
+    'head_json': expectedSnapshot.head.canonicalJson,
+    'inspection': validDataAssetInspectionResponse(),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'inspection_only',
+    'package_id_hex': candidate.packageIdHex,
+    'package_index_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
+      'sha256': expectedSnapshot.packageIndexSeal.sha256,
+    },
+    'project_id': expectedSnapshot.projectId,
+    'project_revision': expectedSnapshot.projectRevision,
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+    'source_snapshot_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
+      'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
+    },
+    'target_path': candidate.targetPath,
+  },
+  expectedSnapshot: expectedSnapshot,
+  requestedOrdinal: candidate.ordinal,
+);
 
 AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
   required AuthoringWorkingHead head,

@@ -688,6 +688,22 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedHead: currentProject.head,
                 gameRoot: gameRoot,
               ),
+          inspectInstalledDataAsset:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .inspectCurrentRevision3InstalledDataAsset(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    gameRoot: gameRoot,
+                    expectedSnapshot: expectedSnapshot,
+                    candidate: candidate,
+                  ),
           publishDataAssetStage: ({required patchReceiptPath}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .addCurrentRevision3DataAssetStage(
@@ -990,6 +1006,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.pickVoiceBuildParent,
     required this.loadDataAssetStages,
     required this.loadInstalledPackageIndex,
+    required this.inspectInstalledDataAsset,
     required this.publishDataAssetStage,
     required this.publishDataAssetSemanticEdit,
     required this.removeDataAssetStage,
@@ -1023,6 +1040,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
   final Revision3DataAssetStageLoader loadDataAssetStages;
   final Revision3InstalledPackageIndexLoader loadInstalledPackageIndex;
+  final Revision3InstalledDataAssetInspector inspectInstalledDataAsset;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
   final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
   final Revision3DataAssetStageRemover removeDataAssetStage;
@@ -1626,6 +1644,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     builder: (context) => InstalledPackageBrowserDialog(
       gameRoot: configuredGameRoot,
       load: loadInstalledPackageIndex,
+      inspect: inspectInstalledDataAsset,
     ),
   );
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart' as crypto;
@@ -6,6 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/dataasset/ui/installed_package_browser_dialog.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+
+import 'dataasset_test_fixtures.dart';
 
 const _gameRoot = r'C:\Games\Gothic 1 Remake';
 
@@ -119,6 +122,60 @@ void main() {
     expect(find.text('2 installed package candidates indexed'), findsOneWidget);
   });
 
+  testWidgets(
+    'compact scaled browser scrolls its header to inspection actions',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 600);
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        _BrowserHost(
+          textScale: 2,
+          load: ({required gameRoot}) async => _packageIndexResult(),
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async => _installedInspectionResult(
+                expectedSnapshot: expectedSnapshot,
+                candidate: candidate,
+              ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.enterText(
+        find.byKey(const Key('installed-package-browser-search')),
+        'asghan',
+      );
+      await tester.pump(const Duration(milliseconds: 180));
+
+      final inspect = find.byKey(const Key('installed-package-inspect-0'));
+      await tester.scrollUntilVisible(
+        inspect,
+        160,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('installed-package-browser-result')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(inspect, findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(inspect);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('closes instead of retrying a stale managed checkpoint', (
     tester,
   ) async {
@@ -153,23 +210,205 @@ void main() {
     );
     expect(calls, 1);
   });
+
+  for (final scenario in <({Object error, String label, String message})>[
+    (
+      error:
+          const Revision3InstalledDataAssetInspectionStaleCheckpointException(),
+      label: 'stale snapshot',
+      message: 'project or installed package snapshot changed',
+    ),
+    (
+      error:
+          const Revision3InstalledDataAssetInspectionRequiresReopenException(),
+      label: 'requires reopen',
+      message: 'managed project must be reopened',
+    ),
+  ]) {
+    testWidgets(
+      'inspection ${scenario.label} closes the browser and removes old actions',
+      (tester) async {
+        final snapshot = _packageIndexResult();
+        await tester.pumpWidget(
+          _BrowserHost(
+            load: ({required gameRoot}) async => snapshot,
+            inspect:
+                ({
+                  required gameRoot,
+                  required expectedSnapshot,
+                  required candidate,
+                }) async => throw scenario.error,
+          ),
+        );
+        await tester.tap(find.byKey(const Key('open-browser')));
+        await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('installed-package-browser-search')),
+          'asghan',
+        );
+        await tester.pump(const Duration(milliseconds: 180));
+        await tester.tap(find.byKey(const Key('installed-package-inspect-0')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(
+          find.byKey(const Key('installed-package-browser-dialog')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('installed-package-browser-refresh')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('installed-package-inspect-0')),
+          findsNothing,
+        );
+        expect(find.textContaining(scenario.message), findsOneWidget);
+      },
+    );
+  }
+
+  testWidgets(
+    'filtered inspection keeps the original ordinal, candidate, and snapshot',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final snapshot = _packageIndexResult();
+      AuthoringRevision3DataAssetPackageIndexResult? receivedSnapshot;
+      AuthoringRevision3DataAssetPackageCandidate? receivedCandidate;
+      await tester.pumpWidget(
+        _BrowserHost(
+          load: ({required gameRoot}) async => snapshot,
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async {
+                receivedSnapshot = expectedSnapshot;
+                receivedCandidate = candidate;
+                return _installedInspectionResult(
+                  expectedSnapshot: expectedSnapshot,
+                  candidate: candidate,
+                );
+              },
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('installed-package-browser-search')),
+        'viper',
+      );
+      await tester.pump(const Duration(milliseconds: 180));
+
+      expect(find.text('DA_Viper'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('installed-package-inspect-1')));
+      await tester.pumpAndSettle();
+
+      expect(identical(receivedSnapshot, snapshot), isTrue);
+      expect(receivedCandidate?.ordinal, 1);
+      expect(
+        identical(receivedCandidate, snapshot.index.candidates[1]),
+        isTrue,
+      );
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('read-only evidence'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'refresh suppresses a late inspection result from the old snapshot',
+    (tester) async {
+      final first = _packageIndexResult();
+      final second = _packageIndexResult();
+      final completion =
+          Completer<AuthoringRevision3InstalledDataAssetInspectionResult>();
+      var loads = 0;
+      await tester.pumpWidget(
+        _BrowserHost(
+          load: ({required gameRoot}) async {
+            loads += 1;
+            return loads == 1 ? first : second;
+          },
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) {
+                expect(identical(expectedSnapshot, first), isTrue);
+                return completion.future;
+              },
+        ),
+      );
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('installed-package-browser-search')),
+        'asghan',
+      );
+      await tester.pump(const Duration(milliseconds: 180));
+      await tester.tap(find.byKey(const Key('installed-package-inspect-0')));
+      await tester.pump();
+
+      await tester.tap(
+        find.byKey(const Key('installed-package-browser-refresh')),
+      );
+      await tester.pumpAndSettle();
+      expect(loads, 2);
+
+      completion.complete(
+        _installedInspectionResult(
+          expectedSnapshot: first,
+          candidate: first.index.candidates.first,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('installed-package-inspection-error')),
+        findsNothing,
+      );
+    },
+  );
 }
 
 class _BrowserHost extends StatelessWidget {
-  const _BrowserHost({required this.load});
+  const _BrowserHost({required this.load, this.inspect, this.textScale});
 
   final Revision3InstalledPackageIndexLoader load;
+  final Revision3InstalledDataAssetInspector? inspect;
+  final double? textScale;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    builder: textScale == null
+        ? null
+        : (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale!)),
+            child: child!,
+          ),
     home: Scaffold(
       body: Builder(
         builder: (context) => TextButton(
           key: const Key('open-browser'),
           onPressed: () => showDialog<void>(
             context: context,
-            builder: (context) =>
-                InstalledPackageBrowserDialog(gameRoot: _gameRoot, load: load),
+            builder: (context) => InstalledPackageBrowserDialog(
+              gameRoot: _gameRoot,
+              load: load,
+              inspect: inspect,
+            ),
           ),
           child: const Text('Open'),
         ),
@@ -250,3 +489,37 @@ Map<String, Object?> _seal(int byteLength, String sha256) => <String, Object?>{
   'byte_len': byteLength,
   'sha256': sha256,
 };
+
+AuthoringRevision3InstalledDataAssetInspectionResult
+_installedInspectionResult({
+  required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+}) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+  <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_ordinal': candidate.ordinal,
+    'head_json': expectedSnapshot.head.canonicalJson,
+    'inspection': validDataAssetInspectionResponse(),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'inspection_only',
+    'package_id_hex': candidate.packageIdHex,
+    'package_index_seal': _seal(
+      expectedSnapshot.packageIndexSeal.byteLength,
+      expectedSnapshot.packageIndexSeal.sha256,
+    ),
+    'project_id': expectedSnapshot.projectId,
+    'project_revision': expectedSnapshot.projectRevision,
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+    'source_snapshot_seal': _seal(
+      expectedSnapshot.sourceSnapshotSeal.byteLength,
+      expectedSnapshot.sourceSnapshotSeal.sha256,
+    ),
+    'target_path': candidate.targetPath,
+  },
+  expectedSnapshot: expectedSnapshot,
+  requestedOrdinal: candidate.ordinal,
+);

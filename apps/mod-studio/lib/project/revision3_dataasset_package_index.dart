@@ -38,10 +38,14 @@ enum AuthoringRevision3DataAssetPackageAuthorityStatus { notGranted }
 
 final class AuthoringRevision3DataAssetPackageCandidate {
   const AuthoringRevision3DataAssetPackageCandidate._({
+    required this.ordinal,
     required this.targetPath,
     required this.packageIdHex,
   });
 
+  /// Stable position in the exact, sorted native snapshot. Search filtering
+  /// must preserve this value; a visible-row index is never package authority.
+  final int ordinal;
   final String targetPath;
   final String packageIdHex;
 
@@ -80,6 +84,7 @@ final class AuthoringRevision3DataAssetPackageCandidate {
       );
     }
     return AuthoringRevision3DataAssetPackageCandidate._(
+      ordinal: index,
       targetPath: targetPath,
       packageIdHex: packageIdHex,
     );

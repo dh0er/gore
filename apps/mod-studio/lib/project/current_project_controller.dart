@@ -129,6 +129,16 @@ final class Revision3DataAssetPackageIndexStaleCheckpointException
   const Revision3DataAssetPackageIndexStaleCheckpointException();
 }
 
+final class Revision3InstalledDataAssetInspectionRequiresReopenException
+    implements Exception {
+  const Revision3InstalledDataAssetInspectionRequiresReopenException();
+}
+
+final class Revision3InstalledDataAssetInspectionStaleCheckpointException
+    implements Exception {
+  const Revision3InstalledDataAssetInspectionStaleCheckpointException();
+}
+
 /// Diagnostic evidence that one terminal lease close failed.
 ///
 /// The coordinator deliberately retains no reference to the lease itself and
@@ -176,6 +186,12 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   });
   Future<AuthoringRevision3DataAssetPackageIndexResult>
   readDataAssetPackageIndexV1({required String gameRoot});
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  });
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
@@ -349,6 +365,18 @@ final class _ManagedRevision3SessionLease
   Future<AuthoringRevision3DataAssetPackageIndexResult>
   readDataAssetPackageIndexV1({required String gameRoot}) =>
       _session.readDataAssetPackageIndexV1(gameRoot: gameRoot);
+
+  @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) => _session.inspectInstalledDataAssetV1(
+    gameRoot: gameRoot,
+    expectedSnapshot: expectedSnapshot,
+    candidate: candidate,
+  );
 
   @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
@@ -1062,6 +1090,87 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3DataAssetPackageIndexRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Inspect one installed DataAsset selected from an exact package-index
+  /// snapshot previously returned for the same visible checkpoint. The
+  /// original candidate ordinal is retained across UI filtering; no caller
+  /// path is accepted as extraction authority.
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectCurrentRevision3InstalledDataAsset({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'installed DataAsset inspection is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3InstalledDataAssetInspectionRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for installed DataAsset inspection',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        expectedSnapshot.head.canonicalJson != expectedHead.canonicalJson ||
+        expectedSnapshot.projectId != expectedProjectId ||
+        expectedSnapshot.projectRevision != expectedProjectRevision ||
+        candidate.ordinal < 0 ||
+        candidate.ordinal >= expectedSnapshot.index.candidates.length ||
+        !identical(
+          candidate,
+          expectedSnapshot.index.candidates[candidate.ordinal],
+        )) {
+      throw const Revision3InstalledDataAssetInspectionStaleCheckpointException();
+    }
+    try {
+      final result = await lease.inspectInstalledDataAssetV1(
+        gameRoot: gameRoot,
+        expectedSnapshot: expectedSnapshot,
+        candidate: candidate,
+      );
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.candidateOrdinal != candidate.ordinal ||
+          result.targetPath != candidate.targetPath ||
+          result.packageIdHex != candidate.packageIdHex ||
+          result.packageIndexSeal.byteLength !=
+              expectedSnapshot.packageIndexSeal.byteLength ||
+          result.packageIndexSeal.sha256 !=
+              expectedSnapshot.packageIndexSeal.sha256 ||
+          result.sourceSnapshotSeal.byteLength !=
+              expectedSnapshot.sourceSnapshotSeal.byteLength ||
+          result.sourceSnapshotSeal.sha256 !=
+              expectedSnapshot.sourceSnapshotSeal.sha256) {
+        throw const Revision3InstalledDataAssetInspectionStaleCheckpointException();
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3InstalledDataAssetInspectionRequiresReopenException(),
           stackTrace,
         );
       }

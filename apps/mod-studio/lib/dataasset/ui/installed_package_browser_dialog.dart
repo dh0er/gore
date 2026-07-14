@@ -5,10 +5,18 @@ import 'package:flutter/services.dart';
 
 import '../../core/mod_ffi.dart';
 import '../../project/current_project_controller.dart';
+import 'dataasset_lab.dart';
 
 typedef Revision3InstalledPackageIndexLoader =
     Future<AuthoringRevision3DataAssetPackageIndexResult> Function({
       required String gameRoot,
+    });
+
+typedef Revision3InstalledDataAssetInspector =
+    Future<AuthoringRevision3InstalledDataAssetInspectionResult> Function({
+      required String gameRoot,
+      required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+      required AuthoringRevision3DataAssetPackageCandidate candidate,
     });
 
 /// Search-first, read-only browser over one exact installed package snapshot.
@@ -18,11 +26,13 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
   const InstalledPackageBrowserDialog({
     required this.gameRoot,
     required this.load,
+    this.inspect,
     super.key,
   });
 
   final String gameRoot;
   final Revision3InstalledPackageIndexLoader load;
+  final Revision3InstalledDataAssetInspector? inspect;
 
   @override
   State<InstalledPackageBrowserDialog> createState() =>
@@ -36,6 +46,9 @@ class _InstalledPackageBrowserDialogState
   Timer? _debounce;
   String _query = '';
   late Future<AuthoringRevision3DataAssetPackageIndexResult> _snapshot;
+  int? _inspectingOrdinal;
+  Object? _inspectionError;
+  int _inspectionEpoch = 0;
 
   @override
   void initState() {
@@ -49,8 +62,11 @@ class _InstalledPackageBrowserDialogState
 
   void _refresh() {
     final next = _load();
+    _inspectionEpoch += 1;
     setState(() {
       _snapshot = next;
+      _inspectingOrdinal = null;
+      _inspectionError = null;
     });
   }
 
@@ -64,6 +80,7 @@ class _InstalledPackageBrowserDialogState
 
   @override
   void dispose() {
+    _inspectionEpoch += 1;
     _debounce?.cancel();
     _search
       ..removeListener(_searchChanged)
@@ -75,8 +92,11 @@ class _InstalledPackageBrowserDialogState
   @override
   Widget build(BuildContext context) {
     final viewport = MediaQuery.sizeOf(context);
+    final textScale = MediaQuery.textScalerOf(context).scale(1);
     final width = (viewport.width - 96).clamp(280.0, 860.0).toDouble();
-    final height = (viewport.height - 180).clamp(320.0, 660.0).toDouble();
+    final height = (viewport.height - 180 - (textScale - 1).clamp(0, 4) * 96)
+        .clamp(160.0, 660.0)
+        .toDouble();
     return AlertDialog(
       key: const Key('installed-package-browser-dialog'),
       title: const Text('Browse installed DataAsset packages'),
@@ -140,211 +160,237 @@ class _InstalledPackageBrowserDialogState
         AuthoringRevision3DataAssetPackageIndexStatus.completeIndex;
     final candidateLabel = candidates.length == 1 ? 'candidate' : 'candidates';
 
-    return Column(
+    return CustomScrollView(
       key: const Key('installed-package-browser-result'),
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Card(
-          color: complete
-              ? Colors.green.withValues(alpha: 0.10)
-              : Colors.amber.withValues(alpha: 0.14),
-          child: ListTile(
-            leading: Icon(
-              complete ? Icons.verified_outlined : Icons.warning_amber_outlined,
-              color: complete ? Colors.green : Colors.amber.shade800,
-            ),
-            title: Text(
-              complete
-                  ? '${candidates.length} installed package $candidateLabel indexed'
-                  : '${candidates.length} $candidateLabel indexed — partial result',
-            ),
-            subtitle: Text(
-              complete
-                  ? 'Directory metadata was read and the installed snapshot stayed exact.'
-                  : 'Some package metadata was missing or noncanonical. Search results are useful for discovery but not complete.',
-            ),
-            trailing: IconButton(
-              key: const Key('installed-package-browser-refresh'),
-              tooltip: 'Read a fresh exact snapshot',
-              onPressed: _refresh,
-              icon: const Icon(Icons.refresh),
+      slivers: [
+        SliverToBoxAdapter(
+          child: Card(
+            color: complete
+                ? Colors.green.withValues(alpha: 0.10)
+                : Colors.amber.withValues(alpha: 0.14),
+            child: ListTile(
+              leading: Icon(
+                complete
+                    ? Icons.verified_outlined
+                    : Icons.warning_amber_outlined,
+                color: complete ? Colors.green : Colors.amber.shade800,
+              ),
+              title: Text(
+                complete
+                    ? '${candidates.length} installed package $candidateLabel indexed'
+                    : '${candidates.length} $candidateLabel indexed — partial result',
+              ),
+              subtitle: Text(
+                complete
+                    ? 'Directory metadata was read and the installed snapshot stayed exact.'
+                    : 'Some package metadata was missing or noncanonical. Search results are useful for discovery but not complete.',
+              ),
+              trailing: IconButton(
+                key: const Key('installed-package-browser-refresh'),
+                tooltip: 'Read a fresh exact snapshot',
+                onPressed: _refresh,
+                icon: const Icon(Icons.refresh),
+              ),
             ),
           ),
         ),
-        const SizedBox(height: 8),
-        const Text(
-          'Paths below are metadata candidates only. Copying one does not extract, inspect, edit, build, or deploy an asset.',
-        ),
-        const SizedBox(height: 10),
-        TextField(
-          key: const Key('installed-package-browser-search'),
-          controller: _search,
-          autofocus: true,
-          decoration: InputDecoration(
-            prefixIcon: const Icon(Icons.search),
-            hintText: 'Search asset name or /Game path…',
-            suffixIcon: _search.text.isEmpty
-                ? null
-                : IconButton(
-                    tooltip: 'Clear search',
-                    onPressed: _search.clear,
-                    icon: const Icon(Icons.close),
-                  ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        const SliverToBoxAdapter(
+          child: Text(
+            'Each Inspect action is bound to this exact snapshot and extracts only to bounded memory. Copying a path grants no extraction, edit, build, or deployment authority.',
           ),
         ),
-        const SizedBox(height: 8),
-        Expanded(
-          child: CustomScrollView(
-            slivers: [
-              if (_query.isEmpty)
-                const SliverToBoxAdapter(
-                  child: SizedBox(height: 120, child: _SearchPrompt()),
-                )
-              else if (visible.isEmpty)
-                const SliverToBoxAdapter(
-                  child: SizedBox(
-                    height: 120,
-                    child: Center(
-                      child: Text('No matching installed package path'),
+        if (_inspectionError != null) ...[
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          SliverToBoxAdapter(
+            child: _InstalledPackageInspectionError(error: _inspectionError!),
+          ),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 10)),
+        SliverToBoxAdapter(
+          child: TextField(
+            key: const Key('installed-package-browser-search'),
+            controller: _search,
+            autofocus: true,
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.search),
+              hintText: 'Search asset name or /Game path…',
+              suffixIcon: _search.text.isEmpty
+                  ? null
+                  : IconButton(
+                      tooltip: 'Clear search',
+                      onPressed: _search.clear,
+                      icon: const Icon(Icons.close),
                     ),
-                  ),
-                )
-              else ...[
-                SliverToBoxAdapter(
-                  child: Text(
-                    totalMatches > visible.length
-                        ? 'Showing the first ${visible.length} of $totalMatches matches'
-                        : '$totalMatches match${totalMatches == 1 ? '' : 'es'}',
-                  ),
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        if (_query.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: _SearchPrompt(),
+            ),
+          )
+        else if (visible.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(child: Text('No matching installed package path')),
+            ),
+          )
+        else ...[
+          SliverToBoxAdapter(
+            child: Text(
+              totalMatches > visible.length
+                  ? 'Showing the first ${visible.length} of $totalMatches matches'
+                  : '$totalMatches match${totalMatches == 1 ? '' : 'es'}',
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: 4)),
+          SliverList(
+            key: const Key('installed-package-browser-results'),
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final candidate = visible[index];
+              final slash = candidate.targetPath.lastIndexOf('/');
+              return ListTile(
+                key: ValueKey('installed-package-${candidate.packageIdHex}'),
+                leading: const Icon(Icons.data_object_outlined),
+                title: Text(candidate.targetPath.substring(slash + 1)),
+                subtitle: Text(candidate.targetPath),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (widget.inspect != null)
+                      if (_inspectingOrdinal == candidate.ordinal)
+                        const SizedBox.square(
+                          dimension: 36,
+                          child: Padding(
+                            padding: EdgeInsets.all(8),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      else
+                        IconButton.filledTonal(
+                          key: ValueKey(
+                            'installed-package-inspect-${candidate.ordinal}',
+                          ),
+                          tooltip: 'Inspect exact installed package',
+                          onPressed: _inspectingOrdinal == null
+                              ? () => _inspectCandidate(result, candidate)
+                              : null,
+                          icon: const Icon(Icons.manage_search_outlined),
+                        ),
+                    IconButton(
+                      tooltip: 'Copy /Game path',
+                      onPressed: () => _copyPath(candidate.targetPath),
+                      icon: const Icon(Icons.copy_outlined),
+                    ),
+                  ],
                 ),
-                const SliverToBoxAdapter(child: SizedBox(height: 4)),
-                SliverList(
-                  key: const Key('installed-package-browser-results'),
-                  delegate: SliverChildBuilderDelegate((context, index) {
-                    final candidate = visible[index];
-                    final slash = candidate.targetPath.lastIndexOf('/');
-                    return ListTile(
-                      key: ValueKey(
-                        'installed-package-${candidate.packageIdHex}',
+              );
+            }, childCount: visible.length),
+          ),
+        ],
+        const SliverToBoxAdapter(child: Divider(height: 20)),
+        SliverToBoxAdapter(
+          child: ExpansionTile(
+            key: const Key('installed-package-browser-manual'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text('Manual /Game path'),
+            subtitle: const Text(
+              'Fallback when a package is absent from metadata',
+            ),
+            children: [
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _manual,
+                builder: (context, value, child) {
+                  final manualPath = value.text.trim();
+                  final manualValid = _isCanonicalGamePackagePath(manualPath);
+                  return Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          key: const Key(
+                            'installed-package-browser-manual-input',
+                          ),
+                          controller: _manual,
+                          decoration: InputDecoration(
+                            hintText: '/Game/Folder/AssetName',
+                            errorText: manualPath.isEmpty || manualValid
+                                ? null
+                                : 'Use a canonical /Game path with letters, numbers, and underscores.',
+                          ),
+                        ),
                       ),
-                      leading: const Icon(Icons.data_object_outlined),
-                      title: Text(candidate.targetPath.substring(slash + 1)),
-                      subtitle: Text(candidate.targetPath),
-                      trailing: IconButton(
-                        tooltip: 'Copy /Game path',
-                        onPressed: () => _copyPath(candidate.targetPath),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        key: const Key('installed-package-browser-manual-copy'),
+                        tooltip: 'Copy validated path',
+                        onPressed: manualValid
+                            ? () => _copyPath(manualPath)
+                            : null,
                         icon: const Icon(Icons.copy_outlined),
                       ),
-                    );
-                  }, childCount: visible.length),
-                ),
-              ],
-              const SliverToBoxAdapter(child: Divider(height: 20)),
-              SliverToBoxAdapter(
-                child: ExpansionTile(
-                  key: const Key('installed-package-browser-manual'),
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('Manual /Game path'),
-                  subtitle: const Text(
-                    'Fallback when a package is absent from metadata',
-                  ),
-                  children: [
-                    ValueListenableBuilder<TextEditingValue>(
-                      valueListenable: _manual,
-                      builder: (context, value, child) {
-                        final manualPath = value.text.trim();
-                        final manualValid = _isCanonicalGamePackagePath(
-                          manualPath,
-                        );
-                        return Row(
-                          children: [
-                            Expanded(
-                              child: TextField(
-                                key: const Key(
-                                  'installed-package-browser-manual-input',
-                                ),
-                                controller: _manual,
-                                decoration: InputDecoration(
-                                  hintText: '/Game/Folder/AssetName',
-                                  errorText: manualPath.isEmpty || manualValid
-                                      ? null
-                                      : 'Use a canonical /Game path with letters, numbers, and underscores.',
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            IconButton.filledTonal(
-                              key: const Key(
-                                'installed-package-browser-manual-copy',
-                              ),
-                              tooltip: 'Copy validated path',
-                              onPressed: manualValid
-                                  ? () => _copyPath(manualPath)
-                                  : null,
-                              icon: const Icon(Icons.copy_outlined),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-                  ],
-                ),
+                    ],
+                  );
+                },
               ),
-              SliverToBoxAdapter(
-                child: ExpansionTile(
-                  key: const Key('installed-package-browser-advanced'),
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('Advanced snapshot evidence'),
-                  children: [
-                    _EvidenceValue(
-                      label: 'Physical chunks',
-                      value: '${result.index.physicalChunkCount}',
-                    ),
-                    _EvidenceValue(
-                      label: 'Winning packages',
-                      value: '${result.index.winningExportBundleCount}',
-                    ),
-                    _EvidenceValue(
-                      label: 'Directory indexed',
-                      value:
-                          '${result.index.directoryIndexedExportBundleCount}',
-                    ),
-                    _EvidenceValue(
-                      label: 'Out of scope',
-                      value: '${result.index.outOfScopeExportBundleCount}',
-                    ),
-                    _EvidenceValue(
-                      label: 'Mount entries',
-                      value: '${result.mountInventoryEntryCount}',
-                    ),
-                    for (final reason in result.index.partialReasons)
-                      _EvidenceValue(
-                        label: _partialReasonLabel(reason.reason),
-                        value: '${reason.count}',
-                      ),
-                    _EvidenceValue(
-                      label: 'Executable SHA-256',
-                      value: result.targetExecutableSeal.sha256,
-                    ),
-                    _EvidenceValue(
-                      label: 'Inventory SHA-256',
-                      value: result.mountInventorySeal.sha256,
-                    ),
-                    _EvidenceValue(
-                      label: 'Index SHA-256',
-                      value: result.packageIndexSeal.sha256,
-                    ),
-                    _EvidenceValue(
-                      label: 'Snapshot SHA-256',
-                      value: result.sourceSnapshotSeal.sha256,
-                    ),
-                  ],
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
             ],
           ),
         ),
+        SliverToBoxAdapter(
+          child: ExpansionTile(
+            key: const Key('installed-package-browser-advanced'),
+            tilePadding: EdgeInsets.zero,
+            title: const Text('Advanced snapshot evidence'),
+            children: [
+              _EvidenceValue(
+                label: 'Physical chunks',
+                value: '${result.index.physicalChunkCount}',
+              ),
+              _EvidenceValue(
+                label: 'Winning packages',
+                value: '${result.index.winningExportBundleCount}',
+              ),
+              _EvidenceValue(
+                label: 'Directory indexed',
+                value: '${result.index.directoryIndexedExportBundleCount}',
+              ),
+              _EvidenceValue(
+                label: 'Out of scope',
+                value: '${result.index.outOfScopeExportBundleCount}',
+              ),
+              _EvidenceValue(
+                label: 'Mount entries',
+                value: '${result.mountInventoryEntryCount}',
+              ),
+              for (final reason in result.index.partialReasons)
+                _EvidenceValue(
+                  label: _partialReasonLabel(reason.reason),
+                  value: '${reason.count}',
+                ),
+              _EvidenceValue(
+                label: 'Executable SHA-256',
+                value: result.targetExecutableSeal.sha256,
+              ),
+              _EvidenceValue(
+                label: 'Inventory SHA-256',
+                value: result.mountInventorySeal.sha256,
+              ),
+              _EvidenceValue(
+                label: 'Index SHA-256',
+                value: result.packageIndexSeal.sha256,
+              ),
+              _EvidenceValue(
+                label: 'Snapshot SHA-256',
+                value: result.sourceSnapshotSeal.sha256,
+              ),
+            ],
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
       ],
     );
   }
@@ -355,6 +401,95 @@ class _InstalledPackageBrowserDialogState
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('Copied $path')));
+  }
+
+  Future<void> _inspectCandidate(
+    AuthoringRevision3DataAssetPackageIndexResult snapshot,
+    AuthoringRevision3DataAssetPackageCandidate candidate,
+  ) async {
+    final inspect = widget.inspect;
+    if (inspect == null || _inspectingOrdinal != null) return;
+    final epoch = ++_inspectionEpoch;
+    setState(() {
+      _inspectingOrdinal = candidate.ordinal;
+      _inspectionError = null;
+    });
+    try {
+      final result = await inspect(
+        gameRoot: widget.gameRoot,
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+      if (!mounted || epoch != _inspectionEpoch) return;
+      setState(() => _inspectingOrdinal = null);
+      await _showInspection(result);
+    } catch (error) {
+      if (!mounted || epoch != _inspectionEpoch) return;
+      if (error
+              is Revision3InstalledDataAssetInspectionStaleCheckpointException ||
+          error
+              is Revision3InstalledDataAssetInspectionRequiresReopenException) {
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        Navigator.of(context).pop();
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(
+              error
+                      is Revision3InstalledDataAssetInspectionRequiresReopenException
+                  ? 'The managed project must be reopened before installed packages can be inspected again.'
+                  : 'The project or installed package snapshot changed. Reopen the browser from the current checkpoint.',
+            ),
+          ),
+        );
+        return;
+      }
+      setState(() {
+        _inspectingOrdinal = null;
+        _inspectionError = error;
+      });
+    }
+  }
+
+  Future<void> _showInspection(
+    AuthoringRevision3InstalledDataAssetInspectionResult result,
+  ) {
+    final viewport = MediaQuery.sizeOf(context);
+    final textScale = MediaQuery.textScalerOf(context).scale(1);
+    final width = (viewport.width - 72).clamp(320.0, 1040.0).toDouble();
+    final height = (viewport.height - 170 - (textScale - 1).clamp(0, 4) * 112)
+        .clamp(180.0, 760.0)
+        .toDouble();
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('installed-dataasset-inspection-dialog'),
+        title: Text(result.targetPath),
+        content: SizedBox(
+          width: width,
+          height: height,
+          child: DataAssetInspectionReport(
+            inspection: result.inspection,
+            header: Card(
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: const ListTile(
+                leading: Icon(Icons.policy_outlined),
+                title: Text('Installed package — read-only evidence'),
+                subtitle: Text(
+                  'Extracted to bounded memory from one exact installed snapshot. No game or project files were changed; edit, build, runtime, deployment, and publication authority remain unavailable.',
+                ),
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('installed-dataasset-inspection-close'),
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -431,6 +566,51 @@ class _InstalledPackageError extends StatelessWidget {
     );
   }
 }
+
+class _InstalledPackageInspectionError extends StatelessWidget {
+  const _InstalledPackageInspectionError({required this.error});
+
+  final Object error;
+
+  @override
+  Widget build(BuildContext context) {
+    final stale =
+        error is Revision3InstalledDataAssetInspectionStaleCheckpointException;
+    final requiresReopen =
+        error is Revision3InstalledDataAssetInspectionRequiresReopenException;
+    final message = stale
+        ? 'The project or installed package snapshot changed. Refresh the browser before inspecting again.'
+        : requiresReopen
+        ? 'The managed project must be reopened before installed packages can be inspected again.'
+        : error is ModFfiException
+        ? _installedInspectionNativeMessage(error as ModFfiException)
+        : 'Inspection failed without changing game or project files. Refresh the exact package snapshot and retry.';
+    return Card(
+      key: const Key('installed-package-inspection-error'),
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: ListTile(
+        leading: const Icon(Icons.error_outline),
+        title: const Text('Installed package inspection failed'),
+        subtitle: Text(message),
+      ),
+    );
+  }
+}
+
+String _installedInspectionNativeMessage(
+  ModFfiException error,
+) => switch (error.code) {
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_MISSING' =>
+    'No canonical generated .usmap was found. In UE4SS open Dumpers, run Generate .usmap, then refresh this browser.',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_CHANGED' =>
+    'The generated .usmap inventory changed during inspection. Refresh and try the exact snapshot again.',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_GENERATION_MISMATCH' =>
+    'This installation no longer matches the executable generation pinned by the project.',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_PACKAGE_INDEX_MISMATCH' ||
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_SOURCE_SNAPSHOT_MISMATCH' =>
+    'The installed package inventory changed. Refresh before selecting the asset again.',
+  _ => error.message,
+};
 
 class _EvidenceValue extends StatelessWidget {
   const _EvidenceValue({required this.label, required this.value});

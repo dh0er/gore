@@ -3014,6 +3014,190 @@ void main() {
   );
 
   test(
+    'installed DataAsset inspection preserves exact snapshot and candidate identity',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_inspection_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 29,
+        name: 'Installed DataAsset inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final snapshot = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      final candidate = snapshot.index.candidates.single;
+      final headBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final result = await session.inspectInstalledDataAssetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+
+      expect(result.head.canonicalJson, session.head.canonicalJson);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.candidateOrdinal, candidate.ordinal);
+      expect(result.targetPath, candidate.targetPath);
+      expect(store.installedDataAssetInspectionCalls, 1);
+      expect(store.installedDataAssetInspectionRoots, <String>[root.path]);
+      expect(store.installedDataAssetInspectionGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(
+        identical(store.installedDataAssetInspectionSnapshots.single, snapshot),
+        isTrue,
+      );
+      expect(
+        identical(
+          store.installedDataAssetInspectionCandidates.single,
+          candidate,
+        ),
+        isTrue,
+      );
+      expect(store.prepareCalls, prepareCalls);
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+
+      final otherSnapshot = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      await expectLater(
+        session.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: snapshot,
+          candidate: otherSnapshot.index.candidates.single,
+        ),
+        throwsArgumentError,
+      );
+      expect(store.installedDataAssetInspectionCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'installed DataAsset inspection retries game drift and poisons integrity or head conflict',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 30,
+          name: 'Installed DataAsset inspection retry',
+        ),
+      );
+      final retrySnapshot = await retrySession.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+      final retryCandidate = retrySnapshot.index.candidates.single;
+      retryStore.nextInstalledDataAssetInspectionError = const ModFfiException(
+        command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+        message: 'fake retryable installed DataAsset game drift',
+      );
+
+      await expectLater(
+        retrySession.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: retrySnapshot,
+          candidate: retryCandidate,
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        (await retrySession.inspectInstalledDataAssetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          expectedSnapshot: retrySnapshot,
+          candidate: retryCandidate,
+        )).candidateOrdinal,
+        retryCandidate.ordinal,
+      );
+      expect(retryStore.installedDataAssetInspectionCalls, 2);
+      await retrySession.close();
+
+      for (final entry in <(String, Matcher)>[
+        (
+          'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_STORE_SEAL_MISMATCH',
+          isA<ManagedProjectVerificationException>(),
+        ),
+        (
+          'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT',
+          isA<ManagedProjectHeadConflictException>(),
+        ),
+      ]) {
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'installed_dataasset_inspection_${entry.$1.hashCode}',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 31,
+                name: 'Installed DataAsset inspection poison',
+              ),
+            );
+        final poisonSnapshot = await poisonSession.readDataAssetPackageIndexV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        );
+        final poisonCandidate = poisonSnapshot.index.candidates.single;
+        poisonStore.nextInstalledDataAssetInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+          code: entry.$1,
+          message: 'fake fail-closed installed DataAsset inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectInstalledDataAssetV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            expectedSnapshot: poisonSnapshot,
+            candidate: poisonCandidate,
+          ),
+          throwsA(entry.$2),
+          reason: entry.$1,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: entry.$1);
+        await expectLater(
+          poisonSession.inspectInstalledDataAssetV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            expectedSnapshot: poisonSnapshot,
+            candidate: poisonCandidate,
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: entry.$1,
+        );
+        expect(poisonStore.installedDataAssetInspectionCalls, 1);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
     'verifyCurrentHead drift or reopen mismatch poisons the session',
     () async {
       for (final mode in <String>['head-drift', 'reopen-mismatch']) {
@@ -3804,6 +3988,14 @@ typedef _AfterDataAssetPackageIndex =
       String projectJson,
     );
 
+typedef _AfterInstalledDataAssetInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+      AuthoringRevision3DataAssetPackageCandidate candidate,
+    );
+
 typedef _AfterDataAssetPrepare =
     FutureOr<void> Function(
       String root,
@@ -3861,6 +4053,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int questInspectionCalls = 0;
   int npcInspectionCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
+  int installedDataAssetInspectionCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
@@ -3872,6 +4065,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _AfterQuestInspection? afterQuestInspection;
   _AfterNpcInspection? afterNpcInspection;
   _AfterDataAssetPackageIndex? afterDataAssetPackageIndex;
+  _AfterInstalledDataAssetInspection? afterInstalledDataAssetInspection;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
   _AfterVoiceBuild? afterVoiceBuild;
@@ -3916,6 +4110,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   String? nextNpcInspectionResponseMismatch;
   Object? nextDataAssetPackageIndexError;
   String? nextDataAssetPackageIndexResponseMismatch;
+  Object? nextInstalledDataAssetInspectionError;
   Object? nextDataAssetError;
   String? nextDataAssetResponseMismatch;
   final List<String> contentExpectedHeads = <String>[];
@@ -3929,6 +4124,15 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
   final List<String> dataAssetPackageIndexRoots = <String>[];
   final List<String> dataAssetPackageIndexExpectedHeads = <String>[];
+  final List<String> installedDataAssetInspectionGameRoots = <String>[];
+  final List<String> installedDataAssetInspectionRoots = <String>[];
+  final List<String> installedDataAssetInspectionExpectedHeads = <String>[];
+  final List<AuthoringRevision3DataAssetPackageIndexResult>
+  installedDataAssetInspectionSnapshots =
+      <AuthoringRevision3DataAssetPackageIndexResult>[];
+  final List<AuthoringRevision3DataAssetPackageCandidate>
+  installedDataAssetInspectionCandidates =
+      <AuthoringRevision3DataAssetPackageCandidate>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
@@ -4849,6 +5053,43 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) async {
+    installedDataAssetInspectionCalls++;
+    installedDataAssetInspectionRoots.add(root);
+    installedDataAssetInspectionGameRoots.add(gameRoot);
+    installedDataAssetInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    installedDataAssetInspectionSnapshots.add(expectedSnapshot);
+    installedDataAssetInspectionCandidates.add(candidate);
+    final injectedError = nextInstalledDataAssetInspectionError;
+    nextInstalledDataAssetInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_installed_dataasset_v1',
+        code:
+            'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native installed DataAsset inspection head CAS rejected',
+      );
+    }
+    final hook = afterInstalledDataAssetInspection;
+    afterInstalledDataAssetInspection = null;
+    await hook?.call(root, expectedHead, expectedSnapshot, candidate);
+    return _installedDataAssetInspectionResult(
+      expectedSnapshot: expectedSnapshot,
+      candidate: candidate,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -5199,6 +5440,40 @@ Map<String, Object?> _dataAssetPackageIndexResponse(
     'target_executable_seal': target['executable'],
   };
 }
+
+AuthoringRevision3InstalledDataAssetInspectionResult
+_installedDataAssetInspectionResult({
+  required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+}) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+  <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_ordinal': candidate.ordinal,
+    'head_json': expectedSnapshot.head.canonicalJson,
+    'inspection': validDataAssetInspectionResponse(),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'inspection_only',
+    'package_id_hex': candidate.packageIdHex,
+    'package_index_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
+      'sha256': expectedSnapshot.packageIndexSeal.sha256,
+    },
+    'project_id': expectedSnapshot.projectId,
+    'project_revision': expectedSnapshot.projectRevision,
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+    'source_snapshot_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
+      'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
+    },
+    'target_path': candidate.targetPath,
+  },
+  expectedSnapshot: expectedSnapshot,
+  requestedOrdinal: candidate.ordinal,
+);
 
 AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({
   required AuthoringWorkingHead head,

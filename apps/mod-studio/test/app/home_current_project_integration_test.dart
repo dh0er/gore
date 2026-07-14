@@ -2187,6 +2187,16 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) => throw StateError(
+    'fake managed lease has no installed DataAsset inspector',
+  );
+
+  @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,

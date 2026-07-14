@@ -42,7 +42,6 @@ class DataAssetLab extends ConsumerStatefulWidget {
 
 class _DataAssetLabState extends ConsumerState<DataAssetLab> {
   final _exportIndexController = TextEditingController();
-  final _searchController = TextEditingController();
   String? _uassetPath;
   String? _usmapPath;
   DataAssetInspection? _inspection;
@@ -56,7 +55,6 @@ class _DataAssetLabState extends ConsumerState<DataAssetLab> {
     _requestEpoch++;
     _pickerEpoch++;
     _exportIndexController.dispose();
-    _searchController.dispose();
     super.dispose();
   }
 
@@ -151,32 +149,9 @@ class _DataAssetLabState extends ConsumerState<DataAssetLab> {
     }
   }
 
-  List<DataAssetExportReport> _visibleExports(DataAssetInspection result) {
-    final query = _searchController.text.trim().toLowerCase();
-    if (query.isEmpty) return result.exports;
-    return result.exports
-        .where((report) {
-          if (report.objectName.toLowerCase().contains(query) ||
-              report.classPath.toLowerCase().contains(query) ||
-              (report.schema?.toLowerCase().contains(query) ?? false)) {
-            return true;
-          }
-          return report.leaves.any((leaf) {
-            final selector = leaf.selector;
-            return selector.kind.wireName.contains(query) ||
-                selector.role.wireName.contains(query) ||
-                selector.pathLabel.toLowerCase().contains(query);
-          });
-        })
-        .toList(growable: false);
-  }
-
   @override
   Widget build(BuildContext context) {
     final result = _inspection;
-    final visibleExports = result == null
-        ? const <DataAssetExportReport>[]
-        : _visibleExports(result);
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -205,33 +180,7 @@ class _DataAssetLabState extends ConsumerState<DataAssetLab> {
           ],
           if (result != null) ...[
             const SizedBox(height: 12),
-            _Summary(result: result),
-            const SizedBox(height: 8),
-            TextField(
-              key: const Key('dataasset-search'),
-              controller: _searchController,
-              decoration: const InputDecoration(
-                labelText: 'Filter proven facts',
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 8),
-            Expanded(
-              child: visibleExports.isEmpty
-                  ? const Center(child: Text('No matching export facts.'))
-                  : ListView.builder(
-                      key: const Key('dataasset-export-list'),
-                      itemCount: visibleExports.length,
-                      itemBuilder: (context, index) => _ExportCard(
-                        key: ValueKey(
-                          'dataasset-export-${visibleExports[index].index}',
-                        ),
-                        report: visibleExports[index],
-                      ),
-                    ),
-            ),
+            Expanded(child: DataAssetInspectionReport(inspection: result)),
           ] else
             const Spacer(),
         ],
@@ -389,6 +338,100 @@ class _InspectionError extends StatelessWidget {
       subtitle: Text(error.toString()),
     ),
   );
+}
+
+/// Reusable, read-only rendering of one strictly parsed fixed-leaf inspection.
+/// It exposes proven facts only and deliberately has no mutation controls.
+class DataAssetInspectionReport extends StatefulWidget {
+  const DataAssetInspectionReport({
+    required this.inspection,
+    this.header,
+    super.key,
+  });
+
+  final DataAssetInspection inspection;
+  final Widget? header;
+
+  @override
+  State<DataAssetInspectionReport> createState() =>
+      _DataAssetInspectionReportState();
+}
+
+class _DataAssetInspectionReportState extends State<DataAssetInspectionReport> {
+  final _searchController = TextEditingController();
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<DataAssetExportReport> get _visibleExports {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return widget.inspection.exports;
+    return widget.inspection.exports
+        .where((report) {
+          if (report.objectName.toLowerCase().contains(query) ||
+              report.classPath.toLowerCase().contains(query) ||
+              (report.schema?.toLowerCase().contains(query) ?? false)) {
+            return true;
+          }
+          return report.leaves.any((leaf) {
+            final selector = leaf.selector;
+            return selector.kind.wireName.contains(query) ||
+                selector.role.wireName.contains(query) ||
+                selector.pathLabel.toLowerCase().contains(query);
+          });
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleExports = _visibleExports;
+    return CustomScrollView(
+      key: const Key('dataasset-inspection-report'),
+      slivers: [
+        if (widget.header != null) ...[
+          SliverToBoxAdapter(child: widget.header),
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        ],
+        SliverToBoxAdapter(child: _Summary(result: widget.inspection)),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        SliverToBoxAdapter(
+          child: TextField(
+            key: const Key('dataasset-search'),
+            controller: _searchController,
+            decoration: const InputDecoration(
+              labelText: 'Filter proven facts',
+              prefixIcon: Icon(Icons.search),
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (_) => setState(() {}),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        if (visibleExports.isEmpty)
+          const SliverFillRemaining(
+            hasScrollBody: false,
+            child: Center(child: Text('No matching export facts.')),
+          )
+        else
+          SliverList(
+            key: const Key('dataasset-export-list'),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => _ExportCard(
+                key: ValueKey(
+                  'dataasset-export-${visibleExports[index].index}',
+                ),
+                report: visibleExports[index],
+              ),
+              childCount: visibleExports.length,
+            ),
+          ),
+      ],
+    );
+  }
 }
 
 class _Summary extends StatelessWidget {

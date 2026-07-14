@@ -522,6 +522,15 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringWorkingHead expectedHead,
   });
 
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -708,6 +717,22 @@ final class ModFfiManagedRevision3AuthoringStore
     root: root,
     gameRoot: gameRoot,
     expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) => ffi.authoringStoreInspectRevision3InstalledDataAssetV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    expectedSnapshot: expectedSnapshot,
+    candidate: candidate,
   );
 
   @override
@@ -2145,6 +2170,72 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3DataAssetPackageIndexError,
   );
 
+  /// Inspect one candidate selected by its original ordinal from an exact
+  /// installed package snapshot. The native side rebuilds that snapshot,
+  /// resolves the candidate itself, extracts only to bounded memory, and
+  /// returns read-only fixed-leaf evidence. No path, project, or game file is
+  /// written and this value grants no edit, build, runtime, or publication
+  /// authority.
+  Future<AuthoringRevision3InstalledDataAssetInspectionResult>
+  inspectInstalledDataAssetV1({
+    required String gameRoot,
+    required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+  }) => _core.readExact<AuthoringRevision3InstalledDataAssetInspectionResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 installed DataAsset inspection has no exact project identity',
+        );
+      }
+      if (expectedSnapshot.head.canonicalJson != basis.head.canonicalJson ||
+          expectedSnapshot.projectId != projectId ||
+          expectedSnapshot.projectRevision != projectRevision ||
+          !expectedSnapshot.matchesCanonicalProjectTarget(basis.projectJson) ||
+          candidate.ordinal < 0 ||
+          candidate.ordinal >= expectedSnapshot.index.candidates.length ||
+          !identical(
+            candidate,
+            expectedSnapshot.index.candidates[candidate.ordinal],
+          )) {
+        throw ArgumentError(
+          'revision-3 installed DataAsset selection is not bound to the exact session basis',
+          'expectedSnapshot',
+        );
+      }
+      final result = await _store.inspectInstalledDataAssetV1(
+        root: root.path,
+        gameRoot: gameRoot,
+        expectedHead: basis.head,
+        expectedSnapshot: expectedSnapshot,
+        candidate: candidate,
+      );
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          result.candidateOrdinal != candidate.ordinal ||
+          result.targetPath != candidate.targetPath ||
+          result.packageIdHex != candidate.packageIdHex ||
+          !_sameRevision3DataAssetSeal(
+            result.packageIndexSeal,
+            expectedSnapshot.packageIndexSeal,
+          ) ||
+          !_sameRevision3DataAssetSeal(
+            result.sourceSnapshotSeal,
+            expectedSnapshot.sourceSnapshotSeal,
+          )) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 installed DataAsset inspection disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'inspectInstalledDataAssetV1',
+    handleReadError: _core._throwRevision3InstalledDataAssetInspectionError,
+  );
+
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
   /// The operation shares the session's serialized lane, verifies the fixed head before and after
@@ -2889,6 +2980,43 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3InstalledDataAssetInspectionError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3InstalledDataAssetInspectionErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 installed DataAsset inspection could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT') {
@@ -3510,6 +3638,42 @@ bool _revision3DataAssetPackageIndexErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_REQUEST_INVALID',
   'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_RESPONSE_LIMIT',
 }.contains(code);
+
+bool _revision3InstalledDataAssetInspectionErrorIsRetryable(
+  String code,
+) => const {
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_CANDIDATE_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_EXTRACTION_FAILED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_GENERATION_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_IO',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_LAYOUT_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_PATH_UNSAFE',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INPUT_CHANGED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INPUT_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INPUT_MISSING',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_INSPECTION_FAILED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_IOSTORE_OPEN_FAILED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_PACKAGE_INDEX_FAILED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_PACKAGE_INDEX_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_PLATFORM_UNSUPPORTED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_REQUEST_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_SOURCE_SNAPSHOT_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_CHANGED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_IO',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_MISSING',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_USMAP_UNSAFE',
+}.contains(code);
+
+bool _sameRevision3DataAssetSeal(
+  AuthoringDraftContentSeal left,
+  AuthoringDraftContentSeal right,
+) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
 
 bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_NPC_CATALOG_FAILED',
