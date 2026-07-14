@@ -39,6 +39,145 @@ import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
   testWidgets(
+    'new managed project menu collects metadata and adopts created R3 project',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_create_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      final destination = Directory.systemTemp.createTempSync(
+        'gore_r3_create_project',
+      );
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+        if (destination.existsSync()) destination.deleteSync(recursive: true);
+      });
+      final legacy = _FakeLegacyLease(path: 'before-create.goremod');
+      final managed = _FakeManagedLease(
+        root: destination,
+        projectId: 'edededededededededededededededed',
+        projectRevision: 0,
+        head: _head(0),
+      );
+      ManagedRevision3ProjectCreateRequest? received;
+      var pickerCalls = 0;
+      String? pickerLabel;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        createManagedRevision3: (request) async {
+          received = request;
+          return managed;
+        },
+        openManagedRevision3: (_) async => throw UnimplementedError(),
+      );
+      final container = _container(
+        coordinator: coordinator,
+        gamePath: gameRoot.path,
+        pickManaged: (label) async {
+          pickerCalls++;
+          pickerLabel = label;
+          return destination.path;
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('newManagedRevision3');
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(
+        find.byKey(const Key('revision3-project-create-dialog')),
+        findsOneWidget,
+      );
+      expect(pickerCalls, 0);
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-name')),
+        'Asghan Expanded',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-author')),
+        'Gore Team',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-locales')),
+        'de, en-US',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-create-submit')),
+      );
+      for (var index = 0; index < 10; index++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(pickerCalls, 1);
+      expect(pickerLabel, 'Create managed mod project here');
+      expect(received?.root.path, destination.path);
+      expect(received?.gameRoot, gameRoot.path);
+      expect(received?.name, 'Asghan Expanded');
+      expect(received?.version, '0.1.0');
+      expect(received?.author, 'Gore Team');
+      expect(received?.authoringLocales, const <String>['de', 'en-US']);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      expect(legacy.closeCalls, 1);
+      expect(
+        find.byKey(const Key('managed-revision3-project-view')),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Created managed mod project'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('new managed project requires a configured game root first', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    var creatorCalls = 0;
+    var pickerCalls = 0;
+    final coordinator = CurrentProjectCoordinator(
+      createManagedRevision3: (_) async {
+        creatorCalls++;
+        throw StateError('creator must not run');
+      },
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async {
+        pickerCalls++;
+        return null;
+      },
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    tester
+        .widget<PopupMenuButton<String>>(find.byKey(const Key('project-menu')))
+        .onSelected!('newManagedRevision3');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(
+      find.byKey(const Key('revision3-project-create-dialog')),
+      findsNothing,
+    );
+    expect(pickerCalls, 0);
+    expect(creatorCalls, 0);
+    expect(
+      find.textContaining('Set the Gothic 1 Remake game path'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
     'managed open owns the shell, hides legacy actions, and Ctrl+S verifies',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -1999,6 +2138,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final Directory root;
   @override
   final String projectId;
+  @override
+  String get canonicalProjectJson => '{}';
   @override
   int projectRevision;
   @override

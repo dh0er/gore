@@ -425,5 +425,119 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get projectTransitionCleanupWarning =>
-      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+      '新しいプロジェクトは開いていますが、以前のプロジェクトセッションを完全にクリーンアップできませんでした。クリーンアップは再試行されません。以前のプロジェクトを再度開く前に Mod Studio を再起動してください。';
+
+  @override
+  String get projectNewManagedRevision3 => '新しい管理対象 Mod プロジェクト…';
+
+  @override
+  String get projectNewLegacy => '新しいレガシープロジェクト';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Mod プロジェクトを作成する前に、設定で Gothic 1 Remake のパスを指定してください。';
+
+  @override
+  String get projectCreateDirectoryPickerTitle => 'ここに管理対象 Mod プロジェクトを作成';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return '管理対象 Mod プロジェクト $projectId を作成しました';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return '管理対象 Mod プロジェクトを作成できませんでした: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Mod プロジェクトを作成';
+
+  @override
+  String get projectCreateNameLabel => 'プロジェクト名';
+
+  @override
+  String get projectCreateNameHelper => 'Mod Studio に表示される名前です。';
+
+  @override
+  String get projectCreateVersionLabel => 'バージョン';
+
+  @override
+  String get projectCreateVersionHelper => '0.1.0 などの初期バージョンです。';
+
+  @override
+  String get projectCreateAuthorLabel => '作者';
+
+  @override
+  String get projectCreateAuthorHelper => 'あなた、または Mod チームの名前です。';
+
+  @override
+  String get projectCreateLocalesLabel => '編集言語';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      '正規化されたタグをカンマで区切ります。例: en, de, en-US。';
+
+  @override
+  String get projectCreateBoundary =>
+      '空の管理対象オフラインプロジェクトを作成します。Mod のビルド、配置、実行は行わず、ゲームファイルやセーブファイルも変更しません。';
+
+  @override
+  String get projectCreateSubmit => 'プロジェクトを作成';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '$label は必須です。';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label の先頭と末尾に空白は使用できません。';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label に制御文字は使用できません。';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label に不正なテキストが含まれています。';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label が UTF-8 の上限 $maxBytes バイトを超えています。';
+  }
+
+  @override
+  String get projectCreateLocalesRequired => '編集言語を1つ以上入力してください。';
+
+  @override
+  String get projectCreateLocalesEmptyEntry => '空の言語エントリを削除してください。';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return '編集言語は最大 $maxLocales 個です。';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'ロケール「$locale」は長さ制限内の ASCII である必要があります。';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'ロケール「$locale」の言語は2～8文字の小文字で指定してください。';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'ロケール「$locale」に無効なセグメントがあります。';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'ロケール「$locale」は正規形ではありません。「$canonical」を使用してください。';
+  }
 }

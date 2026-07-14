@@ -378,7 +378,7 @@ fn hex_digest(digest: impl IntoIterator<Item = u8>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gore_story_catalog::{known_generation_v1, Sha256Digest};
+    use gore_story_catalog::{known_generation_v1, known_generation_v2, Sha256Digest};
     use std::collections::BTreeMap;
     use std::fs;
 
@@ -510,8 +510,24 @@ mod tests {
         let response =
             build_for_game_root_v1_inner(&json!({"game_root": game_root}), MAX_RESPONSE_BYTES)
                 .expect("build pinned native NPC catalog");
+        let generation = &response["generation"];
+        let (source_pair_sha256, payload_sha256, catalog_sha256) =
+            if generation == &json!(known_generation_v1()) {
+                (
+                    "aaeabcbee66bfd7402d88282827e76393fbbcb03d9a9e8f8f8eae4d38c056dd4",
+                    "bc84dd8023a2df28e280e385e363748884fe5a49a94e78c990aacfe6271c6d7d",
+                    "b7f1f08f1c10b38a461af45724d9e722c670e67cad49e00356851a85cda46ec1",
+                )
+            } else if generation == &json!(known_generation_v2()) {
+                (
+                    "42a6794e68610572f91ef1c41d5e8a661107fa689e7f0a41c65c302a784d665b",
+                    "d11c6025e2ced4e376adb0ffdcafe8f5a7f9efd2ec6bf800f271be047b6fb9f8",
+                    "342ec6bc1b1acefdd4f34ae652b141ee89a5e20d94679f10c3001b7e77f04946",
+                )
+            } else {
+                panic!("real NPC golden returned an unregistered generation")
+            };
         assert_eq!(response["ok"], true);
-        assert_eq!(response["generation"], json!(known_generation_v1()));
         assert_eq!(response["record_count"], 634);
         assert_eq!(response["rejection_count"], 416);
         assert_eq!(
@@ -527,18 +543,12 @@ mod tests {
         assert_eq!(response["source"]["source_pair_seal"]["byte_len"], 228);
         assert_eq!(
             response["source"]["source_pair_seal"]["sha256"],
-            "aaeabcbee66bfd7402d88282827e76393fbbcb03d9a9e8f8f8eae4d38c056dd4"
+            source_pair_sha256
         );
         assert_eq!(response["payload_seal"]["byte_len"], 1_806_762);
-        assert_eq!(
-            response["payload_seal"]["sha256"],
-            "bc84dd8023a2df28e280e385e363748884fe5a49a94e78c990aacfe6271c6d7d"
-        );
+        assert_eq!(response["payload_seal"]["sha256"], payload_sha256);
         assert_eq!(response["catalog_seal"]["byte_len"], 1_807_892);
-        assert_eq!(
-            response["catalog_seal"]["sha256"],
-            "b7f1f08f1c10b38a461af45724d9e722c670e67cad49e00356851a85cda46ec1"
-        );
+        assert_eq!(response["catalog_seal"]["sha256"], catalog_sha256);
         assert_eq!(response["catalog_json"].as_str().unwrap().len(), 1_808_069);
         assert!(serde_json::to_vec(&response).unwrap().len() <= MAX_RESPONSE_BYTES);
     }

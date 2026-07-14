@@ -117,6 +117,13 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ## Mod Studio boundary
 
+The closed Story/NPC authoring registry currently accepts exactly two reviewed
+Steam generation triples: the retained V1 seal set and Steam build `24169431`.
+Executable, deployment-aware pristine Shipping cache, and `Binds.Cache` must
+all match the same registered row; nearby hashes and cross-generation mixtures
+fail closed. This is hotfix support, not a promise that future or non-Steam
+builds are compatible without their own reviewed row.
+
 Managed revision-3 Home now provides the first Guided NPC Draft wizard. The
 author supplies only a display name and selects a qualified vanilla archetype
 through the searchable picker. The wizard rebuilds and joins the Story and broad

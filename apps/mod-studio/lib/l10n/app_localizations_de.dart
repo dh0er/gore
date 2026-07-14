@@ -434,4 +434,123 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get projectTransitionCleanupWarning =>
       'Das neue Projekt ist geöffnet, aber die vorherige Projektsitzung konnte nicht vollständig bereinigt werden. Es wird kein erneuter Bereinigungsversuch durchgeführt. Starte Mod Studio neu, bevor du das vorherige Projekt erneut öffnest.';
+
+  @override
+  String get projectNewManagedRevision3 => 'Neues verwaltetes Mod-Projekt…';
+
+  @override
+  String get projectNewLegacy => 'Neues Legacy-Projekt';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Lege vor dem Erstellen eines Mod-Projekts unter Einstellungen den Pfad zu Gothic 1 Remake fest.';
+
+  @override
+  String get projectCreateDirectoryPickerTitle =>
+      'Verwaltetes Mod-Projekt hier erstellen';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return 'Verwaltetes Mod-Projekt $projectId erstellt';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return 'Verwaltetes Mod-Projekt konnte nicht erstellt werden: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Mod-Projekt erstellen';
+
+  @override
+  String get projectCreateNameLabel => 'Projektname';
+
+  @override
+  String get projectCreateNameHelper => 'Der in Mod Studio angezeigte Name.';
+
+  @override
+  String get projectCreateVersionLabel => 'Version';
+
+  @override
+  String get projectCreateVersionHelper =>
+      'Eine Startversion, zum Beispiel 0.1.0.';
+
+  @override
+  String get projectCreateAuthorLabel => 'Autor';
+
+  @override
+  String get projectCreateAuthorHelper =>
+      'Dein Name oder der Name deines Mod-Teams.';
+
+  @override
+  String get projectCreateLocalesLabel => 'Bearbeitungssprachen';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      'Kommagetrennte kanonische Tags, zum Beispiel: en, de, en-US.';
+
+  @override
+  String get projectCreateBoundary =>
+      'Dies erstellt ein leeres, verwaltetes Offline-Projekt. Dabei wird keine Mod gebaut, bereitgestellt oder ausgeführt, und Spiel- sowie Speicherdateien bleiben unverändert.';
+
+  @override
+  String get projectCreateSubmit => 'Projekt erstellen';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '$label ist erforderlich.';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label darf nicht mit Leerraum beginnen oder enden.';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label darf keine Steuerzeichen enthalten.';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label enthält fehlerhaften Text.';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label überschreitet das UTF-8-Limit von $maxBytes Byte.';
+  }
+
+  @override
+  String get projectCreateLocalesRequired =>
+      'Gib mindestens eine Bearbeitungssprache ein.';
+
+  @override
+  String get projectCreateLocalesEmptyEntry =>
+      'Entferne den leeren Eintrag für die Bearbeitungssprache.';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return 'Verwende höchstens $maxLocales Bearbeitungssprachen.';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'Das Locale „$locale“ muss begrenztes ASCII sein.';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'Das Locale „$locale“ benötigt eine kleingeschriebene Sprache mit 2–8 Buchstaben.';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'Das Locale „$locale“ enthält ein ungültiges Segment.';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'Das Locale „$locale“ ist nicht kanonisch; verwende „$canonical“.';
+  }
 }

@@ -432,5 +432,124 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get projectTransitionCleanupWarning =>
-      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+      'El nuevo proyecto está abierto, pero no se pudo limpiar por completo la sesión del proyecto anterior. No se volverá a intentar la limpieza. Reinicia Mod Studio antes de volver a abrir el proyecto anterior.';
+
+  @override
+  String get projectNewManagedRevision3 => 'Nuevo proyecto de mod gestionado…';
+
+  @override
+  String get projectNewLegacy => 'Nuevo proyecto legacy';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Configura la ruta de Gothic 1 Remake en Ajustes antes de crear un proyecto de mod.';
+
+  @override
+  String get projectCreateDirectoryPickerTitle =>
+      'Crear aquí el proyecto de mod gestionado';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return 'Proyecto de mod gestionado $projectId creado';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return 'No se pudo crear el proyecto de mod gestionado: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Crear un proyecto de mod';
+
+  @override
+  String get projectCreateNameLabel => 'Nombre del proyecto';
+
+  @override
+  String get projectCreateNameHelper =>
+      'El nombre que se muestra en Mod Studio.';
+
+  @override
+  String get projectCreateVersionLabel => 'Versión';
+
+  @override
+  String get projectCreateVersionHelper => 'Una versión inicial, como 0.1.0.';
+
+  @override
+  String get projectCreateAuthorLabel => 'Autor';
+
+  @override
+  String get projectCreateAuthorHelper =>
+      'Tu nombre o el de tu equipo de modding.';
+
+  @override
+  String get projectCreateLocalesLabel => 'Idiomas de edición';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      'Etiquetas canónicas separadas por comas, por ejemplo: en, de, en-US.';
+
+  @override
+  String get projectCreateBoundary =>
+      'Esto crea un proyecto offline gestionado y vacío. No compila, instala ni ejecuta un mod, y no modifica los archivos del juego ni las partidas guardadas.';
+
+  @override
+  String get projectCreateSubmit => 'Crear proyecto';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '$label es obligatorio.';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label no puede empezar ni terminar con espacios.';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label no puede contener caracteres de control.';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label contiene texto no válido.';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label supera el límite UTF-8 de $maxBytes bytes.';
+  }
+
+  @override
+  String get projectCreateLocalesRequired =>
+      'Introduce al menos un idioma de edición.';
+
+  @override
+  String get projectCreateLocalesEmptyEntry =>
+      'Elimina la entrada vacía de idioma.';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return 'Usa como máximo $maxLocales idiomas de edición.';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'La configuración regional «$locale» debe ser ASCII y tener una longitud limitada.';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'La configuración regional «$locale» necesita un idioma en minúsculas de 2 a 8 letras.';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'La configuración regional «$locale» contiene un segmento no válido.';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'La configuración regional «$locale» no es canónica; usa «$canonical».';
+  }
 }

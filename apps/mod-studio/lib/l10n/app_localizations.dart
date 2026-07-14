@@ -883,6 +883,180 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.'**
   String get projectTransitionCleanupWarning;
+
+  /// No description provided for @projectNewManagedRevision3.
+  ///
+  /// In en, this message translates to:
+  /// **'New managed mod project…'**
+  String get projectNewManagedRevision3;
+
+  /// No description provided for @projectNewLegacy.
+  ///
+  /// In en, this message translates to:
+  /// **'New legacy project'**
+  String get projectNewLegacy;
+
+  /// No description provided for @projectCreateGamePathRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Set the Gothic 1 Remake game path in Settings before creating a mod project.'**
+  String get projectCreateGamePathRequired;
+
+  /// No description provided for @projectCreateDirectoryPickerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create managed mod project here'**
+  String get projectCreateDirectoryPickerTitle;
+
+  /// No description provided for @projectManagedRevision3Created.
+  ///
+  /// In en, this message translates to:
+  /// **'Created managed mod project {projectId}'**
+  String projectManagedRevision3Created(String projectId);
+
+  /// No description provided for @projectManagedRevision3CreateFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed mod project creation failed: {error}'**
+  String projectManagedRevision3CreateFailed(String error);
+
+  /// No description provided for @projectCreateDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a mod project'**
+  String get projectCreateDialogTitle;
+
+  /// No description provided for @projectCreateNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project name'**
+  String get projectCreateNameLabel;
+
+  /// No description provided for @projectCreateNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'The name shown in Mod Studio.'**
+  String get projectCreateNameHelper;
+
+  /// No description provided for @projectCreateVersionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get projectCreateVersionLabel;
+
+  /// No description provided for @projectCreateVersionHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'A starting version, such as 0.1.0.'**
+  String get projectCreateVersionHelper;
+
+  /// No description provided for @projectCreateAuthorLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Author'**
+  String get projectCreateAuthorLabel;
+
+  /// No description provided for @projectCreateAuthorHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Your name or mod-team name.'**
+  String get projectCreateAuthorHelper;
+
+  /// No description provided for @projectCreateLocalesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Authoring languages'**
+  String get projectCreateLocalesLabel;
+
+  /// No description provided for @projectCreateLocalesHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Comma-separated canonical tags, for example: en, de, en-US.'**
+  String get projectCreateLocalesHelper;
+
+  /// No description provided for @projectCreateBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'This creates an empty managed offline project. It does not build, deploy, or run a mod, and it does not change game files or save files.'**
+  String get projectCreateBoundary;
+
+  /// No description provided for @projectCreateSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Create project'**
+  String get projectCreateSubmit;
+
+  /// No description provided for @projectCreateMetadataRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} is required.'**
+  String projectCreateMetadataRequired(String label);
+
+  /// No description provided for @projectCreateMetadataNoOuterWhitespace.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} cannot start or end with whitespace.'**
+  String projectCreateMetadataNoOuterWhitespace(String label);
+
+  /// No description provided for @projectCreateMetadataControlCharacters.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} cannot contain control characters.'**
+  String projectCreateMetadataControlCharacters(String label);
+
+  /// No description provided for @projectCreateMetadataMalformed.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} contains malformed text.'**
+  String projectCreateMetadataMalformed(String label);
+
+  /// No description provided for @projectCreateMetadataTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} exceeds its {maxBytes}-byte UTF-8 limit.'**
+  String projectCreateMetadataTooLong(String label, int maxBytes);
+
+  /// No description provided for @projectCreateLocalesRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter at least one authoring language.'**
+  String get projectCreateLocalesRequired;
+
+  /// No description provided for @projectCreateLocalesEmptyEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove the empty authoring-language entry.'**
+  String get projectCreateLocalesEmptyEntry;
+
+  /// No description provided for @projectCreateLocalesTooMany.
+  ///
+  /// In en, this message translates to:
+  /// **'Use at most {maxLocales} authoring languages.'**
+  String projectCreateLocalesTooMany(int maxLocales);
+
+  /// No description provided for @projectCreateLocaleBoundedAscii.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" must be bounded ASCII.'**
+  String projectCreateLocaleBoundedAscii(String locale);
+
+  /// No description provided for @projectCreateLocaleLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" needs a 2-8 letter lowercase language.'**
+  String projectCreateLocaleLanguage(String locale);
+
+  /// No description provided for @projectCreateLocaleInvalidSegment.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" has an invalid segment.'**
+  String projectCreateLocaleInvalidSegment(String locale);
+
+  /// No description provided for @projectCreateLocaleNotCanonical.
+  ///
+  /// In en, this message translates to:
+  /// **'Locale \"{locale}\" is not canonical; use \"{canonical}\".'**
+  String projectCreateLocaleNotCanonical(String locale, String canonical);
 }
 
 class _AppLocalizationsDelegate

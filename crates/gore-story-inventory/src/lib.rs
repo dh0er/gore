@@ -18,7 +18,7 @@ use gore_as::cache::collision_inventory::{
     collect_collision_inventory, CollisionInventory, CollisionInventoryError,
     MAX_COLLISION_ENTRIES, MAX_COLLISION_ENTRY_BYTES, MAX_COLLISION_TOTAL_BYTES,
 };
-use gore_story_catalog::{known_generation_v1, GameGenerationSeal, StoryCatalogFile};
+use gore_story_catalog::{is_supported_generation, GameGenerationSeal, StoryCatalogFile};
 pub use gore_story_catalog::{ContentSeal, Sha256Digest};
 use serde::de::{self, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -446,7 +446,7 @@ fn validate_wire(wire: &InventoryWire) -> Result<(), StoryInventoryError> {
 
 fn validate_payload(payload: &InventoryPayload) -> Result<(), StoryInventoryError> {
     validate_generation(&payload.generation)?;
-    if payload.generation != known_generation_v1() {
+    if !is_supported_generation(&payload.generation) {
         return Err(StoryInventoryError::UnsupportedGeneration);
     }
     validate_nonzero_seal("story catalog", &payload.story_catalog_seal)?;
@@ -522,7 +522,7 @@ fn validate_catalog_capability(catalog: &StoryCatalogFile) -> Result<(), StoryIn
     // StoryCatalogFile is closed, but revalidate its complete compiled catalog equivalence at the
     // capability boundary rather than trusting that a value has not been corrupted in-process.
     catalog.to_canonical_json()?;
-    if catalog.generation() != &known_generation_v1() {
+    if !is_supported_generation(catalog.generation()) {
         return Err(StoryInventoryError::UnsupportedGeneration);
     }
     Ok(())
@@ -789,7 +789,7 @@ pub enum StoryInventoryError {
     NonCanonicalJson,
     #[error("collision inventory payload seal does not match its canonical payload")]
     PayloadSealMismatch,
-    #[error("collision inventory does not target the compiled known game generation")]
+    #[error("collision inventory does not target a registered supported game generation")]
     UnsupportedGeneration,
     #[error("collision inventory generation or catalog seal disagrees with the trusted catalog")]
     CatalogBindingMismatch,
@@ -844,6 +844,7 @@ mod tests {
         REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
         REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
     };
+    use gore_story_catalog::{known_generation_v1, known_generation_v2};
     use sha2::Sha256;
     use std::collections::BTreeSet;
     use std::fs;
@@ -907,18 +908,72 @@ mod tests {
         }
     }
 
-    fn artifact() -> BaseGameCollisionInventory {
-        let shipping = b"synthetic shipping";
-        let binds = b"synthetic binds";
-        let catalog = trusted_catalog();
+    fn artifact_for_generation(
+        generation: GameGenerationSeal,
+        story_catalog_seal: ContentSeal,
+    ) -> BaseGameCollisionInventory {
         build_from_collected(
-            catalog.generation().clone(),
-            catalog.catalog_seal().clone(),
-            shipping,
-            binds,
+            generation,
+            story_catalog_seal,
+            b"synthetic shipping",
+            b"synthetic binds",
             collected(),
         )
         .unwrap()
+    }
+
+    fn artifact() -> BaseGameCollisionInventory {
+        let catalog = trusted_catalog();
+        artifact_for_generation(catalog.generation().clone(), catalog.catalog_seal().clone())
+    }
+
+    #[test]
+    fn supported_hotfix_generation_is_accepted_only_as_an_exact_triple() {
+        let generation = known_generation_v2();
+        assert_ne!(generation, known_generation_v1());
+        assert!(is_supported_generation(&generation));
+
+        let artifact = artifact_for_generation(
+            generation.clone(),
+            seal(b"trusted supported-v2 Story catalog"),
+        );
+        assert_eq!(artifact.generation(), &generation);
+        assert_eq!(
+            artifact.wire.inventory.source.shipping_cache,
+            generation.shipping_cache
+        );
+        assert_eq!(
+            artifact.wire.inventory.source.binds_cache,
+            generation.binds_cache
+        );
+        validate_wire(&artifact.wire).unwrap();
+
+        let mut source_drift = artifact.wire.clone();
+        source_drift.inventory.source.binds_cache.sha256 = Sha256Digest::from_bytes([0x5c; 32]);
+        let payload = canonical_json(&source_drift.inventory, "source-drift payload").unwrap();
+        source_drift.payload_seal = seal_bytes(&payload);
+        assert!(matches!(
+            validate_wire(&source_drift),
+            Err(StoryInventoryError::Invariant(_))
+        ));
+
+        let mut nearby_unknown = artifact.wire.clone();
+        nearby_unknown.inventory.generation.executable.sha256 =
+            Sha256Digest::from_bytes([0xa5; 32]);
+        assert_eq!(
+            nearby_unknown.inventory.generation.edition,
+            generation.edition
+        );
+        assert!(!is_supported_generation(
+            &nearby_unknown.inventory.generation
+        ));
+        let payload =
+            canonical_json(&nearby_unknown.inventory, "unknown-generation payload").unwrap();
+        nearby_unknown.payload_seal = seal_bytes(&payload);
+        assert!(matches!(
+            validate_wire(&nearby_unknown),
+            Err(StoryInventoryError::UnsupportedGeneration)
+        ));
     }
 
     fn authoring_seal(seal: &ContentSeal) -> AuthoringContentSeal {

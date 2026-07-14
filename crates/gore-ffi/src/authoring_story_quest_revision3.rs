@@ -626,7 +626,6 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use gore_authoring::{AssetVerification, ProjectRevision3, WorkingProjectStore};
-    use gore_story_catalog::known_generation_v1;
     use gore_story_inventory::Revision3QuestDraftInsertRequestV3;
     use serde_json::json;
     use tempfile::TempDir;
@@ -700,15 +699,15 @@ mod tests {
         output
     }
 
-    fn live_project_json() -> String {
-        let generation = known_generation_v1();
+    fn live_project_json(game_root: &Path) -> String {
+        let (catalog, _, _) = build_fresh_game_inputs(game_root).unwrap();
         let project: ProjectRevision3 = serde_json::from_value(json!({
             "format": 2,
             "schema_revision": 3,
             "project_id": "93939393939393939393939393939393",
             "revision": 0,
             "meta": {"name": "Live Quest FFI", "version": "1.0.0", "author": "tests"},
-            "target": {"executable": generation.executable},
+            "target": {"executable": catalog.generation().executable},
             "authoring_locales": [],
             "entities": {},
             "asset_store": {"assets": {}}
@@ -975,7 +974,7 @@ mod tests {
             .expect("set GORE_STORY_GAME_ROOT to run the live revision-3 Quest FFI test");
         let temp = TempDir::new().unwrap();
         let store = WorkingProjectStore::at(temp.path(), ffi_store_limits()).unwrap();
-        let base_json = live_project_json();
+        let base_json = live_project_json(Path::new(&game_root));
         let base = ProjectRevision3::from_json(&base_json).unwrap();
         let published = store.prepare_revision3_checkpoint(None, &base).unwrap();
         fs::write(temp.path().join("gore-project.json"), &published.head_bytes).unwrap();

@@ -412,6 +412,7 @@ fn map_inventory_error(error: StoryInventoryError) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gore_story_catalog::{known_generation_v1, known_generation_v2};
     use std::fs;
 
     #[test]
@@ -523,13 +524,62 @@ mod tests {
         assert_eq!(response["publication_status"], "not_supported");
         let artifact: Value = serde_json::from_str(response["inventory_json"].as_str().unwrap())
             .expect("native command returned canonical inventory JSON");
+        let generation = &response["generation"];
+        if generation == &json!(known_generation_v1()) {
+            assert_eq!(
+                response["story_catalog_seal"],
+                json!({
+                    "byte_len": 5_611,
+                    "sha256": "51192393aa28cff00b1a4e59de7793a8db354e30692569719c4b46e2f9bc4853",
+                })
+            );
+        } else if generation == &json!(known_generation_v2()) {
+            assert_eq!(
+                response["story_catalog_seal"],
+                json!({
+                    "byte_len": 5_611,
+                    "sha256": "e93bbd62fc824ca8166c3ab9b67f21cf1493295969bf19adff438d665fc16bc3",
+                })
+            );
+            assert_eq!(
+                response["source_pair_seal"],
+                json!({
+                    "byte_len": 129_298_188,
+                    "sha256": "6a1af5da3cecfd524010e579d2b274c4f478d2b87a9cd9e2a874f6747a2ce8d1",
+                })
+            );
+            assert_eq!(
+                response["payload_seal"],
+                json!({
+                    "byte_len": 3_517_746,
+                    "sha256": "bfc4bb8c7a98d363fbb593bf9906f7d8e6f1476227196f3fc19b2f92a5b39689",
+                })
+            );
+        } else {
+            panic!("real Story inventory golden returned an unregistered generation")
+        }
         assert_eq!(artifact["format"], "story_script_collision_inventory");
         assert_eq!(artifact["schema_revision"], 1);
-        assert!(artifact["inventory"]["modules"]
-            .as_array()
-            .is_some_and(|entries| !entries.is_empty()));
-        assert!(artifact["inventory"]["symbols"]
-            .as_array()
-            .is_some_and(|entries| !entries.is_empty()));
+        assert_eq!(response["source_pair_seal"]["byte_len"], 129_298_188);
+        assert_eq!(response["payload_seal"]["byte_len"], 3_517_746);
+        assert_eq!(
+            response["inventory_json"].as_str().unwrap().len(),
+            3_517_936
+        );
+        assert_eq!(
+            artifact["inventory"]["modules"].as_array().unwrap().len(),
+            7_300
+        );
+        assert_eq!(
+            artifact["inventory"]["relative_paths"]
+                .as_array()
+                .unwrap()
+                .len(),
+            7_300
+        );
+        assert_eq!(
+            artifact["inventory"]["symbols"].as_array().unwrap().len(),
+            77_038
+        );
     }
 }

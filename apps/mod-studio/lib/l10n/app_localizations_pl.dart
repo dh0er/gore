@@ -429,5 +429,123 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get projectTransitionCleanupWarning =>
-      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+      'Nowy projekt jest otwarty, ale nie udało się całkowicie wyczyścić sesji poprzedniego projektu. Czyszczenie nie zostanie ponowione. Uruchom ponownie Mod Studio przed ponownym otwarciem poprzedniego projektu.';
+
+  @override
+  String get projectNewManagedRevision3 => 'Nowy zarządzany projekt moda…';
+
+  @override
+  String get projectNewLegacy => 'Nowy projekt starszego typu';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Przed utworzeniem projektu moda ustaw ścieżkę do Gothic 1 Remake w Ustawieniach.';
+
+  @override
+  String get projectCreateDirectoryPickerTitle =>
+      'Utwórz tutaj zarządzany projekt moda';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return 'Utworzono zarządzany projekt moda $projectId';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return 'Nie udało się utworzyć zarządzanego projektu moda: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Utwórz projekt moda';
+
+  @override
+  String get projectCreateNameLabel => 'Nazwa projektu';
+
+  @override
+  String get projectCreateNameHelper => 'Nazwa wyświetlana w Mod Studio.';
+
+  @override
+  String get projectCreateVersionLabel => 'Wersja';
+
+  @override
+  String get projectCreateVersionHelper =>
+      'Wersja początkowa, na przykład 0.1.0.';
+
+  @override
+  String get projectCreateAuthorLabel => 'Autor';
+
+  @override
+  String get projectCreateAuthorHelper =>
+      'Twoja nazwa lub nazwa zespołu modderskiego.';
+
+  @override
+  String get projectCreateLocalesLabel => 'Języki edycji';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      'Kanoniczne tagi rozdzielone przecinkami, na przykład: en, de, en-US.';
+
+  @override
+  String get projectCreateBoundary =>
+      'Tworzy pusty, zarządzany projekt offline. Nie kompiluje, nie wdraża ani nie uruchamia moda oraz nie zmienia plików gry ani zapisów.';
+
+  @override
+  String get projectCreateSubmit => 'Utwórz projekt';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return 'Pole $label jest wymagane.';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return 'Pole $label nie może zaczynać się ani kończyć białym znakiem.';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return 'Pole $label nie może zawierać znaków sterujących.';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return 'Pole $label zawiera nieprawidłowy tekst.';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return 'Pole $label przekracza limit UTF-8 wynoszący $maxBytes bajtów.';
+  }
+
+  @override
+  String get projectCreateLocalesRequired =>
+      'Wprowadź co najmniej jeden język edycji.';
+
+  @override
+  String get projectCreateLocalesEmptyEntry => 'Usuń pusty wpis języka.';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return 'Użyj najwyżej $maxLocales języków edycji.';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'Ustawienie regionalne „$locale” musi być ograniczonym ciągiem ASCII.';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'Ustawienie regionalne „$locale” wymaga języka zapisanego 2–8 małymi literami.';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'Ustawienie regionalne „$locale” zawiera nieprawidłowy segment.';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'Ustawienie regionalne „$locale” nie jest kanoniczne; użyj „$canonical”.';
+  }
 }

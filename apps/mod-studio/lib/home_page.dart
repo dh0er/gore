@@ -47,6 +47,7 @@ import 'project/revision3_quest_source_inspection_dialog.dart';
 import 'project/revision3_quest_transitions_authoring.dart';
 import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
+import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
@@ -71,6 +72,16 @@ final managedRevision3DirectoryPickerProvider =
       (ref) =>
           (confirmButtonText) =>
               getDirectoryPath(confirmButtonText: confirmButtonText),
+    );
+
+typedef ManagedRevision3ProjectCreatePrompt =
+    Future<Revision3ProjectCreateFormResult?> Function(BuildContext context);
+
+/// Injectable metadata-form boundary. Project creation, generation discovery,
+/// and filesystem mutation remain owned by the current-project coordinator.
+final managedRevision3ProjectCreatePromptProvider =
+    Provider<ManagedRevision3ProjectCreatePrompt>(
+      (ref) => showRevision3ProjectCreateDialog,
     );
 
 /// Optional picker seam for alternate shells and deterministic widget tests.
@@ -352,6 +363,46 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   });
 
+  Future<void> _newManagedRevision3Project() => _runProjectAction(() async {
+    if (!await _confirmDiscardIfDirty() || !mounted) return;
+    final l10n = AppLocalizations.of(context);
+    final gameRoot = gameRootFromExe(ref.read(gameExePathProvider));
+    if (gameRoot == null) {
+      _snack(l10n.projectCreateGamePathRequired);
+      return;
+    }
+    try {
+      final form = await ref.read(managedRevision3ProjectCreatePromptProvider)(
+        context,
+      );
+      if (form == null || !mounted) return;
+      final path = await ref.read(managedRevision3DirectoryPickerProvider)(
+        l10n.projectCreateDirectoryPickerTitle,
+      );
+      if (path == null || !mounted) return;
+      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+      final created = await coordinator.createManagedRevision3(
+        ManagedRevision3ProjectCreateRequest(
+          root: Directory(path),
+          gameRoot: gameRoot,
+          name: form.name,
+          version: form.version,
+          author: form.author,
+          authoringLocales: form.authoringLocales,
+        ),
+      );
+      if (!_showTransitionCleanupWarningIfAdded(
+        coordinator,
+        cleanupFailuresBefore,
+      )) {
+        _snack(l10n.projectManagedRevision3Created(created.projectId));
+      }
+    } catch (e) {
+      _snack(l10n.projectManagedRevision3CreateFailed('$e'));
+    }
+  });
+
   Future<void> _openProject() => _runProjectAction(() async {
     if (!await _confirmDiscardIfDirty()) return;
     try {
@@ -490,6 +541,8 @@ class _HomePageState extends ConsumerState<HomePage>
             tooltip: 'Project',
             onSelected: (value) async {
               switch (value) {
+                case 'newManagedRevision3':
+                  await _newManagedRevision3Project();
                 case 'new':
                   await _newProject();
                 case 'open':
@@ -508,9 +561,16 @@ class _HomePageState extends ConsumerState<HomePage>
             },
             itemBuilder: (_) => <PopupMenuEntry<String>>[
               PopupMenuItem(
+                key: const Key('project-new-managed-revision3'),
+                value: 'newManagedRevision3',
+                enabled: !_projectActionBusy,
+                child: Text(l10n.projectNewManagedRevision3),
+              ),
+              PopupMenuItem(
+                key: const Key('project-new-legacy'),
                 value: 'new',
                 enabled: !_projectActionBusy,
-                child: const Text('New project'),
+                child: Text(l10n.projectNewLegacy),
               ),
               PopupMenuItem(
                 value: 'open',

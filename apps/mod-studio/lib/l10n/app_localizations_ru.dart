@@ -432,5 +432,122 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get projectTransitionCleanupWarning =>
-      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+      'Новый проект открыт, но не удалось полностью очистить сеанс предыдущего проекта. Повторная очистка выполняться не будет. Перезапустите Mod Studio, прежде чем снова открывать предыдущий проект.';
+
+  @override
+  String get projectNewManagedRevision3 => 'Новый управляемый проект мода…';
+
+  @override
+  String get projectNewLegacy => 'Новый проект старого формата';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Перед созданием проекта мода укажите путь к Gothic 1 Remake в настройках.';
+
+  @override
+  String get projectCreateDirectoryPickerTitle =>
+      'Создать здесь управляемый проект мода';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return 'Управляемый проект мода $projectId создан';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return 'Не удалось создать управляемый проект мода: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Создать проект мода';
+
+  @override
+  String get projectCreateNameLabel => 'Название проекта';
+
+  @override
+  String get projectCreateNameHelper => 'Название, отображаемое в Mod Studio.';
+
+  @override
+  String get projectCreateVersionLabel => 'Версия';
+
+  @override
+  String get projectCreateVersionHelper => 'Начальная версия, например 0.1.0.';
+
+  @override
+  String get projectCreateAuthorLabel => 'Автор';
+
+  @override
+  String get projectCreateAuthorHelper =>
+      'Ваше имя или название команды моддеров.';
+
+  @override
+  String get projectCreateLocalesLabel => 'Языки редактирования';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      'Канонические теги через запятую, например: en, de, en-US.';
+
+  @override
+  String get projectCreateBoundary =>
+      'Будет создан пустой управляемый офлайн-проект. Мод не компилируется, не устанавливается и не запускается; файлы игры и сохранений не изменяются.';
+
+  @override
+  String get projectCreateSubmit => 'Создать проект';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return 'Поле «$label» обязательно.';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return 'Поле «$label» не может начинаться или заканчиваться пробелом.';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return 'Поле «$label» не может содержать управляющие символы.';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return 'Поле «$label» содержит некорректный текст.';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return 'Поле «$label» превышает ограничение UTF-8 в $maxBytes байт.';
+  }
+
+  @override
+  String get projectCreateLocalesRequired =>
+      'Укажите хотя бы один язык редактирования.';
+
+  @override
+  String get projectCreateLocalesEmptyEntry => 'Удалите пустую запись языка.';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return 'Используйте не более $maxLocales языков редактирования.';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'Локаль «$locale» должна быть ограниченной строкой ASCII.';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'В локали «$locale» язык должен состоять из 2–8 строчных букв.';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'Локаль «$locale» содержит недопустимый сегмент.';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'Локаль «$locale» не каноническая; используйте «$canonical».';
+  }
 }

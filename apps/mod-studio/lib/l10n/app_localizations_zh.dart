@@ -425,7 +425,120 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get projectTransitionCleanupWarning =>
-      'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+      '新项目已打开，但无法完全清理上一个项目的会话。不会再次尝试清理。重新打开上一个项目前，请重启 Mod Studio。';
+
+  @override
+  String get projectNewManagedRevision3 => '新建托管模组项目…';
+
+  @override
+  String get projectNewLegacy => '新建旧版项目';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      '创建模组项目前，请先在设置中指定 Gothic 1 Remake 路径。';
+
+  @override
+  String get projectCreateDirectoryPickerTitle => '在此创建托管模组项目';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return '已创建托管模组项目 $projectId';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return '无法创建托管模组项目：$error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => '创建模组项目';
+
+  @override
+  String get projectCreateNameLabel => '项目名称';
+
+  @override
+  String get projectCreateNameHelper => '在 Mod Studio 中显示的名称。';
+
+  @override
+  String get projectCreateVersionLabel => '版本';
+
+  @override
+  String get projectCreateVersionHelper => '初始版本，例如 0.1.0。';
+
+  @override
+  String get projectCreateAuthorLabel => '作者';
+
+  @override
+  String get projectCreateAuthorHelper => '你的姓名或模组团队名称。';
+
+  @override
+  String get projectCreateLocalesLabel => '创作语言';
+
+  @override
+  String get projectCreateLocalesHelper => '使用逗号分隔的规范标签，例如：en, de, en-US。';
+
+  @override
+  String get projectCreateBoundary =>
+      '这将创建一个空的托管离线项目。不会构建、部署或运行模组，也不会修改游戏文件或存档。';
+
+  @override
+  String get projectCreateSubmit => '创建项目';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '必须填写$label。';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label的开头或结尾不能有空白字符。';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label不能包含控制字符。';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label包含格式错误的文本。';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label超过 $maxBytes 字节的 UTF-8 限制。';
+  }
+
+  @override
+  String get projectCreateLocalesRequired => '请至少输入一种创作语言。';
+
+  @override
+  String get projectCreateLocalesEmptyEntry => '请删除空的语言项。';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return '最多可使用 $maxLocales 种创作语言。';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return '区域设置“$locale”必须是长度受限的 ASCII。';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return '区域设置“$locale”的语言必须是 2–8 个小写字母。';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return '区域设置“$locale”包含无效片段。';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return '区域设置“$locale”不是规范形式；请使用“$canonical”。';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -756,4 +869,121 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get managerDeployActive =>
       'mod-manager 的 loadout 已启用。请先在 gore-manager 中执行 undeploy。';
+
+  @override
+  String get projectTransitionCleanupWarning =>
+      '新项目已打开，但无法完全清理上一个项目的会话。不会再次尝试清理。重新打开上一个项目前，请重启 Mod Studio。';
+
+  @override
+  String get projectNewManagedRevision3 => '新建托管模组项目…';
+
+  @override
+  String get projectNewLegacy => '新建旧版项目';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      '创建模组项目前，请先在设置中指定 Gothic 1 Remake 路径。';
+
+  @override
+  String get projectCreateDirectoryPickerTitle => '在此创建托管模组项目';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return '已创建托管模组项目 $projectId';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return '无法创建托管模组项目：$error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => '创建模组项目';
+
+  @override
+  String get projectCreateNameLabel => '项目名称';
+
+  @override
+  String get projectCreateNameHelper => '在 Mod Studio 中显示的名称。';
+
+  @override
+  String get projectCreateVersionLabel => '版本';
+
+  @override
+  String get projectCreateVersionHelper => '初始版本，例如 0.1.0。';
+
+  @override
+  String get projectCreateAuthorLabel => '作者';
+
+  @override
+  String get projectCreateAuthorHelper => '你的姓名或模组团队名称。';
+
+  @override
+  String get projectCreateLocalesLabel => '创作语言';
+
+  @override
+  String get projectCreateLocalesHelper => '使用逗号分隔的规范标签，例如：en, de, en-US。';
+
+  @override
+  String get projectCreateBoundary =>
+      '这将创建一个空的托管离线项目。不会构建、部署或运行模组，也不会修改游戏文件或存档。';
+
+  @override
+  String get projectCreateSubmit => '创建项目';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '必须填写$label。';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label的开头或结尾不能有空白字符。';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label不能包含控制字符。';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label包含格式错误的文本。';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label超过 $maxBytes 字节的 UTF-8 限制。';
+  }
+
+  @override
+  String get projectCreateLocalesRequired => '请至少输入一种创作语言。';
+
+  @override
+  String get projectCreateLocalesEmptyEntry => '请删除空的语言项。';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return '最多可使用 $maxLocales 种创作语言。';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return '区域设置“$locale”必须是长度受限的 ASCII。';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return '区域设置“$locale”的语言必须是 2–8 个小写字母。';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return '区域设置“$locale”包含无效片段。';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return '区域设置“$locale”不是规范形式；请使用“$canonical”。';
+  }
 }

@@ -1,9 +1,9 @@
 //! Canonical, bounded persistence for structurally verified NPC archetype linkage.
 //!
 //! A catalog can be built or reopened only with a closed [`StoryCatalogFile`] capability for the
-//! compiled generation and the exact Shipping/Binds bytes named by that capability. Linkage is
-//! verified offline from sealed cache defaults. Runtime behavior, mod building, deployment, and
-//! publication remain explicitly unsupported.
+//! exact registered generation and the exact Shipping/Binds bytes named by that capability.
+//! Linkage is verified offline from sealed cache defaults. Runtime behavior, mod building,
+//! deployment, and publication remain explicitly unsupported.
 
 use std::io::{self, Write};
 
@@ -14,7 +14,7 @@ use gore_as::cache::npc_archetypes::{
     MAX_NPC_BINDS_BYTES, MAX_NPC_CACHE_BYTES, MAX_NPC_CLASSES, MAX_NPC_STRING_BYTES,
 };
 use gore_story_catalog::{
-    known_generation_v1, ContentSeal, GameGenerationSeal, Sha256Digest, StoryCatalogFile,
+    is_supported_generation, ContentSeal, GameGenerationSeal, Sha256Digest, StoryCatalogFile,
 };
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -360,21 +360,21 @@ fn validate_capability_and_inputs(
     story_catalog
         .to_canonical_json()
         .map_err(|error| NpcCatalogError::InvalidStoryCatalog(error.to_string()))?;
-    let known = known_generation_v1();
-    if story_catalog.generation() != &known {
+    let generation = story_catalog.generation();
+    if !is_supported_generation(generation) {
         return Err(NpcCatalogError::UnsupportedGeneration);
     }
     validate_exact_input(
         "Shipping cache",
         shipping_cache,
         MAX_NPC_CACHE_BYTES,
-        &known.shipping_cache,
+        &generation.shipping_cache,
     )?;
     validate_exact_input(
         "Binds cache",
         binds_cache,
         MAX_NPC_BINDS_BYTES,
-        &known.binds_cache,
+        &generation.binds_cache,
     )?;
     Ok(())
 }
@@ -635,7 +635,7 @@ fn validate_wire_integrity(wire: &NpcCatalogWire) -> Result<(), NpcCatalogError>
             wire.schema_revision, SCHEMA_REVISION
         )));
     }
-    if wire.catalog.generation != known_generation_v1() {
+    if !is_supported_generation(&wire.catalog.generation) {
         return Err(NpcCatalogError::UnsupportedGeneration);
     }
     if wire.catalog.source.shipping_cache != wire.catalog.generation.shipping_cache
@@ -1012,6 +1012,7 @@ fn preflight_json_string_tokens(bytes: &[u8]) -> Result<(), NpcCatalogError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gore_story_catalog::{known_generation_v1, known_generation_v2};
     use std::collections::BTreeSet;
 
     fn story_catalog() -> StoryCatalogFile {
@@ -1076,15 +1077,27 @@ mod tests {
         }
     }
 
-    fn file_from_payload(mut payload: NpcCatalogPayload) -> NpcArchetypeCatalogFile {
+    fn file_from_payload(payload: NpcCatalogPayload) -> NpcArchetypeCatalogFile {
+        let story = story_catalog();
+        file_from_payload_for_generation(
+            payload,
+            story.generation().clone(),
+            story.catalog_seal().clone(),
+        )
+    }
+
+    fn file_from_payload_for_generation(
+        mut payload: NpcCatalogPayload,
+        generation: GameGenerationSeal,
+        story_catalog_seal: ContentSeal,
+    ) -> NpcArchetypeCatalogFile {
         normalize_payload(&mut payload);
         validate_payload(&payload).unwrap();
-        let story = story_catalog();
-        let source = build_source(story.generation()).unwrap();
+        let source = build_source(&generation).unwrap();
         let payload_bytes = canonical_json(&payload, "payload", MAX_PAYLOAD_JSON_BYTES).unwrap();
         let body = NpcCatalogBody {
-            generation: story.generation().clone(),
-            story_catalog_seal: story.catalog_seal().clone(),
+            generation,
+            story_catalog_seal,
             qualification: NpcCatalogQualification {
                 linkage: LinkageQualification::SealedLinkageVerified,
                 runtime: RuntimeQualification::RuntimeUnqualified,
@@ -1107,6 +1120,56 @@ mod tests {
         };
         validate_wire_integrity(&file.wire).unwrap();
         file
+    }
+
+    #[test]
+    fn supported_hotfix_generation_is_accepted_only_as_an_exact_triple() {
+        let generation = known_generation_v2();
+        assert_ne!(generation, known_generation_v1());
+        assert!(is_supported_generation(&generation));
+
+        let file = file_from_payload_for_generation(
+            payload(),
+            generation.clone(),
+            seal_bytes(b"trusted supported-v2 Story catalog"),
+        );
+        assert_eq!(file.generation(), &generation);
+        assert_eq!(file.source().shipping_cache, generation.shipping_cache);
+        assert_eq!(file.source().binds_cache, generation.binds_cache);
+        validate_wire_integrity(&file.wire).unwrap();
+
+        let mut source_drift = file.wire.clone();
+        source_drift.catalog.source.shipping_cache.sha256 = Sha256Digest::from_bytes([0x5c; 32]);
+        let body = canonical_json(
+            &source_drift.catalog,
+            "source-drift body",
+            MAX_CATALOG_JSON_BYTES,
+        )
+        .unwrap();
+        source_drift.catalog_seal = seal_bytes(&body);
+        assert!(matches!(
+            validate_wire_integrity(&source_drift),
+            Err(NpcCatalogError::Invariant(_))
+        ));
+
+        let mut nearby_unknown = file.wire.clone();
+        nearby_unknown.catalog.generation.executable.sha256 = Sha256Digest::from_bytes([0xa5; 32]);
+        assert_eq!(
+            nearby_unknown.catalog.generation.edition,
+            generation.edition
+        );
+        assert!(!is_supported_generation(&nearby_unknown.catalog.generation));
+        let body = canonical_json(
+            &nearby_unknown.catalog,
+            "unknown-generation body",
+            MAX_CATALOG_JSON_BYTES,
+        )
+        .unwrap();
+        nearby_unknown.catalog_seal = seal_bytes(&body);
+        assert!(matches!(
+            validate_wire_integrity(&nearby_unknown),
+            Err(NpcCatalogError::UnsupportedGeneration)
+        ));
     }
 
     #[test]

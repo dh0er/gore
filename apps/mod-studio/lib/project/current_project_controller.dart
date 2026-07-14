@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
+import 'package:path/path.dart' as p;
 
 import '../core/mod_ffi.dart';
 import '../core/providers.dart';
@@ -15,6 +17,7 @@ import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
 import 'revision3_quest_transitions_authoring.dart';
+import 'revision3_project_bootstrap.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 
@@ -97,6 +100,11 @@ final class CurrentProjectCoordinatorClosedException
     extends CurrentProjectCoordinatorException {
   const CurrentProjectCoordinatorClosedException()
     : super('the current-project coordinator is shutting down or disposed');
+}
+
+final class ManagedRevision3ProjectCreationException
+    extends CurrentProjectCoordinatorException {
+  const ManagedRevision3ProjectCreationException(super.message);
 }
 
 final class Revision3QuestSourceInspectionRequiresReopenException
@@ -190,6 +198,7 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Directory get root;
   String get projectId;
   int get projectRevision;
+  String get canonicalProjectJson;
   AuthoringWorkingHead get head;
   bool get requiresReopen;
 
@@ -286,6 +295,43 @@ abstract interface class ManagedRevision3CurrentProjectLease {
 typedef ManagedRevision3CurrentProjectOpener =
     Future<ManagedRevision3CurrentProjectLease> Function(Directory root);
 
+typedef ManagedRevision3ProjectSessionCreator =
+    Future<ManagedRevision3CurrentProjectLease> Function({
+      required Directory root,
+      required String projectJson,
+    });
+
+typedef ManagedRevision3StoryGenerationLoader =
+    Future<AuthoringStoryCatalogGeneration> Function(String gameRoot);
+
+/// Friendly inputs for one brand-new, empty managed revision-3 project.
+///
+/// The creator owns generation discovery, canonical project construction, and
+/// first-head publication. The coordinator receives only the fully opened
+/// candidate lease and therefore cannot accidentally adopt a partial project.
+final class ManagedRevision3ProjectCreateRequest {
+  ManagedRevision3ProjectCreateRequest({
+    required this.root,
+    required this.gameRoot,
+    required this.name,
+    required this.version,
+    required this.author,
+    required List<String> authoringLocales,
+  }) : authoringLocales = List<String>.unmodifiable(authoringLocales);
+
+  final Directory root;
+  final String gameRoot;
+  final String name;
+  final String version;
+  final String author;
+  final List<String> authoringLocales;
+}
+
+typedef ManagedRevision3CurrentProjectCreator =
+    Future<ManagedRevision3CurrentProjectLease> Function(
+      ManagedRevision3ProjectCreateRequest request,
+    );
+
 typedef LegacyCurrentProjectLeaseFactory = LegacyCurrentProjectLease Function();
 
 /// Compatibility adapter kept intentionally narrow so the existing provider
@@ -363,6 +409,9 @@ final class _ManagedRevision3SessionLease
 
   @override
   int get projectRevision => _session.projectRevision;
+
+  @override
+  String get canonicalProjectJson => _session.projectJson;
 
   @override
   bool get requiresReopen => _session.requiresReopen;
@@ -752,6 +801,30 @@ final legacyCurrentProjectLeaseFactoryProvider =
       return () => ProjectSessionLegacyCurrentProjectLease(session);
     });
 
+final managedRevision3StoryGenerationLoaderProvider =
+    Provider<ManagedRevision3StoryGenerationLoader>((ref) {
+      final ffi = ModFfi(ref.read(coreServiceProvider));
+      return (gameRoot) async =>
+          (await ffi.authoringStoryCatalogV1BuildForGameRoot(
+            gameRoot: gameRoot,
+          )).generation;
+    });
+
+final managedRevision3ProjectSessionCreatorProvider =
+    Provider<ManagedRevision3ProjectSessionCreator>((ref) {
+      final store = ModFfiManagedRevision3AuthoringStore(
+        ModFfi(ref.read(coreServiceProvider)),
+      );
+      return ({required root, required projectJson}) async =>
+          _ManagedRevision3SessionLease(
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: root,
+              store: store,
+              projectJson: projectJson,
+            ),
+          );
+    });
+
 final managedRevision3CurrentProjectOpenerProvider =
     Provider<ManagedRevision3CurrentProjectOpener>((ref) {
       final store = ModFfiManagedRevision3AuthoringStore(
@@ -765,6 +838,129 @@ final managedRevision3CurrentProjectOpenerProvider =
       );
     });
 
+typedef ManagedRevision3ProjectIdFactory = String Function();
+
+final managedRevision3ProjectIdFactoryProvider =
+    Provider<ManagedRevision3ProjectIdFactory>((ref) {
+      final random = Random.secure();
+      return () {
+        final buffer = StringBuffer();
+        do {
+          buffer.clear();
+          for (var index = 0; index < 16; index++) {
+            buffer.write(random.nextInt(256).toRadixString(16).padLeft(2, '0'));
+          }
+        } while (buffer.toString() == '00000000000000000000000000000000');
+        return buffer.toString();
+      };
+    });
+
+/// Production creator for one empty, generation-bound managed R3 project.
+///
+/// The selected root must already exist and be completely empty. Native code
+/// first authenticates the installed Story generation; the Dart bootstrap then
+/// copies only its exact executable seal into canonical project JSON. The
+/// managed session owns immutable-object preparation, absent-head CAS
+/// publication, repair, and full published reopen.
+final managedRevision3CurrentProjectCreatorProvider =
+    Provider<ManagedRevision3CurrentProjectCreator>((ref) {
+      final loadGeneration = ref.read(
+        managedRevision3StoryGenerationLoaderProvider,
+      );
+      final createSession = ref.read(
+        managedRevision3ProjectSessionCreatorProvider,
+      );
+      final recoverSession = ref.read(
+        managedRevision3CurrentProjectOpenerProvider,
+      );
+      final newProjectId = ref.read(managedRevision3ProjectIdFactoryProvider);
+      return (request) async {
+        final root = await _requireNewManagedRevision3Root(request.root);
+        await _requireManagedRevision3RootOutsideGame(root, request.gameRoot);
+        final generation = await loadGeneration(request.gameRoot);
+        // Generation discovery may hash hundreds of MiB. Recheck the selected
+        // destination after that read-only work, before creating any control or
+        // Store object in it.
+        await _requireNewManagedRevision3Root(root);
+        final bootstrap = Revision3ProjectBootstrap.create(
+          generation: generation,
+          projectId: newProjectId(),
+          name: request.name,
+          version: request.version,
+          author: request.author,
+          authoringLocales: request.authoringLocales,
+        );
+        ManagedRevision3CurrentProjectLease? session;
+        try {
+          session = await createSession(
+            root: root,
+            projectJson: bootstrap.canonicalProjectJson,
+          );
+          if (!_managedRevision3LeaseMatchesBootstrap(
+            session,
+            root,
+            bootstrap,
+          )) {
+            throw const ManagedRevision3ProjectCreationException(
+              'the fully reopened managed project differs from its bootstrap identity',
+            );
+          }
+          return session;
+        } catch (error, stackTrace) {
+          if (session != null) {
+            try {
+              await session.close();
+            } catch (cleanupError) {
+              Error.throwWithStackTrace(
+                ManagedRevision3ProjectCreationException(
+                  'managed project creation failed and candidate cleanup also failed: '
+                  '$cleanupError',
+                ),
+                stackTrace,
+              );
+            }
+            Error.throwWithStackTrace(error, stackTrace);
+          }
+
+          ManagedRevision3CurrentProjectLease? recovered;
+          Object? recoveryError;
+          try {
+            recovered = await recoverSession(root);
+            if (_managedRevision3LeaseMatchesBootstrap(
+              recovered,
+              root,
+              bootstrap,
+            )) {
+              return recovered;
+            }
+            recoveryError = const ManagedRevision3ProjectCreationException(
+              'the recoverable managed project differs from its bootstrap identity',
+            );
+          } catch (candidateRecoveryError) {
+            recoveryError = candidateRecoveryError;
+          }
+          if (recovered != null) {
+            try {
+              await recovered.close();
+            } catch (cleanupError) {
+              recoveryError = ManagedRevision3ProjectCreationException(
+                'managed project recovery and cleanup both failed: $cleanupError',
+              );
+            }
+          }
+          Error.throwWithStackTrace(
+            ManagedRevision3ProjectCreationException(
+              'managed project creation did not finish. The selected folder '
+              'may contain a recoverable project; use Open managed project '
+              'before retrying, or choose another empty folder. Initial '
+              'failure: $error. Recovery: $recoveryError',
+            ),
+            stackTrace,
+          );
+        }
+      };
+    });
+
 final currentProjectCoordinatorProvider =
     StateNotifierProvider<CurrentProjectCoordinator, CurrentProjectState>((
       ref,
@@ -773,11 +969,86 @@ final currentProjectCoordinatorProvider =
       return CurrentProjectCoordinator(
         initialLegacy: createLegacy(),
         createLegacy: createLegacy,
+        createManagedRevision3: ref.read(
+          managedRevision3CurrentProjectCreatorProvider,
+        ),
         openManagedRevision3: ref.read(
           managedRevision3CurrentProjectOpenerProvider,
         ),
       );
     });
+
+bool _managedRevision3LeaseMatchesBootstrap(
+  ManagedRevision3CurrentProjectLease lease,
+  Directory root,
+  Revision3ProjectBootstrap bootstrap,
+) =>
+    lease.projectId == bootstrap.identity.projectId &&
+    lease.projectRevision == Revision3ProjectBootstrap.initialRevision &&
+    lease.canonicalProjectJson == bootstrap.canonicalProjectJson &&
+    !lease.requiresReopen &&
+    _sameManagedRevision3Path(lease.root.path, root.path);
+
+Future<Directory> _requireNewManagedRevision3Root(Directory requested) async {
+  final absolute = p.normalize(p.absolute(requested.path));
+  final type = await FileSystemEntity.type(absolute, followLinks: false);
+  if (type != FileSystemEntityType.directory) {
+    throw ManagedRevision3ProjectCreationException(
+      'managed project destination must be an existing real directory: $absolute',
+    );
+  }
+  final resolved = p.normalize(
+    await Directory(absolute).resolveSymbolicLinks(),
+  );
+  final resolvedType = await FileSystemEntity.type(
+    resolved,
+    followLinks: false,
+  );
+  if (resolvedType != FileSystemEntityType.directory) {
+    throw ManagedRevision3ProjectCreationException(
+      'managed project destination must resolve to a real directory: $absolute',
+    );
+  }
+  final root = Directory(resolved);
+  if (!await root.list(followLinks: false).isEmpty) {
+    throw ManagedRevision3ProjectCreationException(
+      'managed project destination must be completely empty: $resolved',
+    );
+  }
+  return root;
+}
+
+Future<void> _requireManagedRevision3RootOutsideGame(
+  Directory root,
+  String requestedGameRoot,
+) async {
+  final game = p.normalize(
+    await Directory(
+      p.normalize(p.absolute(requestedGameRoot)),
+    ).resolveSymbolicLinks(),
+  );
+  final project = p.normalize(root.path);
+  if (_sameManagedRevision3Path(project, game) ||
+      _managedRevision3PathWithin(game, project) ||
+      _managedRevision3PathWithin(project, game)) {
+    throw const ManagedRevision3ProjectCreationException(
+      'managed project destination and game installation must be disjoint',
+    );
+  }
+}
+
+bool _managedRevision3PathWithin(String parent, String child) => p.isWithin(
+  _managedRevision3CasePath(parent),
+  _managedRevision3CasePath(child),
+);
+
+bool _sameManagedRevision3Path(String left, String right) =>
+    _managedRevision3CasePath(left) == _managedRevision3CasePath(right);
+
+String _managedRevision3CasePath(String value) {
+  final normalized = p.normalize(value);
+  return Platform.isWindows ? normalized.toLowerCase() : normalized;
+}
 
 /// Single app-wide owner for compatibility and managed project lifetimes.
 ///
@@ -792,6 +1063,7 @@ final class CurrentProjectCoordinator
   factory CurrentProjectCoordinator({
     LegacyCurrentProjectLease? initialLegacy,
     LegacyCurrentProjectLeaseFactory? createLegacy,
+    ManagedRevision3CurrentProjectCreator? createManagedRevision3,
     required ManagedRevision3CurrentProjectOpener openManagedRevision3,
   }) {
     final initial = initialLegacy == null
@@ -803,6 +1075,7 @@ final class CurrentProjectCoordinator
           ? const NoCurrentProjectState()
           : _stateOf(initial),
       createLegacy: createLegacy,
+      createManagedRevision3: createManagedRevision3,
       openManagedRevision3: openManagedRevision3,
     );
   }
@@ -811,10 +1084,12 @@ final class CurrentProjectCoordinator
     required this._current,
     required CurrentProjectState initialState,
     required this._createLegacy,
+    required this._createManagedRevision3,
     required this._openManagedRevision3,
   }) : super(initialState);
 
   final LegacyCurrentProjectLeaseFactory? _createLegacy;
+  final ManagedRevision3CurrentProjectCreator? _createManagedRevision3;
   final ManagedRevision3CurrentProjectOpener _openManagedRevision3;
   _OwnedCurrentProject? _current;
   final List<CurrentProjectCleanupFailure> _terminalCleanupFailures =
@@ -842,6 +1117,39 @@ final class CurrentProjectCoordinator
     var adopted = false;
     try {
       candidateLease = await _openManagedRevision3(root);
+      final candidate = _OwnedManagedRevision3CurrentProject(candidateLease);
+      final candidateState = _stateOf(candidate);
+      await _adopt(candidate, candidateState);
+      adopted = true;
+      return candidateState as ManagedRevision3CurrentProjectState;
+    } catch (error, stackTrace) {
+      if (candidateLease != null && !adopted) {
+        await _closeUnadopted(
+          _OwnedManagedRevision3CurrentProject(candidateLease),
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  });
+
+  /// Create, fully reopen, and only then adopt one empty managed R3 project.
+  ///
+  /// Creation shares the same invocation-ordered ownership lane as Open. A
+  /// failed creator or invalid candidate snapshot cannot displace the current
+  /// project; an unadopted candidate is terminally closed exactly once.
+  Future<ManagedRevision3CurrentProjectState> createManagedRevision3(
+    ManagedRevision3ProjectCreateRequest request,
+  ) => _enqueue(() async {
+    final create = _createManagedRevision3;
+    if (create == null) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'creating managed revision-3 projects is unavailable',
+      );
+    }
+    ManagedRevision3CurrentProjectLease? candidateLease;
+    var adopted = false;
+    try {
+      candidateLease = await create(request);
       final candidate = _OwnedManagedRevision3CurrentProject(candidateLease);
       final candidateState = _stateOf(candidate);
       await _adopt(candidate, candidateState);

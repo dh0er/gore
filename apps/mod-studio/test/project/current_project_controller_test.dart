@@ -27,6 +27,91 @@ import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
   test(
+    'managed create adopts only a fully opened candidate and closes legacy',
+    () async {
+      final legacy = _FakeLegacyLease(path: 'before-create.goremod');
+      final managed = _FakeManagedLease(
+        root: Directory('created-managed'),
+        projectIdValue: 'abababababababababababababababab',
+        projectRevision: 0,
+        head: _head(41),
+      );
+      ManagedRevision3ProjectCreateRequest? received;
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        createManagedRevision3: (request) async {
+          received = request;
+          return managed;
+        },
+        openManagedRevision3: (_) async => throw UnimplementedError(),
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final request = ManagedRevision3ProjectCreateRequest(
+        root: Directory('chosen-empty-root'),
+        gameRoot: r'C:\Games\Gothic 1 Remake',
+        name: 'My first managed mod',
+        version: '0.1.0',
+        author: 'Author',
+        authoringLocales: const <String>['de', 'en'],
+      );
+
+      final created = await coordinator.createManagedRevision3(request);
+
+      expect(received, same(request));
+      expect(created.root.path, managed.root.path);
+      expect(created.projectId, managed.projectId);
+      expect(created.projectRevision, 0);
+      expect(legacy.closeCalls, 1);
+      expect(managed.closeCalls, 0);
+    },
+  );
+
+  test(
+    'failed managed create preserves current lease and closes bad candidate',
+    () async {
+      final legacy = _FakeLegacyLease(path: 'preserved-create.goremod');
+      final candidate = _FakeManagedLease(
+        root: Directory('bad-created-managed'),
+        projectIdValue: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+        projectRevision: 0,
+        head: _head(42),
+        projectIdError: StateError('created project failed full reopen'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        initialLegacy: legacy,
+        createManagedRevision3: (_) async => candidate,
+        openManagedRevision3: (_) async => throw UnimplementedError(),
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final before = coordinator.state;
+
+      await expectLater(
+        coordinator.createManagedRevision3(
+          ManagedRevision3ProjectCreateRequest(
+            root: Directory('chosen-empty-root'),
+            gameRoot: r'C:\Games\Gothic 1 Remake',
+            name: 'Rejected candidate',
+            version: '0.1.0',
+            author: '',
+            authoringLocales: const <String>['en'],
+          ),
+        ),
+        throwsA(isA<StateError>()),
+      );
+
+      expect(coordinator.state, same(before));
+      expect(legacy.closeCalls, 0);
+      expect(candidate.closeCalls, 1);
+    },
+  );
+
+  test(
     'failed managed open preserves the exact legacy current project',
     () async {
       final legacy = _FakeLegacyLease(
@@ -3657,6 +3742,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final Directory root;
   final String projectIdValue;
   final Object? projectIdError;
+  @override
+  String get canonicalProjectJson => '{}';
   @override
   int projectRevision;
   @override

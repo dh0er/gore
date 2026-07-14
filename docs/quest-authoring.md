@@ -158,6 +158,13 @@ operation independently.
 
 ### Native Quest-intent transaction
 
+The closed Story/inventory authoring registry currently accepts exactly two
+reviewed Steam generation triples: the retained V1 seal set and Steam build
+`24169431`. Executable, deployment-aware pristine Shipping cache, and
+`Binds.Cache` must match one complete registered row; nearby or cross-paired
+seals fail closed. Supporting these two inputs does not generalize compiler or
+runtime qualification to future or non-Steam builds.
+
 The native command `authoring_project_story_quest_draft_insert_v1` closes the
 provenance boundary for the Studio-facing MVP. Its payload contains exactly
 `project_json`, `intent_json`, `profile`, and `game_root`. The bounded

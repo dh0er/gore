@@ -16,6 +16,9 @@ const _authoringRevision3NpcCatalogLayer = 'base-game.g1r.scripts';
 const _authoringRevision3NpcExecutableByteLengthV1 = 171698176;
 const _authoringRevision3NpcExecutableSha256V1 =
     'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5';
+const _authoringRevision3NpcExecutableByteLengthV2 = 171704320;
+const _authoringRevision3NpcExecutableSha256V2 =
+    'b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d';
 
 typedef _AuthoringRevision3NpcParentEvidence = ({
   String role,
@@ -30,11 +33,12 @@ typedef _AuthoringRevision3NpcSelectionEvidence = ({
   _AuthoringRevision3NpcParentEvidence spawnDefinition,
 });
 
-/// Exact closed projection of the native pinned Story-catalog V1 rows. A new
-/// native catalog row must be reviewed and added here before its persisted
-/// parent evidence can cross the strict response boundary.
+/// Exact closed projection of the native pinned Story-catalog rows shared by
+/// the supported V1 and V2 generations. A new native catalog row must be
+/// reviewed and added here before its persisted parent evidence can cross the
+/// strict response boundary.
 const Map<String, _AuthoringRevision3NpcSelectionEvidence>
-_authoringRevision3NpcSelectionEvidenceV1 = {
+_authoringRevision3NpcSelectionEvidence = {
   'g1r:npc:om_grd_asghan_263': (
     characterDefinition: (
       role: 'character_definition',
@@ -82,6 +86,11 @@ _authoringRevision3NpcSelectionEvidenceV1 = {
     ),
   ),
 };
+
+// Kept for the existing source-inspection part; both supported generations use
+// this exact same curated evidence projection.
+const _authoringRevision3NpcSelectionEvidenceV1 =
+    _authoringRevision3NpcSelectionEvidence;
 
 final _authoringRevision3NpcCatalogIdPattern = RegExp(
   r'^[a-z0-9._-]+(?::[a-z0-9._-]+){2,}$',
@@ -655,6 +664,14 @@ _authoringRevision3NpcGeneration(Object? value, String context) {
   );
 }
 
+bool _authoringRevision3NpcIsSupportedGeneration(
+  ({Map<String, Object?> json, int byteLength, String sha256}) generation,
+) =>
+    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV1 &&
+        generation.sha256 == _authoringRevision3NpcExecutableSha256V1) ||
+    (generation.byteLength == _authoringRevision3NpcExecutableByteLengthV2 &&
+        generation.sha256 == _authoringRevision3NpcExecutableSha256V2);
+
 void _authoringRevision3NpcRequireExactDelta(
   Map<String, Object?> base,
   Map<String, Object?> candidate, {
@@ -726,8 +743,7 @@ _authoringRevision3NpcRequireCandidatePair(
     project['target'],
     'project target',
   );
-  if (target.byteLength != _authoringRevision3NpcExecutableByteLengthV1 ||
-      target.sha256 != _authoringRevision3NpcExecutableSha256V1) {
+  if (!_authoringRevision3NpcIsSupportedGeneration(target)) {
     throw const FormatException(
       'authoring revision-3 NPC candidate uses unsupported catalog generation evidence',
     );
@@ -793,7 +809,7 @@ _authoringRevision3NpcRequireCandidatePair(
   );
   _authoringDraftValidateIdentifier(uniqueName, 'unique_name', maxBytes: 64);
   final selectionEvidence =
-      _authoringRevision3NpcSelectionEvidenceV1[parentCatalogId];
+      _authoringRevision3NpcSelectionEvidence[parentCatalogId];
   if (selectionEvidence == null) {
     throw const FormatException(
       'authoring revision-3 NPC candidate has unsupported parent selection evidence',
@@ -1060,7 +1076,8 @@ _authoringRevision3NpcResolvedParent(
     parent['generation'],
     '$context generation',
   );
-  if (jsonEncode(generation.json) != jsonEncode(target.json)) {
+  if (!_authoringRevision3NpcIsSupportedGeneration(generation) ||
+      jsonEncode(generation.json) != jsonEncode(target.json)) {
     throw FormatException(
       'authoring revision-3 NPC candidate $context generation disagrees',
     );

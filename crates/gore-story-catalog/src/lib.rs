@@ -1,10 +1,11 @@
 //! Strict, generation-sealed story catalogs.
 //!
-//! The first revision intentionally supports one curated Gothic 1 Remake Steam generation. It
+//! Schema revision 1 supports a closed registry of curated Gothic 1 Remake Steam generations. It
 //! hashes explicit executable, Shipping cache, and Binds cache inputs, then selects only extraction
-//! records reviewed against that exact triple. It does **not** infer broad NPC/quest semantics from
-//! filenames or the old UE4SS object-dump catalog: generated `__InitDefaults` carry the decisive
-//! links and quest metadata. A generalized cache extractor remains a separate future step.
+//! records reviewed against the exact matching triple. It does **not** infer broad NPC/quest
+//! semantics from filenames or the old UE4SS object-dump catalog: generated `__InitDefaults` carry
+//! the decisive links and quest metadata. A generalized cache extractor remains a separate future
+//! step.
 
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
@@ -26,12 +27,20 @@ pub const QUEST_COLLISION_CATALOG_LAYER: &str = "resolved-loadout.scripts.v1";
 
 const STORY_FORMAT: &str = "story_catalog";
 const STORY_SCHEMA_REVISION: u32 = 1;
-const RECORD_SET_ID: &str = "g1r-steam-1.0.3-curated-story-v1";
-const RECORD_SET_BYTE_LEN: u64 = 5_499;
-const RECORD_SET_SHA256: &str = "323ffe3fb3d6394c0d4397d090aabddb5e87c1ac7e5cecd14382b0a4f0516fc8";
-const CATALOG_PAYLOAD_BYTE_LEN: u64 = 5_611;
-const CATALOG_PAYLOAD_SHA256: &str =
+const RECORD_SET_ID_V1: &str = "g1r-steam-1.0.3-curated-story-v1";
+const RECORD_SET_BYTE_LEN_V1: u64 = 5_499;
+const RECORD_SET_SHA256_V1: &str =
+    "323ffe3fb3d6394c0d4397d090aabddb5e87c1ac7e5cecd14382b0a4f0516fc8";
+const CATALOG_PAYLOAD_BYTE_LEN_V1: u64 = 5_611;
+const CATALOG_PAYLOAD_SHA256_V1: &str =
     "51192393aa28cff00b1a4e59de7793a8db354e30692569719c4b46e2f9bc4853";
+const RECORD_SET_ID_V2: &str = "g1r-steam-1.0.3-curated-story-v2";
+const RECORD_SET_BYTE_LEN_V2: u64 = 5_499;
+const RECORD_SET_SHA256_V2: &str =
+    "3dcf62650b9c4c5c320988644adb3e10a4f3888dba9447b8d0ef06da2d541def";
+const CATALOG_PAYLOAD_BYTE_LEN_V2: u64 = 5_611;
+const CATALOG_PAYLOAD_SHA256_V2: &str =
+    "e93bbd62fc824ca8166c3ab9b67f21cf1493295969bf19adff438d665fc16bc3";
 const VIPER_OFFLINE_EVIDENCE_ID: &str = concat!(
     "npc-logical-clone-v1:viper-current-v1:proof-format-v1:",
     "sha256-b65b551f1f7d0c783c982250c87934287141cc3bf29013ba58c9cdce5852e68a"
@@ -744,9 +753,9 @@ pub enum CatalogError {
         expected: u64,
         actual: u64,
     },
-    #[error("unsupported or stale game generation: expected {expected}, got {actual}")]
+    #[error("unsupported or stale game generation: expected one of {supported:?}, got {actual}")]
     UnsupportedGeneration {
-        expected: Box<GameGenerationSeal>,
+        supported: Box<[GameGenerationSeal]>,
         actual: Box<GameGenerationSeal>,
     },
     #[error("verified extraction records target a different game generation")]
@@ -884,14 +893,12 @@ fn build_known_catalog_from_capture(
     captured: CapturedGeneration,
 ) -> Result<StoryCatalogFile, CatalogError> {
     let actual = captured.generation;
-    let expected = known_generation_v1();
-    if actual != expected {
-        return Err(CatalogError::UnsupportedGeneration {
-            expected: Box::new(expected),
-            actual: Box::new(actual),
-        });
-    }
-    let wire = build_wire_from_verified_records(actual, curated_records_v1())?;
+    let revision =
+        known_catalog_revision(&actual).ok_or_else(|| CatalogError::UnsupportedGeneration {
+            supported: known_supported_generations(),
+            actual: Box::new(actual.clone()),
+        })?;
+    let wire = build_wire_from_verified_records(actual, revision.curated_records())?;
     let catalog = StoryCatalogFile {
         wire,
         input_guard: Some(captured.guard),
@@ -900,7 +907,8 @@ fn build_known_catalog_from_capture(
     Ok(catalog)
 }
 
-/// Build the curated revision-1 catalog only when all three generation inputs match exactly.
+/// Build a schema-revision-1 curated catalog only when all three generation inputs exactly match
+/// one entry in the closed generation registry.
 pub fn build_known_catalog(
     paths: &GenerationPaths,
     limits: GenerationInputLimits,
@@ -1183,6 +1191,92 @@ fn authoring_selector_alias(catalog_id: &str, role: &str) -> String {
     format!("Catalog_{}", Sha256Digest::from_bytes(bytes))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KnownCatalogRevision {
+    V1,
+    V2,
+}
+
+const KNOWN_CATALOG_REVISIONS: [KnownCatalogRevision; 2] =
+    [KnownCatalogRevision::V1, KnownCatalogRevision::V2];
+
+impl KnownCatalogRevision {
+    fn generation(self) -> GameGenerationSeal {
+        match self {
+            Self::V1 => known_generation_v1(),
+            Self::V2 => known_generation_v2(),
+        }
+    }
+
+    fn record_set_id(self) -> &'static str {
+        match self {
+            Self::V1 => RECORD_SET_ID_V1,
+            Self::V2 => RECORD_SET_ID_V2,
+        }
+    }
+
+    fn record_set_seal(self) -> ContentSeal {
+        match self {
+            Self::V1 => known_seal(RECORD_SET_BYTE_LEN_V1, RECORD_SET_SHA256_V1),
+            Self::V2 => known_seal(RECORD_SET_BYTE_LEN_V2, RECORD_SET_SHA256_V2),
+        }
+    }
+
+    fn catalog_payload_seal(self) -> ContentSeal {
+        match self {
+            Self::V1 => known_seal(CATALOG_PAYLOAD_BYTE_LEN_V1, CATALOG_PAYLOAD_SHA256_V1),
+            Self::V2 => known_seal(CATALOG_PAYLOAD_BYTE_LEN_V2, CATALOG_PAYLOAD_SHA256_V2),
+        }
+    }
+
+    fn curated_records(self) -> VerifiedExtractionRecords {
+        curated_records(self.generation(), self.record_set_id())
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::V1 => "compiled curated V1",
+            Self::V2 => "compiled curated V2",
+        }
+    }
+
+    fn record_seal_kind(self) -> &'static str {
+        match self {
+            Self::V1 => "compiled curated V1 record set",
+            Self::V2 => "compiled curated V2 record set",
+        }
+    }
+
+    fn catalog_seal_kind(self) -> &'static str {
+        match self {
+            Self::V1 => "compiled curated V1 catalog payload",
+            Self::V2 => "compiled curated V2 catalog payload",
+        }
+    }
+}
+
+fn known_catalog_revision(generation: &GameGenerationSeal) -> Option<KnownCatalogRevision> {
+    KNOWN_CATALOG_REVISIONS
+        .into_iter()
+        .find(|revision| revision.generation() == *generation)
+}
+
+fn known_supported_generations() -> Box<[GameGenerationSeal]> {
+    KNOWN_CATALOG_REVISIONS
+        .into_iter()
+        .map(KnownCatalogRevision::generation)
+        .collect::<Vec<_>>()
+        .into_boxed_slice()
+}
+
+/// Return whether the complete executable/Shipping/Binds triple has a compiled, reviewed catalog.
+///
+/// This is an exact allow-list check. Matching only an executable, edition string, or individual
+/// cache seal is intentionally insufficient.
+pub fn is_supported_generation(generation: &GameGenerationSeal) -> bool {
+    known_catalog_revision(generation).is_some()
+}
+
 pub fn known_generation_v1() -> GameGenerationSeal {
     GameGenerationSeal {
         edition: "g1r-steam".to_owned(),
@@ -1201,10 +1295,36 @@ pub fn known_generation_v1() -> GameGenerationSeal {
     }
 }
 
+/// The reviewed Steam hotfix generation (Steam build 24169431).
+pub fn known_generation_v2() -> GameGenerationSeal {
+    GameGenerationSeal {
+        edition: "g1r-steam".to_owned(),
+        executable: known_seal(
+            171_704_320,
+            "b52cd0453ad03987b833f7f26d09a2075109f18d653b8d4ff95271c857139e5d",
+        ),
+        shipping_cache: known_seal(
+            123_394_250,
+            "757d8624f0c7480f63cc14a1ba2d7e43f461a529064b0c0cfbf523a54639e385",
+        ),
+        binds_cache: known_seal(
+            5_903_938,
+            "46e6629ad5cacc112b9922d48a1aa948f40572d7285705b981c3eca3dc615fea",
+        ),
+    }
+}
+
+#[cfg(test)]
 fn curated_records_v1() -> VerifiedExtractionRecords {
-    let generation = known_generation_v1();
+    KnownCatalogRevision::V1.curated_records()
+}
+
+fn curated_records(
+    generation: GameGenerationSeal,
+    record_set_id: &'static str,
+) -> VerifiedExtractionRecords {
     VerifiedExtractionRecords {
-        record_set_id: RECORD_SET_ID.to_owned(),
+        record_set_id: record_set_id.to_owned(),
         generation,
         npcs: vec![
             curated_npc(
@@ -1356,41 +1476,43 @@ fn validate_catalog_file(catalog: &StoryCatalogFile) -> Result<(), CatalogError>
     let wire = &catalog.wire;
     validate_wire_integrity(wire)?;
 
-    let expected_generation = known_generation_v1();
-    if wire.catalog.generation != expected_generation {
-        return Err(CatalogError::UnsupportedGeneration {
-            expected: Box::new(expected_generation),
+    let revision = known_catalog_revision(&wire.catalog.generation).ok_or_else(|| {
+        CatalogError::UnsupportedGeneration {
+            supported: known_supported_generations(),
             actual: Box::new(wire.catalog.generation.clone()),
-        });
-    }
-    if wire.catalog.record_set_id != RECORD_SET_ID {
+        }
+    })?;
+    if wire.catalog.record_set_id != revision.record_set_id() {
         return Err(CatalogError::UntrustedCatalog(format!(
-            "record_set_id {:?} is not the compiled V1 record set {:?}",
-            wire.catalog.record_set_id, RECORD_SET_ID
+            "record_set_id {:?} is not the {} record set {:?}",
+            wire.catalog.record_set_id,
+            revision.label(),
+            revision.record_set_id()
         )));
     }
 
     let records = records_from_wire(wire);
-    let mut expected_records = curated_records_v1();
+    let mut expected_records = revision.curated_records();
     normalize_records(&mut expected_records);
     if records != expected_records {
-        return Err(CatalogError::UntrustedCatalog(
-            "record content differs from the compiled curated V1 record set".to_owned(),
-        ));
+        return Err(CatalogError::UntrustedCatalog(format!(
+            "record content differs from the {} record set",
+            revision.label()
+        )));
     }
 
-    let expected_record_seal = known_seal(RECORD_SET_BYTE_LEN, RECORD_SET_SHA256);
+    let expected_record_seal = revision.record_set_seal();
     if wire.catalog.record_set_seal != expected_record_seal {
         return Err(CatalogError::SealMismatch {
-            kind: "compiled curated V1 record set",
+            kind: revision.record_seal_kind(),
             expected: expected_record_seal,
             actual: wire.catalog.record_set_seal.clone(),
         });
     }
-    let expected_catalog_seal = known_seal(CATALOG_PAYLOAD_BYTE_LEN, CATALOG_PAYLOAD_SHA256);
+    let expected_catalog_seal = revision.catalog_payload_seal();
     if wire.catalog_seal != expected_catalog_seal {
         return Err(CatalogError::SealMismatch {
-            kind: "compiled curated V1 catalog payload",
+            kind: revision.catalog_seal_kind(),
             expected: expected_catalog_seal,
             actual: wire.catalog_seal.clone(),
         });
@@ -2319,15 +2441,20 @@ mod tests {
         records
     }
 
-    fn trusted_catalog() -> StoryCatalogFile {
+    fn trusted_catalog_for(revision: KnownCatalogRevision) -> StoryCatalogFile {
         let wire =
-            build_wire_from_verified_records(known_generation_v1(), curated_records_v1()).unwrap();
+            build_wire_from_verified_records(revision.generation(), revision.curated_records())
+                .unwrap();
         let catalog = StoryCatalogFile {
             wire,
             input_guard: None,
         };
         validate_catalog_file(&catalog).unwrap();
         catalog
+    }
+
+    fn trusted_catalog() -> StoryCatalogFile {
+        trusted_catalog_for(KnownCatalogRevision::V1)
     }
 
     fn attach_test_input_guard(catalog: &mut StoryCatalogFile, root: &Path) -> GenerationPaths {
@@ -2411,6 +2538,100 @@ mod tests {
             npc.authoring_qualification == NpcAuthoringQualification::OfflineQualified
                 && npc.runtime_qualification == RuntimeQualification::RuntimeUnqualified
         }));
+    }
+
+    #[test]
+    fn hotfix_catalog_has_its_own_exact_pinned_records_and_payload() {
+        let catalog = trusted_catalog_for(KnownCatalogRevision::V2);
+        assert_eq!(catalog.wire.catalog.generation, known_generation_v2());
+        assert_eq!(catalog.wire.catalog.record_set_id, RECORD_SET_ID_V2);
+        assert_eq!(
+            catalog.wire.catalog.record_set_seal,
+            KnownCatalogRevision::V2.record_set_seal()
+        );
+        assert_eq!(
+            catalog.wire.catalog_seal,
+            KnownCatalogRevision::V2.catalog_payload_seal()
+        );
+
+        let bytes = catalog.to_canonical_json().unwrap();
+        let parsed = StoryCatalogFile::from_json(&bytes).unwrap();
+        assert_eq!(parsed, catalog);
+        assert_eq!(parsed.authoring_selections().unwrap().npcs.len(), MAX_NPCS);
+    }
+
+    #[test]
+    fn hotfix_record_recipe_reuses_the_v1_curated_structure_with_a_v2_binding() {
+        // This locks the intentional compiled-record wiring. It is not an independent re-hash of
+        // installed emitted sources; the generation-specific record and payload seals above are
+        // the trust boundary for the reviewed V2 catalog.
+        let mut v1 = curated_records_v1();
+        let v2 = KnownCatalogRevision::V2.curated_records();
+        v1.generation = known_generation_v2();
+        v1.record_set_id = RECORD_SET_ID_V2.to_owned();
+        assert_eq!(v2, v1);
+    }
+
+    #[test]
+    fn generation_registry_requires_the_complete_exact_triple() {
+        let v1 = known_generation_v1();
+        let v2 = known_generation_v2();
+        assert!(is_supported_generation(&v1));
+        assert!(is_supported_generation(&v2));
+
+        let mut hybrids = Vec::new();
+        let mut hybrid = v1.clone();
+        hybrid.executable = v2.executable.clone();
+        hybrids.push(hybrid);
+        let mut hybrid = v2.clone();
+        hybrid.shipping_cache = v1.shipping_cache.clone();
+        hybrids.push(hybrid);
+        let mut hybrid = v2.clone();
+        hybrid.binds_cache.byte_len += 1;
+        hybrids.push(hybrid);
+        let mut hybrid = v2;
+        hybrid.edition = "g1r-steam-unknown".to_owned();
+        hybrids.push(hybrid);
+
+        for hybrid in hybrids {
+            assert!(!is_supported_generation(&hybrid));
+            let captured = CapturedGeneration {
+                generation: hybrid.clone(),
+                guard: GenerationInputGuard {
+                    inputs: Vec::new(),
+                    publication_supported: false,
+                },
+            };
+            match build_known_catalog_from_capture(captured) {
+                Err(CatalogError::UnsupportedGeneration { supported, actual }) => {
+                    assert_eq!(
+                        supported.as_ref(),
+                        [known_generation_v1(), known_generation_v2()]
+                    );
+                    assert_eq!(*actual, hybrid);
+                }
+                result => panic!("expected unsupported-generation error, got {result:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn trusted_reader_rejects_cross_generation_record_bindings_even_when_resealed() {
+        let mut crossed = trusted_catalog_for(KnownCatalogRevision::V2).wire;
+        crossed.catalog.record_set_id = RECORD_SET_ID_V1.to_owned();
+        reseal_wire(&mut crossed);
+        let bytes =
+            canonical_json(&crossed, "crossed story catalog", MAX_CATALOG_JSON_BYTES).unwrap();
+        assert!(matches!(
+            StoryCatalogFile::from_json(&bytes),
+            Err(CatalogError::UntrustedCatalog(message))
+                if message.contains("compiled curated V2 record set")
+        ));
+
+        assert!(matches!(
+            build_wire_from_verified_records(known_generation_v2(), curated_records_v1()),
+            Err(CatalogError::RecordGenerationMismatch)
+        ));
     }
 
     #[test]
@@ -2857,6 +3078,25 @@ mod tests {
             publish_catalog_atomic(root.path().join("must-not-publish.json"), &built),
             Err(CatalogError::SnapshotPublicationUnsupported)
         ));
+    }
+
+    #[test]
+    #[ignore = "requires GORE_STORY_CATALOG_EXE, _SHIPPING_CACHE, and _BINDS_CACHE"]
+    fn installed_steam_build_24169431_matches_the_v2_source_triple() {
+        let path = |name: &str| {
+            std::env::var_os(name)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| panic!("{name} must name the exact installed source file"))
+        };
+        let paths = GenerationPaths {
+            executable: path("GORE_STORY_CATALOG_EXE"),
+            shipping_cache: path("GORE_STORY_CATALOG_SHIPPING_CACHE"),
+            binds_cache: path("GORE_STORY_CATALOG_BINDS_CACHE"),
+        };
+        let catalog = build_known_catalog(&paths, GenerationInputLimits::default()).unwrap();
+        assert_eq!(catalog.generation(), &known_generation_v2());
+        assert!(is_supported_generation(catalog.generation()));
+        catalog.revalidate_generation_inputs().unwrap();
     }
 
     #[test]

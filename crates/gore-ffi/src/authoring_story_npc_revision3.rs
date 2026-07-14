@@ -1002,7 +1002,6 @@ mod tests {
     use gore_authoring::{
         AssetStoreIndex, FormatV2, ProjectId, ProjectMeta, ProjectRevision3, SchemaRevisionV3,
     };
-    use gore_story_catalog::known_generation_v1;
     use tempfile::TempDir;
 
     use super::*;
@@ -1020,14 +1019,10 @@ mod tests {
         })
     }
 
-    fn project_at_revision(revision: u64, live_target: bool) -> ProjectRevision3 {
-        let executable = if live_target {
-            known_generation_v1().executable
-        } else {
-            ContentSeal {
-                byte_len: 123,
-                sha256: gore_story_catalog::Sha256Digest::from_bytes([0x45; 32]),
-            }
+    fn project_at_revision(revision: u64) -> ProjectRevision3 {
+        let executable = ContentSeal {
+            byte_len: 123,
+            sha256: gore_story_catalog::Sha256Digest::from_bytes([0x45; 32]),
         };
         ProjectRevision3 {
             format: FormatV2,
@@ -1050,10 +1045,32 @@ mod tests {
         }
     }
 
+    fn project_for_live_game(game_root: &Path) -> ProjectRevision3 {
+        let g1r = resolve_g1r_root(game_root);
+        let executable = g1r
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        let binds_path = g1r.join("Script").join("Binds.Cache");
+        let shipping = gore_mod::pristine_script_cache(game_root).unwrap();
+        let catalog = build_known_catalog_with_shipping_snapshot(
+            &executable,
+            &shipping,
+            &binds_path,
+            GenerationInputLimits::default(),
+        )
+        .unwrap();
+        catalog.revalidate_generation_inputs().unwrap();
+
+        let mut project = project_at_revision(0);
+        project.target = authoring_target(catalog.generation());
+        project
+    }
+
     fn published_store_at_revision(revision: u64) -> (TempDir, String, WorkingHead, Vec<u8>) {
         let temp = TempDir::new().unwrap();
         let store = WorkingProjectStore::at(temp.path(), ffi_store_limits()).unwrap();
-        let project = project_at_revision(revision, false);
+        let project = project_at_revision(revision);
         let project_json = project.to_canonical_json().unwrap();
         let prepared = store.prepare_revision3_checkpoint(None, &project).unwrap();
         fs::write(temp.path().join("gore-project.json"), &prepared.head_bytes).unwrap();
@@ -1292,7 +1309,7 @@ mod tests {
             .expect("set GORE_STORY_GAME_ROOT for the live revision-3 NPC FFI test");
         let temp = TempDir::new().unwrap();
         let store = WorkingProjectStore::at(temp.path(), ffi_store_limits()).unwrap();
-        let project = project_at_revision(0, true);
+        let project = project_for_live_game(Path::new(&game_root));
         let project_json = project.to_canonical_json().unwrap();
         let published = store.prepare_revision3_checkpoint(None, &project).unwrap();
         fs::write(temp.path().join("gore-project.json"), &published.head_bytes).unwrap();
@@ -1304,7 +1321,7 @@ mod tests {
         ))
         .unwrap();
         native_collision.intent.module_namespace = "GoreMods.Npcs.NativeIdCollision".to_owned();
-        native_collision.intent.unique_name = "OM_GRD_Asghan_263".to_owned();
+        native_collision.intent.unique_name = "OM_STT_Viper_302".to_owned();
         let native_collision_response = prepare_revision3_npc_draft_v1_raw(&raw_request(json!({
             "current_project_json": project_json,
             "game_root": game_root,
@@ -1319,6 +1336,10 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("AuthoredRuntimeId"));
+        assert!(native_collision_response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("OM_STT_Viper_302"));
         assert_eq!(
             fs::read(temp.path().join("gore-project.json")).unwrap(),
             published.head_bytes

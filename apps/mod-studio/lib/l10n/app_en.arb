@@ -234,5 +234,124 @@
   },
   "projectManagedRevision3RequiresReopen": "Exact-head verification could not complete safely. This session now requires recovery and further verification is blocked. Close Mod Studio, then reopen this project before continuing.",
   "projectManagedRevision3VerifyBlocked": "Verification is blocked until the managed project is reopened.",
-  "projectTransitionCleanupWarning": "The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project."
+  "projectTransitionCleanupWarning": "The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.",
+  "projectNewManagedRevision3": "New managed mod project…",
+  "projectNewLegacy": "New legacy project",
+  "projectCreateGamePathRequired": "Set the Gothic 1 Remake game path in Settings before creating a mod project.",
+  "projectCreateDirectoryPickerTitle": "Create managed mod project here",
+  "projectManagedRevision3Created": "Created managed mod project {projectId}",
+  "@projectManagedRevision3Created": {
+    "placeholders": {
+      "projectId": {
+        "type": "String"
+      }
+    }
+  },
+  "projectManagedRevision3CreateFailed": "Managed mod project creation failed: {error}",
+  "@projectManagedRevision3CreateFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateDialogTitle": "Create a mod project",
+  "projectCreateNameLabel": "Project name",
+  "projectCreateNameHelper": "The name shown in Mod Studio.",
+  "projectCreateVersionLabel": "Version",
+  "projectCreateVersionHelper": "A starting version, such as 0.1.0.",
+  "projectCreateAuthorLabel": "Author",
+  "projectCreateAuthorHelper": "Your name or mod-team name.",
+  "projectCreateLocalesLabel": "Authoring languages",
+  "projectCreateLocalesHelper": "Comma-separated canonical tags, for example: en, de, en-US.",
+  "projectCreateBoundary": "This creates an empty managed offline project. It does not build, deploy, or run a mod, and it does not change game files or save files.",
+  "projectCreateSubmit": "Create project",
+  "projectCreateMetadataRequired": "{label} is required.",
+  "@projectCreateMetadataRequired": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateMetadataNoOuterWhitespace": "{label} cannot start or end with whitespace.",
+  "@projectCreateMetadataNoOuterWhitespace": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateMetadataControlCharacters": "{label} cannot contain control characters.",
+  "@projectCreateMetadataControlCharacters": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateMetadataMalformed": "{label} contains malformed text.",
+  "@projectCreateMetadataMalformed": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateMetadataTooLong": "{label} exceeds its {maxBytes}-byte UTF-8 limit.",
+  "@projectCreateMetadataTooLong": {
+    "placeholders": {
+      "label": {
+        "type": "String"
+      },
+      "maxBytes": {
+        "type": "int"
+      }
+    }
+  },
+  "projectCreateLocalesRequired": "Enter at least one authoring language.",
+  "projectCreateLocalesEmptyEntry": "Remove the empty authoring-language entry.",
+  "projectCreateLocalesTooMany": "Use at most {maxLocales} authoring languages.",
+  "@projectCreateLocalesTooMany": {
+    "placeholders": {
+      "maxLocales": {
+        "type": "int"
+      }
+    }
+  },
+  "projectCreateLocaleBoundedAscii": "Locale \"{locale}\" must be bounded ASCII.",
+  "@projectCreateLocaleBoundedAscii": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateLocaleLanguage": "Locale \"{locale}\" needs a 2-8 letter lowercase language.",
+  "@projectCreateLocaleLanguage": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateLocaleInvalidSegment": "Locale \"{locale}\" has an invalid segment.",
+  "@projectCreateLocaleInvalidSegment": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      }
+    }
+  },
+  "projectCreateLocaleNotCanonical": "Locale \"{locale}\" is not canonical; use \"{canonical}\".",
+  "@projectCreateLocaleNotCanonical": {
+    "placeholders": {
+      "locale": {
+        "type": "String"
+      },
+      "canonical": {
+        "type": "String"
+      }
+    }
+  }
 }

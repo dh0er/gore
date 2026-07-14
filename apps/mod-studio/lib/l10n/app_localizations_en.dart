@@ -429,4 +429,121 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get projectTransitionCleanupWarning =>
       'The new project is open, but the previous project session could not be cleaned up completely. No cleanup retry will be attempted. Restart Mod Studio before reopening the retired project.';
+
+  @override
+  String get projectNewManagedRevision3 => 'New managed mod project…';
+
+  @override
+  String get projectNewLegacy => 'New legacy project';
+
+  @override
+  String get projectCreateGamePathRequired =>
+      'Set the Gothic 1 Remake game path in Settings before creating a mod project.';
+
+  @override
+  String get projectCreateDirectoryPickerTitle =>
+      'Create managed mod project here';
+
+  @override
+  String projectManagedRevision3Created(String projectId) {
+    return 'Created managed mod project $projectId';
+  }
+
+  @override
+  String projectManagedRevision3CreateFailed(String error) {
+    return 'Managed mod project creation failed: $error';
+  }
+
+  @override
+  String get projectCreateDialogTitle => 'Create a mod project';
+
+  @override
+  String get projectCreateNameLabel => 'Project name';
+
+  @override
+  String get projectCreateNameHelper => 'The name shown in Mod Studio.';
+
+  @override
+  String get projectCreateVersionLabel => 'Version';
+
+  @override
+  String get projectCreateVersionHelper => 'A starting version, such as 0.1.0.';
+
+  @override
+  String get projectCreateAuthorLabel => 'Author';
+
+  @override
+  String get projectCreateAuthorHelper => 'Your name or mod-team name.';
+
+  @override
+  String get projectCreateLocalesLabel => 'Authoring languages';
+
+  @override
+  String get projectCreateLocalesHelper =>
+      'Comma-separated canonical tags, for example: en, de, en-US.';
+
+  @override
+  String get projectCreateBoundary =>
+      'This creates an empty managed offline project. It does not build, deploy, or run a mod, and it does not change game files or save files.';
+
+  @override
+  String get projectCreateSubmit => 'Create project';
+
+  @override
+  String projectCreateMetadataRequired(String label) {
+    return '$label is required.';
+  }
+
+  @override
+  String projectCreateMetadataNoOuterWhitespace(String label) {
+    return '$label cannot start or end with whitespace.';
+  }
+
+  @override
+  String projectCreateMetadataControlCharacters(String label) {
+    return '$label cannot contain control characters.';
+  }
+
+  @override
+  String projectCreateMetadataMalformed(String label) {
+    return '$label contains malformed text.';
+  }
+
+  @override
+  String projectCreateMetadataTooLong(String label, int maxBytes) {
+    return '$label exceeds its $maxBytes-byte UTF-8 limit.';
+  }
+
+  @override
+  String get projectCreateLocalesRequired =>
+      'Enter at least one authoring language.';
+
+  @override
+  String get projectCreateLocalesEmptyEntry =>
+      'Remove the empty authoring-language entry.';
+
+  @override
+  String projectCreateLocalesTooMany(int maxLocales) {
+    return 'Use at most $maxLocales authoring languages.';
+  }
+
+  @override
+  String projectCreateLocaleBoundedAscii(String locale) {
+    return 'Locale \"$locale\" must be bounded ASCII.';
+  }
+
+  @override
+  String projectCreateLocaleLanguage(String locale) {
+    return 'Locale \"$locale\" needs a 2-8 letter lowercase language.';
+  }
+
+  @override
+  String projectCreateLocaleInvalidSegment(String locale) {
+    return 'Locale \"$locale\" has an invalid segment.';
+  }
+
+  @override
+  String projectCreateLocaleNotCanonical(String locale, String canonical) {
+    return 'Locale \"$locale\" is not canonical; use \"$canonical\".';
+  }
 }
