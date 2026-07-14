@@ -7,8 +7,7 @@ import 'package:gore_mod/project/revision3_voice_wizard.dart';
 
 import '../support/revision3_voice_content_fixture.dart';
 
-const _lineLabel =
-    'Asghan — Mine entrance question · GRD_263_ASGHAN_OPEN_INFO_06_02';
+const _lineLabel = 'Asghan — Mine entrance question';
 
 void main() {
   testWidgets(
@@ -164,6 +163,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text(first), findsOneWidget);
     expect(find.text(second), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('revision3-voice-line-results')),
+        matching: find.textContaining('GRD_263_ASGHAN_OPEN_INFO_06_02'),
+      ),
+      findsNothing,
+    );
     expect(find.text(revision3VoiceContentLineId), findsNothing);
     expect(find.text(revision3VoiceContentDuplicateLineId), findsNothing);
     await tester.tap(find.text(first));

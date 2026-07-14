@@ -16,6 +16,7 @@ part '../project/revision3_npc_draft.dart';
 part '../project/revision3_quest_outline.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
+part '../project/revision3_voice_take_selection.dart';
 part '../project/revision3_voice_target.dart';
 
 const _maxNativeErrorCodeLength = 128;
@@ -838,6 +839,45 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakePreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Change or clear the selected take of one exact-current revision-3 Voice
+  /// slot and prepare an unpublished candidate.
+  ///
+  /// The request is derived from the managed project itself. No game root,
+  /// audio import, archive target, build, runtime, deployment, or native
+  /// publication authority crosses this boundary.
+  Future<AuthoringRevision3VoiceTakeSelectionPreparation>
+  authoringStorePrepareRevision3VoiceTakeSelectionV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_take_selection_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'voice_take_selection_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakeSelectionPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

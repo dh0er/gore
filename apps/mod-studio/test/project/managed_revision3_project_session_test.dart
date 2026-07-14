@@ -19,6 +19,7 @@ import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
+import '../support/revision3_voice_selection_fixture.dart';
 
 void main() {
   late Directory fixture;
@@ -937,6 +938,156 @@ void main() {
       expect(session.requiresReopen, isTrue);
       expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
       await session.close();
+    },
+  );
+
+  test(
+    'Voice selection and clear publish through exact full-reopen CAS without a game root',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final root = await _projectRoot(fixture, suffix: 'voice_selection');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: voice.projectJson,
+      );
+
+      final selected = await session.prepareAndPublishVoiceTakeSelectionV1(
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+        selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+      );
+
+      expect(store.voiceSelectionPrepareCalls, 1);
+      expect(store.voiceSelectionRequests.single.expectedRevision, 8);
+      expect(selected.projectRevision, 9);
+      expect(selected.slotRevision, voice.slotRevision + 1);
+      expect(selected.previousSelectedTakeId, revision3VoiceFixtureTakeId);
+      expect(selected.selectedTakeId, revision3VoiceSelectionAlternateTakeId);
+      expect(session.projectJson, selected.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        selected.head.canonicalJson,
+      );
+
+      final cleared = await session.prepareAndPublishVoiceTakeSelectionV1(
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: selected.slotRevision,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        expectedSelectedTakeId: revision3VoiceSelectionAlternateTakeId,
+        selectedTakeId: null,
+      );
+      expect(cleared.projectRevision, 10);
+      expect(cleared.slotRevision, selected.slotRevision + 1);
+      expect(cleared.selectedTakeId, isNull);
+      expect(store.voiceSelectionPrepareCalls, 2);
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 10);
+      expect(reopened.projectJson, cleared.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Voice selection semantic failures retry while head and integrity failures poison',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_selection_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: voice.projectJson,
+      );
+      final fixedHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceSelectionError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+        code: 'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_NOT_APPROVED',
+        message: 'fake bounded selection rejection',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishVoiceTakeSelectionV1(
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          expectedSlotRevision: voice.slotRevision,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+          expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+          selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.headFile.readAsBytes(), fixedHead);
+      final published = await retrySession
+          .prepareAndPublishVoiceTakeSelectionV1(
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            expectedSlotRevision: voice.slotRevision,
+            locale: 'de',
+            expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+            expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+            selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+          );
+      expect(published.projectRevision, 9);
+      await retrySession.close();
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_SELECTION_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_VOICE_SELECTION_STORE_INVARIANT',
+        ModFfiException.malformedNativeResponseCode,
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_selection_poison_${code.hashCode}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: voice.projectJson,
+        );
+        store.nextVoiceSelectionError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+          code: code,
+          message: 'fake Voice selection integrity failure',
+        );
+        await expectLater(
+          session.prepareAndPublishVoiceTakeSelectionV1(
+            lineId: revision3VoiceFixtureLineId,
+            slotId: revision3VoiceFixtureSlotId,
+            expectedSlotRevision: voice.slotRevision,
+            locale: 'de',
+            expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+            expectedSelectedTakeId: revision3VoiceFixtureTakeId,
+            selectedTakeId: revision3VoiceSelectionAlternateTakeId,
+          ),
+          code.endsWith('HEAD_CONFLICT')
+              ? throwsA(isA<ManagedProjectHeadConflictException>())
+              : throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      }
     },
   );
 
@@ -2652,6 +2803,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int questOutlinePrepareCalls = 0;
   int npcPrepareCalls = 0;
   int voicePrepareCalls = 0;
+  int voiceSelectionPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
@@ -2679,6 +2831,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> voiceCurrentProjects = <String>[];
   final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
       <AuthoringRevision3VoiceTakeRequestV1>[];
+  final List<AuthoringRevision3VoiceTakeSelectionRequestV1>
+  voiceSelectionRequests = <AuthoringRevision3VoiceTakeSelectionRequestV1>[];
   final List<AuthoringRevision3VoiceTargetRequestV1> voiceTargetRequests =
       <AuthoringRevision3VoiceTargetRequestV1>[];
   final List<String> voiceBuildOutputs = <String>[];
@@ -2688,6 +2842,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   ModFfiException? nextQuestOutlineError;
   Object? nextNpcError;
   Object? nextVoiceError;
+  Object? nextVoiceSelectionError;
   Object? nextVoiceTargetError;
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
@@ -3033,6 +3188,76 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
         fixture.candidateProjectJson;
     return AuthoringRevision3VoiceTakePreparation.fromJson(
       fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeSelectionPreparation>
+  prepareVoiceTakeSelectionV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  }) async {
+    voiceSelectionPrepareCalls++;
+    voiceSelectionRequests.add(request);
+    final injectedError = nextVoiceSelectionError;
+    nextVoiceSelectionError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_selection_v1',
+        code: 'AUTHORING_REVISION3_VOICE_SELECTION_HEAD_CONFLICT',
+        message: 'fake native Voice selection basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = request.expectedSlotRevision + 1;
+    final payload = (slot['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final selected = request.selectedTakeId;
+    if (selected == null) {
+      data.remove('selected');
+    } else {
+      data['selected'] = <String, Object?>{
+        'project_id': request.expectedProjectId,
+        'id': selected,
+        'expected_kind': 'voice_take',
+      };
+    }
+    payload['data'] = data;
+    slot['payload'] = payload;
+    entities[request.slotId] = slot;
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3VoiceTakeSelectionPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision + 1,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'previous_selected_take_id': request.expectedSelectedTakeId,
+        'selected_take_id': request.selectedTakeId,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
       currentProjectJson: currentProjectJson,
       request: request,
     );

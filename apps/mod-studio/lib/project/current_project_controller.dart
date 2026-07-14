@@ -14,6 +14,7 @@ import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_selection_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
 
@@ -149,6 +150,10 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
     required String gameRoot,
     required Revision3VoiceTakeTechnicalPlan plan,
+  });
+  Future<Revision3VoiceTakeSelectionPublication>
+  prepareAndPublishVoiceTakeSelectionV1({
+    required Revision3VoiceTakeSelectionTechnicalPlan plan,
   });
   Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
     required String gameRoot,
@@ -365,6 +370,33 @@ final class _ManagedRevision3SessionLease
       takeId: checkpoint.takeId,
       slotCreated: checkpoint.slotCreated,
       selected: checkpoint.selected,
+    );
+  }
+
+  @override
+  Future<Revision3VoiceTakeSelectionPublication>
+  prepareAndPublishVoiceTakeSelectionV1({
+    required Revision3VoiceTakeSelectionTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishVoiceTakeSelectionV1(
+      lineId: plan.lineId,
+      slotId: plan.slotId,
+      expectedSlotRevision: plan.expectedSlotRevision,
+      locale: plan.locale,
+      expectedLocId: plan.locId,
+      expectedSelectedTakeId: plan.expectedSelectedTakeId,
+      selectedTakeId: plan.selectedTakeId,
+    );
+    return Revision3VoiceTakeSelectionPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      slotId: checkpoint.slotId,
+      slotRevision: checkpoint.slotRevision,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      previousSelectedTakeId: checkpoint.previousSelectedTakeId,
+      selectedTakeId: checkpoint.selectedTakeId,
     );
   }
 
@@ -946,6 +978,66 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTakeRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Select one existing Approved Voice take, or clear an exact current slot,
+  /// without requiring or reading a game installation.
+  Future<Revision3VoiceTakeSelectionPublication>
+  selectCurrentRevision3VoiceTake({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3VoiceTakeSelectionTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice take selection is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakeSelectionRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakeSelectionStaleCheckpointException();
+    }
+    try {
+      final publication = await lease.prepareAndPublishVoiceTakeSelectionV1(
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.slotId != plan.slotId ||
+          publication.slotRevision != plan.expectedSlotRevision + 1 ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId ||
+          publication.previousSelectedTakeId != plan.expectedSelectedTakeId ||
+          publication.selectedTakeId != plan.selectedTakeId) {
+        throw const CurrentProjectCoordinatorException(
+          'published Voice take selection disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeSelectionRequiresReopenException(),
           stackTrace,
         );
       }

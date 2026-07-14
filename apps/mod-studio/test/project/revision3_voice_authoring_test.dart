@@ -16,11 +16,16 @@ void main() {
       expect(catalog.lines, hasLength(1));
       expect(
         catalog.lines.single.displayLabel,
-        'Asghan — Mine entrance question · GRD_263_ASGHAN_OPEN_INFO_06_02',
+        'Asghan — Mine entrance question',
       );
       expect(
         catalog.lines.single.displayLabel,
-        isNot(contains(revision3VoiceContentLineId)),
+        isNot(
+          anyOf(
+            contains(revision3VoiceContentLineId),
+            contains('GRD_263_ASGHAN_OPEN_INFO_06_02'),
+          ),
+        ),
       );
       expect(catalog.suggestedLocales, <String>['de', 'en']);
       expect(
@@ -116,7 +121,10 @@ void main() {
       expect(catalog.lines[0].displayLabel, endsWith('· 1 of 2'));
       expect(catalog.lines[1].displayLabel, endsWith('· 2 of 2'));
       for (final line in catalog.lines) {
-        expect(line.displayLabel, contains('GRD_263_ASGHAN_OPEN_INFO_06_02'));
+        expect(
+          line.displayLabel,
+          isNot(contains('GRD_263_ASGHAN_OPEN_INFO_06_02')),
+        );
         expect(line.displayLabel, isNot(contains(line.lineId)));
         expect(line.matches('asghan'), isTrue);
         expect(line.matches('grd_263_asghan'), isTrue);

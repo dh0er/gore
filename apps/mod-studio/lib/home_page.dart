@@ -41,6 +41,8 @@ import 'project/revision3_quest_outline_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
+import 'project/revision3_voice_take_selection_authoring.dart';
+import 'project/revision3_voice_take_selection_dialog.dart';
 import 'project/revision3_voice_target_dialog.dart';
 import 'project/revision3_voice_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
@@ -604,6 +606,20 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          publishVoiceTakeSelection:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .selectCurrentRevision3VoiceTake(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: currentProject.head,
+                    plan: plan,
+                  ),
           publishVoiceTarget:
               ({
                 required expectedProjectId,
@@ -873,6 +889,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.gameRoot,
     required this.loadContentIndex,
     required this.publishVoiceTake,
+    required this.publishVoiceTakeSelection,
     required this.publishVoiceTarget,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
@@ -898,6 +915,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final String? gameRoot;
   final Revision3ContentIndexLoader loadContentIndex;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
+  final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
@@ -960,6 +978,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                           label: const Text('Settings'),
                         ),
                         FilledButton.icon(
+                          key: const Key('managed-manage-voice-takes'),
+                          onPressed: project.requiresReopen
+                              ? null
+                              : () => _openVoiceTakeSelection(context),
+                          icon: const Icon(Icons.library_music_outlined),
+                          label: const Text('Manage Voice takes'),
+                        ),
+                        FilledButton.icon(
                           key: const Key('managed-add-voice-take'),
                           onPressed: project.requiresReopen || gameRoot == null
                               ? null
@@ -1019,7 +1045,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                         ),
                       ],
                     );
-                    if (constraints.maxWidth < 720) {
+                    if (constraints.maxWidth < 1800) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -1045,7 +1071,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 if (gameRoot == null && !project.requiresReopen) ...[
                   const SizedBox(height: 8),
                   const Text(
-                    'Configure the Gothic 1 Remake installation in Settings to author, resolve, or build Voice content and to create NPC and Quest drafts.',
+                    'Configure the Gothic 1 Remake installation in Settings to import recordings, resolve targets, or build Voice bundles and to create NPC and Quest drafts.',
                     key: Key('managed-quest-game-required'),
                   ),
                 ],
@@ -1082,7 +1108,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 ],
                 const SizedBox(height: 14),
                 Wrap(
-                  spacing: 24,
+                  spacing: 20,
                   runSpacing: 2,
                   children: [
                     SizedBox(
@@ -1231,6 +1257,31 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       SnackBar(
         content: Text(
           'Voice take saved in project revision ${publication.projectRevision}. It is saved to the project only and is not yet usable in game.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openVoiceTakeSelection(BuildContext context) async {
+    if (project.requiresReopen) return;
+    final publication =
+        await showDialog<Revision3VoiceTakeSelectionPublication>(
+          context: context,
+          builder: (context) => Revision3VoiceTakeSelectionDialog(
+            service: Revision3VoiceTakeSelectionAuthoringService(
+              loadContentIndex: loadContentIndex,
+              publishTechnicalPlan: publishVoiceTakeSelection,
+            ),
+          ),
+        );
+    if (!context.mounted || publication == null) return;
+    final outcome = publication.cleared
+        ? 'Voice selection cleared'
+        : 'Approved Voice take selected';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$outcome in project revision ${publication.projectRevision}. Voice build remains a separate offline step; runtime remains unqualified.',
         ),
       ),
     );

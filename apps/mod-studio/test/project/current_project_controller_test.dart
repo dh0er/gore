@@ -13,6 +13,7 @@ import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
@@ -1154,6 +1155,126 @@ void main() {
   });
 
   test(
+    'Voice selection is exact-checkpoint bound, needs no game root, and refreshes state',
+    () async {
+      final plan = _voiceSelectionPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-selection'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceSelectionPublish: (lease, received) {
+          expect(received, same(plan));
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTakeSelectionPublication(
+            projectId: revision3VoiceContentProjectId,
+            projectRevision: 8,
+            lineId: received.lineId,
+            slotId: received.slotId,
+            slotRevision: received.expectedSlotRevision + 1,
+            locale: received.locale,
+            locId: received.locId,
+            previousSelectedTakeId: received.expectedSelectedTakeId,
+            selectedTakeId: received.selectedTakeId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      for (final stale
+          in <({String root, int revision, AuthoringWorkingHead head})>[
+            (root: Directory('another-root').path, revision: 7, head: _head(7)),
+            (root: managed.root.path, revision: 6, head: _head(7)),
+            (root: managed.root.path, revision: 7, head: _head(6)),
+          ]) {
+        await expectLater(
+          coordinator.selectCurrentRevision3VoiceTake(
+            expectedRoot: stale.root,
+            expectedProjectId: managed.projectId,
+            expectedProjectRevision: stale.revision,
+            expectedHead: stale.head,
+            plan: plan,
+          ),
+          throwsA(isA<Revision3VoiceTakeSelectionStaleCheckpointException>()),
+        );
+      }
+      expect(managed.voiceSelectionPublishCalls, 0);
+
+      final publication = await coordinator.selectCurrentRevision3VoiceTake(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        plan: plan,
+      );
+      expect(publication.selectedTakeId, isNull);
+      expect(managed.voiceSelectionPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test(
+    'poisoned Voice selection maps to requires-reopen and locks retry',
+    () async {
+      final plan = _voiceSelectionPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-poisoned-voice-selection'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceSelectionPublish: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected Voice selection verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.selectCurrentRevision3VoiceTake(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeSelectionRequiresReopenException>()),
+      );
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeSelectionRequiresReopenException>()),
+      );
+      expect(managed.voiceSelectionPublishCalls, 1);
+    },
+  );
+
+  test(
     'Voice target publication advances exactly once and Voice build preserves the checkpoint',
     () async {
       final plan = _voiceTargetPlan();
@@ -1719,6 +1840,11 @@ typedef _DataAssetSemanticPublishHook =
       _FakeManagedLease lease,
       DataAssetSemanticEditIntent intent,
     );
+typedef _VoiceSelectionPublishHook =
+    FutureOr<Revision3VoiceTakeSelectionPublication> Function(
+      _FakeManagedLease lease,
+      Revision3VoiceTakeSelectionTechnicalPlan plan,
+    );
 typedef _DataAssetRemoveHook =
     FutureOr<Revision3DataAssetStageRemovalPublication> Function(
       _FakeManagedLease lease,
@@ -1737,6 +1863,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onQuestPublish,
     this.onQuestOutlinePublish,
     this.onVoicePublish,
+    this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
     this.onDataAssetPublish,
@@ -1760,6 +1887,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _QuestPublishHook? onQuestPublish;
   final _QuestOutlinePublishHook? onQuestOutlinePublish;
   final _VoicePublishHook? onVoicePublish;
+  final _VoiceSelectionPublishHook? onVoiceSelectionPublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
   final _VoiceBuildHook? onVoiceBuild;
   final _DataAssetPublishHook? onDataAssetPublish;
@@ -1776,6 +1904,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
   int voicePublishCalls = 0;
+  int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
@@ -1858,6 +1987,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Voice publisher');
     }
     return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<Revision3VoiceTakeSelectionPublication>
+  prepareAndPublishVoiceTakeSelectionV1({
+    required Revision3VoiceTakeSelectionTechnicalPlan plan,
+  }) async {
+    voiceSelectionPublishCalls++;
+    final publish = onVoiceSelectionPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice selection publisher');
+    }
+    return publish(this, plan);
   }
 
   @override
@@ -1963,6 +2105,21 @@ Revision3VoiceTargetTechnicalPlan _voiceTargetPlan() {
     catalog: catalog,
     lineId: revision3VoiceContentLineId,
     locale: 'de',
+  );
+}
+
+Revision3VoiceTakeSelectionTechnicalPlan _voiceSelectionPlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(
+      existingSlotCandidateCount: 1,
+      existingSlotHasSelectedTake: true,
+    ),
+  );
+  return Revision3VoiceTakeSelectionTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    lineId: revision3VoiceContentLineId,
+    locale: 'de',
+    selectedTakeId: null,
   );
 }
 

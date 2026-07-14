@@ -69,6 +69,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_revision3_npc_draft_v1',
   'authoring_store_prepare_revision3_quest_draft_v3',
   'authoring_store_prepare_revision3_quest_outline_edit_v1',
+  'authoring_store_prepare_revision3_voice_take_selection_v1',
   'authoring_store_prepare_revision3_voice_take_v1',
   'authoring_store_prepare_revision3_voice_target_v1',
   'authoring_store_read_revision3_content_index_v1',

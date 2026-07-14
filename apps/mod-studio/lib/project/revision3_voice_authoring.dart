@@ -107,15 +107,63 @@ final class Revision3VoiceDialogLineChoice {
 /// Friendly facts about an existing line/language Voice slot. The hidden slot
 /// identity stays in the transaction planner.
 final class Revision3VoiceExistingSlotSummary {
-  const Revision3VoiceExistingSlotSummary({
+  Revision3VoiceExistingSlotSummary({
+    required this.slotRevision,
     required this.candidateCount,
     required this.hasSelectedTake,
     required this.targetResolution,
-  });
+    required List<Revision3VoiceCandidateTake> candidates,
+    required this.selectedTakeId,
+  }) : candidates = List<Revision3VoiceCandidateTake>.unmodifiable(candidates) {
+    if (candidateCount != this.candidates.length ||
+        hasSelectedTake != (selectedTakeId != null) ||
+        (selectedTakeId != null &&
+            !this.candidates.any((take) => take.id == selectedTakeId))) {
+      throw const FormatException('Voice slot selection facts disagree.');
+    }
+  }
 
+  final int slotRevision;
   final int candidateCount;
   final bool hasSelectedTake;
   final Revision3ContentVoiceTargetResolution targetResolution;
+  final List<Revision3VoiceCandidateTake> candidates;
+
+  /// Exact hidden identity used only to bind a selection transaction.
+  final String? selectedTakeId;
+
+  Revision3VoiceCandidateTake? candidate(String id) {
+    for (final candidate in candidates) {
+      if (candidate.id == id) return candidate;
+    }
+    return null;
+  }
+}
+
+/// One visible candidate card backed by an exact hidden VoiceTake identity.
+final class Revision3VoiceCandidateTake {
+  const Revision3VoiceCandidateTake._({
+    required this.id,
+    required this.revision,
+    required this.displayName,
+    required this.displayLabel,
+    required this.status,
+  });
+
+  final String id;
+  final int revision;
+  final String displayName;
+  final String displayLabel;
+  final Revision3ContentVoiceTakeStatus status;
+
+  bool get isApproved => status == Revision3ContentVoiceTakeStatus.approved;
+
+  String get statusLabel => switch (status) {
+    Revision3ContentVoiceTakeStatus.draft => 'Draft',
+    Revision3ContentVoiceTakeStatus.recorded => 'Recorded',
+    Revision3ContentVoiceTakeStatus.reviewed => 'Reviewed',
+    Revision3ContentVoiceTakeStatus.approved => 'Approved',
+  };
 }
 
 /// Closed, friendly projection of all Voice-authorable lines in one exact R3
@@ -216,7 +264,6 @@ final class Revision3VoiceCatalog {
           baseLabel: _voiceLineBaseLabel(
             speaker: entity.summary.primaryIdentity,
             displayName: entity.displayName,
-            localizationIdentity: localizationIdentity,
           ),
           slotIdsByLocale: slots,
           slotSummariesByLocale: slotSummaries,
@@ -322,7 +369,6 @@ final class _Revision3VoiceProjectedLine {
 String _voiceLineBaseLabel({
   required String? speaker,
   required String displayName,
-  required String localizationIdentity,
 }) {
   final visible = <String>[
     if (speaker case final value? when value != 'Dialog line') value,
@@ -331,7 +377,7 @@ String _voiceLineBaseLabel({
   final lineLabel = visible.isEmpty
       ? 'Unnamed dialog line'
       : visible.join(' — ');
-  return '$lineLabel · $localizationIdentity';
+  return lineLabel;
 }
 
 final class _Revision3VoiceSlotOwner {
@@ -394,6 +440,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
   }
 
   final candidates = <String, Revision3ContentEntity>{};
+  final orderedCandidates = <Revision3ContentEntity>[];
   for (final candidate in entity.references.where(
     (item) => item.role == 'voice_candidate',
   )) {
@@ -414,6 +461,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
       return null;
     }
     candidates[candidate.target.entityId] = take;
+    orderedCandidates.add(take);
   }
   if (candidates.length != details.candidateCount) return null;
 
@@ -421,6 +469,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
       .where((item) => item.role == 'voice_selected')
       .toList(growable: false);
   if (selected.length != (details.hasSelectedTake ? 1 : 0)) return null;
+  String? selectedTakeId;
   if (selected case [final chosen]) {
     if (chosen.qualifier != null ||
         chosen.resolution != Revision3ContentReferenceResolution.resolved ||
@@ -429,11 +478,44 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
         !candidates.containsKey(chosen.target.entityId)) {
       return null;
     }
+    selectedTakeId = chosen.target.entityId;
+  }
+  final baseLabels = <String>[
+    for (final take in orderedCandidates)
+      take.displayName.trim().isEmpty ? 'Unnamed take' : take.displayName,
+  ];
+  final labelCounts = <String, int>{};
+  for (final label in baseLabels) {
+    final folded = label.toLowerCase();
+    labelCounts[folded] = (labelCounts[folded] ?? 0) + 1;
+  }
+  final labelOrdinals = <String, int>{};
+  final records = <Revision3VoiceCandidateTake>[];
+  for (var index = 0; index < orderedCandidates.length; index++) {
+    final take = orderedCandidates[index];
+    final label = baseLabels[index];
+    final folded = label.toLowerCase();
+    final ordinal = (labelOrdinals[folded] ?? 0) + 1;
+    labelOrdinals[folded] = ordinal;
+    records.add(
+      Revision3VoiceCandidateTake._(
+        id: take.id,
+        revision: take.revision,
+        displayName: take.displayName,
+        displayLabel: labelCounts[folded] == 1
+            ? label
+            : '$label · $ordinal of ${labelCounts[folded]}',
+        status: take.summary.voiceTake!.status,
+      ),
+    );
   }
   return Revision3VoiceExistingSlotSummary(
+    slotRevision: entity.revision,
     candidateCount: details.candidateCount,
     hasSelectedTake: details.hasSelectedTake,
     targetResolution: details.targetResolution,
+    candidates: records,
+    selectedTakeId: selectedTakeId,
   );
 }
 

@@ -211,6 +211,37 @@ final class ManagedRevision3VoiceTakeCheckpoint {
   final bool assetDeduplicated;
 }
 
+/// One changed or cleared VoiceSlot selection returned only after native
+/// preparation, full candidate reopen, fixed-head CAS publication, and a full
+/// published reopen. Build remains blocked and runtime remains unqualified.
+final class ManagedRevision3VoiceTakeSelectionCheckpoint {
+  const ManagedRevision3VoiceTakeSelectionCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.slotId,
+    required this.slotRevision,
+    required this.locale,
+    required this.locId,
+    required this.previousSelectedTakeId,
+    required this.selectedTakeId,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String slotId;
+  final int slotRevision;
+  final String locale;
+  final String locId;
+  final String? previousSelectedTakeId;
+  final String? selectedTakeId;
+}
+
 /// One installed-archive Voice target resolution returned only after native
 /// evidence was sealed, the candidate was fully reopened, fixed-head CAS
 /// published, and the published generation was fully reopened again.
@@ -403,6 +434,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3VoiceTakeRequestV1 request,
   });
 
+  Future<AuthoringRevision3VoiceTakeSelectionPreparation>
+  prepareVoiceTakeSelectionV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  });
+
   Future<AuthoringRevision3VoiceTargetPreparation> prepareVoiceTargetV1({
     required String root,
     required String gameRoot,
@@ -531,6 +569,18 @@ final class ModFfiManagedRevision3AuthoringStore
     root: root,
     gameRoot: gameRoot,
     source: source,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceTakeSelectionPreparation>
+  prepareVoiceTakeSelectionV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3VoiceTakeSelectionV1(
+    root: root,
     currentProjectJson: currentProjectJson,
     request: request,
   );
@@ -1204,6 +1254,86 @@ class ManagedRevision3AuthoringProjectSession {
               asset: prepared.asset,
               ogg: prepared.ogg,
               assetDeduplicated: prepared.assetDeduplicated,
+            ),
+          );
+        },
+      );
+
+  /// Select one existing Approved Voice take, or clear the current selection,
+  /// through the project-only managed publication lane. No game root or media
+  /// read is required or accepted.
+  Future<ManagedRevision3VoiceTakeSelectionCheckpoint>
+  prepareAndPublishVoiceTakeSelectionV1({
+    required String lineId,
+    required String slotId,
+    required int expectedSlotRevision,
+    required String locale,
+    required String expectedLocId,
+    required String? expectedSelectedTakeId,
+    required String? selectedTakeId,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3VoiceTakeSelectionCheckpoint
+      >(
+        operation: 'prepareAndPublishVoiceTakeSelectionV1',
+        handlePrepareError: _core._throwRevision3VoiceSelectionPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice selection has no exact project identity',
+            );
+          }
+          final request =
+              AuthoringRevision3VoiceTakeSelectionRequestV1.forProject(
+                expectedHead: basis.head,
+                currentProjectJson: basis.projectJson,
+                lineId: lineId,
+                slotId: slotId,
+                expectedSlotRevision: expectedSlotRevision,
+                locale: locale,
+                expectedLocId: expectedLocId,
+                expectedSelectedTakeId: expectedSelectedTakeId,
+                selectedTakeId: selectedTakeId,
+              );
+          final prepared = await _store.prepareVoiceTakeSelectionV1(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.lineId != request.lineId ||
+              prepared.slotId != request.slotId ||
+              prepared.slotRevision != request.expectedSlotRevision + 1 ||
+              prepared.locale != request.locale ||
+              prepared.locId != request.expectedLocId ||
+              prepared.previousSelectedTakeId !=
+                  request.expectedSelectedTakeId ||
+              prepared.selectedTakeId != request.selectedTakeId) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice selection preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3VoiceTakeSelectionCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3VoiceTakeSelectionCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              lineId: prepared.lineId,
+              slotId: prepared.slotId,
+              slotRevision: prepared.slotRevision,
+              locale: prepared.locale,
+              locId: prepared.locId,
+              previousSelectedTakeId: prepared.previousSelectedTakeId,
+              selectedTakeId: prepared.selectedTakeId,
             ),
           );
         },
@@ -2108,6 +2238,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceSelectionPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_SELECTION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceSelectionPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice selection preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBuildError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT') {
@@ -2545,6 +2711,25 @@ bool _revision3VoiceTargetPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_TARGET_REVISION_LIMIT',
   'AUTHORING_REVISION3_VOICE_TARGET_SIGNED_WIRE_LIMIT',
   'AUTHORING_REVISION3_VOICE_TARGET_STORE_GAME_ALIAS',
+}.contains(code);
+
+bool _revision3VoiceSelectionPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_SELECTION_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_NO_CHANGES',
+  'AUTHORING_REVISION3_VOICE_SELECTION_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_REQUEST_INVALID',
+  'AUTHORING_REVISION3_VOICE_SELECTION_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_VOICE_SELECTION_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_REVISION_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_SELECTION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_NOT_APPROVED',
+  'AUTHORING_REVISION3_VOICE_SELECTION_TARGET_CONFLICT',
 }.contains(code);
 
 bool _revision3VoiceBuildErrorIsRetryable(String code) => const {

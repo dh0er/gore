@@ -23,6 +23,7 @@ import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
@@ -68,7 +69,6 @@ void main() {
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 10));
       }
-
       expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
       expect(requestedRoot?.path, managed.root.path);
       expect(
@@ -495,8 +495,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(
-        find.text(
-          'Asghan — Mine entrance question · GRD_263_ASGHAN_OPEN_INFO_06_02',
+        find.descendant(
+          of: find.byKey(const Key('revision3-voice-line-results')),
+          matching: find.text('Asghan — Mine entrance question'),
         ),
       );
       await tester.pumpAndSettle();
@@ -525,6 +526,122 @@ void main() {
       );
       expect(find.byKey(const Key('revision3-voice-wizard')), findsNothing);
       expect(find.text('Build / Deploy'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'managed Voice selection works without a game root and retains Library selection',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      tester.view.physicalSize = const Size(1600, 1200);
+      const firstTakeId = '55000000000000000000000000000000';
+      const secondTakeId = '55000000000000000000000000000001';
+      var currentIndex = _voiceSelectionIndex(
+        revision: 7,
+        selectedTakeId: firstTakeId,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-selection'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) => currentIndex,
+        onVoiceSelectionPublish: (lease, plan) {
+          expect(plan.lineId, revision3VoiceContentLineId);
+          expect(plan.slotId, revision3VoiceContentSlotId);
+          expect(plan.locale, 'de');
+          expect(plan.expectedSelectedTakeId, firstTakeId);
+          expect(plan.selectedTakeId, secondTakeId);
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          currentIndex = _voiceSelectionIndex(
+            revision: 8,
+            selectedTakeId: secondTakeId,
+            slotRevision: plan.expectedSlotRevision + 1,
+          );
+          return Revision3VoiceTakeSelectionPublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            lineId: plan.lineId,
+            slotId: plan.slotId,
+            slotRevision: plan.expectedSlotRevision + 1,
+            locale: plan.locale,
+            locId: plan.locId,
+            previousSelectedTakeId: plan.expectedSelectedTakeId,
+            selectedTakeId: plan.selectedTakeId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final manage = find.byKey(const Key('managed-manage-voice-takes'));
+      expect(manage, findsOneWidget);
+      expect(tester.widget<FilledButton>(manage).onPressed, isNotNull);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('managed-add-voice-take')),
+            )
+            .onPressed,
+        isNull,
+        reason: 'Ogg import still needs its separate safety game root',
+      );
+      final libraryLine = find.byKey(
+        const Key('revision3-content-entity-$revision3VoiceContentLineId'),
+      );
+      await tester.ensureVisible(libraryLine);
+      await tester.tap(libraryLine);
+      await tester.pump();
+      expect(tester.widget<ListTile>(libraryLine).selected, isTrue);
+
+      await tester.tap(manage);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+      await tester.pump();
+      await tester.ensureVisible(
+        find.byKey(const Key('voice-selection-take-1')),
+      );
+      await tester.tap(find.byKey(const Key('voice-selection-take-1')));
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('voice-selection-save')));
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+      expect(find.text('8'), findsWidgets);
+      expect(
+        find.textContaining(
+          'Approved Voice take selected in project revision 8',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<ListTile>(libraryLine).selected,
+        isTrue,
+        reason:
+            'the same visible line remains selected after exact-head reload',
+      );
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(4));
     },
   );
 
@@ -638,10 +755,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       await tester.tap(
-        find.textContaining('GRD_263_ASGHAN_OPEN_INFO_06_02').last,
+        find.descendant(
+          of: find.byKey(const Key('revision3-voice-target-line-results')),
+          matching: find.text('Asghan — Mine entrance question'),
+        ),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+      final targetSubmit = find.byKey(
+        const Key('revision3-voice-target-submit'),
+      );
+      await tester.ensureVisible(targetSubmit);
+      await tester.tap(targetSubmit);
       await tester.pumpAndSettle();
 
       expect(managed.voiceTargetPublishCalls, 1);
@@ -716,6 +840,15 @@ void main() {
     expect(tester.widget<FilledButton>(voiceButton).onPressed, isNull);
     expect(
       tester
+          .widget<FilledButton>(
+            find.byKey(const Key('managed-manage-voice-takes')),
+          )
+          .onPressed,
+      isNotNull,
+      reason: 'selection is project-only and intentionally needs no game path',
+    );
+    expect(
+      tester
           .widget<PopupMenuButton<String>>(
             find.byKey(const Key('managed-voice-tools')),
           )
@@ -724,7 +857,7 @@ void main() {
     );
     expect(
       find.text(
-        'Configure the Gothic 1 Remake installation in Settings to author, resolve, or build Voice content and to create NPC and Quest drafts.',
+        'Configure the Gothic 1 Remake installation in Settings to import recordings, resolve targets, or build Voice bundles and to create NPC and Quest drafts.',
       ),
       findsOneWidget,
     );
@@ -1141,6 +1274,14 @@ void main() {
             .onPressed,
         isNull,
       );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('managed-manage-voice-takes')),
+            )
+            .onPressed,
+        isNull,
+      );
 
       final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
@@ -1355,6 +1496,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onQuestPublish,
     this.onQuestOutlinePublish,
     this.onVoicePublish,
+    this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
     this.onDataAssetList,
@@ -1396,6 +1538,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3VoiceTakeTechnicalPlan plan,
   )?
   onVoicePublish;
+  final Revision3VoiceTakeSelectionPublication Function(
+    _FakeManagedLease lease,
+    Revision3VoiceTakeSelectionTechnicalPlan plan,
+  )?
+  onVoiceSelectionPublish;
   final Revision3VoiceTargetPublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -1436,6 +1583,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
   int voicePublishCalls = 0;
+  int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
@@ -1507,6 +1655,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Voice publisher');
     }
     return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<Revision3VoiceTakeSelectionPublication>
+  prepareAndPublishVoiceTakeSelectionV1({
+    required Revision3VoiceTakeSelectionTechnicalPlan plan,
+  }) async {
+    voiceSelectionPublishCalls++;
+    final publish = onVoiceSelectionPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice selection publisher');
+    }
+    return publish(this, plan);
   }
 
   @override
@@ -1620,6 +1781,40 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+Revision3ContentIndex _voiceSelectionIndex({
+  required int revision,
+  required String selectedTakeId,
+  int slotRevision = 1,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingSlotCandidateCount: 2,
+    existingSlotHasSelectedTake: true,
+  );
+  final entities = (json['entities']! as List).cast<Map<String, Object?>>();
+  for (final entity in entities) {
+    if (entity['id'] == revision3VoiceContentSlotId) {
+      entity['revision'] = slotRevision;
+      final references = (entity['references']! as List)
+          .cast<Map<String, Object?>>();
+      final selected = references.singleWhere(
+        (reference) => reference['role'] == 'voice_selected',
+      );
+      final target = (selected['target']! as Map).cast<String, Object?>();
+      target['entity_id'] = selectedTakeId;
+      selected['target'] = target;
+    }
+    if (entity['kind'] == 'voice_take') {
+      final summary = (entity['summary']! as Map).cast<String, Object?>();
+      final data = (summary['data']! as Map).cast<String, Object?>();
+      data['status'] = 'approved';
+      summary['data'] = data;
+      entity['summary'] = summary;
+    }
+  }
+  return Revision3ContentIndex.fromJsonObject(json);
+}
 
 Revision3QuestCatalog _questCatalog() => Revision3QuestCatalog(
   parents: [
