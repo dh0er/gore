@@ -58,6 +58,11 @@
 //!   collision authority, consumes the repeated-Quest transaction, imports its structural
 //!   artifact, and fully reopens a prepared revision-3 checkpoint. It returns only structural,
 //!   build-blocked/runtime-unqualified facts and never publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_quest_context_edit_v1` changes only one existing managed
+//!   Quest's description, family, and giver. Parent/giver IDs are resolved inside a freshly
+//!   rebuilt Story capability bound to the exact Store head and caller-observed catalog seal.
+//!   The route prepares and fully reopens an immutable candidate without importing an artifact,
+//!   touching the game/save, or publishing the fixed head.
 //! - `authoring_store_prepare_revision3_quest_outline_edit_v1` edits only one exact-current
 //!   managed Quest's display outline and deterministically regenerates its owned ScriptModule.
 //!   It fully reopens an unpublished candidate, never accepts collision authority from the
@@ -129,6 +134,7 @@ mod authoring_story_catalog;
 mod authoring_story_inventory;
 mod authoring_story_npc_revision3;
 mod authoring_story_quest;
+mod authoring_story_quest_context_revision3;
 mod authoring_story_quest_outline_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_voice_build_revision3;
@@ -185,6 +191,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dataasset_edit_v1",
     "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
+    "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_prepare_revision3_quest_outline_edit_v1",
     "authoring_store_prepare_revision3_voice_take_selection_v1",
@@ -466,6 +473,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_npc_draft_v1" => {
             Some(authoring_story_npc_revision3::prepare_revision3_npc_draft_v1_raw)
         }
+        "authoring_store_prepare_revision3_quest_context_edit_v1" => Some(
+            authoring_story_quest_context_revision3::prepare_revision3_quest_context_edit_v1_raw,
+        ),
         "authoring_store_prepare_revision3_quest_draft_v3" => {
             Some(authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw)
         }
@@ -1515,6 +1525,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
+                    "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_prepare_revision3_quest_outline_edit_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
@@ -1614,6 +1625,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_npc_draft_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_quest_context_edit_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_draft_v3"));
