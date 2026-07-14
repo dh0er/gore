@@ -8,6 +8,7 @@ import 'package:path/path.dart' as p;
 import '../core/mod_ffi.dart';
 import 'managed_project_lock.dart';
 import 'project_atomic_io.dart';
+import 'revision3_content_index.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
 
@@ -92,6 +93,29 @@ final class ManagedProjectDerivedRejection<T>
 
 typedef ManagedProjectDeriver<T> =
     FutureOr<ManagedProjectDerivedSave<T>> Function(String latestProjectJson);
+
+/// One structurally verified revision-3 Quest checkpoint returned only after fixed-head CAS
+/// publication and a full reopen. It deliberately carries no build, runtime, deployment, source,
+/// or artifact-authority claim.
+final class ManagedRevision3QuestDraftCheckpoint {
+  const ManagedRevision3QuestDraftCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.questId,
+    required this.scriptModuleId,
+    required this.artifactDeduplicated,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String questId;
+  final String scriptModuleId;
+  final bool artifactDeduplicated;
+}
 
 /// Narrow seam over the native managed-store document API.
 ///
@@ -184,6 +208,18 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringWorkingHead head,
     required AuthoringAssetVerification verification,
   });
+
+  Future<AuthoringRevision3QuestDraftPreparation> prepareQuestDraftV3({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required String questRequestJson,
+  });
+
+  Future<AuthoringRevision3ContentIndexResult> readContentIndex({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  });
 }
 
 final class ModFfiManagedRevision3AuthoringStore
@@ -219,6 +255,28 @@ final class ModFfiManagedRevision3AuthoringStore
     head: head,
     verification: verification,
   );
+
+  @override
+  Future<AuthoringRevision3QuestDraftPreparation> prepareQuestDraftV3({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required String questRequestJson,
+  }) => ffi.authoringStorePrepareRevision3QuestDraftV3(
+    root: root,
+    gameRoot: gameRoot,
+    currentProjectJson: currentProjectJson,
+    questRequestJson: questRequestJson,
+  );
+
+  @override
+  Future<AuthoringRevision3ContentIndexResult> readContentIndex({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreReadRevision3ContentIndexV1(
+    root: root,
+    expectedHead: expectedHead,
+  );
 }
 
 final class _ManagedOpenedCheckpoint {
@@ -237,6 +295,18 @@ final class _ManagedOpenedCheckpoint {
   final bool? blocksBuild;
   final String? projectId;
   final int? projectRevision;
+}
+
+final class _ManagedPreparedCheckpoint<T> {
+  const _ManagedPreparedCheckpoint({
+    required this.head,
+    required this.projectJson,
+    required this.value,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final T value;
 }
 
 abstract interface class _ManagedCheckpointStore {
@@ -435,9 +505,10 @@ class ManagedAuthoringProjectSession {
 /// It otherwise uses the exact same lock, serialized operation lane, compare-and-swap,
 /// verification, repair, and no-clobber publication core as [ManagedAuthoringProjectSession].
 class ManagedRevision3AuthoringProjectSession {
-  ManagedRevision3AuthoringProjectSession._(this._core);
+  ManagedRevision3AuthoringProjectSession._(this._core, this._store);
 
   final _ManagedProjectSessionCore _core;
+  final ManagedRevision3AuthoringStore _store;
 
   Directory get root => _core.root;
   String get projectJson => _core.projectJson;
@@ -460,6 +531,7 @@ class ManagedRevision3AuthoringProjectSession {
       projectJson: projectJson,
       replacement: replacement,
     ),
+    store,
   );
 
   static Future<ManagedRevision3AuthoringProjectSession> open({
@@ -472,12 +544,112 @@ class ManagedRevision3AuthoringProjectSession {
       store: _Revision3ManagedCheckpointStore(store),
       replacement: replacement,
     ),
+    store,
   );
 
   Future<void> save(String projectJson) => _core.save(projectJson);
 
   Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
       _core.deriveAndSave(derive);
+
+  /// Prepare and publish one semantic revision-3 Quest Draft transaction.
+  ///
+  /// The request's head/project/revision binding is constructed only after this operation reaches
+  /// the serialized session lane. Native code prepares immutable objects but cannot publish the
+  /// fixed head. The session then requires an exact basis match, fully reopens the candidate,
+  /// publishes it through the crash-recoverable byte-CAS lane, and fully reopens the published
+  /// generation before returning. No game file is written and no build/runtime claim is created.
+  Future<ManagedRevision3QuestDraftCheckpoint> prepareAndPublishQuestDraftV3({
+    required String gameRoot,
+    required String questId,
+    required String scriptModuleId,
+    required String displayName,
+    required AuthoringRevision3QuestDraftIntentV3 intent,
+  }) =>
+      _core._publishPreparedRevision3QuestCheckpoint<
+        ManagedRevision3QuestDraftCheckpoint
+      >((basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Quest transaction has no exact project identity',
+          );
+        }
+        final request = AuthoringRevision3QuestDraftRequestV3(
+          expectedHead: basis.head,
+          expectedProjectId: projectId,
+          expectedRevision: projectRevision,
+          questId: questId,
+          scriptModuleId: scriptModuleId,
+          displayName: displayName,
+          intent: intent,
+        );
+        final prepared = await _store.prepareQuestDraftV3(
+          root: root.path,
+          gameRoot: gameRoot,
+          currentProjectJson: basis.projectJson,
+          questRequestJson: request.canonicalJson,
+        );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.questId != request.questId ||
+            prepared.scriptModuleId != request.scriptModuleId ||
+            prepared.displayName != request.displayName ||
+            prepared.moduleNamespace != request.intent.moduleNamespace ||
+            prepared.technicalId != request.intent.technicalId ||
+            prepared.textHelper != request.intent.textHelper ||
+            prepared.title != request.intent.title ||
+            prepared.description != request.intent.description ||
+            prepared.objectiveTitle != request.intent.objectiveTitle) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Quest preparation disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<ManagedRevision3QuestDraftCheckpoint>(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3QuestDraftCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            questId: prepared.questId,
+            scriptModuleId: prepared.scriptModuleId,
+            artifactDeduplicated: prepared.artifactDeduplicated,
+          ),
+        );
+      });
+
+  /// Read the semantic content projection bound to the exact checkpoint owned by this session.
+  ///
+  /// The operation shares the session's serialized lane, verifies the fixed head before and after
+  /// native projection, and never prepares objects or enters the publication path.
+  Future<Revision3ContentIndex> readContentIndex() =>
+      _core.readExact<Revision3ContentIndex>((basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 content read has no exact project identity',
+          );
+        }
+        final result = await _store.readContentIndex(
+          root: root.path,
+          expectedHead: basis.head,
+        );
+        if (result.head.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.projectRevision != projectRevision ||
+            result.index.projectId != projectId ||
+            result.index.projectRevision != projectRevision) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 content read disagrees with its exact session basis',
+          );
+        }
+        return result.index;
+      }, operation: 'readContentIndex');
 
   /// Reopen the exact currently-published checkpoint with full asset
   /// verification without preparing or publishing a new checkpoint.
@@ -677,6 +849,115 @@ class _ManagedProjectSessionCore {
     });
   }
 
+  /// Execute one read against the exact current checkpoint without mutation.
+  ///
+  /// The fixed head is checked on both sides of the awaited native read. Integrity,
+  /// response-shape, or store failures poison the session; bounded semantic/read-capacity and
+  /// unavailable-transport failures remain retryable when the exact disk head is unchanged.
+  Future<T> readExact<T>(
+    Future<T> Function(_ManagedOpenedCheckpoint basis) read, {
+    required String operation,
+  }) {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<T>(operation);
+    }
+    return _enqueue(() async {
+      _requireWritableState();
+      final basis = _opened;
+      final operations = _ManagedSessionOperations(
+        root: root,
+        store: _store,
+        replacement: _replacement,
+      );
+      await _requireExactPublishedHead(operations, basis.head);
+      final T result;
+      try {
+        result = await read(basis);
+      } catch (error, stackTrace) {
+        // If native work raced an external head write, that drift is the stronger failure.
+        await _requireExactPublishedHead(operations, basis.head);
+        _throwRevision3ContentReadError(error, stackTrace);
+      }
+      await _requireExactPublishedHead(operations, basis.head);
+      return result;
+    });
+  }
+
+  /// Publish an already-prepared immutable candidate through the same exact-head lane as save.
+  ///
+  /// The callback receives the exact fully-opened basis only inside the serialized lane. It may
+  /// install immutable CAS objects, but it must not touch the fixed head. Its candidate is fully
+  /// reopened here before any publication is attempted.
+  Future<T> _publishPreparedRevision3QuestCheckpoint<T>(
+    Future<_ManagedPreparedCheckpoint<T>> Function(
+      _ManagedOpenedCheckpoint basis,
+    )
+    prepare,
+  ) {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<T>('prepareAndPublishQuestDraftV3');
+    }
+    return _enqueue(() async {
+      _requireWritableState();
+      final basis = _opened;
+      final operations = _ManagedSessionOperations(
+        root: root,
+        store: _store,
+        replacement: _replacement,
+      );
+      await _requireExactPublishedHead(operations, basis.head);
+
+      final _ManagedPreparedCheckpoint<T> prepared;
+      try {
+        prepared = await prepare(basis);
+      } catch (error, stackTrace) {
+        // A native prepare can suspend for a long game/catalog rebuild. A concurrent head drift is
+        // the stronger integrity failure and must poison the session even when preparation also
+        // reports a semantic or transport error.
+        await _requireExactPublishedHead(operations, basis.head);
+        if (error is ModFfiException) {
+          _throwRevision3QuestPrepareError(error, stackTrace);
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+
+      await _requireExactPublishedHead(operations, basis.head);
+      try {
+        await operations.verifyPreparedCheckpoint(
+          prepared.head,
+          expectedProjectJson: prepared.projectJson,
+        );
+      } catch (error, stackTrace) {
+        await _requireExactPublishedHead(operations, basis.head);
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+
+      try {
+        await operations.publish(prepared.head, expectedHead: basis.head);
+      } on AtomicSwapConflictException catch (error) {
+        _requiresReopen = true;
+        throw ManagedProjectHeadConflictException(error.message);
+      } on AtomicSwapException {
+        _requiresReopen = true;
+        rethrow;
+      } catch (_) {
+        _requiresReopen = true;
+        rethrow;
+      }
+
+      try {
+        _opened = await operations.openPublished(
+          expectedHead: prepared.head,
+          expectedProjectJson: prepared.projectJson,
+        );
+      } catch (_) {
+        _requiresReopen = true;
+        rethrow;
+      }
+      return prepared.value;
+    });
+  }
+
   /// Verify and fully reopen the exact head currently owned by this session.
   ///
   /// This is a durability check, not a save: it prepares no immutable objects
@@ -724,6 +1005,57 @@ class _ManagedProjectSessionCore {
         'managed project must be reopened after an uncertain publication',
       );
     }
+  }
+
+  Never _throwRevision3QuestPrepareError(
+    ModFfiException error,
+    StackTrace stackTrace,
+  ) {
+    if (error.code == 'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT') {
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectHeadConflictException(error.message),
+        stackTrace,
+      );
+    }
+    if (_revision3QuestPrepareErrorRequiresReopen(error.code)) {
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+
+  Never _throwRevision3ContentReadError(Object error, StackTrace stackTrace) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_CONTENT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ContentReadErrorRequiresReopen(error.code)) {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectVerificationException(error.message),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 content could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
   }
 
   Future<void> _saveCapturedInQueue(String capturedProjectJson) async {
@@ -953,6 +1285,36 @@ bool _prepareErrorRequiresReopen(String code) => const {
   'AUTHORING_STORE_JSON_NONCANONICAL',
   'AUTHORING_STORE_PATH_UNSAFE',
   'AUTHORING_STORE_ROOT_MISSING',
+}.contains(code);
+
+bool _revision3QuestPrepareErrorRequiresReopen(String code) => const {
+  'AUTHORING_REVISION3_QUEST_HEAD_MISSING',
+  'AUTHORING_REVISION3_QUEST_PROJECT_INVALID',
+  'AUTHORING_REVISION3_QUEST_STORE_COLLISION',
+  'AUTHORING_REVISION3_QUEST_STORE_INVARIANT',
+  'AUTHORING_REVISION3_QUEST_STORE_IO',
+  'AUTHORING_REVISION3_QUEST_STORE_JSON_INVALID',
+  'AUTHORING_REVISION3_QUEST_STORE_OBJECT_MISSING',
+  'AUTHORING_REVISION3_QUEST_STORE_PATH_UNSAFE',
+  'AUTHORING_REVISION3_QUEST_STORE_ROOT_MISSING',
+  'AUTHORING_REVISION3_QUEST_STORE_SEAL_MISMATCH',
+}.contains(code);
+
+bool _revision3ContentReadErrorRequiresReopen(String code) => const {
+  ModFfiException.malformedNativeResponseCode,
+  'AUTHORING_REVISION3_CONTENT_HEAD_INVALID',
+  'AUTHORING_REVISION3_CONTENT_HEAD_MISSING',
+  'AUTHORING_REVISION3_CONTENT_INVARIANT',
+  'AUTHORING_REVISION3_CONTENT_STORE_COLLISION',
+  'AUTHORING_REVISION3_CONTENT_STORE_INVARIANT',
+  'AUTHORING_REVISION3_CONTENT_STORE_IO',
+  'AUTHORING_REVISION3_CONTENT_STORE_JSON_INVALID',
+  'AUTHORING_REVISION3_CONTENT_STORE_LIMIT',
+  'AUTHORING_REVISION3_CONTENT_STORE_LIMITS_INVALID',
+  'AUTHORING_REVISION3_CONTENT_STORE_OBJECT_MISSING',
+  'AUTHORING_REVISION3_CONTENT_STORE_PATH_UNSAFE',
+  'AUTHORING_REVISION3_CONTENT_STORE_ROOT_MISSING',
+  'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
 }.contains(code);
 
 Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {

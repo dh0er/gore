@@ -60,6 +60,8 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_checkpoint',
   'authoring_store_prepare_document_checkpoint',
   'authoring_store_prepare_revision3_checkpoint',
+  'authoring_store_prepare_revision3_quest_draft_v3',
+  'authoring_store_read_revision3_content_index_v1',
   'authoring_store_verify_asset',
   'authoring_story_build_plan_v1_generate',
   'authoring_story_catalog_v1_build',

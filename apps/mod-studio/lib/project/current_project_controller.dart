@@ -8,6 +8,7 @@ import '../core/mod_ffi.dart';
 import '../core/providers.dart';
 import 'managed_project_session.dart';
 import 'project_controller.dart';
+import 'revision3_content_index.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
 
@@ -127,6 +128,7 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   AuthoringWorkingHead get head;
   bool get requiresReopen;
 
+  Future<Revision3ContentIndex> readContentIndex();
   Future<void> verifyCurrentHead();
   Future<void> close();
 }
@@ -220,6 +222,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   Future<void> verifyCurrentHead() => _session.verifyCurrentHead();
+
+  @override
+  Future<Revision3ContentIndex> readContentIndex() =>
+      _session.readContentIndex();
 
   @override
   Future<void> close() => _session.close();
@@ -447,6 +453,31 @@ final class CurrentProjectCoordinator
               as ManagedRevision3CurrentProjectState;
     }
     return refreshed;
+  });
+
+  /// Read the semantic index of the exact managed revision-3 current project.
+  ///
+  /// This shares the app-wide project lane with save/open/close transitions. A legacy project has
+  /// no equivalent semantic projection, and a poisoned managed lease must first be reopened.
+  Future<Revision3ContentIndex>
+  readCurrentRevision3ContentIndex() => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the revision-3 content index is available only for managed revision-3 projects',
+      );
+    }
+    if (current.lease.requiresReopen) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'managed revision-3 content is blocked until the project is reopened',
+      );
+    }
+    try {
+      return await current.lease.readContentIndex();
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
   });
 
   /// Detach and close the current lease in the operation lane.

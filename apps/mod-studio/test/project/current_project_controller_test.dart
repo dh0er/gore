@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/project_controller.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
 
 void main() {
   test(
@@ -515,6 +516,79 @@ void main() {
     expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
     expect(managed.verifyCalls, 0);
   });
+
+  test(
+    'managed content read uses the current lease and refreshes poison state',
+    () async {
+      final projectId = '14141414141414141414141414141414';
+      final index = _contentIndex(projectId: projectId, revision: 14);
+      final managed = _FakeManagedLease(
+        root: Directory('managed-content'),
+        projectIdValue: projectId,
+        projectRevision: 14,
+        head: _head(14),
+        contentIndex: index,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      expect(await coordinator.readCurrentRevision3ContentIndex(), same(index));
+      expect(managed.contentReadCalls, 1);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+
+      managed.onContentRead = (lease) {
+        lease.requiresReopenValue = true;
+        throw StateError('injected content verification failure');
+      };
+      await expectLater(
+        coordinator.readCurrentRevision3ContentIndex(),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        coordinator.readCurrentRevision3ContentIndex(),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.contentReadCalls, 2);
+    },
+  );
+
+  test('content read rejects absent and legacy current projects', () async {
+    final empty = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    addTearDown(() async {
+      await empty.shutdown();
+      empty.dispose();
+    });
+    await expectLater(
+      empty.readCurrentRevision3ContentIndex(),
+      throwsA(isA<NoCurrentProjectException>()),
+    );
+
+    final legacy = CurrentProjectCoordinator(
+      initialLegacy: _FakeLegacyLease(path: 'legacy.goremod'),
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    addTearDown(() async {
+      await legacy.shutdown();
+      legacy.dispose();
+    });
+    await expectLater(
+      legacy.readCurrentRevision3ContentIndex(),
+      throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+    );
+  });
 }
 
 final class _FakeLegacyLease implements LegacyCurrentProjectLease {
@@ -574,6 +648,7 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
 }
 
 typedef _VerifyHook = FutureOr<void> Function(_FakeManagedLease lease);
+typedef _ContentReadHook = FutureOr<void> Function(_FakeManagedLease lease);
 
 final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   _FakeManagedLease({
@@ -583,6 +658,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.head,
     this.projectIdError,
     this.onVerify,
+    this.contentIndex,
     this.closeFailuresRemaining = 0,
   });
 
@@ -595,9 +671,12 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   final AuthoringWorkingHead head;
   final _VerifyHook? onVerify;
+  final Revision3ContentIndex? contentIndex;
+  _ContentReadHook? onContentRead;
   int closeFailuresRemaining;
   bool requiresReopenValue = false;
   int verifyCalls = 0;
+  int contentReadCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -614,6 +693,14 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   Future<void> verifyCurrentHead() async {
     verifyCalls++;
     await onVerify?.call(this);
+  }
+
+  @override
+  Future<Revision3ContentIndex> readContentIndex() async {
+    contentReadCalls++;
+    await onContentRead?.call(this);
+    return contentIndex ??
+        (throw StateError('fake managed lease has no content index'));
   }
 
   @override
@@ -635,3 +722,25 @@ AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
     },
   }),
 );
+
+Revision3ContentIndex _contentIndex({
+  required String projectId,
+  required int revision,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': revision,
+  'project_name': 'Controller content',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 1,
+      'sha256': List<String>.filled(64, '5').join(),
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{},
+  'entities': <Object?>[],
+  'assets': <Object?>[],
+});

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart' as crypto;
 
 import '../dataasset/domain/dataasset_inspection.dart';
+import '../project/revision3_content_index.dart';
 import 'core_service.dart';
 
 export '../dataasset/domain/dataasset_inspection.dart';
@@ -19,6 +20,18 @@ const _maxDataAssetExportIndex = 0x7fffffff;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringRevision3ContentIndexJsonBytes = 32 * 1024 * 1024;
+const _maxAuthoringRevision3QuestRequestJsonBytes = 64 * 1024;
+const _maxAuthoringRevision3QuestCollisionArtifactBytes = 24 * 1024 * 1024;
+const _authoringRevision3QuestGeneratorId =
+    'gore-authoring.draft-quest-skeleton';
+const _authoringRevision3QuestGeneratorVersion = 2;
+const _authoringRevision3QuestCollisionCatalogLayer =
+    'base-game-plus-exact-revision3-project.story-collisions.v2';
+const _authoringRevision3QuestCollisionMediaType =
+    'application/vnd.gore.quest-collision-capability+json;version=2';
+const _authoringRevision3QuestFingerprintDomain =
+    'gore-story-build.revision3-quest-v2.input-fingerprint\u0000';
 const _maxAuthoringStoryMutationJsonBytes = 20 * 1024 * 1024;
 const _maxAuthoringStoryCatalogJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringStoryCatalogNpcs = 2;
@@ -50,7 +63,9 @@ const _maxAuthoringStoryBuildSealedInputsTotal =
 // This one FFI command deliberately stays within signed 64-bit JSON integers. A base at this
 // maximum can advance once to `_maxAuthoringStoryAppliedRevision` without becoming a double.
 const _maxAuthoringStoryBaseRevision = 0x7ffffffffffffffe;
-const _maxAuthoringStoryAppliedRevision = 0x7fffffffffffffff;
+const _maxAuthoringSignedJsonInteger = 0x7fffffffffffffff;
+const _maxAuthoringStoryAppliedRevision = _maxAuthoringSignedJsonInteger;
+const _maxAuthoringRevision3QuestBasisRevision = _maxAuthoringStoryBaseRevision;
 const _maxAuthoringNpcDraftInputBytes = 16 * 1024;
 const _maxAuthoringQuestDraftInputBytes = 20 * 1024 * 1024;
 const _maxAuthoringDraftSourceBytes = 1024 * 1024;
@@ -506,6 +521,33 @@ class ModFfi {
     return AuthoringRevision3StoreOpenedResult.fromJson(response);
   }
 
+  /// Read the bounded semantic index of one exact, currently-published revision-3 checkpoint.
+  ///
+  /// Native code fully verifies the project and its assets before and after projection. This
+  /// remains a read-only content view and grants no build, runtime, deployment, or publication
+  /// authority.
+  Future<AuthoringRevision3ContentIndexResult>
+  authoringStoreReadRevision3ContentIndexV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_read_revision3_content_index_v1';
+    _authoringRevision3StorePath(root);
+    _authoringRevision3ContentReadEnvelopePreflight(
+      command,
+      expectedHead.canonicalJson,
+      root,
+    );
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    return AuthoringRevision3ContentIndexResult.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
   /// Prepare immutable objects without publishing `gore-project.json`.
   ///
   /// `expectedHead == null` is a strict CAS assertion that the fixed head is absent. The raw
@@ -587,6 +629,52 @@ class ModFfi {
       'project_json': projectJson,
     });
     return AuthoringRevision3CheckpointPreparation.fromJson(response);
+  }
+
+  /// Prepare one revision-3 Quest Draft checkpoint without publishing the fixed head.
+  ///
+  /// Both nested JSON strings cross the native boundary byte-for-byte. Native code rebuilds the
+  /// game/catalog capability, validates the exact published basis, installs only immutable
+  /// objects, and returns an unpublished structural candidate. This wrapper grants no build,
+  /// runtime, deployment, source-inspection, artifact, or publication authority.
+  Future<AuthoringRevision3QuestDraftPreparation>
+  authoringStorePrepareRevision3QuestDraftV3({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required String questRequestJson,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_quest_draft_v3';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    // The native model contains unsigned 64-bit counters and seals. Keep the entire JSON-number
+    // surface inside Dart/native's shared signed wire domain before crossing the FFI boundary;
+    // checking only the project revision would still allow an unsafe nested seal or asset length.
+    _authoringRequireCanonicalRevision3ProjectJson(currentProjectJson);
+    _authoringRevision3RequestString(
+      questRequestJson,
+      'questRequestJson',
+      _maxAuthoringRevision3QuestRequestJsonBytes,
+    );
+    _authoringRevision3QuestPrepareEnvelopePreflight(
+      command,
+      root,
+      gameRoot,
+      currentProjectJson,
+      questRequestJson,
+    );
+    final response = await _call(command, {
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'quest_request_json': questRequestJson,
+      'root': root,
+    });
+    return AuthoringRevision3QuestDraftPreparation.fromJson(response);
   }
 
   /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.
@@ -873,11 +961,15 @@ void _authoringRevision3RequestString(
 }
 
 void _authoringRevision3StorePath(String value) {
-  _authoringRevision3RequestString(value, 'root', _maxAuthoringStorePathBytes);
+  _authoringRevision3Path(value, 'root');
+}
+
+void _authoringRevision3Path(String value, String field) {
+  _authoringRevision3RequestString(value, field, _maxAuthoringStorePathBytes);
   if (value.contains('\u0000')) {
     throw ArgumentError.value(
       '<${value.length} characters>',
-      'root',
+      field,
       'must not contain NUL',
     );
   }
@@ -892,6 +984,22 @@ void _authoringRevision3OpenEnvelopePreflight(
       '{"command":"","payload":{"root":"","verification":""}}'.length +
       command.length +
       verification.length;
+  _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
+}
+
+void _authoringRevision3ContentReadEnvelopePreflight(
+  String command,
+  String expectedHeadJson,
+  String root,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"expected_head_json":"","root":""}}'.length +
+      command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    expectedHeadJson,
+    'expectedHead',
+    encodedBytes,
+  );
   _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
 }
 
@@ -940,6 +1048,35 @@ void _authoringRevision3PrepareEnvelopePreflight(
     );
   }
   _authoringAddEscapedJsonStringBytes(projectJson, 'projectJson', encodedBytes);
+}
+
+void _authoringRevision3QuestPrepareEnvelopePreflight(
+  String command,
+  String root,
+  String gameRoot,
+  String currentProjectJson,
+  String questRequestJson,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"current_project_json":"","game_root":"","quest_request_json":"","root":""}}'
+          .length +
+      command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    currentProjectJson,
+    'currentProjectJson',
+    encodedBytes,
+  );
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    gameRoot,
+    'gameRoot',
+    encodedBytes,
+  );
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    questRequestJson,
+    'questRequestJson',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
 }
 
 void _voiceOggInspectPath(String value) {
@@ -1331,6 +1468,45 @@ Map<String, Object?> _authoringDecodeDuplicateSafeObject(
   }
 }
 
+void _authoringRequireSignedSafeUnsignedJsonNumbers(
+  Object? root,
+  String context,
+) {
+  final pending = <Object?>[root];
+  while (pending.isNotEmpty) {
+    final value = pending.removeLast();
+    if (value == null || value is String || value is bool) continue;
+    if (value is int) {
+      if (value < 0 || value > _maxAuthoringSignedJsonInteger) {
+        throw FormatException(
+          'authoring $context contains an integer outside the signed-safe unsigned range',
+        );
+      }
+      continue;
+    }
+    if (value is List) {
+      pending.addAll(value);
+      continue;
+    }
+    if (value is Map) {
+      for (final entry in value.entries) {
+        if (entry.key is! String) {
+          throw FormatException(
+            'authoring $context contains a non-string object key',
+          );
+        }
+        pending.add(entry.value);
+      }
+      continue;
+    }
+    // JSON decimals/exponents decode as doubles. Revision-3's closed model has only unsigned
+    // integer numbers, so accepting one here would either lose precision or expand the schema.
+    throw FormatException(
+      'authoring $context contains a non-integer JSON number or unsupported value',
+    );
+  }
+}
+
 final class _AuthoringDuplicateKeyJsonScanner {
   _AuthoringDuplicateKeyJsonScanner(this.source);
 
@@ -1651,6 +1827,10 @@ _authoringRequireCanonicalRevision3ProjectJson(String projectJson) {
       'authoring revision-3 store project ID must not be zero',
     );
   }
+  _authoringRequireSignedSafeUnsignedJsonNumbers(
+    project,
+    'revision-3 store project',
+  );
   final revision = _authoringRequiredInt(project, 'revision');
   if (jsonEncode(project) != projectJson) {
     throw const FormatException(
@@ -7331,6 +7511,1183 @@ class AuthoringStoreOpenedResult {
       projectJson: projectJson,
       diagnostics: diagnostics,
       blocksBuild: blocksBuild,
+    );
+  }
+}
+
+/// Bounded author intent for the native revision-3 Quest transaction.
+///
+/// Catalog IDs remain selectors only. Native code resolves them from a freshly rebuilt trusted
+/// catalog; this DTO carries no resolved game values or authority evidence.
+final class AuthoringRevision3QuestDraftIntentV3 {
+  const AuthoringRevision3QuestDraftIntentV3._({
+    required this.moduleNamespace,
+    required this.technicalId,
+    required this.textHelper,
+    required this.parentCatalogId,
+    required this.giverCatalogId,
+    required this.title,
+    required this.description,
+    required this.objectiveTitle,
+  });
+
+  factory AuthoringRevision3QuestDraftIntentV3({
+    required String moduleNamespace,
+    required String technicalId,
+    required String textHelper,
+    required String parentCatalogId,
+    required String giverCatalogId,
+    required String title,
+    required String description,
+    required String objectiveTitle,
+  }) => AuthoringRevision3QuestDraftIntentV3.fromJson(<String, Object?>{
+    'module_namespace': moduleNamespace,
+    'technical_id': technicalId,
+    'text_helper': textHelper,
+    'parent_catalog_id': parentCatalogId,
+    'giver_catalog_id': giverCatalogId,
+    'title': title,
+    'description': description,
+    'objective_title': objectiveTitle,
+  });
+
+  final String moduleNamespace;
+  final String technicalId;
+  final String textHelper;
+  final String parentCatalogId;
+  final String giverCatalogId;
+  final String title;
+  final String description;
+  final String objectiveTitle;
+
+  factory AuthoringRevision3QuestDraftIntentV3.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'module_namespace',
+      'technical_id',
+      'text_helper',
+      'parent_catalog_id',
+      'giver_catalog_id',
+      'title',
+      'description',
+      'objective_title',
+    }, 'revision-3 Quest intent');
+    _authoringRequireRevision3QuestFieldOrder(json, const <String>[
+      'module_namespace',
+      'technical_id',
+      'text_helper',
+      'parent_catalog_id',
+      'giver_catalog_id',
+      'title',
+      'description',
+      'objective_title',
+    ], 'intent');
+    return AuthoringRevision3QuestDraftIntentV3._(
+      moduleNamespace: _authoringRevision3QuestRequestString(
+        json,
+        'module_namespace',
+      ),
+      technicalId: _authoringRevision3QuestRequestString(json, 'technical_id'),
+      textHelper: _authoringRevision3QuestRequestString(json, 'text_helper'),
+      parentCatalogId: _authoringRevision3QuestRequestString(
+        json,
+        'parent_catalog_id',
+      ),
+      giverCatalogId: _authoringRevision3QuestRequestString(
+        json,
+        'giver_catalog_id',
+      ),
+      title: _authoringRevision3QuestRequestString(json, 'title'),
+      description: _authoringRevision3QuestRequestString(json, 'description'),
+      objectiveTitle: _authoringRevision3QuestRequestString(
+        json,
+        'objective_title',
+      ),
+    );
+  }
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'module_namespace': moduleNamespace,
+    'technical_id': technicalId,
+    'text_helper': textHelper,
+    'parent_catalog_id': parentCatalogId,
+    'giver_catalog_id': giverCatalogId,
+    'title': title,
+    'description': description,
+    'objective_title': objectiveTitle,
+  };
+}
+
+/// Exact canonical request-v3 transport bound to one published R3 project/head.
+final class AuthoringRevision3QuestDraftRequestV3 {
+  const AuthoringRevision3QuestDraftRequestV3._({
+    required this.canonicalJson,
+    required this.expectedHead,
+    required this.expectedProjectId,
+    required this.expectedRevision,
+    required this.questId,
+    required this.scriptModuleId,
+    required this.displayName,
+    required this.intent,
+  });
+
+  factory AuthoringRevision3QuestDraftRequestV3({
+    required AuthoringWorkingHead expectedHead,
+    required String expectedProjectId,
+    required int expectedRevision,
+    required String questId,
+    required String scriptModuleId,
+    required String displayName,
+    required AuthoringRevision3QuestDraftIntentV3 intent,
+  }) => AuthoringRevision3QuestDraftRequestV3.fromCanonicalJson(
+    jsonEncode(<String, Object?>{
+      'expected_head': jsonDecode(expectedHead.canonicalJson),
+      'expected_project_id': expectedProjectId,
+      'expected_revision': expectedRevision,
+      'quest_id': questId,
+      'script_module_id': scriptModuleId,
+      'display_name': displayName,
+      'intent': intent.toJson(),
+    }),
+  );
+
+  /// Exact canonical UTF-8 JSON passed unchanged as `quest_request_json`.
+  final String canonicalJson;
+  final AuthoringWorkingHead expectedHead;
+  final String expectedProjectId;
+  final int expectedRevision;
+  final String questId;
+  final String scriptModuleId;
+  final String displayName;
+  final AuthoringRevision3QuestDraftIntentV3 intent;
+
+  factory AuthoringRevision3QuestDraftRequestV3.fromCanonicalJson(
+    String value,
+  ) {
+    try {
+      _authoringRevision3RequestString(
+        value,
+        'questRequestJson',
+        _maxAuthoringRevision3QuestRequestJsonBytes,
+      );
+    } on ArgumentError {
+      throw const FormatException(
+        'authoring revision-3 Quest request is not bounded UTF-8',
+      );
+    }
+    final request = _authoringDecodeDuplicateSafeObject(
+      value,
+      'revision-3 Quest request',
+    );
+    _authoringExactFields(request, const {
+      'expected_head',
+      'expected_project_id',
+      'expected_revision',
+      'quest_id',
+      'script_module_id',
+      'display_name',
+      'intent',
+    }, 'revision-3 Quest request');
+    _authoringRequireRevision3QuestFieldOrder(request, const <String>[
+      'expected_head',
+      'expected_project_id',
+      'expected_revision',
+      'quest_id',
+      'script_module_id',
+      'display_name',
+      'intent',
+    ], 'request');
+    if (jsonEncode(request) != value) {
+      throw const FormatException(
+        'authoring revision-3 Quest request is not canonical',
+      );
+    }
+    final expectedHead = AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(
+        _authoringRequiredObject(
+          request['expected_head'],
+          'revision-3 Quest expected head',
+        ),
+      ),
+    );
+    final expectedProjectId = _authoringRevision3QuestEntityId(
+      request,
+      'expected_project_id',
+    );
+    final questId = _authoringRevision3QuestEntityId(request, 'quest_id');
+    final scriptModuleId = _authoringRevision3QuestEntityId(
+      request,
+      'script_module_id',
+    );
+    if (questId == scriptModuleId) {
+      throw const FormatException(
+        'authoring revision-3 Quest request entity IDs must be distinct',
+      );
+    }
+    return AuthoringRevision3QuestDraftRequestV3._(
+      canonicalJson: value,
+      expectedHead: expectedHead,
+      expectedProjectId: expectedProjectId,
+      expectedRevision: _authoringRequiredInt(
+        request,
+        'expected_revision',
+        max: _maxAuthoringRevision3QuestBasisRevision,
+      ),
+      questId: questId,
+      scriptModuleId: scriptModuleId,
+      displayName: _authoringRevision3QuestRequestString(
+        request,
+        'display_name',
+      ),
+      intent: AuthoringRevision3QuestDraftIntentV3.fromJson(
+        _authoringRequiredObject(
+          request['intent'],
+          'revision-3 Quest request intent',
+        ),
+      ),
+    );
+  }
+}
+
+enum AuthoringRevision3QuestBuildStatus { blocked }
+
+enum AuthoringRevision3QuestRuntimeStatus { runtimeUnqualified }
+
+enum AuthoringRevision3QuestArtifactAuthority { notGranted }
+
+enum AuthoringRevision3QuestSourceInspection { freshCapabilityRequired }
+
+enum AuthoringRevision3QuestNativePublicationStatus { notSupported }
+
+/// Strict result of the native prepare-only revision-3 Quest transaction.
+///
+/// `publicationStatus` describes the native command only. A managed session may subsequently
+/// publish [head] as its fixed project checkpoint after exact full reopen and byte-CAS checks.
+final class AuthoringRevision3QuestDraftPreparation {
+  const AuthoringRevision3QuestDraftPreparation._({
+    required this.basisHead,
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.revision,
+    required this.questId,
+    required this.scriptModuleId,
+    required this.displayName,
+    required this.moduleNamespace,
+    required this.technicalId,
+    required this.textHelper,
+    required this.title,
+    required this.description,
+    required this.objectiveTitle,
+    required this.artifactDeduplicated,
+    required this.buildStatus,
+    required this.runtimeStatus,
+    required this.artifactAuthority,
+    required this.sourceInspection,
+    required this.publicationStatus,
+  });
+
+  final AuthoringWorkingHead basisHead;
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int revision;
+  final String questId;
+  final String scriptModuleId;
+  final String displayName;
+  final String moduleNamespace;
+  final String technicalId;
+  final String textHelper;
+  final String title;
+  final String description;
+  final String objectiveTitle;
+  final bool artifactDeduplicated;
+  final AuthoringRevision3QuestBuildStatus buildStatus;
+  final AuthoringRevision3QuestRuntimeStatus runtimeStatus;
+  final AuthoringRevision3QuestArtifactAuthority artifactAuthority;
+  final AuthoringRevision3QuestSourceInspection sourceInspection;
+  final AuthoringRevision3QuestNativePublicationStatus publicationStatus;
+
+  factory AuthoringRevision3QuestDraftPreparation.fromJson(
+    Map<String, Object?> json,
+  ) {
+    _authoringExactFields(json, const {
+      'ok',
+      'outcome',
+      'basis_head_json',
+      'head_json',
+      'project_json',
+      'revision',
+      'quest_id',
+      'script_module_id',
+      'artifact_deduplicated',
+      'build_status',
+      'runtime_status',
+      'artifact_authority',
+      'source_inspection',
+      'publication_status',
+    }, 'revision-3 Quest preparation response');
+    if (json['ok'] != true || json['outcome'] != 'prepared_unpublished') {
+      throw const FormatException(
+        'authoring revision-3 Quest preparation response is not prepared',
+      );
+    }
+    final basisHead = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRevision3ResponseString(
+        json,
+        'basis_head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRevision3ResponseString(
+        json,
+        'head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    if (head.canonicalJson == basisHead.canonicalJson) {
+      throw const FormatException(
+        'authoring revision-3 Quest candidate did not advance its head',
+      );
+    }
+    final projectJson = _authoringRevision3ResponseString(
+      json,
+      'project_json',
+      maxBytes: _maxAuthoringProjectJsonBytes,
+    );
+    final project = _authoringRequireCanonicalRevision3ProjectJson(projectJson);
+    final revision = _authoringRequiredInt(
+      json,
+      'revision',
+      min: 1,
+      max: _maxAuthoringStoryAppliedRevision,
+    );
+    if (revision != project.revision) {
+      throw const FormatException(
+        'authoring revision-3 Quest response revision disagrees with its project',
+      );
+    }
+    final questId = _authoringRevision3QuestEntityId(json, 'quest_id');
+    final scriptModuleId = _authoringRevision3QuestEntityId(
+      json,
+      'script_module_id',
+    );
+    if (questId == scriptModuleId) {
+      throw const FormatException(
+        'authoring revision-3 Quest response entity IDs must be distinct',
+      );
+    }
+    final candidate = _authoringRequireRevision3QuestCandidatePair(
+      projectJson,
+      basisHead: basisHead,
+      projectId: project.projectId,
+      questId: questId,
+      scriptModuleId: scriptModuleId,
+    );
+    return AuthoringRevision3QuestDraftPreparation._(
+      basisHead: basisHead,
+      head: head,
+      projectJson: projectJson,
+      projectId: project.projectId,
+      revision: revision,
+      questId: questId,
+      scriptModuleId: scriptModuleId,
+      displayName: candidate.displayName,
+      moduleNamespace: candidate.moduleNamespace,
+      technicalId: candidate.technicalId,
+      textHelper: candidate.textHelper,
+      title: candidate.title,
+      description: candidate.description,
+      objectiveTitle: candidate.objectiveTitle,
+      artifactDeduplicated: _authoringRequiredBool(
+        json,
+        'artifact_deduplicated',
+      ),
+      buildStatus: switch (json['build_status']) {
+        'blocked' => AuthoringRevision3QuestBuildStatus.blocked,
+        _ => throw const FormatException(
+          'authoring revision-3 Quest response has an unsupported build status',
+        ),
+      },
+      runtimeStatus: switch (json['runtime_status']) {
+        'runtime_unqualified' =>
+          AuthoringRevision3QuestRuntimeStatus.runtimeUnqualified,
+        _ => throw const FormatException(
+          'authoring revision-3 Quest response has an unsupported runtime status',
+        ),
+      },
+      artifactAuthority: switch (json['artifact_authority']) {
+        'not_granted' => AuthoringRevision3QuestArtifactAuthority.notGranted,
+        _ => throw const FormatException(
+          'authoring revision-3 Quest response grants unsupported artifact authority',
+        ),
+      },
+      sourceInspection: switch (json['source_inspection']) {
+        'fresh_capability_required' =>
+          AuthoringRevision3QuestSourceInspection.freshCapabilityRequired,
+        _ => throw const FormatException(
+          'authoring revision-3 Quest response grants unsupported source inspection',
+        ),
+      },
+      publicationStatus: switch (json['publication_status']) {
+        'not_supported' =>
+          AuthoringRevision3QuestNativePublicationStatus.notSupported,
+        _ => throw const FormatException(
+          'authoring revision-3 Quest response grants unsupported publication authority',
+        ),
+      },
+    );
+  }
+}
+
+String _authoringRevision3QuestRequestString(
+  Map<String, Object?> json,
+  String field,
+) {
+  final value = json[field];
+  if (value is! String) {
+    throw FormatException(
+      'authoring revision-3 Quest request field $field is not a string',
+    );
+  }
+  try {
+    _authoringRevision3RequestString(
+      value,
+      field,
+      _maxAuthoringRevision3QuestRequestJsonBytes,
+    );
+  } on ArgumentError {
+    throw FormatException(
+      'authoring revision-3 Quest request field $field is not bounded UTF-8',
+    );
+  }
+  return value;
+}
+
+void _authoringRequireRevision3QuestFieldOrder(
+  Map<String, Object?> json,
+  List<String> expected,
+  String context,
+) {
+  final fields = json.keys.toList(growable: false);
+  for (var index = 0; index < expected.length; index++) {
+    if (fields[index] != expected[index]) {
+      throw FormatException(
+        'authoring revision-3 Quest $context has non-canonical field order',
+      );
+    }
+  }
+}
+
+String _authoringRevision3QuestEntityId(
+  Map<String, Object?> json,
+  String field,
+) {
+  final id = _authoringEntityId(
+    _authoringRequiredString(json, field, maxBytes: 32),
+    field,
+  );
+  if (id == '00000000000000000000000000000000') {
+    throw FormatException(
+      'authoring revision-3 Quest field $field must not be zero',
+    );
+  }
+  return id;
+}
+
+({
+  String displayName,
+  String moduleNamespace,
+  String technicalId,
+  String textHelper,
+  String title,
+  String description,
+  String objectiveTitle,
+})
+_authoringRequireRevision3QuestCandidatePair(
+  String projectJson, {
+  required AuthoringWorkingHead basisHead,
+  required String projectId,
+  required String questId,
+  required String scriptModuleId,
+}) {
+  final project = _authoringDecodeDuplicateSafeObject(
+    projectJson,
+    'revision-3 Quest candidate project',
+  );
+  final entities = _authoringRequiredObject(
+    project['entities'],
+    'revision-3 Quest candidate entities',
+  );
+  final target = _authoringRequireRevision3QuestGeneration(
+    project['target'],
+    'project target',
+  );
+  final questEntity = _authoringRevision3QuestCandidateEntityData(
+    entities,
+    questId,
+    'quest_draft',
+  );
+  final questData = questEntity.data;
+  _authoringExactFields(questData, const {
+    'generator_id',
+    'generator_version',
+    'input',
+    'script_module',
+  }, 'revision-3 Quest candidate Quest data');
+  _authoringRequireRevision3QuestFieldOrder(questData, const <String>[
+    'generator_id',
+    'generator_version',
+    'input',
+    'script_module',
+  ], 'candidate Quest data');
+  _authoringRequireRevision3QuestGenerator(questData, 'Quest');
+  final questInput = _authoringRequiredObject(
+    questData['input'],
+    'revision-3 Quest candidate Quest input',
+  );
+  _authoringExactFields(questInput, const {
+    'target',
+    'quest_id',
+    'module_namespace',
+    'technical_id',
+    'text_helper',
+    'parent_quest',
+    'giver',
+    'title',
+    'description',
+    'objective_title',
+    'collision_catalog',
+  }, 'revision-3 Quest candidate Quest input');
+  _authoringRequireRevision3QuestFieldOrder(questInput, const <String>[
+    'target',
+    'quest_id',
+    'module_namespace',
+    'technical_id',
+    'text_helper',
+    'parent_quest',
+    'giver',
+    'title',
+    'description',
+    'objective_title',
+    'collision_catalog',
+  ], 'candidate Quest input');
+  if (questInput['quest_id'] != questId) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate input identity disagrees',
+    );
+  }
+  final inputTarget = _authoringRequireRevision3QuestGeneration(
+    questInput['target'],
+    'Quest input target',
+  );
+  if (inputTarget != target) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate target generation disagrees',
+    );
+  }
+  final moduleNamespace = _authoringRevision3QuestCandidateString(
+    questInput,
+    'module_namespace',
+  );
+  final technicalId = _authoringRevision3QuestCandidateString(
+    questInput,
+    'technical_id',
+  );
+  final textHelper = _authoringRevision3QuestCandidateString(
+    questInput,
+    'text_helper',
+  );
+  final title = _authoringRevision3QuestCandidateString(questInput, 'title');
+  final description = _authoringRevision3QuestCandidateString(
+    questInput,
+    'description',
+  );
+  final objectiveTitle = _authoringRevision3QuestCandidateString(
+    questInput,
+    'objective_title',
+  );
+  _authoringRequireRevision3QuestResolvedCatalogValue(
+    questInput['parent_quest'],
+    target: target,
+    runtimeField: 'runtime_class',
+    context: 'parent Quest',
+  );
+  _authoringRequireRevision3QuestResolvedCatalogValue(
+    questInput['giver'],
+    target: target,
+    runtimeField: 'runtime_unique_name',
+    context: 'giver',
+  );
+  final collision = _authoringRequiredObject(
+    questInput['collision_catalog'],
+    'revision-3 Quest candidate collision artifact reference',
+  );
+  _authoringExactFields(collision, const {
+    'generation',
+    'catalog_layer',
+    'artifact',
+    'source_seal',
+    'basis_snapshot',
+  }, 'revision-3 Quest candidate collision artifact reference');
+  _authoringRequireRevision3QuestFieldOrder(collision, const <String>[
+    'generation',
+    'catalog_layer',
+    'artifact',
+    'source_seal',
+    'basis_snapshot',
+  ], 'candidate collision artifact reference');
+  if (_authoringRequireRevision3QuestGeneration(
+        collision['generation'],
+        'collision generation',
+      ) !=
+      target) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision generation disagrees',
+    );
+  }
+  if (collision['catalog_layer'] !=
+      _authoringRevision3QuestCollisionCatalogLayer) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision catalog layer is unsupported',
+    );
+  }
+  final artifact = _authoringRequireRevision3QuestContentSeal(
+    collision['artifact'],
+    'collision artifact',
+  );
+  if (artifact.byteLength > _maxAuthoringRevision3QuestCollisionArtifactBytes) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision artifact exceeds its closed-model limit',
+    );
+  }
+  final sourceSeal = _authoringRequireRevision3QuestContentSeal(
+    collision['source_seal'],
+    'collision source seal',
+  );
+  if (sourceSeal.byteLength != artifact.byteLength) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision raw and semantic artifact lengths disagree',
+    );
+  }
+  final basisSnapshot = _authoringRequireRevision3QuestContentSeal(
+    collision['basis_snapshot'],
+    'collision basis snapshot',
+  );
+  if (basisSnapshot.byteLength != basisHead.snapshotByteLength ||
+      basisSnapshot.sha256 != basisHead.snapshotSha256) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision basis snapshot disagrees with its head',
+    );
+  }
+  final assetStore = _authoringRequiredObject(
+    project['asset_store'],
+    'revision-3 Quest candidate AssetStore',
+  );
+  _authoringExactFields(assetStore, const {
+    'assets',
+  }, 'revision-3 Quest candidate AssetStore');
+  final assets = _authoringRequiredObject(
+    assetStore['assets'],
+    'revision-3 Quest candidate AssetStore assets',
+  );
+  final artifactMeta = _authoringRequiredObject(
+    assets[artifact.sha256],
+    'revision-3 Quest collision artifact metadata',
+  );
+  _authoringExactFields(artifactMeta, const {
+    'byte_len',
+    'media_type',
+  }, 'revision-3 Quest collision artifact metadata');
+  if (artifactMeta['byte_len'] != artifact.byteLength ||
+      artifactMeta['media_type'] !=
+          _authoringRevision3QuestCollisionMediaType) {
+    throw const FormatException(
+      'authoring revision-3 Quest collision artifact metadata disagrees',
+    );
+  }
+  final questOrigin = _authoringRequiredObject(
+    questEntity.entity['origin'],
+    'revision-3 Quest candidate Quest origin',
+  );
+  _authoringExactFields(questOrigin, const {
+    'type',
+    'authored_runtime_id',
+  }, 'revision-3 Quest candidate Quest origin');
+  if (questOrigin['type'] != 'new' ||
+      questOrigin['authored_runtime_id'] != technicalId) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate Quest origin disagrees',
+    );
+  }
+  _authoringRequireRevision3QuestTypedRef(
+    questData['script_module'],
+    projectId: projectId,
+    id: scriptModuleId,
+    kind: 'script_module',
+    context: 'Quest script module',
+  );
+
+  final moduleEntity = _authoringRevision3QuestCandidateEntityData(
+    entities,
+    scriptModuleId,
+    'script_module',
+  );
+  final moduleData = moduleEntity.data;
+  _authoringExactFields(moduleData, const {
+    'generator_id',
+    'generator_version',
+    'owner',
+    'module_namespace',
+    'module_relative_path',
+    'source',
+    'source_sha256',
+    'input_fingerprint',
+    'status',
+  }, 'revision-3 Quest candidate ScriptModule data');
+  _authoringRequireRevision3QuestFieldOrder(moduleData, const <String>[
+    'generator_id',
+    'generator_version',
+    'owner',
+    'module_namespace',
+    'module_relative_path',
+    'source',
+    'source_sha256',
+    'input_fingerprint',
+    'status',
+  ], 'candidate ScriptModule data');
+  _authoringRequireRevision3QuestGenerator(moduleData, 'ScriptModule');
+  _authoringRequireRevision3QuestTypedRef(
+    moduleData['owner'],
+    projectId: projectId,
+    id: questId,
+    kind: 'quest_draft',
+    context: 'ScriptModule owner',
+  );
+  if (moduleData['module_namespace'] != moduleNamespace) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate module namespace disagrees',
+    );
+  }
+  _authoringRevision3QuestCandidateString(moduleData, 'module_relative_path');
+  final source = _authoringRevision3QuestCandidateString(moduleData, 'source');
+  final sourceSha256 = _authoringRequiredString(
+    moduleData,
+    'source_sha256',
+    maxBytes: 64,
+  );
+  if (!_authoringSha256Pattern.hasMatch(sourceSha256) ||
+      crypto.sha256.convert(utf8.encode(source)).toString() != sourceSha256) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate source seal disagrees',
+    );
+  }
+  final inputFingerprint = _authoringRequiredString(
+    moduleData,
+    'input_fingerprint',
+    maxBytes: 64,
+  );
+  if (!_authoringSha256Pattern.hasMatch(inputFingerprint) ||
+      _authoringRevision3QuestInputFingerprint(questInput) !=
+          inputFingerprint) {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate input fingerprint disagrees',
+    );
+  }
+  final moduleOrigin = _authoringRequiredObject(
+    moduleEntity.entity['origin'],
+    'revision-3 Quest candidate ScriptModule origin',
+  );
+  _authoringExactFields(moduleOrigin, const {
+    'type',
+    'generator_id',
+    'generator_version',
+    'owner',
+  }, 'revision-3 Quest candidate ScriptModule origin');
+  if (moduleOrigin['type'] != 'generated') {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate ScriptModule origin is unsupported',
+    );
+  }
+  _authoringRequireRevision3QuestGenerator(moduleOrigin, 'ScriptModule origin');
+  _authoringRequireRevision3QuestTypedRef(
+    moduleOrigin['owner'],
+    projectId: projectId,
+    id: questId,
+    kind: 'quest_draft',
+    context: 'ScriptModule origin owner',
+  );
+  final status = _authoringRequiredObject(
+    moduleData['status'],
+    'revision-3 Quest candidate ScriptModule status',
+  );
+  _authoringExactFields(status, const {
+    'authoring',
+    'runtime',
+  }, 'revision-3 Quest candidate ScriptModule status');
+  if (status['authoring'] != 'offline_draft' ||
+      status['runtime'] != 'runtime_unqualified') {
+    throw const FormatException(
+      'authoring revision-3 Quest candidate ScriptModule status is unsupported',
+    );
+  }
+  final displayName = _authoringRevision3QuestCandidateString(
+    questEntity.entity,
+    'display_name',
+  );
+  return (
+    displayName: displayName,
+    moduleNamespace: moduleNamespace,
+    technicalId: technicalId,
+    textHelper: textHelper,
+    title: title,
+    description: description,
+    objectiveTitle: objectiveTitle,
+  );
+}
+
+({Map<String, Object?> entity, Map<String, Object?> data})
+_authoringRevision3QuestCandidateEntityData(
+  Map<String, Object?> entities,
+  String id,
+  String kind,
+) {
+  final entity = _authoringRequiredObject(
+    entities[id],
+    'revision-3 Quest candidate $kind entity',
+  );
+  _authoringExactFields(entity, const {
+    'id',
+    'display_name',
+    'origin',
+    'revision',
+    'payload',
+  }, 'revision-3 Quest candidate $kind entity');
+  if (entity['id'] != id) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $kind key and ID disagree',
+    );
+  }
+  final payload = _authoringRequiredObject(
+    entity['payload'],
+    'revision-3 Quest candidate $kind payload',
+  );
+  _authoringExactFields(payload, const {
+    'kind',
+    'data',
+  }, 'revision-3 Quest candidate $kind payload');
+  if (payload['kind'] != kind) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $kind payload disagrees',
+    );
+  }
+  return (
+    entity: entity,
+    data: _authoringRequiredObject(
+      payload['data'],
+      'revision-3 Quest candidate $kind data',
+    ),
+  );
+}
+
+void _authoringRequireRevision3QuestGenerator(
+  Map<String, Object?> json,
+  String context,
+) {
+  if (json['generator_id'] != _authoringRevision3QuestGeneratorId ||
+      json['generator_version'] != _authoringRevision3QuestGeneratorVersion) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $context generator is unsupported',
+    );
+  }
+}
+
+({int byteLength, String sha256}) _authoringRequireRevision3QuestContentSeal(
+  Object? value,
+  String context,
+) {
+  final seal = _authoringRequiredObject(
+    value,
+    'revision-3 Quest candidate $context',
+  );
+  _authoringExactFields(seal, const {
+    'byte_len',
+    'sha256',
+  }, 'revision-3 Quest candidate $context');
+  _authoringRequireRevision3QuestFieldOrder(seal, const <String>[
+    'byte_len',
+    'sha256',
+  ], 'candidate $context');
+  final sha256 = _authoringRequiredString(seal, 'sha256', maxBytes: 64);
+  if (!_authoringSha256Pattern.hasMatch(sha256)) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $context SHA-256 is invalid',
+    );
+  }
+  return (
+    byteLength: _authoringRequiredInt(
+      seal,
+      'byte_len',
+      min: 1,
+      max: _maxAuthoringStoryAppliedRevision,
+    ),
+    sha256: sha256,
+  );
+}
+
+({int byteLength, String sha256}) _authoringRequireRevision3QuestGeneration(
+  Object? value,
+  String context,
+) {
+  final generation = _authoringRequiredObject(
+    value,
+    'revision-3 Quest candidate $context generation',
+  );
+  _authoringExactFields(generation, const {
+    'executable',
+  }, 'revision-3 Quest candidate $context generation');
+  return _authoringRequireRevision3QuestContentSeal(
+    generation['executable'],
+    '$context executable',
+  );
+}
+
+void _authoringRequireRevision3QuestResolvedCatalogValue(
+  Object? value, {
+  required ({int byteLength, String sha256}) target,
+  required String runtimeField,
+  required String context,
+}) {
+  final resolved = _authoringRequiredObject(
+    value,
+    'revision-3 Quest candidate $context',
+  );
+  _authoringExactFields(resolved, <String>{
+    'generation',
+    'source_seal',
+    'catalog_layer',
+    'canonical_selector',
+    runtimeField,
+  }, 'revision-3 Quest candidate $context');
+  _authoringRequireRevision3QuestFieldOrder(resolved, <String>[
+    'generation',
+    'source_seal',
+    'catalog_layer',
+    'canonical_selector',
+    runtimeField,
+  ], 'candidate $context');
+  if (_authoringRequireRevision3QuestGeneration(
+        resolved['generation'],
+        '$context generation',
+      ) !=
+      target) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $context generation disagrees',
+    );
+  }
+  _authoringRequireRevision3QuestContentSeal(
+    resolved['source_seal'],
+    '$context source seal',
+  );
+  for (final field in <String>[
+    'catalog_layer',
+    'canonical_selector',
+    runtimeField,
+  ]) {
+    _authoringRevision3QuestCandidateString(resolved, field);
+  }
+}
+
+String _authoringRevision3QuestCandidateString(
+  Map<String, Object?> json,
+  String field,
+) => _authoringRequiredString(
+  json,
+  field,
+  maxBytes: _maxAuthoringProjectJsonBytes,
+);
+
+String _authoringRevision3QuestInputFingerprint(
+  Map<String, Object?> questInput,
+) {
+  final inputBytes = utf8.encode(jsonEncode(questInput));
+  final length = ByteData(8)..setUint64(0, inputBytes.length, Endian.big);
+  final bytes = BytesBuilder(copy: false)
+    ..add(utf8.encode(_authoringRevision3QuestFingerprintDomain))
+    ..add(length.buffer.asUint8List())
+    ..add(inputBytes);
+  return crypto.sha256.convert(bytes.takeBytes()).toString();
+}
+
+void _authoringRequireRevision3QuestTypedRef(
+  Object? value, {
+  required String projectId,
+  required String id,
+  required String kind,
+  required String context,
+}) {
+  final ref = _authoringRequiredObject(
+    value,
+    'revision-3 Quest candidate $context reference',
+  );
+  _authoringExactFields(ref, const {
+    'project_id',
+    'id',
+    'expected_kind',
+  }, 'revision-3 Quest candidate $context reference');
+  if (ref['project_id'] != projectId ||
+      ref['id'] != id ||
+      ref['expected_kind'] != kind) {
+    throw FormatException(
+      'authoring revision-3 Quest candidate $context reference is not exact',
+    );
+  }
+}
+
+enum AuthoringRevision3ContentAuthority { readOnlyExactCurrentProject }
+
+enum AuthoringRevision3ContentBuildStatus { notEvaluated }
+
+enum AuthoringRevision3ContentRuntimeStatus { runtimeUnqualified }
+
+enum AuthoringRevision3ContentPublicationStatus { notApplicable }
+
+/// Strict semantic projection of one exact, currently-published revision-3 checkpoint.
+///
+/// The nested index is preserved in its canonical form and parsed only after duplicate-key,
+/// signed-wire, closed-schema, and project-identity checks. The status enums deliberately expose
+/// the native command's lack of build, runtime, and publication authority.
+final class AuthoringRevision3ContentIndexResult {
+  const AuthoringRevision3ContentIndexResult._({
+    required this.head,
+    required this.projectId,
+    required this.projectRevision,
+    required this.indexJson,
+    required this.index,
+    required this.contentAuthority,
+    required this.buildStatus,
+    required this.runtimeStatus,
+    required this.publicationStatus,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectId;
+  final int projectRevision;
+
+  /// Exact canonical nested bytes returned by native code.
+  final String indexJson;
+  final Revision3ContentIndex index;
+  final AuthoringRevision3ContentAuthority contentAuthority;
+  final AuthoringRevision3ContentBuildStatus buildStatus;
+  final AuthoringRevision3ContentRuntimeStatus runtimeStatus;
+  final AuthoringRevision3ContentPublicationStatus publicationStatus;
+
+  factory AuthoringRevision3ContentIndexResult.fromJson(
+    Map<String, Object?> json, {
+    required AuthoringWorkingHead expectedHead,
+  }) {
+    _authoringExactFields(json, const <String>{
+      'ok',
+      'head_json',
+      'project_id',
+      'project_revision',
+      'index_json',
+      'content_authority',
+      'build_status',
+      'runtime_status',
+      'publication_status',
+    }, 'revision-3 content-index response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'authoring revision-3 content-index response is not ok',
+      );
+    }
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRevision3ResponseString(
+        json,
+        'head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    if (head.canonicalJson != expectedHead.canonicalJson) {
+      throw const FormatException(
+        'authoring revision-3 content-index response changed its exact head',
+      );
+    }
+    final projectId = _authoringEntityId(
+      _authoringRequiredString(json, 'project_id', maxBytes: 32),
+      'project_id',
+    );
+    if (projectId == '00000000000000000000000000000000') {
+      throw const FormatException(
+        'authoring revision-3 content-index project ID must not be zero',
+      );
+    }
+    final projectRevision = _authoringRequiredInt(
+      json,
+      'project_revision',
+      max: _maxAuthoringSignedJsonInteger,
+    );
+    final indexJson = _authoringRevision3ResponseString(
+      json,
+      'index_json',
+      maxBytes: _maxAuthoringRevision3ContentIndexJsonBytes,
+    );
+    final indexObject = _authoringDecodeDuplicateSafeObject(
+      indexJson,
+      'revision-3 content index',
+    );
+    _authoringRequireSignedSafeUnsignedJsonNumbers(
+      indexObject,
+      'revision-3 content index',
+    );
+    if (jsonEncode(indexObject) != indexJson) {
+      throw const FormatException(
+        'authoring revision-3 content index is not canonical',
+      );
+    }
+    final index = Revision3ContentIndex.fromJsonObject(indexObject);
+    if (index.projectId != projectId ||
+        index.projectRevision != projectRevision) {
+      throw const FormatException(
+        'authoring revision-3 content index disagrees with its project identity',
+      );
+    }
+    return AuthoringRevision3ContentIndexResult._(
+      head: head,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      indexJson: indexJson,
+      index: index,
+      contentAuthority: switch (json['content_authority']) {
+        'read_only_exact_current_project' =>
+          AuthoringRevision3ContentAuthority.readOnlyExactCurrentProject,
+        _ => throw const FormatException(
+          'authoring revision-3 content-index response grants unsupported content authority',
+        ),
+      },
+      buildStatus: switch (json['build_status']) {
+        'not_evaluated' => AuthoringRevision3ContentBuildStatus.notEvaluated,
+        _ => throw const FormatException(
+          'authoring revision-3 content-index response has an unsupported build status',
+        ),
+      },
+      runtimeStatus: switch (json['runtime_status']) {
+        'runtime_unqualified' =>
+          AuthoringRevision3ContentRuntimeStatus.runtimeUnqualified,
+        _ => throw const FormatException(
+          'authoring revision-3 content-index response has an unsupported runtime status',
+        ),
+      },
+      publicationStatus: switch (json['publication_status']) {
+        'not_applicable' =>
+          AuthoringRevision3ContentPublicationStatus.notApplicable,
+        _ => throw const FormatException(
+          'authoring revision-3 content-index response grants unsupported publication authority',
+        ),
+      },
     );
   }
 }

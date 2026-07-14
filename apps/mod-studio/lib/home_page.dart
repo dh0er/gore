@@ -28,6 +28,7 @@ import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
+import 'project/revision3_content_library.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
@@ -526,6 +527,9 @@ class _HomePageState extends ConsumerState<HomePage>
       body: switch (currentProject) {
         ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
           project: currentProject,
+          loadContentIndex: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .readCurrentRevision3ContentIndex(),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -647,33 +651,37 @@ class _HomePageState extends ConsumerState<HomePage>
 }
 
 class _ManagedRevision3ProjectView extends StatelessWidget {
-  const _ManagedRevision3ProjectView({required this.project});
+  const _ManagedRevision3ProjectView({
+    required this.project,
+    required this.loadContentIndex,
+  });
 
   final ManagedRevision3CurrentProjectState project;
+  final Revision3ContentIndexLoader loadContentIndex;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 860),
-        child: Card(
-          margin: const EdgeInsets.all(32),
+    return Column(
+      key: const Key('managed-revision3-project-view'),
+      children: [
+        Card(
+          margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Padding(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
             child: Column(
-              key: const Key('managed-revision3-project-view'),
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   l10n.projectManagedRevision3Title,
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
-                const SizedBox(height: 8),
-                Text(l10n.projectManagedRevision3IdentityOnly),
+                const SizedBox(height: 4),
+                const Text(
+                  'Exact-current managed identity and semantic project content.',
+                ),
                 if (project.requiresReopen) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 12),
                   Container(
                     key: const Key('managed-project-requires-reopen-warning'),
                     padding: const EdgeInsets.all(12),
@@ -703,37 +711,82 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                     ),
                   ),
                 ],
-                const SizedBox(height: 24),
-                _ProjectFact(
-                  label: l10n.projectRoot,
-                  value: project.root.path,
-                  valueKey: const Key('managed-project-root'),
-                ),
-                _ProjectFact(
-                  label: l10n.projectId,
-                  value: project.projectId,
-                  valueKey: const Key('managed-project-id'),
-                ),
-                _ProjectFact(
-                  label: l10n.projectRevision,
-                  value: '${project.projectRevision}',
-                  valueKey: const Key('managed-project-revision'),
-                ),
-                _ProjectFact(
-                  label: l10n.projectHeadSha256,
-                  value: project.head.snapshotSha256,
-                  valueKey: const Key('managed-project-head'),
-                ),
-                _ProjectFact(
-                  label: l10n.projectSnapshotBytes,
-                  value: '${project.head.snapshotByteLength}',
-                  valueKey: const Key('managed-project-head-bytes'),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 24,
+                  runSpacing: 2,
+                  children: [
+                    SizedBox(
+                      width: 360,
+                      child: _ProjectFact(
+                        label: l10n.projectRoot,
+                        value: project.root.path,
+                        valueKey: const Key('managed-project-root'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 300,
+                      child: _ProjectFact(
+                        label: l10n.projectId,
+                        value: project.projectId,
+                        valueKey: const Key('managed-project-id'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 160,
+                      child: _ProjectFact(
+                        label: l10n.projectRevision,
+                        value: '${project.projectRevision}',
+                        valueKey: const Key('managed-project-revision'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 460,
+                      child: _ProjectFact(
+                        label: l10n.projectHeadSha256,
+                        value: project.head.snapshotSha256,
+                        valueKey: const Key('managed-project-head'),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 160,
+                      child: _ProjectFact(
+                        label: l10n.projectSnapshotBytes,
+                        value: '${project.head.snapshotByteLength}',
+                        valueKey: const Key('managed-project-head-bytes'),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
-      ),
+        Expanded(
+          child: project.requiresReopen
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.lock_reset_outlined, size: 36),
+                        const SizedBox(height: 10),
+                        const Text(
+                          'Reopen the managed project before reading its content.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : Revision3ContentLibrary(
+                  projectId: project.projectId,
+                  projectRevision: project.projectRevision,
+                  load: loadContentIndex,
+                ),
+        ),
+      ],
     );
   }
 }

@@ -12,6 +12,7 @@ import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
 
 void main() {
   testWidgets(
@@ -393,6 +394,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
 
   @override
   Future<void> close() async => closeCalls++;
+
+  @override
+  Future<Revision3ContentIndex> readContentIndex() async =>
+      throw StateError('fake managed lease has no content index');
 
   @override
   Future<void> verifyCurrentHead() async {
