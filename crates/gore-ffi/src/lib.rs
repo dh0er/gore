@@ -66,6 +66,12 @@
 //!   locale to one unresolved VoiceSlot, imports one validated Ogg VoiceTake into immutable CAS,
 //!   and fully reopens an unpublished candidate. It never selects an unapproved take, resolves a
 //!   runtime target, or publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_voice_target_v1` resolves one existing VoiceSlot against
+//!   the first installed archive for its canonical locale. Native code alone derives bounded,
+//!   sealed exact-member evidence; the route prepares a fully reopened candidate without editing
+//!   the archive or publishing the fixed project head.
+//! - `authoring_store_build_revision3_voice_v1` prepares the bounded revision-3 Voice build
+//!   artifact route without deploying, editing the installation, or publishing the project head.
 //! - `authoring_read_dataasset_extract_receipt_v2` exposes only the verified target and package /
 //!   USMAP content facts needed for an explicit pre-publication target confirmation. It is
 //!   read-only and returns no local path, raw package bytes, selector, or offset.
@@ -116,7 +122,9 @@ mod authoring_story_inventory;
 mod authoring_story_npc_revision3;
 mod authoring_story_quest;
 mod authoring_story_quest_revision3;
+mod authoring_voice_build_revision3;
 mod authoring_voice_revision3;
+mod authoring_voice_target_revision3;
 mod dataasset;
 mod transport;
 mod voice;
@@ -151,6 +159,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_project_story_draft_insert_v1",
     "authoring_project_story_quest_draft_insert_v1",
     "authoring_read_dataasset_extract_receipt_v2",
+    "authoring_store_build_revision3_voice_v1",
     "authoring_store_import_ogg",
     "authoring_store_list_revision3_dataasset_stages_v1",
     "authoring_store_open",
@@ -168,6 +177,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_npc_draft_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_prepare_revision3_voice_take_v1",
+    "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
@@ -422,6 +432,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_read_dataasset_extract_receipt_v2" => {
             Some(authoring_dataasset_revision3::read_extract_raw)
         }
+        "authoring_store_build_revision3_voice_v1" => {
+            Some(authoring_voice_build_revision3::build_revision3_voice_v1_raw)
+        }
         "authoring_store_open_revision3" => Some(authoring_store::open_revision3_raw),
         "authoring_store_open_revision3_head_bytes" => {
             Some(authoring_store::open_revision3_head_bytes_raw)
@@ -446,6 +459,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_prepare_revision3_voice_take_v1" => {
             Some(authoring_voice_revision3::prepare_revision3_voice_take_v1_raw)
+        }
+        "authoring_store_prepare_revision3_voice_target_v1" => {
+            Some(authoring_voice_target_revision3::prepare_revision3_voice_target_v1_raw)
         }
         "authoring_store_read_revision3_content_index_v1" => {
             Some(authoring_content_revision3::read_revision3_content_index_v1_raw)
@@ -1465,6 +1481,7 @@ mod tests {
                     "authoring_project_story_draft_insert_v1",
                     "authoring_project_story_quest_draft_insert_v1",
                     "authoring_read_dataasset_extract_receipt_v2",
+                    "authoring_store_build_revision3_voice_v1",
                     "authoring_store_import_ogg",
                     "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_open",
@@ -1482,6 +1499,7 @@ mod tests {
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_prepare_revision3_voice_take_v1",
+                    "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
@@ -1582,6 +1600,12 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_voice_target_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_build_revision3_voice_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_content_index_v1"));
