@@ -25,10 +25,21 @@ typedef Revision3QuestSourceInspector =
       Revision3ContentIndex index,
       Revision3ContentEntity quest,
     );
+typedef Revision3NpcSourceInspector =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity npc,
+    );
 
 enum _ContentMode { entities, assets }
 
-enum _QuestEditAction { outline, context, transitions, sourceInspection }
+enum _EntityToolAction {
+  questOutline,
+  questContext,
+  questTransitions,
+  questSourceInspection,
+  npcProfile,
+}
 
 const _stableSlotQuestGeneratorVersion = 4;
 
@@ -48,6 +59,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editQuestContext,
     this.editQuestTransitions,
     this.inspectQuestSource,
+    this.inspectNpcSource,
     super.key,
   });
 
@@ -60,6 +72,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3QuestContextEditor? editQuestContext;
   final Revision3QuestTransitionsEditor? editQuestTransitions;
   final Revision3QuestSourceInspector? inspectQuestSource;
+  final Revision3NpcSourceInspector? inspectNpcSource;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -247,7 +260,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           onSelected: (entity) async {
             setState(() => _selectedEntityId = entity.id);
             if (constraints.maxWidth < 900) {
-              final editAction = await _showDetailsSheet<_QuestEditAction>(
+              final editAction = await _showDetailsSheet<_EntityToolAction>(
                 context,
                 semanticsLabel: '${entity.kind.displayName} details',
                 child: _EntityDetails(
@@ -263,34 +276,43 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                   },
                   onEditQuestOutline: widget.editQuestOutline == null
                       ? null
-                      : () async =>
-                            Navigator.of(context).pop(_QuestEditAction.outline),
+                      : () async => Navigator.of(
+                          context,
+                        ).pop(_EntityToolAction.questOutline),
                   onEditQuestContext: widget.editQuestContext == null
                       ? null
-                      : () async =>
-                            Navigator.of(context).pop(_QuestEditAction.context),
+                      : () async => Navigator.of(
+                          context,
+                        ).pop(_EntityToolAction.questContext),
                   onEditQuestTransitions: widget.editQuestTransitions == null
                       ? null
                       : () async => Navigator.of(
                           context,
-                        ).pop(_QuestEditAction.transitions),
+                        ).pop(_EntityToolAction.questTransitions),
                   onInspectQuestSource: widget.inspectQuestSource == null
                       ? null
                       : () async => Navigator.of(
                           context,
-                        ).pop(_QuestEditAction.sourceInspection),
+                        ).pop(_EntityToolAction.questSourceInspection),
+                  onInspectNpcSource: widget.inspectNpcSource == null
+                      ? null
+                      : () async => Navigator.of(
+                          context,
+                        ).pop(_EntityToolAction.npcProfile),
                 ),
               );
               if (!mounted || editAction == null) return;
               switch (editAction) {
-                case _QuestEditAction.outline:
+                case _EntityToolAction.questOutline:
                   await widget.editQuestOutline?.call(index, entity);
-                case _QuestEditAction.context:
+                case _EntityToolAction.questContext:
                   await widget.editQuestContext?.call(index, entity);
-                case _QuestEditAction.transitions:
+                case _EntityToolAction.questTransitions:
                   await widget.editQuestTransitions?.call(index, entity);
-                case _QuestEditAction.sourceInspection:
+                case _EntityToolAction.questSourceInspection:
                   await widget.inspectQuestSource?.call(index, entity);
+                case _EntityToolAction.npcProfile:
+                  await widget.inspectNpcSource?.call(index, entity);
               }
             }
           },
@@ -325,6 +347,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       onInspectQuestSource: widget.inspectQuestSource == null
                           ? null
                           : () => widget.inspectQuestSource!(index, selected),
+                      onInspectNpcSource: widget.inspectNpcSource == null
+                          ? null
+                          : () => widget.inspectNpcSource!(index, selected),
                     ),
             ),
           ],
@@ -734,6 +759,7 @@ class _EntityDetails extends StatelessWidget {
     required this.onEditQuestContext,
     required this.onEditQuestTransitions,
     required this.onInspectQuestSource,
+    required this.onInspectNpcSource,
   });
 
   final Revision3ContentIndex index;
@@ -744,6 +770,7 @@ class _EntityDetails extends StatelessWidget {
   final Future<void> Function()? onEditQuestContext;
   final Future<void> Function()? onEditQuestTransitions;
   final Future<void> Function()? onInspectQuestSource;
+  final Future<void> Function()? onInspectNpcSource;
 
   @override
   Widget build(BuildContext context) {
@@ -771,7 +798,7 @@ class _EntityDetails extends StatelessWidget {
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: PopupMenuButton<_QuestEditAction>(
+              child: PopupMenuButton<_EntityToolAction>(
                 key: Key('revision3-content-edit-quest-${entity.id}'),
                 enabled:
                     editQuestOutline != null ||
@@ -781,14 +808,15 @@ class _EntityDetails extends StatelessWidget {
                 tooltip: 'Quest tools',
                 onSelected: (action) async {
                   switch (action) {
-                    case _QuestEditAction.outline:
+                    case _EntityToolAction.questOutline:
                       await editQuestOutline?.call();
-                    case _QuestEditAction.context:
+                    case _EntityToolAction.questContext:
                       await onEditQuestContext?.call();
-                    case _QuestEditAction.transitions:
+                    case _EntityToolAction.questTransitions:
                       await onEditQuestTransitions?.call();
-                    case _QuestEditAction.sourceInspection:
+                    case _EntityToolAction.questSourceInspection:
                       await onInspectQuestSource?.call();
+                    case _EntityToolAction.npcProfile:
                   }
                 },
                 itemBuilder: (context) => [
@@ -796,7 +824,7 @@ class _EntityDetails extends StatelessWidget {
                     key: Key(
                       'revision3-content-edit-quest-outline-${entity.id}',
                     ),
-                    value: _QuestEditAction.outline,
+                    value: _EntityToolAction.questOutline,
                     enabled: editQuestOutline != null,
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -813,7 +841,7 @@ class _EntityDetails extends StatelessWidget {
                     key: Key(
                       'revision3-content-inspect-quest-source-${entity.id}',
                     ),
-                    value: _QuestEditAction.sourceInspection,
+                    value: _EntityToolAction.questSourceInspection,
                     enabled: onInspectQuestSource != null,
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -832,7 +860,7 @@ class _EntityDetails extends StatelessWidget {
                     key: Key(
                       'revision3-content-edit-quest-context-${entity.id}',
                     ),
-                    value: _QuestEditAction.context,
+                    value: _EntityToolAction.questContext,
                     enabled: onEditQuestContext != null,
                     child: ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -847,7 +875,7 @@ class _EntityDetails extends StatelessWidget {
                     key: Key(
                       'revision3-content-edit-quest-transitions-${entity.id}',
                     ),
-                    value: _QuestEditAction.transitions,
+                    value: _EntityToolAction.questTransitions,
                     enabled: onEditQuestTransitions != null,
                     child: const ListTile(
                       contentPadding: EdgeInsets.zero,
@@ -869,6 +897,53 @@ class _EntityDetails extends StatelessWidget {
                         Icon(Icons.edit_note_outlined),
                         SizedBox(width: 8),
                         Text('Quest tools'),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (entity.kind == Revision3ContentEntityKind.npcDraft) ...[
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: PopupMenuButton<_EntityToolAction>(
+                key: Key('revision3-content-npc-tools-${entity.id}'),
+                enabled: onInspectNpcSource != null,
+                tooltip: 'NPC tools',
+                onSelected: (action) async {
+                  if (action == _EntityToolAction.npcProfile) {
+                    await onInspectNpcSource?.call();
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    key: Key(
+                      'revision3-content-inspect-npc-source-${entity.id}',
+                    ),
+                    value: _EntityToolAction.npcProfile,
+                    enabled: onInspectNpcSource != null,
+                    child: const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.fact_check_outlined),
+                      title: Text('Profile & checks'),
+                      subtitle: Text(
+                        'Verify saved source and show remaining blockers',
+                      ),
+                    ),
+                  ),
+                ],
+                child: const Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.person_search_outlined),
+                        SizedBox(width: 8),
+                        Text('NPC tools'),
                       ],
                     ),
                   ),

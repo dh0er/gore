@@ -17,6 +17,7 @@ import 'catalog/ui/items_tab.dart';
 import 'core/mod_ffi.dart';
 import 'core/providers.dart';
 import 'dataasset/ui/dataasset_lab.dart';
+import 'dataasset/ui/installed_package_browser_dialog.dart';
 import 'dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
@@ -34,6 +35,7 @@ import 'project/revision3_content_library.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_npc_authoring.dart';
+import 'project/revision3_npc_profile_dialog.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_context_authoring.dart';
@@ -677,6 +679,15 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedProjectRevision: currentProject.projectRevision,
                 expectedHead: currentProject.head,
               ),
+          loadInstalledPackageIndex: ({required gameRoot}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .readCurrentRevision3DataAssetPackageIndex(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                gameRoot: gameRoot,
+              ),
           publishDataAssetStage: ({required patchReceiptPath}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .addCurrentRevision3DataAssetStage(
@@ -838,6 +849,15 @@ class _HomePageState extends ConsumerState<HomePage>
                 gameRoot: gameRoot,
                 questId: questId,
               ),
+          inspectNpcSource: ({required npcId}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .inspectCurrentRevision3NpcSource(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                npcId: npcId,
+              ),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -969,6 +989,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
     required this.loadDataAssetStages,
+    required this.loadInstalledPackageIndex,
     required this.publishDataAssetStage,
     required this.publishDataAssetSemanticEdit,
     required this.removeDataAssetStage,
@@ -989,6 +1010,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.loadQuestContextSeed,
     required this.editQuestContext,
     required this.inspectQuestSource,
+    required this.inspectNpcSource,
   });
 
   final ManagedRevision3CurrentProjectState project;
@@ -1000,6 +1022,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
   final Revision3DataAssetStageLoader loadDataAssetStages;
+  final Revision3InstalledPackageIndexLoader loadInstalledPackageIndex;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
   final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
   final Revision3DataAssetStageRemover removeDataAssetStage;
@@ -1020,6 +1043,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3QuestContextSeedLoader loadQuestContextSeed;
   final Revision3QuestContextTechnicalPublisher editQuestContext;
   final Revision3QuestSourceInspectionLoader inspectQuestSource;
+  final Revision3NpcSourceInspectionLoader inspectNpcSource;
 
   @override
   Widget build(BuildContext context) {
@@ -1321,6 +1345,10 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                                           index,
                                           quest,
                                         ),
+                              inspectNpcSource: project.requiresReopen
+                                  ? null
+                                  : (index, npc) =>
+                                        _openNpcProfile(context, index, npc),
                             ),
                             Revision3DataAssetStagePanel(
                               projectRoot: project.root.path,
@@ -1339,6 +1367,13 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                                   pickDataAssetExtractReceipt,
                               semanticExtractReceiptInspector:
                                   inspectDataAssetExtractReceipt,
+                              browseInstalledPackages:
+                                  project.requiresReopen || gameRoot == null
+                                  ? null
+                                  : () => _openInstalledPackageBrowser(
+                                      context,
+                                      gameRoot!,
+                                    ),
                             ),
                           ],
                         ),
@@ -1566,6 +1601,33 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _openNpcProfile(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity npc,
+  ) async {
+    if (project.requiresReopen) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Revision3NpcProfileDialog(
+        npcTitle: npc.summary.primaryIdentity,
+        npcId: npc.id,
+        inspect: inspectNpcSource,
+      ),
+    );
+  }
+
+  Future<void> _openInstalledPackageBrowser(
+    BuildContext context,
+    String configuredGameRoot,
+  ) => showDialog<void>(
+    context: context,
+    builder: (context) => InstalledPackageBrowserDialog(
+      gameRoot: configuredGameRoot,
+      load: loadInstalledPackageIndex,
+    ),
+  );
 
   Future<void> _openNpcWizard(BuildContext context) async {
     final configuredGameRoot = gameRoot;

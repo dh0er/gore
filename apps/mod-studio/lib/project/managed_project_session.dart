@@ -509,6 +509,19 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String questId,
   });
 
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  });
+
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -672,6 +685,29 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     expectedHead: expectedHead,
     questId: questId,
+  );
+
+  @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) => ffi.authoringStoreInspectRevision3NpcSourceV1(
+    root: root,
+    expectedHead: expectedHead,
+    npcId: npcId,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreReadRevision3DataAssetPackageIndexV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
   );
 
   @override
@@ -2037,6 +2073,78 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3QuestSourceInspectionError,
   );
 
+  /// Verify persisted source and readiness evidence for one exact-current NPC
+  /// Draft. This project-only read never prepares or publishes a checkpoint and
+  /// does not require a configured game installation.
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String npcId,
+  }) => _core.readExact<AuthoringRevision3NpcSourceInspectionResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 NPC source inspection has no exact project identity',
+        );
+      }
+      final result = await _store.inspectNpcSourceV1(
+        root: root.path,
+        expectedHead: basis.head,
+        npcId: npcId,
+      );
+      final projectBytes = utf8.encode(basis.projectJson);
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          result.npcId != npcId ||
+          result.projectSeal.byteLength != projectBytes.length ||
+          result.projectSeal.sha256 !=
+              crypto.sha256.convert(projectBytes).toString()) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 NPC source inspection disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'inspectNpcSourceV1',
+    handleReadError: _core._throwRevision3NpcSourceInspectionError,
+  );
+
+  /// Read path-only installed DataAsset package candidates for the exact
+  /// current project generation. Native code reopens both the Store and the
+  /// selected installation, reads no ExportBundle payload, and returns no
+  /// extraction, mutation, build, runtime, or publication authority.
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({
+    required String gameRoot,
+  }) => _core.readExact<AuthoringRevision3DataAssetPackageIndexResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 DataAsset package index has no exact project identity',
+        );
+      }
+      final result = await _store.readDataAssetPackageIndexV1(
+        root: root.path,
+        gameRoot: gameRoot,
+        expectedHead: basis.head,
+      );
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          !result.matchesCanonicalProjectTarget(basis.projectJson)) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 DataAsset package index disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'readDataAssetPackageIndexV1',
+    handleReadError: _core._throwRevision3DataAssetPackageIndexError,
+  );
+
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
   /// The operation shares the session's serialized lane, verifies the fixed head before and after
@@ -2708,6 +2816,79 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3NpcSourceInspectionError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3NpcSourceInspectionErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 NPC source inspection could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3DataAssetPackageIndexError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DataAssetPackageIndexErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 DataAsset package index could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT') {
@@ -3304,6 +3485,30 @@ bool _revision3QuestSourceInspectionErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_INSPECTION_REQUEST_INVALID',
   'AUTHORING_REVISION3_QUEST_INSPECTION_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_QUEST_INSPECTION_UNSUPPORTED_GENERATION',
+}.contains(code);
+
+bool _revision3NpcSourceInspectionErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_NPC_INSPECTION_FAILED',
+  'AUTHORING_REVISION3_NPC_INSPECTION_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_INSPECTION_NPC_INVALID',
+  'AUTHORING_REVISION3_NPC_INSPECTION_PROJECT_INVALID',
+  'AUTHORING_REVISION3_NPC_INSPECTION_REQUEST_INVALID',
+  'AUTHORING_REVISION3_NPC_INSPECTION_RESPONSE_LIMIT',
+}.contains(code);
+
+bool _revision3DataAssetPackageIndexErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_CHANGED',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_GENERATION_MISMATCH',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_IO',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LAYOUT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_PATH_UNSAFE',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_IOSTORE_OPEN_FAILED',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PACKAGE_INDEX_FAILED',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PLATFORM_UNSUPPORTED',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_REQUEST_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_RESPONSE_LIMIT',
 }.contains(code);
 
 bool _revision3NpcPrepareErrorIsRetryable(String code) => const {

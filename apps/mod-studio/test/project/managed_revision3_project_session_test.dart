@@ -107,6 +107,8 @@ void main() {
             head,
             project,
           ),
+          'authoring_store_read_revision3_dataasset_package_index_v1':
+              _dataAssetPackageIndexResponse(head, project),
           'authoring_store_prepare_revision3_quest_draft_v3':
               _questPreparedResponse(
                 basisHead: head,
@@ -137,6 +139,11 @@ void main() {
         verification: AuthoringAssetVerification.full,
       );
       await adapter.readContentIndex(root: fixture.path, expectedHead: head);
+      await adapter.readDataAssetPackageIndexV1(
+        root: fixture.path,
+        gameRoot: r'D:\Games\Gothic Remake',
+        expectedHead: head,
+      );
       await adapter.prepareQuestDraftV3(
         root: fixture.path,
         gameRoot: r'D:\Games\Gothic Remake',
@@ -155,6 +162,7 @@ void main() {
         'authoring_store_prepare_revision3_checkpoint',
         'authoring_store_open_revision3_head_bytes',
         'authoring_store_read_revision3_content_index_v1',
+        'authoring_store_read_revision3_dataasset_package_index_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
         'authoring_store_prepare_revision3_npc_draft_v1',
       ]);
@@ -177,12 +185,17 @@ void main() {
         'root': fixture.path,
       });
       expect(core.calls[4].payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'game_root': r'D:\Games\Gothic Remake',
+        'root': fixture.path,
+      });
+      expect(core.calls[5].payload, <String, Object?>{
         'current_project_json': project,
         'game_root': r'D:\Games\Gothic Remake',
         'quest_request_json': questRequest.canonicalJson,
         'root': fixture.path,
       });
-      expect(core.calls[5].payload, <String, Object?>{
+      expect(core.calls[6].payload, <String, Object?>{
         'current_project_json': project,
         'game_root': r'D:\Games\Gothic Remake',
         'npc_request_json': npcRequest.canonicalJson,
@@ -2613,6 +2626,394 @@ void main() {
   );
 
   test(
+    'NPC source inspection uses only the exact project basis and never prepares',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_inspection_exact');
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 16,
+        name: 'NPC inspection exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+      final npcPrepareCalls = store.npcPrepareCalls;
+
+      final result = await session.inspectNpcSourceV1(
+        npcId: revision3NpcInspectionNpcId,
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 16);
+      expect(result.npcId, revision3NpcInspectionNpcId);
+      expect(result.plan.knownParentLabel, 'Asghan');
+      expect(store.npcInspectionCalls, 1);
+      expect(store.npcInspectionRoots, <String>[root.path]);
+      expect(store.npcInspectionExpectedHeads, <String>[exactHead]);
+      expect(store.npcInspectionNpcIds, <String>[revision3NpcInspectionNpcId]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(store.npcPrepareCalls, npcPrepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('NPC source inspection detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'npc_inspection_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 17, name: 'NPC inspection head race'),
+    );
+    final external = store.register(
+      _projectJson(revision: 92, name: 'External NPC inspection winner'),
+    );
+    store.afterNpcInspection = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.npcInspectionCalls, 1);
+    expect(session.projectRevision, 17);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.npcInspectionCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'NPC inspection domain and local validation errors stay open while integrity errors poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_inspection_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 18, name: 'NPC inspection retry'),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_NPC_INSPECTION_FAILED',
+        'AUTHORING_REVISION3_NPC_INSPECTION_INPUT_LIMIT',
+        'AUTHORING_REVISION3_NPC_INSPECTION_NPC_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_PROJECT_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_REQUEST_INVALID',
+        'AUTHORING_REVISION3_NPC_INSPECTION_RESPONSE_LIMIT',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextNpcInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_npc_source_v1',
+          code: code,
+          message: 'fake retryable NPC inspection domain error',
+        );
+        await expectLater(
+          retrySession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+
+      retryStore.nextNpcInspectionError = const FormatException(
+        'locally invalid NPC ID',
+      );
+      await expectLater(
+        retrySession.inspectNpcSourceV1(npcId: 'not-an-entity-id'),
+        throwsA(isA<FormatException>()),
+      );
+      expect(
+        retrySession.requiresReopen,
+        isFalse,
+        reason: 'local request rejection cannot poison an untouched Store',
+      );
+      expect(
+        (await retrySession.inspectNpcSourceV1(
+          npcId: revision3NpcInspectionNpcId,
+        )).projectRevision,
+        18,
+      );
+      await retrySession.close();
+
+      final poisonCodes = <String>[
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_NPC_INSPECTION_STORE_SEAL_MISMATCH',
+        'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT',
+      ];
+      var ordinal = 0;
+      for (final code in poisonCodes) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'npc_inspection_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 18 + ordinal,
+                name: 'NPC inspection poison $ordinal',
+              ),
+            );
+        poisonStore.nextNpcInspectionError = ModFfiException(
+          command: 'authoring_store_inspect_revision3_npc_source_v1',
+          code: code,
+          message: 'fake fail-closed NPC inspection error',
+        );
+
+        await expectLater(
+          poisonSession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(
+            code == 'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: code,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          poisonSession.inspectNpcSourceV1(npcId: revision3NpcInspectionNpcId),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: code,
+        );
+        expect(poisonStore.npcInspectionCalls, 1, reason: code);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
+    'DataAsset package index binds the exact project generation without writes',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_package_index_exact',
+      );
+      final store = _FakeRevision3Store();
+      final projectJson = _projectJson(
+        revision: 22,
+        name: 'DataAsset package index exact',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final exactHead = session.head.canonicalJson;
+      final exactHeadBytes = await session.headFile.readAsBytes();
+      final prepareCalls = store.prepareCalls;
+
+      final result = await session.readDataAssetPackageIndexV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+      );
+
+      expect(result.head.canonicalJson, exactHead);
+      expect(result.projectId, session.projectId);
+      expect(result.projectRevision, 22);
+      expect(
+        result.index.candidates.single.targetPath,
+        '/Game/Characters/DA_Asghan',
+      );
+      expect(store.dataAssetPackageIndexReadCalls, 1);
+      expect(store.dataAssetPackageIndexRoots, <String>[root.path]);
+      expect(store.dataAssetPackageIndexGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.dataAssetPackageIndexExpectedHeads, <String>[exactHead]);
+      expect(store.prepareCalls, prepareCalls);
+      expect(
+        await session.headFile.readAsBytes(),
+        orderedEquals(exactHeadBytes),
+      );
+      expect(session.projectJson, projectJson);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('DataAsset package index detects a post-read exact-head race', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dataasset_package_index_head_race',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(
+        revision: 23,
+        name: 'DataAsset package index race',
+      ),
+    );
+    final external = store.register(
+      _projectJson(revision: 93, name: 'External package-index winner'),
+    );
+    store.afterDataAssetPackageIndex = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.readDataAssetPackageIndexV1(gameRoot: r'D:\Games\Gothic Remake'),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(store.dataAssetPackageIndexReadCalls, 1);
+    expect(session.projectRevision, 23);
+    expect(session.requiresReopen, isTrue);
+    await expectLater(
+      session.readDataAssetPackageIndexV1(gameRoot: r'D:\Games\Gothic Remake'),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.dataAssetPackageIndexReadCalls, 1);
+    await session.close();
+  });
+
+  test(
+    'DataAsset game-domain failures retry while integrity and target drift poison',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_package_index_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 24,
+          name: 'DataAsset package index retry',
+        ),
+      );
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_CHANGED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_GENERATION_MISMATCH',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_IO',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LAYOUT_INVALID',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_LIMIT',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_GAME_PATH_UNSAFE',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_INPUT_LIMIT',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_IOSTORE_OPEN_FAILED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PACKAGE_INDEX_FAILED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_PLATFORM_UNSUPPORTED',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_REQUEST_INVALID',
+        'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_RESPONSE_LIMIT',
+      ];
+      for (final code in retryableCodes) {
+        retryStore.nextDataAssetPackageIndexError = ModFfiException(
+          command: 'authoring_store_read_revision3_dataasset_package_index_v1',
+          code: code,
+          message: 'fake retryable DataAsset package-index error',
+        );
+        await expectLater(
+          retrySession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+          reason: code,
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(
+        (await retrySession.readDataAssetPackageIndexV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+        )).projectRevision,
+        24,
+      );
+      await retrySession.close();
+
+      var ordinal = 0;
+      for (final scenario in <String>['malformed', 'store', 'head', 'target']) {
+        ordinal++;
+        final poisonRoot = await _projectRoot(
+          fixture,
+          suffix: 'dataasset_package_index_poison_$ordinal',
+        );
+        final poisonStore = _FakeRevision3Store();
+        final poisonSession =
+            await ManagedRevision3AuthoringProjectSession.create(
+              root: poisonRoot,
+              store: poisonStore,
+              projectJson: _projectJson(
+                revision: 24 + ordinal,
+                name: 'DataAsset package-index poison $ordinal',
+              ),
+            );
+        if (scenario == 'target') {
+          poisonStore.nextDataAssetPackageIndexResponseMismatch = 'target';
+        } else {
+          final code = switch (scenario) {
+            'malformed' => ModFfiException.malformedNativeResponseCode,
+            'store' =>
+              'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_STORE_SEAL_MISMATCH',
+            'head' =>
+              'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_HEAD_CONFLICT',
+            _ => throw StateError('unknown poison scenario'),
+          };
+          poisonStore.nextDataAssetPackageIndexError = ModFfiException(
+            command:
+                'authoring_store_read_revision3_dataasset_package_index_v1',
+            code: code,
+            message: 'fake fail-closed DataAsset package-index error',
+          );
+        }
+
+        await expectLater(
+          poisonSession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(
+            scenario == 'head'
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: scenario,
+        );
+        expect(poisonSession.requiresReopen, isTrue, reason: scenario);
+        await expectLater(
+          poisonSession.readDataAssetPackageIndexV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+          reason: scenario,
+        );
+        expect(poisonStore.dataAssetPackageIndexReadCalls, 1);
+        await poisonSession.close();
+      }
+    },
+  );
+
+  test(
     'verifyCurrentHead drift or reopen mismatch poisons the session',
     () async {
       for (final mode in <String>['head-drift', 'reopen-mismatch']) {
@@ -3389,6 +3790,20 @@ typedef _AfterQuestInspection =
       String projectJson,
     );
 
+typedef _AfterNpcInspection =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDataAssetPackageIndex =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
 typedef _AfterDataAssetPrepare =
     FutureOr<void> Function(
       String root,
@@ -3444,6 +3859,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
   int questInspectionCalls = 0;
+  int npcInspectionCalls = 0;
+  int dataAssetPackageIndexReadCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
@@ -3453,6 +3870,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _AfterNpcPrepare? afterNpcPrepare;
   _AfterContentRead? afterContentRead;
   _AfterQuestInspection? afterQuestInspection;
+  _AfterNpcInspection? afterNpcInspection;
+  _AfterDataAssetPackageIndex? afterDataAssetPackageIndex;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
   _AfterVoiceBuild? afterVoiceBuild;
@@ -3493,6 +3912,10 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   String? nextContentResponseMismatch;
   Object? nextQuestInspectionError;
   String? nextQuestInspectionResponseMismatch;
+  Object? nextNpcInspectionError;
+  String? nextNpcInspectionResponseMismatch;
+  Object? nextDataAssetPackageIndexError;
+  String? nextDataAssetPackageIndexResponseMismatch;
   Object? nextDataAssetError;
   String? nextDataAssetResponseMismatch;
   final List<String> contentExpectedHeads = <String>[];
@@ -3500,6 +3923,12 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> questInspectionGameRoots = <String>[];
   final List<String> questInspectionExpectedHeads = <String>[];
   final List<String> questInspectionQuestIds = <String>[];
+  final List<String> npcInspectionRoots = <String>[];
+  final List<String> npcInspectionExpectedHeads = <String>[];
+  final List<String> npcInspectionNpcIds = <String>[];
+  final List<String> dataAssetPackageIndexGameRoots = <String>[];
+  final List<String> dataAssetPackageIndexRoots = <String>[];
+  final List<String> dataAssetPackageIndexExpectedHeads = <String>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
@@ -4279,6 +4708,147 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) async {
+    npcInspectionCalls++;
+    npcInspectionRoots.add(root);
+    npcInspectionExpectedHeads.add(expectedHead.canonicalJson);
+    npcInspectionNpcIds.add(npcId);
+    final injectedError = nextNpcInspectionError;
+    nextNpcInspectionError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_inspect_revision3_npc_source_v1',
+        code: 'AUTHORING_REVISION3_NPC_INSPECTION_HEAD_CONFLICT',
+        message: 'fake native NPC inspection head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown NPC inspection checkpoint head');
+    }
+    final hook = afterNpcInspection;
+    afterNpcInspection = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextNpcInspectionResponseMismatch;
+    nextNpcInspectionResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    return revision3NpcInspectionResult(
+      head: mismatch == 'head' ? register(projectJson) : expectedHead,
+      projectJson: projectJson,
+      projectId: mismatch == 'project-id'
+          ? '00000000000000000000000000000093'
+          : project['project_id']! as String,
+      projectRevision: mismatch == 'revision'
+          ? (project['revision']! as int) + 1
+          : project['revision']! as int,
+      npcId: mismatch == 'npc' ? '00000000000000000000000000000053' : npcId,
+      projectSealJson: mismatch == 'project-seal'
+          ? _projectJson(revision: 99, name: 'Mismatched NPC inspection seal')
+          : projectJson,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    dataAssetPackageIndexReadCalls++;
+    dataAssetPackageIndexRoots.add(root);
+    dataAssetPackageIndexGameRoots.add(gameRoot);
+    dataAssetPackageIndexExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextDataAssetPackageIndexError;
+    nextDataAssetPackageIndexError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_read_revision3_dataasset_package_index_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_PACKAGE_INDEX_HEAD_CONFLICT',
+        message: 'fake native DataAsset package-index head CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown DataAsset package-index checkpoint head');
+    }
+    final hook = afterDataAssetPackageIndex;
+    afterDataAssetPackageIndex = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final mismatch = nextDataAssetPackageIndexResponseMismatch;
+    nextDataAssetPackageIndexResponseMismatch = null;
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final target = (project['target'] as Map).cast<String, Object?>();
+    final executable = (target['executable'] as Map).cast<String, Object?>();
+    final packageIndexJson = jsonEncode(<String, Object?>{
+      'status': 'complete_index',
+      'physical_chunk_count': 1,
+      'winning_export_bundle_count': 1,
+      'directory_indexed_export_bundle_count': 1,
+      'out_of_scope_export_bundle_count': 0,
+      'candidates': <Object?>[
+        <String, Object?>{
+          'target_path': '/Game/Characters/DA_Asghan',
+          'package_id_hex': '0123456789abcdef',
+        },
+      ],
+      'partial_reasons': <Object?>[],
+    });
+    final packageIndexBytes = utf8.encode(packageIndexJson);
+    Map<String, Object?> seal(int byteLength, String sha256) =>
+        <String, Object?>{'byte_len': byteLength, 'sha256': sha256};
+    return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+      <String, Object?>{
+        'authority_status': 'not_granted',
+        'build_status': 'not_evaluated',
+        'candidate_count': 1,
+        'content_status': 'metadata_candidates_only',
+        'export_bundle_payload_status': 'not_read',
+        'head_json': mismatch == 'head'
+            ? register(projectJson).canonicalJson
+            : expectedHead.canonicalJson,
+        'mount_inventory_entry_count': 2,
+        'mount_inventory_seal': seal(80, 'b' * 64),
+        'mutation_status': 'not_supported',
+        'ok': true,
+        'outcome': 'audit_only',
+        'package_index_json': packageIndexJson,
+        'package_index_seal': seal(
+          packageIndexBytes.length,
+          crypto.sha256.convert(packageIndexBytes).toString(),
+        ),
+        'package_index_status': 'complete_index',
+        'project_id': mismatch == 'project-id'
+            ? '93939393939393939393939393939393'
+            : project['project_id'],
+        'project_revision': mismatch == 'revision'
+            ? (project['revision']! as int) + 1
+            : project['revision'],
+        'publication_status': 'not_supported',
+        'runtime_status': 'runtime_unqualified',
+        'scope': 'installed_dataasset_package_candidates_only',
+        'source_snapshot_seal': seal(120, 'c' * 64),
+        'target_executable_seal': mismatch == 'target'
+            ? seal(executable['byte_len']! as int, 'd' * 64)
+            : executable,
+      },
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -4574,6 +5144,59 @@ Map<String, Object?> _contentResponse(
     'build_status': 'not_evaluated',
     'runtime_status': 'runtime_unqualified',
     'publication_status': 'not_applicable',
+  };
+}
+
+Map<String, Object?> _dataAssetPackageIndexResponse(
+  AuthoringWorkingHead head,
+  String projectJson,
+) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final target = (project['target'] as Map).cast<String, Object?>();
+  final indexJson = jsonEncode(<String, Object?>{
+    'status': 'complete_index',
+    'physical_chunk_count': 1,
+    'winning_export_bundle_count': 1,
+    'directory_indexed_export_bundle_count': 1,
+    'out_of_scope_export_bundle_count': 0,
+    'candidates': <Object?>[
+      <String, Object?>{
+        'target_path': '/Game/Characters/DA_Asghan',
+        'package_id_hex': '0123456789abcdef',
+      },
+    ],
+    'partial_reasons': <Object?>[],
+  });
+  final indexBytes = utf8.encode(indexJson);
+  Map<String, Object?> seal(int byteLength, String sha256) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': sha256,
+  };
+  return <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_count': 1,
+    'content_status': 'metadata_candidates_only',
+    'export_bundle_payload_status': 'not_read',
+    'head_json': head.canonicalJson,
+    'mount_inventory_entry_count': 2,
+    'mount_inventory_seal': seal(80, 'b' * 64),
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'audit_only',
+    'package_index_json': indexJson,
+    'package_index_seal': seal(
+      indexBytes.length,
+      crypto.sha256.convert(indexBytes).toString(),
+    ),
+    'package_index_status': 'complete_index',
+    'project_id': project['project_id'],
+    'project_revision': project['revision'],
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'installed_dataasset_package_candidates_only',
+    'source_snapshot_seal': seal(120, 'c' * 64),
+    'target_executable_seal': target['executable'],
   };
 }
 

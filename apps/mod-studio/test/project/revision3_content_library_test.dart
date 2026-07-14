@@ -162,6 +162,38 @@ void main() {
     expect(inspectedQuest, _questId);
   });
 
+  testWidgets('NPC Profile & checks routes the exact NPC without a game root', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var inspectionCalls = 0;
+    String? inspectedNpc;
+    await _pumpLoadedLibrary(
+      tester,
+      inspectNpcSource: (index, npc) async {
+        inspectionCalls++;
+        expect(index.projectId, _projectId);
+        inspectedNpc = npc.id;
+      },
+    );
+
+    final tools = find.byKey(Key('revision3-content-npc-tools-$_npcId'));
+    expect(tools, findsOneWidget);
+    await tester.tap(tools);
+    await tester.pumpAndSettle();
+
+    final action = find.byKey(
+      Key('revision3-content-inspect-npc-source-$_npcId'),
+    );
+    expect(action, findsOneWidget);
+    expect(tester.widget<PopupMenuItem<Object?>>(action).enabled, isTrue);
+    await tester.tap(find.text('Profile & checks'));
+    await tester.pumpAndSettle();
+
+    expect(inspectionCalls, 1);
+    expect(inspectedNpc, _npcId);
+  });
+
   testWidgets(
     'V4 Quest disables legacy outline while context and transitions stay available',
     (tester) async {
@@ -464,6 +496,47 @@ void main() {
     expect(sheetWasVisibleAtCallback, isFalse);
   });
 
+  testWidgets('compact NPC sheet closes before routing Profile & checks', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(560, 760));
+    var inspectionCalls = 0;
+    var sheetWasVisibleAtCallback = false;
+    String? inspectedNpc;
+    await _pumpLoadedLibrary(
+      tester,
+      inspectNpcSource: (index, npc) async {
+        inspectionCalls++;
+        inspectedNpc = npc.id;
+        sheetWasVisibleAtCallback = find
+            .byKey(const Key('revision3-content-entity-details'))
+            .evaluate()
+            .isNotEmpty;
+      },
+    );
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_npcId')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-content-entity-details')),
+      findsOneWidget,
+    );
+    final tools = find.byKey(Key('revision3-content-npc-tools-$_npcId'));
+    await tester.ensureVisible(tools);
+    await tester.tap(tools);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Profile & checks'));
+    await tester.pumpAndSettle();
+
+    expect(inspectionCalls, 1);
+    expect(inspectedNpc, _npcId);
+    expect(sheetWasVisibleAtCallback, isFalse);
+    expect(
+      find.byKey(const Key('revision3-content-entity-details')),
+      findsNothing,
+    );
+  });
+
   testWidgets('keeps same-role qualified backlinks as distinct siblings', (
     tester,
   ) async {
@@ -618,6 +691,7 @@ Future<void> _pumpLoadedLibrary(
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
+  Revision3NpcSourceInspector? inspectNpcSource,
 }) async {
   await _pumpLibrary(
     tester,
@@ -626,6 +700,7 @@ Future<void> _pumpLoadedLibrary(
     editQuestContext: editQuestContext,
     editQuestTransitions: editQuestTransitions,
     inspectQuestSource: inspectQuestSource,
+    inspectNpcSource: inspectNpcSource,
   );
   await tester.pumpAndSettle();
 }
@@ -638,6 +713,7 @@ Future<void> _pumpLibrary(
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
+  Revision3NpcSourceInspector? inspectNpcSource,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -651,6 +727,7 @@ Future<void> _pumpLibrary(
         editQuestContext: editQuestContext,
         editQuestTransitions: editQuestTransitions,
         inspectQuestSource: inspectQuestSource,
+        inspectNpcSource: inspectNpcSource,
       ),
     ),
   ),

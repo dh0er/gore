@@ -19,6 +19,7 @@ import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
@@ -772,6 +773,387 @@ void main() {
         throwsA(isA<Revision3QuestSourceInspectionRequiresReopenException>()),
       );
       expect(managed.questInspectionCalls, 1);
+    },
+  );
+
+  test(
+    'NPC source inspection binds the exact visible checkpoint without a game root',
+    () async {
+      const projectId = '46464646464646464646464646464646';
+      const npcId = '76767676767676767676767676767676';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-npc-inspection'),
+        projectIdValue: projectId,
+        projectRevision: 46,
+        head: _head(46),
+        onNpcInspection: (lease, receivedNpcId) {
+          expect(receivedNpcId, npcId);
+          return revision3NpcInspectionResult(
+            head: lease.head,
+            projectJson: revision3NpcInspectionProjectJson(
+              projectId: lease.projectId,
+              revision: lease.projectRevision,
+            ),
+            npcId: receivedNpcId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final staleRequests =
+          <Future<AuthoringRevision3NpcSourceInspectionResult> Function()>[
+            () => coordinator.inspectCurrentRevision3NpcSource(
+              expectedRoot: 'another-root',
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              npcId: npcId,
+            ),
+            () => coordinator.inspectCurrentRevision3NpcSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: '47474747474747474747474747474747',
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              npcId: npcId,
+            ),
+            () => coordinator.inspectCurrentRevision3NpcSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision + 1,
+              expectedHead: visible.head,
+              npcId: npcId,
+            ),
+            () => coordinator.inspectCurrentRevision3NpcSource(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: _head(47),
+              npcId: npcId,
+            ),
+          ];
+      for (final inspect in staleRequests) {
+        await expectLater(
+          inspect(),
+          throwsA(isA<Revision3NpcSourceInspectionStaleCheckpointException>()),
+        );
+      }
+      expect(managed.npcInspectionCalls, 0);
+
+      final result = await coordinator.inspectCurrentRevision3NpcSource(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        npcId: npcId,
+      );
+
+      expect(result.projectId, visible.projectId);
+      expect(result.projectRevision, visible.projectRevision);
+      expect(result.head.canonicalJson, visible.head.canonicalJson);
+      expect(result.npcId, npcId);
+      expect(managed.npcInspectionCalls, 1);
+      expect(managed.npcInspectionNpcIds, <String>[npcId]);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test('NPC source inspection maps a mismatched result to stale', () async {
+    const projectId = '48484848484848484848484848484848';
+    const npcId = '78787878787878787878787878787878';
+    final managed = _FakeManagedLease(
+      root: Directory('managed-npc-inspection-result-stale'),
+      projectIdValue: projectId,
+      projectRevision: 48,
+      head: _head(48),
+      onNpcInspection: (lease, receivedNpcId) => revision3NpcInspectionResult(
+        head: _head(49),
+        projectJson: revision3NpcInspectionProjectJson(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        npcId: receivedNpcId,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.inspectCurrentRevision3NpcSource(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        npcId: npcId,
+      ),
+      throwsA(isA<Revision3NpcSourceInspectionStaleCheckpointException>()),
+    );
+
+    expect(managed.npcInspectionCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
+    'NPC source inspection maps poisoned lease state to requires-reopen and locks retry',
+    () async {
+      const projectId = '49494949494949494949494949494949';
+      const npcId = '79797979797979797979797979797979';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-npc-inspection-reopen'),
+        projectIdValue: projectId,
+        projectRevision: 49,
+        head: _head(49),
+        onNpcInspection: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected NPC inspection integrity failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<AuthoringRevision3NpcSourceInspectionResult> inspect() =>
+          coordinator.inspectCurrentRevision3NpcSource(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            npcId: npcId,
+          );
+
+      await expectLater(
+        inspect(),
+        throwsA(isA<Revision3NpcSourceInspectionRequiresReopenException>()),
+      );
+      expect(managed.npcInspectionCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        inspect(),
+        throwsA(isA<Revision3NpcSourceInspectionRequiresReopenException>()),
+      );
+      expect(managed.npcInspectionCalls, 1);
+    },
+  );
+
+  test(
+    'DataAsset package browsing binds the exact visible checkpoint and game root',
+    () async {
+      const projectId = '50505050505050505050505050505050';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-package-index'),
+        projectIdValue: projectId,
+        projectRevision: 50,
+        head: _head(50),
+        onDataAssetPackageIndexRead: (lease, gameRoot) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          return _controllerDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      for (final read
+          in <Future<AuthoringRevision3DataAssetPackageIndexResult> Function()>[
+            () => coordinator.readCurrentRevision3DataAssetPackageIndex(
+              expectedRoot: 'another-root',
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: r'C:\Games\Gothic Remake',
+            ),
+            () => coordinator.readCurrentRevision3DataAssetPackageIndex(
+              expectedRoot: visible.root.path,
+              expectedProjectId: '51515151515151515151515151515151',
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              gameRoot: r'C:\Games\Gothic Remake',
+            ),
+            () => coordinator.readCurrentRevision3DataAssetPackageIndex(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision + 1,
+              expectedHead: visible.head,
+              gameRoot: r'C:\Games\Gothic Remake',
+            ),
+            () => coordinator.readCurrentRevision3DataAssetPackageIndex(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: _head(51),
+              gameRoot: r'C:\Games\Gothic Remake',
+            ),
+          ]) {
+        await expectLater(
+          read(),
+          throwsA(
+            isA<Revision3DataAssetPackageIndexStaleCheckpointException>(),
+          ),
+        );
+      }
+      await expectLater(
+        coordinator.readCurrentRevision3DataAssetPackageIndex(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          gameRoot: '',
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      final result = await coordinator
+          .readCurrentRevision3DataAssetPackageIndex(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+          );
+
+      expect(result.projectId, visible.projectId);
+      expect(result.projectRevision, visible.projectRevision);
+      expect(
+        result.index.candidates.single.targetPath,
+        '/Game/Characters/DA_Asghan',
+      );
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(managed.dataAssetPackageIndexGameRoots, <String>[
+        r'C:\Games\Gothic Remake',
+      ]);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test('DataAsset package result mismatch maps to stale', () async {
+    const projectId = '52525252525252525252525252525252';
+    final managed = _FakeManagedLease(
+      root: Directory('managed-dataasset-package-index-stale'),
+      projectIdValue: projectId,
+      projectRevision: 52,
+      head: _head(52),
+      onDataAssetPackageIndexRead: (lease, _) =>
+          _controllerDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision + 1,
+          ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.readCurrentRevision3DataAssetPackageIndex(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        gameRoot: r'C:\Games\Gothic Remake',
+      ),
+      throwsA(isA<Revision3DataAssetPackageIndexStaleCheckpointException>()),
+    );
+    expect(managed.dataAssetPackageIndexReadCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
+    'DataAsset package browsing maps poisoned lease state to requires-reopen',
+    () async {
+      const projectId = '53535353535353535353535353535353';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-package-index-reopen'),
+        projectIdValue: projectId,
+        projectRevision: 53,
+        head: _head(53),
+        onDataAssetPackageIndexRead: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected DataAsset package-index failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<AuthoringRevision3DataAssetPackageIndexResult> read() =>
+          coordinator.readCurrentRevision3DataAssetPackageIndex(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            gameRoot: r'C:\Games\Gothic Remake',
+          );
+
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DataAssetPackageIndexRequiresReopenException>()),
+      );
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DataAssetPackageIndexRequiresReopenException>()),
+      );
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
     },
   );
 
@@ -2446,6 +2828,11 @@ typedef _QuestInspectionHook =
       String gameRoot,
       String questId,
     );
+typedef _NpcInspectionHook =
+    FutureOr<AuthoringRevision3NpcSourceInspectionResult> Function(
+      _FakeManagedLease lease,
+      String npcId,
+    );
 typedef _QuestPublishHook =
     FutureOr<Revision3QuestDraftPublication> Function(
       _FakeManagedLease lease,
@@ -2530,6 +2917,11 @@ typedef _DataAssetRemoveHook =
       _FakeManagedLease lease,
       String targetPath,
     );
+typedef _DataAssetPackageIndexReadHook =
+    FutureOr<AuthoringRevision3DataAssetPackageIndexResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+    );
 
 final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   _FakeManagedLease({
@@ -2540,6 +2932,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.projectIdError,
     this.onVerify,
     this.onQuestInspection,
+    this.onNpcInspection,
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
@@ -2554,6 +2947,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
+    this.onDataAssetPackageIndexRead,
     this.dataAssetStages = const [],
     this.contentIndex,
     this.closeFailuresRemaining = 0,
@@ -2569,6 +2963,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   AuthoringWorkingHead head;
   final _VerifyHook? onVerify;
   final _QuestInspectionHook? onQuestInspection;
+  final _NpcInspectionHook? onNpcInspection;
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
   final _QuestOutlinePublishHook? onQuestOutlinePublish;
@@ -2583,6 +2978,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _DataAssetPublishHook? onDataAssetPublish;
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
+  final _DataAssetPackageIndexReadHook? onDataAssetPackageIndexRead;
   final List<AuthoringRevision3DataAssetStage> dataAssetStages;
   final Revision3ContentIndex? contentIndex;
   _ContentReadHook? onContentRead;
@@ -2593,6 +2989,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int questInspectionCalls = 0;
   final List<String> questInspectionGameRoots = <String>[];
   final List<String> questInspectionQuestIds = <String>[];
+  int npcInspectionCalls = 0;
+  final List<String> npcInspectionNpcIds = <String>[];
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
@@ -2608,6 +3006,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
   int dataAssetRemoveCalls = 0;
+  int dataAssetPackageIndexReadCalls = 0;
+  final List<String> dataAssetPackageIndexGameRoots = <String>[];
   int closeCalls = 0;
 
   @override
@@ -2647,6 +3047,31 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest source inspector');
     }
     return inspect(this, gameRoot, questId);
+  }
+
+  @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String npcId,
+  }) async {
+    npcInspectionCalls++;
+    npcInspectionNpcIds.add(npcId);
+    final inspect = onNpcInspection;
+    if (inspect == null) {
+      throw StateError('fake managed lease has no NPC source inspector');
+    }
+    return inspect(this, npcId);
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({required String gameRoot}) async {
+    dataAssetPackageIndexReadCalls++;
+    dataAssetPackageIndexGameRoots.add(gameRoot);
+    final read = onDataAssetPackageIndexRead;
+    if (read == null) {
+      throw StateError('fake managed lease has no DataAsset package index');
+    }
+    return read(this, gameRoot);
   }
 
   @override
@@ -2967,6 +3392,62 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+AuthoringRevision3DataAssetPackageIndexResult
+_controllerDataAssetPackageIndexResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final indexJson = jsonEncode(<String, Object?>{
+    'status': 'complete_index',
+    'physical_chunk_count': 1,
+    'winning_export_bundle_count': 1,
+    'directory_indexed_export_bundle_count': 1,
+    'out_of_scope_export_bundle_count': 0,
+    'candidates': <Object?>[
+      <String, Object?>{
+        'target_path': '/Game/Characters/DA_Asghan',
+        'package_id_hex': '0123456789abcdef',
+      },
+    ],
+    'partial_reasons': <Object?>[],
+  });
+  final indexBytes = utf8.encode(indexJson);
+  Map<String, Object?> seal(int byteLength, String sha256) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': sha256,
+  };
+  return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    <String, Object?>{
+      'authority_status': 'not_granted',
+      'build_status': 'not_evaluated',
+      'candidate_count': 1,
+      'content_status': 'metadata_candidates_only',
+      'export_bundle_payload_status': 'not_read',
+      'head_json': head.canonicalJson,
+      'mount_inventory_entry_count': 2,
+      'mount_inventory_seal': seal(80, 'b' * 64),
+      'mutation_status': 'not_supported',
+      'ok': true,
+      'outcome': 'audit_only',
+      'package_index_json': indexJson,
+      'package_index_seal': seal(
+        indexBytes.length,
+        crypto.sha256.convert(indexBytes).toString(),
+      ),
+      'package_index_status': 'complete_index',
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'publication_status': 'not_supported',
+      'runtime_status': 'runtime_unqualified',
+      'scope': 'installed_dataasset_package_candidates_only',
+      'source_snapshot_seal': seal(120, 'c' * 64),
+      'target_executable_seal': seal(171698176, 'd' * 64),
+    },
+    expectedHead: head,
+  );
+}
 
 AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
   required AuthoringWorkingHead head,

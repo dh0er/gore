@@ -8,6 +8,11 @@ import 'package:gore_mod/core/mod_ffi.dart';
 const revision3NpcFixtureGeneratorId = 'gore-authoring.logical-npc-clone-draft';
 const revision3NpcFixtureGeneratorVersion = 1;
 const revision3NpcFixtureCatalogLayer = 'base-game.g1r.scripts';
+const revision3NpcInspectionProjectId = '00000000000000000000000000000003';
+const revision3NpcInspectionNpcId = '00000000000000000000000000000051';
+const revision3NpcInspectionModuleId = '00000000000000000000000000000052';
+const revision3NpcInspectionUniqueName = 'GORE_InspectionGuard';
+const revision3NpcInspectionModuleNamespace = 'GoreMods.Npcs.InspectionGuard';
 
 typedef _Revision3NpcFixtureParent = ({
   int byteLength,
@@ -331,3 +336,214 @@ Uint8List _uint64(int value) {
   final data = ByteData(8)..setUint64(0, value, Endian.big);
   return data.buffer.asUint8List();
 }
+
+/// Fully closed NPC source-inspection result for Session, Controller, and UI
+/// tests. Every seal is derived from the supplied exact bytes; optional
+/// identity overrides deliberately keep the DTO internally consistent so the
+/// next integration layer can prove that it rejects a response-basis drift.
+AuthoringRevision3NpcSourceInspectionResult revision3NpcInspectionResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  String? projectId,
+  int? projectRevision,
+  String npcId = revision3NpcInspectionNpcId,
+  String moduleId = revision3NpcInspectionModuleId,
+  String displayName = 'Inspection Guard',
+  String uniqueName = revision3NpcInspectionUniqueName,
+  String moduleNamespace = revision3NpcInspectionModuleNamespace,
+  String? projectSealJson,
+}) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final responseProjectId = projectId ?? project['project_id']! as String;
+  final responseRevision = projectRevision ?? project['revision']! as int;
+  final target = (project['target']! as Map).cast<String, Object?>();
+  final request = AuthoringRevision3NpcDraftRequestV1.forProject(
+    expectedHead: head,
+    currentProjectJson: jsonEncode(<String, Object?>{
+      ...project,
+      'project_id': responseProjectId,
+      'revision': responseRevision,
+    }),
+    npcId: npcId,
+    scriptModuleId: moduleId,
+    displayName: displayName,
+    intent: AuthoringRevision3NpcDraftIntentV1(
+      moduleNamespace: moduleNamespace,
+      uniqueName: uniqueName,
+      parentCatalogId: 'g1r:npc:om_grd_asghan_263',
+    ),
+  );
+  final input = revision3NpcFixtureInput(request: request, target: target);
+  final inputJson = jsonEncode(input);
+  final source = revision3NpcFixtureSource(input);
+  final sourceSeal = _bytesSeal(source);
+  final sealedProject = projectSealJson ?? projectJson;
+  final canonicalProjectSeal = _bytesSeal(sealedProject);
+  final npcRef = _typedRef(responseProjectId, npcId, 'npc_draft');
+  final moduleRef = _typedRef(responseProjectId, moduleId, 'script_module');
+  final planJson = jsonEncode(<String, Object?>{
+    'format': 'revision3_npc_source_inspection_plan',
+    'schema_revision': 1,
+    'scope': 'source_readiness_inspection_only',
+    'source_status': 'persisted_and_regenerated_exact',
+    'compiler_status': 'not_run',
+    'build_status': 'blocked',
+    'runtime_qualification': 'runtime_unqualified',
+    'spawn_status': 'not_supported',
+    'publication_status': 'not_supported',
+    'provenance': <String, Object?>{
+      'project_id': responseProjectId,
+      'project_revision': responseRevision,
+      'target': target,
+      'canonical_project': canonicalProjectSeal,
+    },
+    'npc': <String, Object?>{
+      'reference': npcRef,
+      'entity_revision': 2,
+      'display_name': displayName,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': uniqueName,
+      },
+      'generator_id': revision3NpcFixtureGeneratorId,
+      'generator_version': revision3NpcFixtureGeneratorVersion,
+      'input': input,
+      'input_seal': _bytesSeal(inputJson),
+      'script_module': moduleRef,
+    },
+    'module': <String, Object?>{
+      'reference': moduleRef,
+      'entity_revision': 3,
+      'display_name': moduleNamespace,
+      'origin': <String, Object?>{
+        'type': 'generated',
+        'generator_id': revision3NpcFixtureGeneratorId,
+        'generator_version': revision3NpcFixtureGeneratorVersion,
+        'owner': npcRef,
+      },
+      'persisted_source': sourceSeal,
+      'generated': <String, Object?>{
+        'generator_id': revision3NpcFixtureGeneratorId,
+        'generator_version': revision3NpcFixtureGeneratorVersion,
+        'owner': npcRef,
+        'module_namespace': moduleNamespace,
+        'module_relative_path': '${moduleNamespace.replaceAll('.', '/')}.as',
+        'source': source,
+        'source_sha256': sourceSeal['sha256'],
+        'input_fingerprint': revision3NpcFixtureInputFingerprint(input),
+        'status': <String, Object?>{
+          'authoring': 'offline_draft',
+          'runtime': 'runtime_unqualified',
+        },
+      },
+    },
+    'diagnostics': <Object?>[
+      _inspectionDiagnostic(
+        code: 'NPC_COMPILER_NOT_RUN',
+        severity: 'warning',
+        entity: moduleRef,
+        propertyPath: 'payload.data.source',
+        message:
+            'The exact generated NPC source was not submitted to a compiler by this read-only inspection.',
+      ),
+      _inspectionDiagnostic(
+        code: 'NPC_PRODUCTION_LOWERING_UNAVAILABLE',
+        severity: 'error',
+        entity: npcRef,
+        propertyPath: 'payload.data.script_module',
+        message:
+            'Production lowering for revision-3 NPC drafts is unavailable.',
+      ),
+      _inspectionDiagnostic(
+        code: 'NPC_RUNTIME_RESIDENCE_UNQUALIFIED',
+        severity: 'error',
+        entity: npcRef,
+        propertyPath: 'payload.data.script_module',
+        message:
+            'NPC class residence, effective behavior, distinct state, and persistence are runtime-unqualified.',
+      ),
+      _inspectionDiagnostic(
+        code: 'NPC_SPAWN_UNAVAILABLE',
+        severity: 'error',
+        entity: npcRef,
+        propertyPath: 'payload.data.input',
+        message:
+            'No qualified spawn or world-placement mechanism is available for this NPC draft.',
+      ),
+    ],
+  });
+  final planSeal = _bytesSeal(planJson);
+  return AuthoringRevision3NpcSourceInspectionResult.fromJson(
+    <String, Object?>{
+      // gore-ffi builds the outer response with json!, whose serde_json map
+      // order is lexical when preserve_order is disabled.
+      'build_status': 'blocked',
+      'compiler_status': 'not_run',
+      'head_json': head.canonicalJson,
+      'npc_id': npcId,
+      'ok': true,
+      'outcome': 'inspection_only',
+      'plan_json': planJson,
+      'plan_seal': planSeal,
+      'project_id': responseProjectId,
+      'project_revision': responseRevision,
+      'project_seal': canonicalProjectSeal,
+      'publication_status': 'not_supported',
+      'runtime_qualification': 'runtime_unqualified',
+      'scope': 'source_readiness_inspection_only',
+      'source_status': 'persisted_and_regenerated_exact',
+      'spawn_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedNpcId: npcId,
+  );
+}
+
+String revision3NpcInspectionProjectJson({
+  String projectId = revision3NpcInspectionProjectId,
+  int revision = 7,
+  String name = 'NPC inspection fixture',
+}) => jsonEncode(<String, Object?>{
+  'format': 2,
+  'schema_revision': 3,
+  'project_id': projectId,
+  'revision': revision,
+  'meta': <String, Object?>{
+    'name': name,
+    'version': '1.0.0',
+    'author': 'NPC inspection tests',
+  },
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entities': <String, Object?>{},
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
+
+Map<String, Object?> _bytesSeal(String value) {
+  final bytes = utf8.encode(value);
+  return <String, Object?>{
+    'byte_len': bytes.length,
+    'sha256': crypto.sha256.convert(bytes).toString(),
+  };
+}
+
+Map<String, Object?> _inspectionDiagnostic({
+  required String code,
+  required String severity,
+  required Map<String, Object?> entity,
+  required String propertyPath,
+  required String message,
+}) => <String, Object?>{
+  'code': code,
+  'severity': severity,
+  'entity': entity,
+  'property_path': propertyPath,
+  'message': message,
+  'blocks_build': true,
+};

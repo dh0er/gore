@@ -28,6 +28,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
     this.semanticUsmapPicker,
     this.semanticExtractReceiptPicker,
     this.semanticExtractReceiptInspector,
+    this.browseInstalledPackages,
     super.key,
   });
 
@@ -45,6 +46,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final DataAssetFilePicker? semanticUsmapPicker;
   final DataAssetExtractReceiptPicker? semanticExtractReceiptPicker;
   final DataAssetExtractReceiptInspector? semanticExtractReceiptInspector;
+  final Future<void> Function()? browseInstalledPackages;
 
   @override
   State<Revision3DataAssetStagePanel> createState() =>
@@ -432,52 +434,74 @@ class _Revision3DataAssetStagePanelState
         _DataAssetBoundaryNotice(locked: _locked),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: Text(
-                  stages == null
-                      ? 'Verified DataAsset edits'
-                      : 'Verified DataAsset edits (${stages.length})',
-                  style: Theme.of(context).textTheme.titleLarge,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      stages == null
+                          ? 'Verified DataAsset edits'
+                          : 'Verified DataAsset edits (${stages.length})',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    key: const Key('revision3-dataasset-stage-refresh'),
+                    tooltip: 'Refresh exact project list',
+                    onPressed: _busy || _loading || _locked ? null : _reload,
+                    icon: const Icon(Icons.refresh),
+                  ),
+                ],
               ),
-              IconButton(
-                key: const Key('revision3-dataasset-stage-refresh'),
-                tooltip: 'Refresh exact project list',
-                onPressed: _busy || _loading || _locked ? null : _reload,
-                icon: const Icon(Icons.refresh),
-              ),
-              if (widget.publishSemanticEdit != null) ...[
-                const SizedBox(width: 8),
-                OutlinedButton.icon(
-                  key: const Key('revision3-dataasset-semantic-create'),
-                  onPressed:
-                      _busy ||
-                          _locked ||
-                          _semanticCheckpointStale ||
-                          widget.semanticExtractReceiptInspector == null ||
-                          !_registryReady
-                      ? null
-                      : _openSemanticEditor,
-                  icon: const Icon(Icons.tune_outlined),
-                  label: const Text('Create value edit...'),
-                ),
-              ],
-              const SizedBox(width: 8),
-              FilledButton.icon(
-                key: const Key('revision3-dataasset-stage-add'),
-                onPressed: _busy || _locked || !_registryReady
-                    ? null
-                    : _addVerifiedEdit,
-                icon: _picking || _mutating
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.add),
-                label: Text(
-                  _picking ? 'Choosing...' : 'Import verified proof...',
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('revision3-dataasset-browse-installed'),
+                      onPressed: _busy || _locked
+                          ? null
+                          : widget.browseInstalledPackages,
+                      icon: const Icon(Icons.travel_explore_outlined),
+                      label: const Text('Browse installed packages...'),
+                    ),
+                    if (widget.publishSemanticEdit != null)
+                      OutlinedButton.icon(
+                        key: const Key('revision3-dataasset-semantic-create'),
+                        onPressed:
+                            _busy ||
+                                _locked ||
+                                _semanticCheckpointStale ||
+                                widget.semanticExtractReceiptInspector ==
+                                    null ||
+                                !_registryReady
+                            ? null
+                            : _openSemanticEditor,
+                        icon: const Icon(Icons.tune_outlined),
+                        label: const Text('Create value edit...'),
+                      ),
+                    FilledButton.icon(
+                      key: const Key('revision3-dataasset-stage-add'),
+                      onPressed: _busy || _locked || !_registryReady
+                          ? null
+                          : _addVerifiedEdit,
+                      icon: _picking || _mutating
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.add),
+                      label: Text(
+                        _picking ? 'Choosing...' : 'Import verified proof...',
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

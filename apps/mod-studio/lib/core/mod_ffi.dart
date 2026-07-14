@@ -12,7 +12,9 @@ export '../dataasset/domain/dataasset_inspection.dart';
 export '../dataasset/domain/dataasset_semantic_edit.dart';
 
 part '../project/revision3_dataasset_stage.dart';
+part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_npc_source_inspection.dart';
 part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
 part '../project/revision3_quest_source_inspection.dart';
@@ -35,6 +37,7 @@ const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringRevision3ContentIndexJsonBytes = 32 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetResponseBytes = 64 * 1024 * 1024;
+const _maxAuthoringRevision3DataAssetPackageIndexJsonBytes = 64 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetEditRequestBytes =
     _maxDataAssetPathBytes * 8 +
     _maxAuthoringHeadJsonBytes * 2 +
@@ -742,6 +745,70 @@ class ModFfi {
         response,
         expectedHead: expectedHead,
         requestedQuestId: requestedQuestId,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Inspect the persisted source/readiness evidence for one exact-current
+  /// revision-3 NPC Draft. This is a project-only read: no game installation,
+  /// compiler, build, spawn, deployment, mutation, or publication authority is
+  /// involved.
+  Future<AuthoringRevision3NpcSourceInspectionResult>
+  authoringStoreInspectRevision3NpcSourceV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) async {
+    const command = 'authoring_store_inspect_revision3_npc_source_v1';
+    _authoringRevision3Path(root, 'root');
+    final requestedNpcId = _authoringRevision3NpcEntityId(<String, Object?>{
+      'npc_id': npcId,
+    }, 'npc_id');
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'npc_id': requestedNpcId,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3NpcSourceInspectionResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        requestedNpcId: requestedNpcId,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Read the metadata-only installed package-candidate index for the exact
+  /// current revision-3 project generation. The native command reads no export
+  /// payload and grants no extraction, mutation, build, runtime, or publication
+  /// authority.
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  authoringStoreReadRevision3DataAssetPackageIndexV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_read_revision3_dataasset_package_index_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('gameRoot', gameRoot),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'game_root': gameRoot,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+        response,
+        expectedHead: expectedHead,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,6 +17,7 @@ import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+import 'package:gore_mod/project/revision3_content_library.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
@@ -29,6 +31,7 @@ import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
@@ -412,7 +415,8 @@ void main() {
         ),
       );
       expect(inspect, findsOneWidget);
-      await tester.tap(inspect);
+      expect(tester.widget<PopupMenuItem<Object?>>(inspect).enabled, isTrue);
+      await tester.tap(find.text('Source & checks'));
       await tester.pumpAndSettle();
 
       expect(managed.questSourceInspectionCalls, 1);
@@ -429,6 +433,79 @@ void main() {
             .requiresReopen,
         isFalse,
       );
+    },
+  );
+
+  testWidgets(
+    'selected Library NPC Profile & checks reaches the exact lease without a game root',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const revision = 7;
+      final contentIndex = _npcInspectionIndex(
+        projectId: revision3NpcInspectionProjectId,
+        revision: revision,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\npc-source-inspection'),
+        projectId: revision3NpcInspectionProjectId,
+        projectRevision: revision,
+        head: _head(revision),
+        contentIndexBuilder: (_) => contentIndex,
+        onNpcSourceInspection: (lease, npcId) async {
+          expect(npcId, revision3NpcInspectionNpcId);
+          return revision3NpcInspectionResult(
+            head: lease.head,
+            projectJson: revision3NpcInspectionProjectJson(
+              projectId: lease.projectId,
+              revision: lease.projectRevision,
+            ),
+            npcId: npcId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final library = tester.widget<Revision3ContentLibrary>(
+        find.byType(Revision3ContentLibrary),
+      );
+      expect(library.inspectNpcSource, isNotNull);
+      final opening = library.inspectNpcSource!(
+        contentIndex,
+        contentIndex.entities.single,
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-npc-profile-dialog')),
+        findsOneWidget,
+      );
+      expect(managed.npcSourceInspectionCalls, 1);
+      expect(managed.npcSourceInspectionNpcIds, <String>[
+        revision3NpcInspectionNpcId,
+      ]);
+      expect(
+        find.byKey(const Key('revision3-npc-profile-result')),
+        findsOneWidget,
+      );
+      expect(find.text('Build blocked'), findsOneWidget);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await opening;
     },
   );
 
@@ -1192,6 +1269,86 @@ void main() {
   });
 
   testWidgets(
+    'DataAsset installed-package browser reaches the exact managed lease',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_dataasset_browser_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '71717171717171717171717171717171';
+      const revision = 4;
+      final head = _head(revision);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dataasset-browser'),
+        projectId: projectId,
+        projectRevision: revision,
+        head: head,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onDataAssetList: (_) => const <AuthoringRevision3DataAssetStage>[],
+        onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(lease.head.canonicalJson, head.canonicalJson);
+          return _homeDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+      );
+      await tester.pumpAndSettle();
+
+      final browse = find.byKey(
+        const Key('revision3-dataasset-browse-installed'),
+      );
+      expect(browse, findsOneWidget);
+      expect(tester.widget<OutlinedButton>(browse).onPressed, isNotNull);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+      await tester.tap(browse);
+      await tester.pumpAndSettle();
+
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(
+        find.byKey(const Key('installed-package-browser-result')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('1 installed package candidate indexed'),
+        findsOneWidget,
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
     'visible DataAsset registry adds and removes through exact managed checkpoints',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -1820,6 +1977,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestSourceInspection,
+    this.onNpcSourceInspection,
     this.onQuestOutlinePublish,
     this.onQuestTransitionsSeed,
     this.onQuestTransitionsPublish,
@@ -1833,6 +1991,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
+    this.onDataAssetPackageIndexRead,
     this.contentIndexBuilder,
   });
 
@@ -1863,6 +2022,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     String questId,
   )?
   onQuestSourceInspection;
+  final Future<AuthoringRevision3NpcSourceInspectionResult> Function(
+    _FakeManagedLease lease,
+    String npcId,
+  )?
+  onNpcSourceInspection;
   final Revision3QuestOutlineEditPublication Function(
     _FakeManagedLease lease,
     Revision3QuestOutlineEditInput input,
@@ -1939,6 +2103,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     String targetPath,
   )?
   onDataAssetRemove;
+  Future<AuthoringRevision3DataAssetPackageIndexResult> Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+  )?
+  onDataAssetPackageIndexRead;
   final Revision3ContentIndex Function(_FakeManagedLease lease)?
   contentIndexBuilder;
   bool requiresReopenValue = false;
@@ -1947,6 +2116,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questSourceInspectionCalls = 0;
+  int npcSourceInspectionCalls = 0;
+  final List<String> npcSourceInspectionNpcIds = <String>[];
   int questOutlinePublishCalls = 0;
   int questTransitionsSeedCalls = 0;
   int questTransitionsPublishCalls = 0;
@@ -1960,6 +2131,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
   int dataAssetRemoveCalls = 0;
+  int dataAssetPackageIndexReadCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -1988,6 +2160,30 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       );
     }
     return inspect(this, gameRoot, questId);
+  }
+
+  @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String npcId,
+  }) async {
+    npcSourceInspectionCalls++;
+    npcSourceInspectionNpcIds.add(npcId);
+    final inspect = onNpcSourceInspection;
+    if (inspect == null) {
+      throw StateError('fake managed lease has no NPC source inspector');
+    }
+    return inspect(this, npcId);
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({required String gameRoot}) async {
+    dataAssetPackageIndexReadCalls++;
+    final read = onDataAssetPackageIndexRead;
+    if (read == null) {
+      throw StateError('fake managed lease has no DataAsset package index');
+    }
+    return read(this, gameRoot);
   }
 
   @override
@@ -2208,6 +2404,61 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 }
 
+AuthoringRevision3DataAssetPackageIndexResult _homeDataAssetPackageIndexResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final packageIndexJson = jsonEncode(<String, Object?>{
+    'status': 'complete_index',
+    'physical_chunk_count': 1,
+    'winning_export_bundle_count': 1,
+    'directory_indexed_export_bundle_count': 1,
+    'out_of_scope_export_bundle_count': 0,
+    'candidates': <Object?>[
+      <String, Object?>{
+        'target_path': '/Game/Characters/DA_Asghan',
+        'package_id_hex': '0123456789abcdef',
+      },
+    ],
+    'partial_reasons': <Object?>[],
+  });
+  final packageIndexBytes = utf8.encode(packageIndexJson);
+  Map<String, Object?> seal(int byteLength, String sha256) => <String, Object?>{
+    'byte_len': byteLength,
+    'sha256': sha256,
+  };
+  return AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    <String, Object?>{
+      'authority_status': 'not_granted',
+      'build_status': 'not_evaluated',
+      'candidate_count': 1,
+      'content_status': 'metadata_candidates_only',
+      'export_bundle_payload_status': 'not_read',
+      'head_json': head.canonicalJson,
+      'mount_inventory_entry_count': 2,
+      'mount_inventory_seal': seal(80, 'b' * 64),
+      'mutation_status': 'not_supported',
+      'ok': true,
+      'outcome': 'audit_only',
+      'package_index_json': packageIndexJson,
+      'package_index_seal': seal(
+        packageIndexBytes.length,
+        crypto.sha256.convert(packageIndexBytes).toString(),
+      ),
+      'package_index_status': 'complete_index',
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'publication_status': 'not_supported',
+      'runtime_status': 'runtime_unqualified',
+      'scope': 'installed_dataasset_package_candidates_only',
+      'source_snapshot_seal': seal(120, 'c' * 64),
+      'target_executable_seal': seal(1, '5' * 64),
+    },
+    expectedHead: head,
+  );
+}
+
 AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
   jsonEncode(<String, Object?>{
     'store_format': 1,
@@ -2237,6 +2488,54 @@ Revision3ContentIndex _contentIndex({
   'authoring_locales': <Object?>[],
   'entity_counts': <String, Object?>{},
   'entities': <Object?>[],
+  'assets': <Object?>[],
+});
+
+Revision3ContentIndex _npcInspectionIndex({
+  required String projectId,
+  required int revision,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': revision,
+  'project_name': 'Home NPC project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{'npc_draft': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': revision3NpcInspectionNpcId,
+      'kind': 'npc_draft',
+      'display_name': 'Inspection Guard',
+      'revision': 2,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': revision3NpcInspectionUniqueName,
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': revision3NpcInspectionUniqueName,
+          'module_namespace': revision3NpcInspectionModuleNamespace,
+          'parent_character_definition':
+              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+          'parent_spawn_definition':
+              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
   'assets': <Object?>[],
 });
 

@@ -257,6 +257,7 @@ void main() {
       ),
       <String>[
         'authoring_store_build_revision3_voice_v1',
+        'authoring_store_inspect_revision3_npc_source_v1',
         'authoring_store_inspect_revision3_quest_source_v1',
         'authoring_store_list_revision3_dataasset_stages_v1',
         'authoring_store_open_revision3',
@@ -274,6 +275,7 @@ void main() {
         'authoring_store_prepare_revision3_voice_take_v1',
         'authoring_store_prepare_revision3_voice_target_v1',
         'authoring_store_read_revision3_content_index_v1',
+        'authoring_store_read_revision3_dataasset_package_index_v1',
       ],
     );
     expect(

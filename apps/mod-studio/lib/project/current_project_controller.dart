@@ -109,6 +109,26 @@ final class Revision3QuestSourceInspectionStaleCheckpointException
   const Revision3QuestSourceInspectionStaleCheckpointException();
 }
 
+final class Revision3NpcSourceInspectionRequiresReopenException
+    implements Exception {
+  const Revision3NpcSourceInspectionRequiresReopenException();
+}
+
+final class Revision3NpcSourceInspectionStaleCheckpointException
+    implements Exception {
+  const Revision3NpcSourceInspectionStaleCheckpointException();
+}
+
+final class Revision3DataAssetPackageIndexRequiresReopenException
+    implements Exception {
+  const Revision3DataAssetPackageIndexRequiresReopenException();
+}
+
+final class Revision3DataAssetPackageIndexStaleCheckpointException
+    implements Exception {
+  const Revision3DataAssetPackageIndexStaleCheckpointException();
+}
+
 /// Diagnostic evidence that one terminal lease close failed.
 ///
 /// The coordinator deliberately retains no reference to the lease itself and
@@ -151,6 +171,11 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required String questId,
   });
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String npcId,
+  });
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({required String gameRoot});
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
@@ -314,6 +339,16 @@ final class _ManagedRevision3SessionLease
     required String gameRoot,
     required String questId,
   }) => _session.inspectQuestSourceV1(gameRoot: gameRoot, questId: questId);
+
+  @override
+  Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
+    required String npcId,
+  }) => _session.inspectNpcSourceV1(npcId: npcId);
+
+  @override
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readDataAssetPackageIndexV1({required String gameRoot}) =>
+      _session.readDataAssetPackageIndexV1(gameRoot: gameRoot);
 
   @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
@@ -920,6 +955,113 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3QuestSourceInspectionRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Inspect persisted NPC source/readiness evidence in the exact visible
+  /// managed revision-3 checkpoint. This project-only read requires no game
+  /// installation and grants no compile/build/runtime/spawn authority.
+  Future<AuthoringRevision3NpcSourceInspectionResult>
+  inspectCurrentRevision3NpcSource({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'NPC source inspection is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3NpcSourceInspectionRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3NpcSourceInspectionStaleCheckpointException();
+    }
+    try {
+      final inspection = await lease.inspectNpcSourceV1(npcId: npcId);
+      if (inspection.head.canonicalJson != expectedHead.canonicalJson ||
+          inspection.projectId != expectedProjectId ||
+          inspection.projectRevision != expectedProjectRevision ||
+          inspection.npcId != npcId) {
+        throw const Revision3NpcSourceInspectionStaleCheckpointException();
+      }
+      return inspection;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3NpcSourceInspectionRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read path-only installed DataAsset package candidates for the exact
+  /// visible managed revision-3 checkpoint and its project-pinned executable
+  /// generation. The result is metadata-only and grants no extraction, edit,
+  /// build, runtime, deployment, or publication authority.
+  Future<AuthoringRevision3DataAssetPackageIndexResult>
+  readCurrentRevision3DataAssetPackageIndex({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'DataAsset package browsing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetPackageIndexRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for DataAsset package browsing',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetPackageIndexStaleCheckpointException();
+    }
+    try {
+      final result = await lease.readDataAssetPackageIndexV1(
+        gameRoot: gameRoot,
+      );
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectRevision != expectedProjectRevision) {
+        throw const Revision3DataAssetPackageIndexStaleCheckpointException();
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetPackageIndexRequiresReopenException(),
           stackTrace,
         );
       }
