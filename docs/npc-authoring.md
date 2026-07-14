@@ -145,3 +145,44 @@ Executable and Binds guards plus the pristine Shipping selection are
 revalidated around catalog serialization and bounded response construction.
 Errors never include native paths. The command performs no filesystem writes,
 game launch, build, deploy, publication, or runtime qualification.
+
+## Native revision-3 Draft transaction
+
+The revision-3 core now has a filesystem-free atomic transaction for one NPC
+Draft plus its owned deterministic `ScriptModule`. The closed request binds the
+exact working head, project ID, revision, game-generation target, distinct
+entity IDs, display name, module namespace, unique runtime name, and one native
+archetype catalog ID. Parent class provenance is not accepted from serialized
+caller input.
+
+Instead, the transaction consumes two fresh native contexts: a Story/NPC
+catalog selection sealed to the exact generation, and a base-game plus
+exact-current-project collision inventory. The collision domains cover module
+namespaces, relative source paths, generated symbols, and case-insensitive
+runtime IDs projected by the pinned Story catalog. Existing revision-3 NPC and
+Quest/module pairs are regenerated and checked as a complete closure; valid
+existing Quests remain unchanged, while residual modules, orphan ownership,
+source drift, entity/runtime/symbol/path collisions, or a mismatched
+head/project/revision/target fail before a candidate is returned. The runtime-ID
+claim is deliberately limited to the catalog's curated projection, not unknown
+game NPCs outside it.
+
+The native FFI command `authoring_store_prepare_revision3_npc_draft_v1`
+reopens the exact published project, rebuilds the Story and NPC catalogs and
+current-project collision source, consumes those contexts in the transaction,
+prepares one immutable candidate checkpoint, and fully reopens it. It
+revalidates the game inputs and fixed head around preparation and never replaces
+the fixed head or writes into the game. Its only status claims are:
+
+- `build_status: blocked`;
+- `runtime_status: runtime_unqualified`;
+- `catalog_authority: not_granted`;
+- `collision_authority: not_granted`;
+- `source_inspection: fresh_native_context_required`;
+- `publication_status: not_supported`.
+
+This lands the native prepare-only revision-3 boundary, not managed-session or
+Studio publication, a semantic NPC editor, generated production build output,
+spawn support, or runtime qualification. The retained live FFI test remains
+environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI fixtures do
+not substitute for that pinned-game proof.

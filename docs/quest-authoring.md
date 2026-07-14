@@ -208,9 +208,23 @@ DTO/wrapper and managed-session semantic Quest operation now validate the exact
 basis, complete Quest/ScriptModule/artifact candidate closure, status contract,
 and every signed-wire number before publishing by exact fixed-head byte CAS.
 They fully reopen the published checkpoint and poison the session if publication
-becomes uncertain. The catalog/wizard/editor UI is still required; this native
-and session path does not make Quest authoring visible in Mod Studio or qualified
-in game.
+becomes uncertain.
+
+The managed revision-3 Home surface now exposes the first bounded friendly
+Quest wizard over this operation. It accepts a name, description, first
+objective, Quest family, and giver; users never enter entity IDs, namespaces,
+symbols, or paths. Family/giver choices come from a freshly rebuilt Story
+catalog when the dialog opens and are refreshed again immediately before the
+native transaction. Technical identities are derived deterministically from
+the exact managed checkpoint, and the coordinator rejects an advanced project
+as a stale wizard that must be closed and reopened. A successful publication
+refreshes the visible project revision and exact-current content library.
+
+This is a one-shell Draft workflow, not the semantic Quest catalog, outline,
+state graph, conditions/effects editor, journal/reward workflow, compiler, or
+runtime qualification. The first generator's plain-text subset is validated in
+the form, and the UI continues to show `blocked` and `runtime_unqualified`
+without compile, deploy, game-install, or save-file claims.
 
 ### Managed revision-3 Studio transaction boundary
 

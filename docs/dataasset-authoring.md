@@ -212,9 +212,22 @@ file types, validate the complete live generation and manifest closure, reject
 all project/manifest numbers outside the signed Studio wire, and never return a
 local path, receipt text, raw offset, or authority-bearing handle.
 
-The FFI boundary still adds no CLI or visible Mod Studio stage action and grants
-no build, pack, deploy, runtime, or future reinspection authority. Strict Dart/
-session publication, semantic preview/diff/undo, build lowering, and post-pack
+Strict Dart DTOs now mirror the closed prepare/list/remove results without
+exposing the PatchReceipt input path, receipt bytes, raw offsets, or a native
+publication handle. They validate the real native struct-order manifest seal
+even though embedded `serde_json::Value` objects arrive with sorted map keys,
+reconstruct the exact nested working-head order, reject non-signed-wire numbers
+and expanded status claims, and close candidate/AssetStore bindings.
+
+`ManagedRevision3AuthoringProjectSession` publishes prepare and remove
+candidates through the same serialized full-reopen, crash-repair, exact
+fixed-head byte-CAS, and post-publication reopen lane used by other revision-3
+mutations. Listing is an exact-head serialized read. Head drift never clobbers
+the winner; malformed or integrity-uncertain results poison the session, while
+bounded local-input/response-limit failures remain retryable after the disk
+head is rechecked. The FFI/session boundary still adds no visible Mod Studio
+stage action and grants no build, pack, deploy, runtime, or future reinspection
+authority. Semantic preview/diff/undo, build lowering, and post-pack
 verification are separate work.
 
 ## 6. Pack the patched pair without deploying it
