@@ -4,6 +4,8 @@
 //!   gore-cli catalog --kind item    <dump.txt> -o item_catalog.json
 //!   gore-cli catalog --kind npc     <dump.txt> -o npc_catalog.json
 //!   gore-cli catalog --kind knowledge <dump.txt> -o knowledge_catalog.json
+//!   gore-cli catalog --kind knowledge <dump.txt> --script-cache <Shipping.Cache> \
+//!     -o knowledge_catalog.json
 //!
 //! Output is byte-identical to the Python pipeline scripts.
 
@@ -19,7 +21,12 @@ pub enum CatalogKind {
     Knowledge,
 }
 
-pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
+pub fn run(
+    kind: CatalogKind,
+    dump: PathBuf,
+    script_cache: Option<PathBuf>,
+    out: PathBuf,
+) -> Result<()> {
     // UE4SS object dumps can contain non-UTF-8 bytes in unrelated object names;
     // decode lossily (like the original Python builders) so one bad byte doesn't
     // abort catalog generation. The `ASClass` lines we scan are ASCII.
@@ -55,7 +62,33 @@ pub fn run(kind: CatalogKind, dump: PathBuf, out: PathBuf) -> Result<()> {
             j
         }
         CatalogKind::Knowledge => {
-            let entries = pipeline::build_knowledge_catalog(&lines);
+            let mut entries = pipeline::build_knowledge_catalog(&lines);
+            if let Some(cache_path) = script_cache.as_ref() {
+                let cache = fs::read(cache_path)
+                    .with_context(|| format!("reading script cache '{}'", cache_path.display()))?;
+                let metadata =
+                    gore_as::cache::knowledge_metadata::extract_knowledge_metadata(&cache)
+                        .with_context(|| {
+                            format!(
+                                "extracting knowledge captions from '{}'",
+                                cache_path.display()
+                            )
+                        })?;
+                let metadata_count = metadata.len();
+                pipeline::enrich_knowledge_catalog(
+                    &mut entries,
+                    metadata
+                        .into_iter()
+                        .map(|entry| (entry.id, entry.caption, entry.loc_key, entry.module)),
+                );
+                let enriched_count = entries
+                    .iter()
+                    .filter(|entry| entry.loc_key.is_some() || entry.caption.is_some())
+                    .count();
+                eprintln!(
+                    "matched {enriched_count} of {metadata_count} cache-derived knowledge captions"
+                );
+            }
             let count = entries.len();
             let j = pipeline::to_catalog_json(&entries).context("serialising knowledge catalog")?;
             eprintln!("wrote {count} knowledge tokens to {}", out.display());

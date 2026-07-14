@@ -125,22 +125,22 @@ void main() {
     });
 
     final add = KnowledgeEntryEdit.add(
-      setPath: const ['CharacterKnowledgeByUniqueName', '{Diego}', 'Knowledge'],
+      character: 'Diego',
       entry: 'Voiceline_X',
     );
     expect(add.toEditJson(), {
-      'path': 'private.typed.setAdd',
-      'value': {
-        'path': ['CharacterKnowledgeByUniqueName', '{Diego}', 'Knowledge'],
-        'value': 'Voiceline_X',
-      },
+      'path': 'private.knowledge.setEntry',
+      'value': {'character': 'Diego', 'entry': 'Voiceline_X', 'present': true},
     });
 
     final remove = KnowledgeEntryEdit.remove(
-      setPath: const ['CharacterKnowledgeByUniqueName', '{Diego}', 'Knowledge'],
+      character: 'Diego',
       entry: 'Voiceline_X',
     );
-    expect(remove.toEditJson()['path'], 'private.typed.setRemove');
+    expect(remove.toEditJson(), {
+      'path': 'private.knowledge.setEntry',
+      'value': {'character': 'Diego', 'entry': 'Voiceline_X', 'present': false},
+    });
 
     final removeEvent = MemoryEventEdit.remove(
       arrayPath: const [
@@ -167,6 +167,10 @@ void main() {
       index: 4,
     );
     expect(duplicate.toEditJson()['path'], 'private.typed.arrayDuplicate');
+    expect(
+      MemoryEventEdit.fromEditJson(duplicate.toEditJson())?.isRemove,
+      isFalse,
+    );
   });
 
   test('knowledge and event pages parse', () {

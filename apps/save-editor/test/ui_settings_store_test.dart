@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:goresave/features/app/domain/ui_settings.dart';
 
@@ -14,6 +15,7 @@ void main() {
       const UiSettings(
         windowSize: Size(1720, 980),
         windowMaximized: true,
+        showObjectIds: true,
       ),
     );
 
@@ -21,6 +23,7 @@ void main() {
 
     expect(reloaded.windowSize, const Size(1720, 980));
     expect(reloaded.windowMaximized, isTrue);
+    expect(reloaded.showObjectIds, isTrue);
   });
 
   test('window size defaults to null and maximized to false', () {
@@ -28,6 +31,7 @@ void main() {
 
     expect(settings.windowSize, isNull);
     expect(settings.windowMaximized, isFalse);
+    expect(settings.showObjectIds, isFalse);
   });
 
   test('rejects invalid persisted window sizes', () {
@@ -57,4 +61,29 @@ void main() {
     expect(updated.windowSize, const Size(1600, 900));
     expect(updated.windowMaximized, isTrue);
   });
+
+  test('showObjectIds provider persists changes through the UI store', () {
+    final store = _MemoryUiSettingsStore();
+    final container = ProviderContainer(
+      overrides: [uiSettingsStoreProvider.overrideWithValue(store)],
+    );
+    addTearDown(container.dispose);
+
+    expect(container.read(showObjectIdsProvider), isFalse);
+
+    container.read(showObjectIdsProvider.notifier).set(true);
+
+    expect(container.read(showObjectIdsProvider), isTrue);
+    expect(store.settings.showObjectIds, isTrue);
+  });
+}
+
+class _MemoryUiSettingsStore implements UiSettingsStore {
+  UiSettings settings = const UiSettings();
+
+  @override
+  UiSettings read() => settings;
+
+  @override
+  void write(UiSettings settings) => this.settings = settings;
 }

@@ -7,45 +7,68 @@ import 'package:goresave/loc/game_lang.dart';
 import 'support/l10n_test_app.dart';
 
 void main() {
-  testWidgets('NPC header shows the resolved name + the FULL GlobalId', (
-    tester,
-  ) async {
-    const longId = 'Herek-WP_OM_TUNNEL_ME_01';
-    final catalog = <String, Map<String, String>>{
-      'herek': {'english': 'Herek'},
-    };
-
+  testWidgets('NPC header hides the GlobalId by default', (tester) async {
+    const id = 'Herek-WP_OM_TUNNEL_ME_01';
     await tester.pumpWidget(
       wrapWithL10n(
         Scaffold(
-          body: SizedBox(
-            width: 600,
-            child: ActorDetailHeader(
-              actor: const Actor.npc(
-                id: longId,
-                name: 'Herek',
-                uniqueName: 'Herek',
-              ),
-              locCatalog: catalog,
-              lang: kGameLangs.first,
-            ),
+          body: ActorDetailHeader(
+            actor: const Actor.npc(id: id, name: 'Herek', uniqueName: 'Herek'),
+            locCatalog: const {
+              'herek': {'english': 'Herek'},
+            },
+            lang: kGameLangs.first,
           ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    // Resolved (loc catalog) display name shown prominently.
     expect(find.text('Herek'), findsOneWidget);
-    // The FULL GlobalId is present in the tree as SELECTABLE text. A
-    // SelectableText with no maxLines cap wraps rather than ellipsizing, so the
-    // whole id is always readable.
-    final idFinder = find.widgetWithText(SelectableText, longId);
-    expect(idFinder, findsOneWidget);
-    final id = tester.widget<SelectableText>(idFinder);
-    expect(id.data, longId);
-    expect(id.maxLines, isNull);
+    expect(find.text(id), findsNothing);
   });
+
+  testWidgets(
+    'NPC header shows the resolved name + the FULL GlobalId when enabled',
+    (tester) async {
+      const longId = 'Herek-WP_OM_TUNNEL_ME_01';
+      final catalog = <String, Map<String, String>>{
+        'herek': {'english': 'Herek'},
+      };
+
+      await tester.pumpWidget(
+        wrapWithL10n(
+          Scaffold(
+            body: SizedBox(
+              width: 600,
+              child: ActorDetailHeader(
+                actor: const Actor.npc(
+                  id: longId,
+                  name: 'Herek',
+                  uniqueName: 'Herek',
+                ),
+                locCatalog: catalog,
+                lang: kGameLangs.first,
+                showObjectIds: true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Resolved (loc catalog) display name shown prominently.
+      expect(find.text('Herek'), findsOneWidget);
+      // The FULL GlobalId is present in the tree as SELECTABLE text. A
+      // SelectableText with no maxLines cap wraps rather than ellipsizing, so the
+      // whole id is always readable.
+      final idFinder = find.widgetWithText(SelectableText, longId);
+      expect(idFinder, findsOneWidget);
+      final id = tester.widget<SelectableText>(idFinder);
+      expect(id.data, longId);
+      expect(id.maxLines, isNull);
+    },
+  );
 
   testWidgets('NPC header resolves a prettified name when catalog misses', (
     tester,
@@ -64,6 +87,7 @@ void main() {
               ),
               locCatalog: const {},
               lang: kGameLangs.first,
+              showObjectIds: true,
             ),
           ),
         ),
@@ -98,5 +122,30 @@ void main() {
     expect(find.text('Player'), findsOneWidget);
     // The player has no GlobalId → no SelectableText id field.
     expect(find.byType(SelectableText), findsNothing);
+  });
+
+  testWidgets('orphan shows its real knowledge key, never the sentinel', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      wrapWithL10n(
+        Scaffold(
+          body: ActorDetailHeader(
+            actor: const Actor.npc(
+              id: 'orphan:ST_VLK_Mud_Sleeper',
+              name: 'Mud',
+              uniqueName: 'ST_VLK_Mud_Sleeper',
+            ),
+            locCatalog: const {},
+            lang: kGameLangs.first,
+            showObjectIds: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('ST_VLK_Mud_Sleeper'), findsOneWidget);
+    expect(find.text('orphan:ST_VLK_Mud_Sleeper'), findsNothing);
   });
 }

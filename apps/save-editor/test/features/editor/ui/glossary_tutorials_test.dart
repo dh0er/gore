@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/character_index.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
@@ -74,6 +75,14 @@ void main() {
       expect(find.text('Tut_CombatBasics'), findsNothing);
 
       const firstId = 'Quest_Tutorials_Tut_CombatBasics';
+      expect(find.text(firstId), findsNothing);
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(GlossaryDetail)),
+      );
+      container.read(showObjectIdsProvider.notifier).set(true);
+      await tester.pump();
+      expect(find.text(firstId), findsOneWidget);
+
       await tester.tap(find.byKey(const Key('tutorial-state-$firstId')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Failed').last);

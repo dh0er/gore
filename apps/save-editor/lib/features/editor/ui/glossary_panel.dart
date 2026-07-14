@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -568,6 +569,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
         documents: hidden,
         catalog: catalog,
         lang: lang,
+        showObjectIds: ref.read(showObjectIdsProvider),
       ),
     );
     if (selected == null || !mounted) return;
@@ -582,6 +584,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     final scheme = widget.theme.colorScheme;
     final filtered = _filteredDocuments(locCatalog, lang);
     final selected = _documents.cast<_GlossaryDocument?>().firstWhere(
@@ -617,7 +620,11 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                     : LayoutBuilder(
                         builder: (context, constraints) {
                           if (_section == _GlossarySection.tutorials) {
-                            return _buildTutorialLayout(l10n, constraints);
+                            return _buildTutorialLayout(
+                              l10n,
+                              constraints,
+                              showObjectIds,
+                            );
                           }
                           const categoryWidth = 220.0;
                           const documentWidth = 300.0;
@@ -635,6 +642,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                             locCatalog,
                             lang,
                             filtered,
+                            showObjectIds,
                           );
                           final detail = selected == null
                               ? _GlossaryEmptyDetail(
@@ -645,6 +653,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                                   locCatalog,
                                   lang,
                                   selected,
+                                  showObjectIds,
                                 );
                           if (narrow) {
                             if (selected != null) {
@@ -800,8 +809,9 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
   Widget _buildTutorialLayout(
     AppLocalizations l10n,
     BoxConstraints constraints,
+    bool showObjectIds,
   ) {
-    final list = _buildTutorialGateList(l10n);
+    final list = _buildTutorialGateList(l10n, showObjectIds);
     if (constraints.maxWidth < 640) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -842,7 +852,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     return tutorials;
   }
 
-  Widget _buildTutorialGateList(AppLocalizations l10n) {
+  Widget _buildTutorialGateList(AppLocalizations l10n, bool showObjectIds) {
     final tutorials = _filteredTutorials(l10n);
     return Column(
       key: const Key('glossary-tutorial-gates'),
@@ -930,7 +940,28 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                             : Icons.visibility_off_outlined,
                       ),
                       title: Text(_tutorialGateTitle(l10n, tutorial)),
-                      subtitle: pending ? Text(l10n.glossaryPending) : null,
+                      subtitle: !showObjectIds && !pending
+                          ? null
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (showObjectIds)
+                                  SelectableText(
+                                    tutorial.id,
+                                    maxLines: 1,
+                                    style: widget.theme.textTheme.bodySmall
+                                        ?.copyWith(
+                                          color: widget
+                                              .theme
+                                              .colorScheme
+                                              .onSurfaceVariant,
+                                          fontFamily: 'Consolas',
+                                        ),
+                                  ),
+                                if (pending) Text(l10n.glossaryPending),
+                              ],
+                            ),
                       trailing:
                           widget.editable && tutorial.writable && knownState
                           ? DropdownButton<String>(
@@ -993,6 +1024,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     List<_GlossaryDocument> filtered,
+    bool showObjectIds,
   ) {
     final isNpcSection = _section.index <= _GlossarySection.outsiders.index;
     final addableHiddenCount = _addableHiddenDocuments().length;
@@ -1129,11 +1161,27 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      subtitle: Text(
-                        l10n.glossarySegmentsCount(
-                          unlockedCount,
-                          document.segments.length,
-                        ),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            l10n.glossarySegmentsCount(
+                              unlockedCount,
+                              document.segments.length,
+                            ),
+                          ),
+                          if (showObjectIds && document.technicalNpcId != null)
+                            Text(
+                              document.technicalNpcId!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontFamily: 'Consolas',
+                                fontSize: 11,
+                              ),
+                            ),
+                        ],
                       ),
                       trailing: _documentHasPendingEdit(document)
                           ? Icon(
@@ -1229,6 +1277,7 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
     Map<String, Map<String, String>> catalog,
     GameLang lang,
     _GlossaryDocument document,
+    bool showObjectIds,
   ) {
     final name = document.displayName(catalog, lang);
     final portraitUnlocked =
@@ -1264,6 +1313,15 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(name, style: widget.theme.textTheme.titleLarge),
+                  if (showObjectIds && document.technicalNpcId != null)
+                    SelectableText(
+                      document.technicalNpcId!,
+                      maxLines: 1,
+                      style: widget.theme.textTheme.bodySmall?.copyWith(
+                        color: widget.theme.colorScheme.onSurfaceVariant,
+                        fontFamily: 'Consolas',
+                      ),
+                    ),
                   const SizedBox(height: 2),
                   Text(
                     document.isNpc
@@ -1462,6 +1520,16 @@ class _GlossaryDocument {
   final String? npcGlobalId;
   final NpcRelationship? relationship;
 
+  /// Best available technical NPC identifier for optional advanced display.
+  /// Prefer the actual spawned GlobalId, then the dialog key/catalog id.
+  String? get technicalNpcId {
+    if (!isNpc) return null;
+    for (final candidate in [npcGlobalId, uniqueName, npcCatalogId]) {
+      if (candidate?.trim().isNotEmpty == true) return candidate;
+    }
+    return null;
+  }
+
   _GlossarySegment? get primarySegment {
     if (isNpc) {
       // Prefer the canonical first-meeting segment when a document also has
@@ -1534,11 +1602,13 @@ class _AddGlossaryEntryDialog extends StatefulWidget {
     required this.documents,
     required this.catalog,
     required this.lang,
+    required this.showObjectIds,
   });
 
   final List<_GlossaryDocument> documents;
   final Map<String, Map<String, String>> catalog;
   final GameLang lang;
+  final bool showObjectIds;
 
   @override
   State<_AddGlossaryEntryDialog> createState() =>
@@ -1606,7 +1676,24 @@ class _AddGlossaryEntryDialogState extends State<_AddGlossaryEntryDialog> {
                           title: Text(
                             document.displayName(widget.catalog, widget.lang),
                           ),
-                          subtitle: Text(_sectionLabel(l10n, document.section)),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_sectionLabel(l10n, document.section)),
+                              if (widget.showObjectIds &&
+                                  document.technicalNpcId != null)
+                                Text(
+                                  document.technicalNpcId!,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontFamily: 'Consolas',
+                                    fontSize: 11,
+                                  ),
+                                ),
+                            ],
+                          ),
                           enabled: enabled,
                           onTap: enabled
                               ? () => Navigator.of(context).pop(document)

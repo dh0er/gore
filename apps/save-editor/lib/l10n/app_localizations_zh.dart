@@ -15,6 +15,13 @@ class AppLocalizationsZh extends AppLocalizations {
   String get debugSectionSubtitle => '用于错误报告的诊断和原始数据';
 
   @override
+  String get showObjectIdsTitle => 'Show object IDs';
+
+  @override
+  String get showObjectIdsSubtitle =>
+      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -306,6 +313,30 @@ class AppLocalizationsZh extends AppLocalizations {
   String get switchProfile => '切换存档配置';
 
   @override
+  String get openSaveFile => 'Open file';
+
+  @override
+  String get externalSave => 'Externally opened save';
+
+  @override
+  String get saveProfileTitle => 'Save profile';
+
+  @override
+  String get saveProfileDescription =>
+      'Assign this save to a different game profile. The save and profile index are backed up together.';
+
+  @override
+  String get saveProfileExternalHint =>
+      'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.';
+
+  @override
+  String get saveProfileNoProfiles =>
+      'No editable game profiles were found in PersistentDataList.sav.';
+
+  @override
+  String get saveProfileSelect => 'Select profile';
+
+  @override
   String get rescanSaveFolder => '重新扫描存档文件夹';
 
   @override
@@ -436,6 +467,12 @@ class AppLocalizationsZh extends AppLocalizations {
   String attributeCurrent(String name) {
     return '$name 当前值';
   }
+
+  @override
+  String get attributeBaseValue => 'Base value';
+
+  @override
+  String get attributeCurrentValue => 'Current value';
 
   @override
   String get inventoryTitle => '物品栏';
@@ -803,6 +840,10 @@ class AppLocalizationsZh extends AppLocalizations {
   String get removeMemoryEventBody => '移除此记忆事件？将先写入一份备份。';
 
   @override
+  String get memoryEventRemovalQueued =>
+      'Event removal queued — press Save to apply it.';
+
+  @override
   String get duplicateEvent => '复制事件';
 
   @override
@@ -810,6 +851,10 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get duplicateMemoryEventBody => '复制此记忆事件？将先写入一份备份。';
+
+  @override
+  String get memoryEventDuplicationQueued =>
+      'Event duplication queued — press Save to apply it.';
 
   @override
   String get selectCharacterFromList => '从列表中选择一个角色';

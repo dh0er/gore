@@ -169,10 +169,11 @@ void main() {
         ),
       ],
       localizedLabel: (_) => null,
+      rawFallbackLabel: (quest) => 'Readable ${quest.name}',
       allowRawFallback: true,
     );
 
-    expect(journal.roots.oldCamp.single.label, 'MAIN');
+    expect(journal.roots.oldCamp.single.label, 'Readable MAIN');
     expect(journal.roots.oldCamp.single.children, isEmpty);
   });
 }

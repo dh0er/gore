@@ -1,6 +1,8 @@
 {
   "debugSectionTitle": "Advanced (debug)",
   "debugSectionSubtitle": "Diagnostics & raw data for bug reports",
+  "showObjectIdsTitle": "Show object IDs",
+  "showObjectIdsSubtitle": "Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.",
   "@@locale": "en",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",
@@ -121,6 +123,13 @@
     }
   },
   "switchProfile": "Switch profile",
+  "openSaveFile": "Open file",
+  "externalSave": "Externally opened save",
+  "saveProfileTitle": "Save profile",
+  "saveProfileDescription": "Assign this save to a different game profile. The save and profile index are backed up together.",
+  "saveProfileExternalHint": "Select a profile to import this file into the game's save folder and register it there. The original file remains unchanged.",
+  "saveProfileNoProfiles": "No editable game profiles were found in PersistentDataList.sav.",
+  "saveProfileSelect": "Select profile",
   "rescanSaveFolder": "Rescan save folder",
   "discardUnsavedChangesTitle": "Discard unsaved changes?",
   "rescanDiscardBody": "Rescanning reloads every save and discards your {count} unsaved {count, plural, =1{change} other{changes}}.",
@@ -206,6 +215,14 @@
         "type": "String"
       }
     }
+  },
+  "attributeBaseValue": "Base value",
+  "@attributeBaseValue": {
+    "description": "Generic label for an attribute's base-value input; the attribute name is shown beside the field."
+  },
+  "attributeCurrentValue": "Current value",
+  "@attributeCurrentValue": {
+    "description": "Generic label for an attribute's current-value input; the attribute name is shown beside the field."
   },
   "inventoryTitle": "Inventory",
   "inventoryEmpty": "This inventory is empty.",
@@ -460,10 +477,12 @@
   },
   "removeEvent": "Remove event",
   "removeMemoryEventTitle": "Remove memory event?",
-  "removeMemoryEventBody": "Remove this memory event? A backup is written first.",
+  "removeMemoryEventBody": "Queue this memory event for removal? The save file is changed only when you press Save.",
+  "memoryEventRemovalQueued": "Event removal queued — press Save to apply it.",
   "duplicateEvent": "Duplicate event",
   "duplicateMemoryEventTitle": "Duplicate memory event?",
-  "duplicateMemoryEventBody": "Duplicate this memory event? A backup is written first.",
+  "duplicateMemoryEventBody": "Queue a duplicate of this memory event? The save file is changed only when you press Save.",
+  "memoryEventDuplicationQueued": "Event duplication queued — press Save to apply it.",
   "selectCharacterFromList": "Select a character from the list",
   "factionsSidebar": "Factions",
   "factionsForgiveButton": "Forgive",

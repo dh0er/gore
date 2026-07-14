@@ -117,6 +117,7 @@ class CharacterMasterList extends StatefulWidget {
     required this.reloadKey,
     required this.locCatalog,
     required this.lang,
+    this.showObjectIds = false,
   });
 
   /// The currently selected actor (player, NPC, or orphan). Owned by the parent
@@ -145,6 +146,10 @@ class CharacterMasterList extends StatefulWidget {
 
   /// The current game language, driving which loc set the name resolves from.
   final GameLang lang;
+
+  /// Whether raw GlobalIds / orphan knowledge keys are rendered as row
+  /// subtitles. Search continues to match identifiers while they are hidden.
+  final bool showObjectIds;
 
   @override
   State<CharacterMasterList> createState() => _CharacterMasterListState();
@@ -320,11 +325,12 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         // the "search NPCs" field rather than under it).
         ListTile(
           dense: true,
-          // The player has no id/subtitle, so it would render shorter than the
-          // two-line NPC rows. Extra vertical content padding matches their
-          // height while keeping the (centered) label aligned at the same left
-          // edge — no placeholder subtitle that would shove the label upward.
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          // Match the two-line NPC height only when optional ids are visible.
+          // Default one-line mode keeps every row equally compact.
+          contentPadding: EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: widget.showObjectIds ? 8 : 0,
+          ),
           leading: const Icon(Icons.person_outline),
           title: Text(
             l10n.tabPlayer,
@@ -448,12 +454,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
         color: row.isDead ? scheme.error : null,
       ),
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text(
-        row.globalId ?? '',
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: const TextStyle(fontSize: 11),
-      ),
+      subtitle: widget.showObjectIds
+          ? Text(
+              row.globalId ?? '',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11),
+            )
+          : null,
       trailing: _aspectBadges(row, scheme, l10n),
       selected: isSelected,
       selectedTileColor: scheme.primaryContainer,
@@ -486,6 +494,14 @@ class _CharacterMasterListState extends State<CharacterMasterList> {
       dense: true,
       leading: const Icon(Icons.help_outline),
       title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: widget.showObjectIds
+          ? Text(
+              row.uniqueName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11),
+            )
+          : null,
       trailing: row.hasKnowledge
           ? Tooltip(
               message: l10n.dialogKnowledge,

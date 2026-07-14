@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
@@ -38,7 +39,10 @@ class AddInventoryItemDialog extends ConsumerStatefulWidget {
       _AddInventoryItemDialogState();
 }
 
-typedef _CatalogGroup = ({ItemCategory category, List<ItemCatalogEntry> entries});
+typedef _CatalogGroup = ({
+  ItemCategory category,
+  List<ItemCatalogEntry> entries,
+});
 
 class _AddInventoryItemDialogState
     extends ConsumerState<AddInventoryItemDialog> {
@@ -50,8 +54,9 @@ class _AddInventoryItemDialogState
   ItemCategory? _selectedCategory;
   ItemCatalogEntry? _selected;
   final TextEditingController _searchController = TextEditingController();
-  final TextEditingController _countController =
-      TextEditingController(text: '1');
+  final TextEditingController _countController = TextEditingController(
+    text: '1',
+  );
   String? _countError;
   // Created once: a fresh future per build would reset the FutureBuilder
   // (spinner flash) on every setState.
@@ -100,7 +105,9 @@ class _AddInventoryItemDialogState
     if (entry == null) return;
     final parsed = int.tryParse(_countController.text.trim());
     if (parsed == null || parsed < 1 || parsed > _maxCount) return;
-    Navigator.of(context).pop(InventoryItemAdd(path: entry.path, count: parsed));
+    Navigator.of(
+      context,
+    ).pop(InventoryItemAdd(path: entry.path, count: parsed));
   }
 
   List<_CatalogGroup> _group(List<ItemCatalogEntry> entries) {
@@ -110,7 +117,8 @@ class _AddInventoryItemDialogState
     }
     return [
       for (final cat in ItemCategory.values)
-        if (byCategory.containsKey(cat)) (category: cat, entries: byCategory[cat]!),
+        if (byCategory.containsKey(cat))
+          (category: cat, entries: byCategory[cat]!),
     ];
   }
 
@@ -119,8 +127,8 @@ class _AddInventoryItemDialogState
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final locCatalog =
-        ref.watch(locCatalogProvider).value ?? const {};
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     return AlertDialog(
       title: Text(l10n.addItemDialogTitle),
       contentPadding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
@@ -139,17 +147,20 @@ class _AddInventoryItemDialogState
               );
             }
             final catalog = snapshot.data!;
-            final available = catalog.entries
-                .where((e) => !widget.excludePaths.contains(e.path))
-                .toList()
-              // Order by the localized name shown in the rows, not the raw id,
-              // so both the per-category list and the flat search read A→Z the
-              // way the user sees them. _group preserves this encounter order.
-              ..sort(
-                (a, b) => _displayName(locCatalog, lang, a.id)
-                    .toLowerCase()
-                    .compareTo(_displayName(locCatalog, lang, b.id).toLowerCase()),
-              );
+            final available =
+                catalog.entries
+                    .where((e) => !widget.excludePaths.contains(e.path))
+                    .toList()
+                  // Order by the localized name shown in the rows, not the raw id,
+                  // so both the per-category list and the flat search read A→Z the
+                  // way the user sees them. _group preserves this encounter order.
+                  ..sort(
+                    (a, b) => _displayName(locCatalog, lang, a.id)
+                        .toLowerCase()
+                        .compareTo(
+                          _displayName(locCatalog, lang, b.id).toLowerCase(),
+                        ),
+                  );
             final groups = _group(available);
 
             // Resolve the selected category (fall back to first available).
@@ -167,12 +178,15 @@ class _AddInventoryItemDialogState
               shown = available.where((e) {
                 return e.id.toLowerCase().contains(query) ||
                     e.path.toLowerCase().contains(query) ||
-                    _displayName(locCatalog, lang, e.id)
-                        .toLowerCase()
-                        .contains(query);
+                    _displayName(
+                      locCatalog,
+                      lang,
+                      e.id,
+                    ).toLowerCase().contains(query);
               }).toList();
             } else {
-              shown = groups
+              shown =
+                  groups
                       .where((g) => g.category == selectedCat)
                       .firstOrNull
                       ?.entries ??
@@ -202,9 +216,11 @@ class _AddInventoryItemDialogState
                     } else if (_selected != null &&
                         !(_selected!.id.toLowerCase().contains(q) ||
                             _selected!.path.toLowerCase().contains(q) ||
-                            _displayName(locCatalog, lang, _selected!.id)
-                                .toLowerCase()
-                                .contains(q))) {
+                            _displayName(
+                              locCatalog,
+                              lang,
+                              _selected!.id,
+                            ).toLowerCase().contains(q))) {
                       // A search that no longer matches the selection drops it.
                       _selected = null;
                     }
@@ -215,10 +231,26 @@ class _AddInventoryItemDialogState
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          _displayName(locCatalog, lang, _selected!.id),
-                          style: theme.textTheme.bodyMedium,
-                          overflow: TextOverflow.ellipsis,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _displayName(locCatalog, lang, _selected!.id),
+                              style: theme.textTheme.bodyMedium,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            if (showObjectIds)
+                              Text(
+                                _selected!.id,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                  fontFamily: 'Consolas',
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -256,19 +288,24 @@ class _AddInventoryItemDialogState
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: SingleChildScrollView(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
                                   child: Column(
                                     children: [
                                       for (final g in groups)
                                         SidebarTile(
                                           icon: iconForItemCategory(g.category),
                                           label: l10n.categoryWithCount(
-                                              localizedItemCategoryLabel(
-                                                  l10n, g.category),
-                                              g.entries.length),
+                                            localizedItemCategoryLabel(
+                                              l10n,
+                                              g.category,
+                                            ),
+                                            g.entries.length,
+                                          ),
                                           selected:
-                                              !searching && g.category == selectedCat,
+                                              !searching &&
+                                              g.category == selectedCat,
                                           onTap: () => setState(() {
                                             _selectedCategory = g.category;
                                             _query = '';
@@ -288,11 +325,12 @@ class _AddInventoryItemDialogState
                                       itemCount: shown.length,
                                       itemBuilder: (context, index) =>
                                           _entryTile(
-                                        theme,
-                                        shown[index],
-                                        locCatalog,
-                                        lang,
-                                      ),
+                                            theme,
+                                            shown[index],
+                                            locCatalog,
+                                            lang,
+                                            showObjectIds,
+                                          ),
                                     ),
                             ),
                           ],
@@ -316,12 +354,12 @@ class _AddInventoryItemDialogState
     );
   }
 
-
   Widget _entryTile(
     ThemeData theme,
     ItemCatalogEntry entry,
     Map<String, Map<String, String>> catalog,
     GameLang lang,
+    bool showObjectIds,
   ) {
     final isSelected = _selected == entry;
     return ListTile(
@@ -334,7 +372,9 @@ class _AddInventoryItemDialogState
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: showObjectIds
+          ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
+          : null,
       onTap: () => setState(() {
         _selected = isSelected ? null : entry;
       }),

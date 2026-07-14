@@ -15,6 +15,13 @@ class AppLocalizationsDe extends AppLocalizations {
   String get debugSectionSubtitle => 'Diagnose & Rohdaten für Fehlerberichte';
 
   @override
+  String get showObjectIdsTitle => 'Objekt-IDs anzeigen';
+
+  @override
+  String get showObjectIdsSubtitle =>
+      'Technische IDs von NPCs, Gegenständen, Dialogwissen und Quests im Editor anzeigen.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -309,6 +316,30 @@ class AppLocalizationsDe extends AppLocalizations {
   String get switchProfile => 'Profil wechseln';
 
   @override
+  String get openSaveFile => 'Datei öffnen';
+
+  @override
+  String get externalSave => 'Extern geöffneter Spielstand';
+
+  @override
+  String get saveProfileTitle => 'Spielstand-Profil';
+
+  @override
+  String get saveProfileDescription =>
+      'Diesen Spielstand einem anderen Spielprofil zuordnen. Spielstand und Profilindex werden gemeinsam gesichert.';
+
+  @override
+  String get saveProfileExternalHint =>
+      'Wähle ein Profil, um diese Datei in den Spiel-Speicherordner zu importieren und dort zu registrieren. Die Originaldatei bleibt unverändert.';
+
+  @override
+  String get saveProfileNoProfiles =>
+      'In PersistentDataList.sav wurden keine bearbeitbaren Spielprofile gefunden.';
+
+  @override
+  String get saveProfileSelect => 'Profil auswählen';
+
+  @override
   String get rescanSaveFolder => 'Speicherordner neu einlesen';
 
   @override
@@ -441,6 +472,12 @@ class AppLocalizationsDe extends AppLocalizations {
   String attributeCurrent(String name) {
     return '$name aktuell';
   }
+
+  @override
+  String get attributeBaseValue => 'Basiswert';
+
+  @override
+  String get attributeCurrentValue => 'Aktueller Wert';
 
   @override
   String get inventoryTitle => 'Inventar';
@@ -820,7 +857,11 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get removeMemoryEventBody =>
-      'Dieses Erinnerungsereignis entfernen? Zuvor wird eine Sicherung erstellt.';
+      'Dieses Erinnerungsereignis zum Entfernen vormerken? Der Spielstand wird erst mit „Speichern“ geändert.';
+
+  @override
+  String get memoryEventRemovalQueued =>
+      'Entfernen vorgemerkt – mit „Speichern“ anwenden.';
 
   @override
   String get duplicateEvent => 'Ereignis duplizieren';
@@ -830,7 +871,11 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get duplicateMemoryEventBody =>
-      'Dieses Erinnerungsereignis duplizieren? Zuvor wird eine Sicherung erstellt.';
+      'Eine Kopie dieses Erinnerungsereignisses vormerken? Der Spielstand wird erst mit „Speichern“ geändert.';
+
+  @override
+  String get memoryEventDuplicationQueued =>
+      'Duplizieren vorgemerkt – mit „Speichern“ anwenden.';
 
   @override
   String get selectCharacterFromList => 'Wähle einen Charakter aus der Liste';

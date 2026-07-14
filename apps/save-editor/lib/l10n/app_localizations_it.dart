@@ -16,6 +16,13 @@ class AppLocalizationsIt extends AppLocalizations {
       'Diagnostica e dati grezzi per le segnalazioni di bug';
 
   @override
+  String get showObjectIdsTitle => 'Show object IDs';
+
+  @override
+  String get showObjectIdsSubtitle =>
+      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -310,6 +317,30 @@ class AppLocalizationsIt extends AppLocalizations {
   String get switchProfile => 'Cambia profilo';
 
   @override
+  String get openSaveFile => 'Open file';
+
+  @override
+  String get externalSave => 'Externally opened save';
+
+  @override
+  String get saveProfileTitle => 'Save profile';
+
+  @override
+  String get saveProfileDescription =>
+      'Assign this save to a different game profile. The save and profile index are backed up together.';
+
+  @override
+  String get saveProfileExternalHint =>
+      'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.';
+
+  @override
+  String get saveProfileNoProfiles =>
+      'No editable game profiles were found in PersistentDataList.sav.';
+
+  @override
+  String get saveProfileSelect => 'Select profile';
+
+  @override
   String get rescanSaveFolder => 'Riscansiona la cartella dei salvataggi';
 
   @override
@@ -442,6 +473,12 @@ class AppLocalizationsIt extends AppLocalizations {
   String attributeCurrent(String name) {
     return '$name attuale';
   }
+
+  @override
+  String get attributeBaseValue => 'Base value';
+
+  @override
+  String get attributeCurrentValue => 'Current value';
 
   @override
   String get inventoryTitle => 'Inventario';
@@ -823,6 +860,10 @@ class AppLocalizationsIt extends AppLocalizations {
       'Rimuovere questo evento della memoria? Viene creato prima un backup.';
 
   @override
+  String get memoryEventRemovalQueued =>
+      'Event removal queued — press Save to apply it.';
+
+  @override
   String get duplicateEvent => 'Duplica evento';
 
   @override
@@ -831,6 +872,10 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get duplicateMemoryEventBody =>
       'Duplicare questo evento della memoria? Viene creato prima un backup.';
+
+  @override
+  String get memoryEventDuplicationQueued =>
+      'Event duplication queued — press Save to apply it.';
 
   @override
   String get selectCharacterFromList => 'Seleziona un personaggio dall\'elenco';

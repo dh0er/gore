@@ -297,9 +297,7 @@ class _ProfileHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
     final scheme = Theme.of(context).colorScheme;
-    final multiProfile = profiles.length > 1;
     final l10n = AppLocalizations.of(context);
     return Container(
       width: double.infinity,
@@ -328,30 +326,21 @@ class _ProfileHeader extends StatelessWidget {
           Expanded(
             child: Row(
               children: [
-                Flexible(
-                  child: multiProfile
-                      ? _ProfileSwitcher(
-                          profile: profile,
-                          profiles: profiles,
-                          notifier: notifier,
-                          isLoading: isLoading,
-                        )
-                      : Text(
-                          profile?.displayName ?? l10n.profile,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.titleMedium,
-                        ),
+                Expanded(
+                  child: _ProfileSwitcher(
+                    profile: profile,
+                    profiles: profiles,
+                    notifier: notifier,
+                    isLoading: isLoading,
+                  ),
                 ),
-                const SizedBox(width: 12),
-                // Inflexible on purpose: the chip label comes from a small
-                // fixed set, so the chip takes its intrinsic width and never
-                // truncates; the (flexible) profile name to its left yields
-                // the remaining space instead.
-                ProfileDifficultyChip(
-                  profile: profile,
-                  notifier: notifier,
-                  isLoading: isLoading,
+                const SizedBox(width: 8),
+                Flexible(
+                  child: ProfileDifficultyChip(
+                    profile: profile,
+                    notifier: notifier,
+                    isLoading: isLoading,
+                  ),
                 ),
               ],
             ),
@@ -404,8 +393,8 @@ class _ProfileHeader extends StatelessWidget {
   }
 }
 
-/// Profile name shown as a [PopupMenuButton] when multiple profiles exist.
-/// Selecting a profile calls [EditorNotifier.selectProfile].
+/// Profile picker plus the always-last "Open file" action. It remains a menu
+/// with zero/one profile so detached savegames are reachable in every setup.
 class _ProfileSwitcher extends StatelessWidget {
   const _ProfileSwitcher({
     required this.profile,
@@ -425,14 +414,21 @@ class _ProfileSwitcher extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final currentId = profile?.profileId;
     final l10n = AppLocalizations.of(context);
-    return PopupMenuButton<int>(
+    return PopupMenuButton<String>(
       tooltip: l10n.switchProfile,
       enabled: !isLoading,
-      onSelected: (id) => notifier.selectProfile(id),
+      onSelected: (choice) {
+        if (choice == 'open-file') {
+          notifier.openSaveFile();
+          return;
+        }
+        final id = int.tryParse(choice.substring('profile:'.length));
+        if (id != null) notifier.selectProfile(id);
+      },
       itemBuilder: (context) => [
         for (final p in profiles)
-          PopupMenuItem<int>(
-            value: p.profileId,
+          PopupMenuItem<String>(
+            value: 'profile:${p.profileId}',
             child: Row(
               children: [
                 if (p.profileId == currentId)
@@ -449,6 +445,17 @@ class _ProfileSwitcher extends StatelessWidget {
               ],
             ),
           ),
+        if (profiles.isNotEmpty) const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'open-file',
+          child: Row(
+            children: [
+              const Icon(Icons.file_open_outlined, size: 18),
+              const SizedBox(width: 8),
+              Expanded(child: Text(l10n.openSaveFile)),
+            ],
+          ),
+        ),
       ],
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -527,6 +534,7 @@ class _SaveSlotCard extends StatelessWidget {
                           child: _SaveKindIcon(
                             quickSave: save.quickSave,
                             autoSave: save.autoSave,
+                            external: save.isExternal,
                             selected: selected,
                           ),
                         ),
@@ -565,23 +573,25 @@ class _SaveKindIcon extends StatelessWidget {
   const _SaveKindIcon({
     required this.quickSave,
     required this.autoSave,
+    required this.external,
     required this.selected,
   });
 
   final bool? quickSave;
   final bool? autoSave;
+  final bool external;
   final bool selected;
 
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final label = _formatSaveKind(
-      l10n,
-      quickSave: quickSave,
-      autoSave: autoSave,
-    );
+    final label = external
+        ? l10n.externalSave
+        : _formatSaveKind(l10n, quickSave: quickSave, autoSave: autoSave);
     if (label == '-') return const SizedBox(height: 16);
-    final icon = quickSave == true
+    final icon = external
+        ? Icons.insert_drive_file_outlined
+        : quickSave == true
         ? Icons.flash_on_outlined
         : autoSave == true
         ? Icons.timer_outlined
@@ -919,7 +929,13 @@ class _OverviewPanel extends StatelessWidget {
       children: [
         _HeaderCard(inspection: inspection, save: state.selectedSave),
         const SizedBox(height: 16),
-        _MetadataEditor(inspection: inspection, notifier: notifier),
+        _MetadataEditor(
+          inspection: inspection,
+          notifier: notifier,
+          syncPersistentDataList: state.selectedSave?.isExternal != true,
+        ),
+        const SizedBox(height: 16),
+        _SaveProfileCard(state: state, notifier: notifier),
         const SizedBox(height: 16),
         _GameTimeCard(
           inspection: inspection,
@@ -986,6 +1002,20 @@ class _DebugSectionState extends State<_DebugSection> {
             ),
             if (_expanded) ...[
               const SizedBox(height: 8),
+              Consumer(
+                builder: (context, ref, _) {
+                  final showObjectIds = ref.watch(showObjectIdsProvider);
+                  return SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    secondary: const Icon(Icons.badge_outlined),
+                    title: Text(l10n.showObjectIdsTitle),
+                    subtitle: Text(l10n.showObjectIdsSubtitle),
+                    value: showObjectIds,
+                    onChanged: ref.read(showObjectIdsProvider.notifier).set,
+                  );
+                },
+              ),
+              const Divider(height: 24),
               // Codec self-test: the in-process pure-Rust codec is effectively
               // always ready, so this is a capability readout / smoke test.
               Row(
@@ -1016,29 +1046,41 @@ class _DebugSectionState extends State<_DebugSection> {
               ),
               if (inspection != null) ...[
                 const Divider(height: 24),
-                Row(
-                  children: [
-                    const Icon(Icons.data_object, size: 20),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        l10n.inspectionJsonTitle,
-                        style: theme.textTheme.titleSmall,
+                ExpansionTile(
+                  key: const ValueKey('inspection-json-expansion'),
+                  initiallyExpanded: false,
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 8),
+                  leading: const Icon(Icons.data_object, size: 20),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          l10n.inspectionJsonTitle,
+                          style: theme.textTheme.titleSmall,
+                        ),
                       ),
-                    ),
-                    IconButton(
-                      tooltip: l10n.copy,
-                      icon: const Icon(Icons.copy),
-                      onPressed: () => Clipboard.setData(
-                        ClipboardData(text: _json(inspection)),
+                      IconButton(
+                        tooltip: l10n.copy,
+                        icon: const Icon(Icons.copy),
+                        onPressed: () => Clipboard.setData(
+                          ClipboardData(text: _json(inspection)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  children: [
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: SelectableText(
+                        _json(inspection),
+                        style: const TextStyle(
+                          fontFamily: 'Consolas',
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 8),
-                SelectableText(
-                  _json(inspection),
-                  style: const TextStyle(fontFamily: 'Consolas', fontSize: 12),
                 ),
               ],
             ],
@@ -1237,10 +1279,15 @@ Uint8List? _decodeScreenshot(ScreenshotSummary? screenshot) {
 }
 
 class _MetadataEditor extends StatefulWidget {
-  const _MetadataEditor({required this.inspection, required this.notifier});
+  const _MetadataEditor({
+    required this.inspection,
+    required this.notifier,
+    required this.syncPersistentDataList,
+  });
 
   final SaveInspection inspection;
   final EditorNotifier notifier;
+  final bool syncPersistentDataList;
 
   @override
   State<_MetadataEditor> createState() => _MetadataEditorState();
@@ -1314,7 +1361,7 @@ class _MetadataEditorState extends State<_MetadataEditor> {
           edits: [
             {'path': 'public.m_PlayerSaveName', 'value': value},
           ],
-          syncPersistentDataList: true,
+          syncPersistentDataList: widget.syncPersistentDataList,
         ),
       );
     }
@@ -1333,6 +1380,106 @@ class _MetadataEditorState extends State<_MetadataEditor> {
             errorText: _error,
           ),
           onChanged: _updatePending,
+        ),
+      ),
+    );
+  }
+}
+
+/// Profile association stored by the game in PersistentDataList.sav. Changing
+/// it is an explicit immediate operation (with paired backups), because it must
+/// atomically update both the slot file and the profile index rather than join
+/// the selected save's ordinary pending edit batch.
+class _SaveProfileCard extends StatelessWidget {
+  const _SaveProfileCard({required this.state, required this.notifier});
+
+  final EditorState state;
+  final EditorNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final theme = Theme.of(context);
+    final save = state.selectedSave;
+    final external = save?.isExternal == true;
+    // A detached file's embedded numeric profile id is not authoritative for
+    // this folder. Keep the selector empty so even a coincidental matching id
+    // can be chosen to trigger the import.
+    final currentId = external
+        ? null
+        : state.profiles.any(
+            (profile) => profile.profileId == save?.persistentProfileId,
+          )
+        ? save?.persistentProfileId
+        : null;
+    final enabled =
+        state.profiles.isNotEmpty && !state.isLoading && !state.hasUnsavedEdits;
+    final explanation = external
+        ? l10n.saveProfileExternalHint
+        : state.profiles.isEmpty
+        ? l10n.saveProfileNoProfiles
+        : l10n.saveProfileDescription;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(
+              external ? Icons.link_off_outlined : Icons.account_tree_outlined,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l10n.saveProfileTitle,
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    explanation,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 20),
+            SizedBox(
+              width: 260,
+              child: DropdownButtonFormField<int>(
+                initialValue: currentId,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: l10n.profile,
+                  isDense: true,
+                ),
+                hint: Text(l10n.saveProfileSelect),
+                items: [
+                  for (final profile in state.profiles)
+                    DropdownMenuItem<int>(
+                      value: profile.profileId,
+                      child: Text(
+                        profile.displayName,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: enabled
+                    ? (profileId) {
+                        if (profileId != null && profileId != currentId) {
+                          notifier.assignSelectedSaveToProfile(profileId);
+                        }
+                      }
+                    : null,
+              ),
+            ),
+          ],
         ),
       ),
     );

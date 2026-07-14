@@ -148,13 +148,26 @@ String? localizedQuestDescription(
 /// Localized text for a dialog-knowledge entry, or null. Handles:
 ///  - `Voiceline_<id>_AlkimiaLocalization` → exact inner id (single line)
 ///  - `Choice<Name>` / `Topic_<Name>` / `Info_*` → `info_<snake>` (+variant)
-///  - purely numeric node ids → null (no catalog text)
+///  - an exact cache-derived caption key when [locKey] is provided
+///  - a cache-derived literal [caption] when the game uses `FText::FromString`
+///  - numeric node ids without exact metadata return null rather than guessing
 String? localizedKnowledgeEntry(
   Map<String, Map<String, String>> catalog,
   GameLang lang,
-  String entry,
-) {
-  if (catalog.isEmpty || entry.isEmpty) return null;
+  String entry, {
+  String? locKey,
+  String? caption,
+}) {
+  if (entry.isEmpty) return null;
+
+  // Generated numeric ids cannot be mapped by spelling, but the Shipping
+  // cache retains the exact localization key assigned to the class Caption.
+  if (catalog.isNotEmpty && locKey != null && locKey.trim().isNotEmpty) {
+    final exact = resolveGameText(catalog, locKey, lang);
+    if (exact != null) return exact;
+  }
+  if (caption != null && caption.trim().isNotEmpty) return caption;
+  if (catalog.isEmpty) return null;
   final lower = entry.toLowerCase();
 
   // Voiceline wrapper: strip prefix + trailing _AlkimiaLocalization.
@@ -187,4 +200,105 @@ String? localizedKnowledgeEntry(
     if (r != null) return r;
   }
   return null;
+}
+
+/// Player-facing fallback for a knowledge id when neither extracted game text
+/// nor cache-derived Caption metadata is available. It deliberately avoids
+/// echoing the raw token: separators and camel-case are humanized, while opaque
+/// generated hashes collapse to their broad dialog kind. The exact id remains
+/// available through the opt-in "show object ids" setting.
+String readableKnowledgeEntry(String entry) {
+  final trimmed = entry.trim();
+  if (trimmed.isEmpty) return 'Dialog entry';
+  final lower = trimmed.toLowerCase();
+  if (_hasLongNumber(trimmed)) {
+    if (lower.startsWith('choice')) return 'Dialog choice';
+    if (lower.startsWith('topic')) return 'Dialog topic';
+    if (lower.startsWith('info')) return 'Dialog information';
+    return 'Dialog entry';
+  }
+
+  var snake = _toSnake(trimmed);
+  if (snake.startsWith('voiceline_')) {
+    snake = snake.substring('voiceline_'.length);
+  }
+  const locSuffix = '_alkimia_localization';
+  if (snake.endsWith(locSuffix)) {
+    snake = snake.substring(0, snake.length - locSuffix.length);
+  }
+  final words = snake
+      .split('_')
+      .where((word) => word.isNotEmpty)
+      .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
+      .join(' ');
+  return words.isEmpty ? 'Dialog entry' : words;
+}
+
+/// Humanizes a technical quest name for the rare no-localization fallback.
+/// The journal still exposes the exact quest id when object ids are enabled,
+/// but its primary title remains readable while the loc catalog is missing or
+/// still loading.
+String readableQuestEntry(String value) {
+  var token = value.trim();
+  if (token.isEmpty) return 'Quest';
+  token = token.split('/').last.split('.').last;
+  token = token.replaceFirst(
+    RegExp(r'^Quest[_\- ]*', caseSensitive: false),
+    '',
+  );
+  for (final camp in const ['OC', 'NC', 'SC']) {
+    token = token.replaceAll(
+      RegExp('${camp}CHAPTER', caseSensitive: false),
+      '${camp}_Chapter_',
+    );
+  }
+
+  final words = <String>[];
+  final current = StringBuffer();
+  void flush() {
+    if (current.isEmpty) return;
+    words.add(current.toString());
+    current.clear();
+  }
+
+  bool upper(int c) => c >= 0x41 && c <= 0x5a;
+  bool lower(int c) => c >= 0x61 && c <= 0x7a;
+  bool digit(int c) => c >= 0x30 && c <= 0x39;
+  for (var i = 0; i < token.length; i++) {
+    final c = token.codeUnitAt(i);
+    if (c == 0x5f || c == 0x2d || c == 0x20) {
+      flush();
+      continue;
+    }
+    final previous = i == 0 ? null : token.codeUnitAt(i - 1);
+    final next = i + 1 < token.length ? token.codeUnitAt(i + 1) : null;
+    final boundary =
+        current.isNotEmpty &&
+        ((upper(c) &&
+                previous != null &&
+                (lower(previous) || digit(previous))) ||
+            (upper(c) &&
+                previous != null &&
+                upper(previous) &&
+                next != null &&
+                lower(next)) ||
+            (digit(c) && previous != null && !digit(previous)) ||
+            (!digit(c) && previous != null && digit(previous)));
+    if (boundary) flush();
+    current.writeCharCode(c);
+  }
+  flush();
+
+  final readable = words
+      .map((word) {
+        if (word.toUpperCase() == 'OBJ') return 'Objective';
+        if (word.length <= 3 && word == word.toUpperCase()) return word;
+        if (word == word.toUpperCase() || word == word.toLowerCase()) {
+          final lowerWord = word.toLowerCase();
+          return '${lowerWord[0].toUpperCase()}${lowerWord.substring(1)}';
+        }
+        return word;
+      })
+      .join(' ');
+  return readable.isEmpty ? 'Quest' : readable;
 }

@@ -128,6 +128,18 @@ abstract class AppLocalizations {
   /// **'Diagnostics & raw data for bug reports'**
   String get debugSectionSubtitle;
 
+  /// No description provided for @showObjectIdsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Show object IDs'**
+  String get showObjectIdsTitle;
+
+  /// No description provided for @showObjectIdsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.'**
+  String get showObjectIdsSubtitle;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
@@ -698,6 +710,48 @@ abstract class AppLocalizations {
   /// **'Switch profile'**
   String get switchProfile;
 
+  /// No description provided for @openSaveFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Open file'**
+  String get openSaveFile;
+
+  /// No description provided for @externalSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Externally opened save'**
+  String get externalSave;
+
+  /// No description provided for @saveProfileTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save profile'**
+  String get saveProfileTitle;
+
+  /// No description provided for @saveProfileDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Assign this save to a different game profile. The save and profile index are backed up together.'**
+  String get saveProfileDescription;
+
+  /// No description provided for @saveProfileExternalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.'**
+  String get saveProfileExternalHint;
+
+  /// No description provided for @saveProfileNoProfiles.
+  ///
+  /// In en, this message translates to:
+  /// **'No editable game profiles were found in PersistentDataList.sav.'**
+  String get saveProfileNoProfiles;
+
+  /// No description provided for @saveProfileSelect.
+  ///
+  /// In en, this message translates to:
+  /// **'Select profile'**
+  String get saveProfileSelect;
+
   /// No description provided for @rescanSaveFolder.
   ///
   /// In en, this message translates to:
@@ -919,6 +973,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{name} current'**
   String attributeCurrent(String name);
+
+  /// Generic label for an attribute's base-value input; the attribute name is shown beside the field.
+  ///
+  /// In en, this message translates to:
+  /// **'Base value'**
+  String get attributeBaseValue;
+
+  /// Generic label for an attribute's current-value input; the attribute name is shown beside the field.
+  ///
+  /// In en, this message translates to:
+  /// **'Current value'**
+  String get attributeCurrentValue;
 
   /// No description provided for @inventoryTitle.
   ///
@@ -1571,8 +1637,14 @@ abstract class AppLocalizations {
   /// No description provided for @removeMemoryEventBody.
   ///
   /// In en, this message translates to:
-  /// **'Remove this memory event? A backup is written first.'**
+  /// **'Queue this memory event for removal? The save file is changed only when you press Save.'**
   String get removeMemoryEventBody;
+
+  /// No description provided for @memoryEventRemovalQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Event removal queued — press Save to apply it.'**
+  String get memoryEventRemovalQueued;
 
   /// No description provided for @duplicateEvent.
   ///
@@ -1589,8 +1661,14 @@ abstract class AppLocalizations {
   /// No description provided for @duplicateMemoryEventBody.
   ///
   /// In en, this message translates to:
-  /// **'Duplicate this memory event? A backup is written first.'**
+  /// **'Queue a duplicate of this memory event? The save file is changed only when you press Save.'**
   String get duplicateMemoryEventBody;
+
+  /// No description provided for @memoryEventDuplicationQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Event duplication queued — press Save to apply it.'**
+  String get memoryEventDuplicationQueued;
 
   /// No description provided for @selectCharacterFromList.
   ///

@@ -5,7 +5,10 @@ import 'package:goresave/features/editor/domain/item_categories.dart';
 void main() {
   test('maps known prefixes to categories', () {
     expect(itemCategoryFromId('ItMw_1H_Sword_01'), ItemCategory.meleeWeapon);
-    expect(itemCategoryFromId('ItRw_Bow_Diego_Sleeper'), ItemCategory.rangedWeapon);
+    expect(
+      itemCategoryFromId('ItRw_Bow_Diego_Sleeper'),
+      ItemCategory.rangedWeapon,
+    );
     expect(itemCategoryFromId('ItAr_Rune_FireBall_Base'), ItemCategory.rune);
     expect(itemCategoryFromId('ItAr_Scroll_Charm'), ItemCategory.scroll);
     expect(itemCategoryFromId('ItFo_Apple'), ItemCategory.food);
@@ -42,7 +45,17 @@ void main() {
 
   test('display name strips prefix', () {
     expect(itemDisplayNameFromId('ItMi_Orenugget'), 'Orenugget');
-    expect(itemDisplayNameFromId('ItAr_Rune_FireBall_Base'), 'Rune FireBall Base');
+    expect(
+      itemDisplayNameFromId('ItAr_Rune_FireBall_Base'),
+      'Rune FireBall Base',
+    );
+    expect(itemDisplayNameFromId('ItChestKey01'), 'Chest Key 01');
+    expect(itemDisplayNameFromId('ItDoorKey01'), 'Door Key 01');
+    expect(
+      itemDisplayNameFromId('ItFocusStoneBridgeItem'),
+      'Focus Stone Bridge Item',
+    );
+    expect(itemDisplayNameFromId('ItKeyDefault'), 'Key Default');
     expect(itemDisplayNameFromId('NoPrefix'), 'NoPrefix');
   });
 
@@ -54,9 +67,14 @@ void main() {
       PrivateInventoryItem(id: 'Weird_Thing', path: 'p4', count: 1),
     ];
     final groups = groupInventoryItems(items);
-    expect(groups.map((g) => g.category).toList(),
-        [ItemCategory.meleeWeapon, ItemCategory.misc, ItemCategory.other]);
-    expect(groups[1].items.map((i) => i.id).toList(),
-        ['ItMi_Gold', 'ItMi_Orenugget']); // sorted by id within group
+    expect(groups.map((g) => g.category).toList(), [
+      ItemCategory.meleeWeapon,
+      ItemCategory.misc,
+      ItemCategory.other,
+    ]);
+    expect(groups[1].items.map((i) => i.id).toList(), [
+      'ItMi_Gold',
+      'ItMi_Orenugget',
+    ]); // sorted by id within group
   });
 }

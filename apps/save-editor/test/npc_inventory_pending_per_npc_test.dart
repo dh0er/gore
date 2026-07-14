@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// Regression test mirroring `npc_attribute_pending_per_npc_test.dart` for the
 /// Inventory tab: NPC inventory pending edits must be keyed PER-NPC
@@ -21,6 +24,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -189,11 +195,7 @@ class _NpcInventoryCoreService implements GoresaveCoreService {
               'status': 'decoded',
               'preview': false,
               'decompressedSize': 9,
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'playerName': 'Hero',

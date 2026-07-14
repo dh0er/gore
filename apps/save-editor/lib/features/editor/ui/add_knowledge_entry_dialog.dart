@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/knowledge_catalog.dart';
 import 'package:goresave/features/editor/ui/sidebar_tile.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
+import 'package:goresave/loc/progression_loc.dart';
 
 /// Shows a picker dialog over [catalog] that lets the user choose a knowledge
 /// entry to add.
@@ -75,8 +77,8 @@ class _AddKnowledgeEntryDialogState
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
-    final catalog =
-        ref.watch(locCatalogProvider).value ?? const {};
+    final catalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
 
     final available = widget.catalog.entries
         .where((e) => !widget.exclude.contains(e.id.toLowerCase()))
@@ -92,14 +94,23 @@ class _AddKnowledgeEntryDialogState
     final List<KnowledgeCatalogEntry> shown;
     if (searching) {
       shown = available.where((e) {
-        final name = localizedGameName(catalog, lang, e.id) ?? e.id;
+        final name =
+            localizedKnowledgeEntry(
+              catalog,
+              lang,
+              e.id,
+              locKey: e.locKey,
+              caption: e.caption,
+            ) ??
+            e.id;
         return e.id.toLowerCase().contains(query) ||
             name.toLowerCase().contains(query);
       }).toList();
     } else if (selectedCategory == _kAllCategory) {
       shown = available;
     } else {
-      shown = groups
+      shown =
+          groups
               .where((g) => g.category == selectedCategory)
               .firstOrNull
               ?.entries ??
@@ -141,14 +152,14 @@ class _AddKnowledgeEntryDialogState
                               borderRadius: BorderRadius.circular(12),
                             ),
                             child: SingleChildScrollView(
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 6),
+                              padding: const EdgeInsets.symmetric(vertical: 6),
                               child: Column(
                                 children: [
                                   SidebarTile(
                                     icon: Icons.list_outlined,
                                     label: l10n.allWithCount(available.length),
-                                    selected: !searching &&
+                                    selected:
+                                        !searching &&
                                         selectedCategory == _kAllCategory,
                                     onTap: () => setState(() {
                                       _selectedCategory = _kAllCategory;
@@ -158,11 +169,15 @@ class _AddKnowledgeEntryDialogState
                                   ),
                                   for (final g in groups)
                                     SidebarTile(
-                                      icon:
-                                          _iconForKnowledgeCategory(g.category),
+                                      icon: _iconForKnowledgeCategory(
+                                        g.category,
+                                      ),
                                       label: l10n.categoryWithCount(
-                                          _cap(g.category), g.entries.length),
-                                      selected: !searching &&
+                                        _cap(g.category),
+                                        g.entries.length,
+                                      ),
+                                      selected:
+                                          !searching &&
                                           g.category == selectedCategory,
                                       onTap: () => setState(() {
                                         _selectedCategory = g.category;
@@ -181,8 +196,12 @@ class _AddKnowledgeEntryDialogState
                               ? Center(child: Text(l10n.noEntriesMatch))
                               : ListView.builder(
                                   itemCount: shown.length,
-                                  itemBuilder: (context, index) =>
-                                      _entryTile(shown[index], catalog, lang),
+                                  itemBuilder: (context, index) => _entryTile(
+                                    shown[index],
+                                    catalog,
+                                    lang,
+                                    showObjectIds,
+                                  ),
                                 ),
                         ),
                       ],
@@ -204,24 +223,33 @@ class _AddKnowledgeEntryDialogState
     KnowledgeCatalogEntry entry,
     Map<String, Map<String, String>> catalog,
     GameLang lang,
+    bool showObjectIds,
   ) {
-    // Localized knowledge name from the id (lowercased); fall back to the raw
-    // id when no extracted catalog entry exists.
-    final name = localizedGameName(catalog, lang, entry.id) ?? entry.id;
+    // Generated numeric ids need their exact cache-derived Caption key; their
+    // class-name spelling alone carries no dialog meaning.
+    final name =
+        localizedKnowledgeEntry(
+          catalog,
+          lang,
+          entry.id,
+          locKey: entry.locKey,
+          caption: entry.caption,
+        ) ??
+        readableKnowledgeEntry(entry.id);
     return ListTile(
       dense: true,
       leading: Icon(_iconForKnowledgeCategory(entry.category)),
-      title: Text(
-        name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
+      title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      subtitle: showObjectIds
+          ? Text(entry.id, maxLines: 1, overflow: TextOverflow.ellipsis)
+          : null,
       onTap: () => Navigator.of(context).pop(entry.id),
     );
   }
 }
 
-String _cap(String s) => s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+String _cap(String s) =>
+    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
 IconData _iconForKnowledgeCategory(String category) {
   switch (category) {

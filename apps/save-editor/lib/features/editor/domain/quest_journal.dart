@@ -168,6 +168,7 @@ QuestJournal buildQuestJournal(
   required QuestJournalTextResolver localizedLabel,
   QuestJournalTextResolver? localizedDescription,
   QuestJournalPredicate? isJournalQuest,
+  QuestJournalTextResolver? rawFallbackLabel,
   bool allowRawFallback = false,
 }) {
   final rows = quests.toList(growable: false);
@@ -205,7 +206,9 @@ QuestJournal buildQuestJournal(
     }
 
     if (allowRawFallback && _isRawFallbackRoot(entry)) {
-      entry.label = entry.quest.name.trim();
+      entry.label =
+          _nonBlank(rawFallbackLabel?.call(entry.quest)) ??
+          entry.quest.name.trim();
       entry.localized = false;
     }
   }

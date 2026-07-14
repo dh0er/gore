@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// Regression test for Bug #8: switching away from an NPC whose attribute draft
 /// is queued and returning must REHYDRATE the panel's local field state from the
@@ -23,6 +26,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -45,9 +51,12 @@ void main() {
       // NPC-A exposes Health + Strength (both in Main stats). Edit Health base.
       await tester.tap(find.text('Lizard-A'));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextField, 'Health base'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('npc-attribute:Health:base')),
+        findsOneWidget,
+      );
       await tester.enterText(
-        find.widgetWithText(TextField, 'Health base'),
+        find.byKey(const ValueKey('npc-attribute:Health:base')),
         '111',
       );
       await tester.pump();
@@ -63,7 +72,7 @@ void main() {
       // Health base shows the rehydrated draft (111), not the saved 10.
       final healthField = tester.widget<EditableText>(
         find.descendant(
-          of: find.widgetWithText(TextField, 'Health base'),
+          of: find.byKey(const ValueKey('npc-attribute:Health:base')),
           matching: find.byType(EditableText),
         ),
       );
@@ -71,9 +80,12 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
       // Edit a SECOND attribute (Strength base). Both A edits must be queued.
-      expect(find.widgetWithText(TextField, 'Strength base'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('npc-attribute:Strength:base')),
+        findsOneWidget,
+      );
       await tester.enterText(
-        find.widgetWithText(TextField, 'Strength base'),
+        find.byKey(const ValueKey('npc-attribute:Strength:base')),
         '99',
       );
       await tester.pump();
@@ -84,8 +96,8 @@ void main() {
       await tester.pumpAndSettle();
 
       final write = core.requests.lastWhere((r) => r.command == 'write_save');
-      final edits =
-          (write.payload['edits'] as List).cast<Map<String, Object?>>();
+      final edits = (write.payload['edits'] as List)
+          .cast<Map<String, Object?>>();
       expect(edits, hasLength(2));
 
       Map<String, Object?> editForKey(String key) {
@@ -193,11 +205,7 @@ class _TwoAttributeNpcCoreService implements GoresaveCoreService {
               'status': 'decoded',
               'preview': false,
               'decompressedSize': 9,
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'playerName': 'Hero',

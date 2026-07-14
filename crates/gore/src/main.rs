@@ -38,6 +38,9 @@ enum Commands {
         kind: cmd::catalog::CatalogKind,
         /// Path to UE4SS_ObjectDump.txt
         dump: PathBuf,
+        /// Shipping script cache used to enrich knowledge captions
+        #[arg(long, value_name = "CACHE")]
+        script_cache: Option<PathBuf>,
         /// Output catalog JSON path
         #[arg(short = 'o', long)]
         out: PathBuf,
@@ -349,7 +352,12 @@ fn run_cli() {
     let result = match cli.command {
         Commands::Dump { sdk_dir, out } => cmd::dump::run(sdk_dir, out),
         Commands::Stubs { model, out, filter } => cmd::stubs::run(model, out, filter),
-        Commands::Catalog { kind, dump, out } => cmd::catalog::run(kind, dump, out),
+        Commands::Catalog {
+            kind,
+            dump,
+            script_cache,
+            out,
+        } => cmd::catalog::run(kind, dump, script_cache, out),
         Commands::StoryCatalog {
             exe,
             cache,
@@ -475,6 +483,42 @@ mod story_catalog_cli_tests {
             "story_catalog.v1.json",
         ])
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod catalog_cli_tests {
+    use super::*;
+
+    #[test]
+    fn knowledge_catalog_accepts_optional_script_cache() {
+        let cli = Cli::try_parse_from([
+            "gore",
+            "catalog",
+            "--kind",
+            "knowledge",
+            "UE4SS_ObjectDump.txt",
+            "--script-cache",
+            "PrecompiledScript_Shipping.Cache",
+            "--out",
+            "knowledge_catalog.json",
+        ])
+        .unwrap();
+        let Commands::Catalog {
+            kind: cmd::catalog::CatalogKind::Knowledge,
+            dump,
+            script_cache,
+            out,
+        } = cli.command
+        else {
+            panic!("expected knowledge catalog command");
+        };
+        assert_eq!(dump, PathBuf::from("UE4SS_ObjectDump.txt"));
+        assert_eq!(
+            script_cache,
+            Some(PathBuf::from("PrecompiledScript_Shipping.Cache"))
+        );
+        assert_eq!(out, PathBuf::from("knowledge_catalog.json"));
     }
 }
 

@@ -279,13 +279,19 @@ pub fn build_npc_catalog(lines: &[&str]) -> (Vec<NpcEntry>, Vec<String>) {
 
 /// One knowledge catalog entry.
 ///
-/// Field order: `category` < `id` (alphabetical, sort_keys=True).
+/// Field order is alphabetical to preserve the generator's `sort_keys=True`
+/// output. Cache-derived fields are optional so catalogs generated without a
+/// script cache remain byte-compatible with the original two-field format.
 #[derive(Debug, Clone, Serialize)]
 pub struct KnowledgeEntry {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
     pub category: String,
     pub id: String,
-    // Future: #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    // pub names: std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loc_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
 }
 
 /// Build the knowledge catalog from raw dump lines.
@@ -330,11 +336,38 @@ pub fn build_knowledge_catalog(lines: &[&str]) -> Vec<KnowledgeEntry> {
     // BTreeMap iterates in sorted key order — matches Python's `sorted(found.items())`
     let mut entries: Vec<KnowledgeEntry> = found
         .into_iter()
-        .map(|(id, category)| KnowledgeEntry { category, id })
+        .map(|(id, category)| KnowledgeEntry {
+            caption: None,
+            category,
+            id,
+            loc_key: None,
+            module: None,
+        })
         .collect();
     // Python: entries.sort(key=lambda e: e["id"]) — already sorted from BTreeMap
     entries.sort_by(|a, b| a.id.cmp(&b.id));
     entries
+}
+
+/// Join exact cache-derived `(id, caption, loc_key, module)` metadata into an existing
+/// knowledge catalog. Unknown cache classes are ignored and catalog entries
+/// missing from the inspected cache retain their portable two-field form.
+pub fn enrich_knowledge_catalog(
+    entries: &mut [KnowledgeEntry],
+    metadata: impl IntoIterator<Item = (String, Option<String>, Option<String>, String)>,
+) {
+    let by_id: std::collections::BTreeMap<String, (Option<String>, Option<String>, String)> =
+        metadata
+            .into_iter()
+            .map(|(id, caption, loc_key, module)| (id, (caption, loc_key, module)))
+            .collect();
+    for entry in entries {
+        if let Some((caption, loc_key, module)) = by_id.get(&entry.id) {
+            entry.caption = caption.clone();
+            entry.loc_key = loc_key.clone();
+            entry.module = Some(module.clone());
+        }
+    }
 }
 
 // ─── JSON serialization helpers ──────────────────────────────────────────────
@@ -493,6 +526,56 @@ mod tests {
             !ids.contains(&"Choice"),
             "bare Choice must be excluded: {ids:?}"
         );
+    }
+
+    #[test]
+    fn knowledge_metadata_enrichment_is_exact_and_optional() {
+        let mut entries = build_knowledge_catalog(KNOWLEDGE_FIXTURE);
+        enrich_knowledge_catalog(
+            &mut entries,
+            [
+                (
+                    "Topic_Diego_209799".to_string(),
+                    None,
+                    Some("INFO_DIEGO_OTHERCAMPS_15_00".to_string()),
+                    "Story.Conversation_Diego".to_string(),
+                ),
+                (
+                    "Info_FMORGAreyouok".to_string(),
+                    Some("[Forced Conversation]".to_string()),
+                    None,
+                    "Story.Conversation_Forced".to_string(),
+                ),
+                (
+                    "Topic_NotInDump".to_string(),
+                    None,
+                    Some("INFO_UNUSED".to_string()),
+                    "Story.Unused".to_string(),
+                ),
+            ],
+        );
+        let by_id: std::collections::HashMap<&str, &KnowledgeEntry> = entries
+            .iter()
+            .map(|entry| (entry.id.as_str(), entry))
+            .collect();
+        assert_eq!(
+            by_id["Topic_Diego_209799"].loc_key.as_deref(),
+            Some("INFO_DIEGO_OTHERCAMPS_15_00")
+        );
+        assert_eq!(
+            by_id["Topic_Diego_209799"].module.as_deref(),
+            Some("Story.Conversation_Diego")
+        );
+        assert_eq!(
+            by_id["Info_FMORGAreyouok"].caption.as_deref(),
+            Some("[Forced Conversation]")
+        );
+        assert!(by_id["Info_FMORGAreyouok"].loc_key.is_none());
+
+        let json = to_catalog_json(&entries).unwrap();
+        assert!(json.contains("\"loc_key\": \"INFO_DIEGO_OTHERCAMPS_15_00\""));
+        assert!(json.contains("\"caption\": \"[Forced Conversation]\""));
+        assert!(!json.contains("Topic_NotInDump"));
     }
 
     #[test]
