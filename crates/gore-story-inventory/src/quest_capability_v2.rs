@@ -278,6 +278,15 @@ impl QuestCollisionCapabilityArtifactV2 {
 }
 
 impl PreparedQuestCollisionArtifactV2 {
+    #[cfg(test)]
+    pub(crate) fn insert_test_parent_selection(
+        &mut self,
+        catalog_id: String,
+        parent: QuestParentInput,
+    ) {
+        self.capability.parents.insert(catalog_id, parent);
+    }
+
     /// Borrow the exact structural artifact without exposing or duplicating the capability.
     pub const fn artifact(&self) -> &QuestCollisionCapabilityArtifactV2 {
         &self.artifact

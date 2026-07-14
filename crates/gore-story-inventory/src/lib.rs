@@ -26,6 +26,7 @@ use sha2::{Digest as _, Sha256};
 
 mod quest_capability;
 mod quest_capability_v2;
+mod revision3_quest_context_transaction_v1;
 mod revision3_quest_persistence_v3;
 mod revision3_quest_transaction_v3;
 
@@ -57,6 +58,15 @@ pub use quest_capability_v2::{
     Revision3QuestCollisionCapabilityErrorV2, Revision3QuestCollisionCoverageV2,
     VerifiedRevision3QuestCollisionCapabilityV2,
     BASE_GAME_AND_EXACT_REVISION3_PROJECT_COLLISION_LAYER_V2,
+};
+pub use revision3_quest_context_transaction_v1::{
+    apply_revision3_quest_context_edit_transaction_v1, Revision3QuestContextEditBindingErrorV1,
+    Revision3QuestContextEditBuildStatusV1, Revision3QuestContextEditConflictV1,
+    Revision3QuestContextEditErrorV1, Revision3QuestContextEditOutcomeV1,
+    Revision3QuestContextEditProjectTransportErrorV1, Revision3QuestContextEditPublicationStatusV1,
+    Revision3QuestContextEditRequestJsonErrorV1, Revision3QuestContextEditRequestV1,
+    Revision3QuestContextEditRuntimeStatusV1,
+    MAX_REVISION3_QUEST_CONTEXT_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use revision3_quest_persistence_v3::{
     prepare_revision3_quest_draft_persistence_v3, Revision3QuestDraftPersistenceErrorV3,
@@ -1901,6 +1911,159 @@ mod tests {
                 additional_objective_titles: Vec::new(),
             },
         }
+    }
+
+    fn context_edit_request_v1(
+        project: &gore_authoring::ProjectRevision3,
+        head: &WorkingHead,
+        catalog: &StoryCatalogFile,
+        quest_id: AuthoringEntityId,
+    ) -> Revision3QuestContextEditRequestV1 {
+        let entity = &project.entities[&quest_id];
+        let Revision3EntityPayload::QuestDraft(quest) = &entity.payload else {
+            panic!("expected context-edit Quest Draft")
+        };
+        Revision3QuestContextEditRequestV1 {
+            expected_head: head.clone(),
+            expected_project_id: project.project_id,
+            expected_revision: project.revision,
+            expected_story_catalog_seal: catalog.catalog_seal().clone(),
+            quest_id,
+            expected_quest_revision: entity.revision,
+            description: quest.input.description.clone(),
+            parent_catalog_id: "g1r:quest-parent:swampcamp_scchapter2".to_owned(),
+            giver_catalog_id: "g1r:npc:om_grd_asghan_263".to_owned(),
+        }
+    }
+
+    fn alternate_test_parent(
+        project: &gore_authoring::ProjectRevision3,
+        quest_id: AuthoringEntityId,
+    ) -> gore_authoring::Revision3QuestParentInput {
+        let Revision3EntityPayload::QuestDraft(quest) = &project.entities[&quest_id].payload else {
+            panic!("expected context-edit Quest Draft")
+        };
+        let mut parent = quest.input.parent_quest.clone();
+        parent.canonical_selector = "Catalog_TestAlternateParent".to_owned();
+        parent.runtime_class = "UQuest_TestAlternateParent".to_owned();
+        parent
+    }
+
+    fn prepare_context_edit_artifact_v1(
+        store: &WorkingProjectStore,
+        head: &WorkingHead,
+        catalog: &StoryCatalogFile,
+        alternate_parent: Option<gore_authoring::Revision3QuestParentInput>,
+    ) -> PreparedQuestCollisionArtifactV2 {
+        let mut prepared = prepare_v3_transaction_artifact(store, head, catalog);
+        if let Some(parent) = alternate_parent {
+            prepared
+                .insert_test_parent_selection("g1r:quest-parent:test-alternate".to_owned(), parent);
+        }
+        prepared
+    }
+
+    fn assert_context_edit_exact_delta(
+        before: &gore_authoring::ProjectRevision3,
+        outcome: &Revision3QuestContextEditOutcomeV1,
+        quest_id: AuthoringEntityId,
+        expected_description: &str,
+        expected_parent: &gore_authoring::Revision3QuestParentInput,
+        expected_giver: &gore_authoring::Revision3QuestGiverInput,
+    ) {
+        let after = outcome.project();
+        assert_eq!(after.revision, before.revision + 1);
+        assert_eq!(after.asset_store, before.asset_store);
+        assert_eq!(after.entities.len(), before.entities.len());
+
+        let before_quest_entity = &before.entities[&quest_id];
+        let Revision3EntityPayload::QuestDraft(before_quest) = &before_quest_entity.payload else {
+            panic!("expected basis Quest Draft")
+        };
+        let module_id = before_quest.script_module.id;
+        let before_module_entity = &before.entities[&module_id];
+        let Revision3EntityPayload::ScriptModule(before_module) = &before_module_entity.payload
+        else {
+            panic!("expected basis ScriptModule")
+        };
+        let after_quest_entity = &after.entities[&quest_id];
+        let Revision3EntityPayload::QuestDraft(after_quest) = &after_quest_entity.payload else {
+            panic!("expected edited Quest Draft")
+        };
+        let after_module_entity = &after.entities[&module_id];
+        let Revision3EntityPayload::ScriptModule(after_module) = &after_module_entity.payload
+        else {
+            panic!("expected edited ScriptModule")
+        };
+
+        assert_eq!(after_quest_entity.id, before_quest_entity.id);
+        assert_eq!(
+            after_quest_entity.display_name,
+            before_quest_entity.display_name
+        );
+        assert_eq!(after_quest_entity.origin, before_quest_entity.origin);
+        assert_eq!(
+            after_quest_entity.revision,
+            before_quest_entity.revision + 1
+        );
+        assert_eq!(after_module_entity.id, before_module_entity.id);
+        assert_eq!(
+            after_module_entity.display_name,
+            before_module_entity.display_name
+        );
+        assert_eq!(after_module_entity.origin, before_module_entity.origin);
+        assert_eq!(
+            after_module_entity.revision,
+            before_module_entity.revision + 1
+        );
+
+        assert_eq!(after_quest.input.description, expected_description);
+        assert_eq!(&after_quest.input.parent_quest, expected_parent);
+        assert_eq!(&after_quest.input.giver, expected_giver);
+        let mut normalized_quest = after_quest.clone();
+        normalized_quest.input.description = before_quest.input.description.clone();
+        normalized_quest.input.parent_quest = before_quest.input.parent_quest.clone();
+        normalized_quest.input.giver = before_quest.input.giver.clone();
+        assert_eq!(normalized_quest, *before_quest);
+
+        assert_eq!(after_module.generator_id, before_module.generator_id);
+        assert_eq!(
+            after_module.generator_version,
+            before_module.generator_version
+        );
+        assert_eq!(after_module.owner, before_module.owner);
+        assert_eq!(
+            after_module.module_namespace,
+            before_module.module_namespace
+        );
+        assert_eq!(
+            after_module.module_relative_path,
+            before_module.module_relative_path
+        );
+        assert_eq!(after_module.status, before_module.status);
+        let expected_module = gore_authoring::regenerate_revision3_quest_module_v2(
+            after_quest,
+            QuestCollisionCatalogInput {
+                generation: after_quest.input.collision_catalog.generation.clone(),
+                source_seal: after_quest.input.collision_catalog.source_seal.clone(),
+                catalog_layer: after_quest.input.collision_catalog.catalog_layer.clone(),
+                modules: BTreeSet::new(),
+                relative_paths: BTreeSet::new(),
+                symbols: BTreeSet::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(after_module, &expected_module);
+
+        let mut normalized_project = after.clone();
+        normalized_project.revision = before.revision;
+        normalized_project
+            .entities
+            .insert(quest_id, before_quest_entity.clone());
+        normalized_project
+            .entities
+            .insert(module_id, before_module_entity.clone());
+        assert_eq!(&normalized_project, before);
     }
 
     fn apply_v3(
@@ -3777,6 +3940,460 @@ mod tests {
             Err(Revision3QuestDraftInsertErrorV3::Conflict(
                 Revision3QuestDraftConflictV3::ProjectRevisionOverflow
             ))
+        ));
+    }
+
+    #[test]
+    fn revision3_context_edit_description_parent_giver_and_all_have_an_exact_closed_delta() {
+        let fixture = s3_fixture("context-edit-delta");
+        let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+        let before = &fixture.project;
+        let Revision3EntityPayload::QuestDraft(basis_quest) =
+            &before.entities[&fixture.quest_id].payload
+        else {
+            panic!("expected context-edit Quest")
+        };
+        let basis_parent = basis_quest.input.parent_quest.clone();
+        let basis_giver = basis_quest.input.giver.clone();
+        let alternate_parent = alternate_test_parent(before, fixture.quest_id);
+        let viper = fixture
+            .fresh_capability()
+            .resolve_giver("g1r:npc:om_stt_viper_302")
+            .unwrap();
+
+        let mut description_request =
+            context_edit_request_v1(before, &head, &fixture.catalog, fixture.quest_id);
+        description_request.description = "Only the description changed.".to_owned();
+        let description_outcome = apply_revision3_quest_context_edit_transaction_v1(
+            prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+            &before.to_canonical_json().unwrap(),
+            &description_request.to_canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert_context_edit_exact_delta(
+            before,
+            &description_outcome,
+            fixture.quest_id,
+            &description_request.description,
+            &basis_parent,
+            &basis_giver,
+        );
+
+        let mut parent_request =
+            context_edit_request_v1(before, &head, &fixture.catalog, fixture.quest_id);
+        parent_request.parent_catalog_id = "g1r:quest-parent:test-alternate".to_owned();
+        let parent_outcome = apply_revision3_quest_context_edit_transaction_v1(
+            prepare_context_edit_artifact_v1(
+                &fixture.store,
+                &head,
+                &fixture.catalog,
+                Some(alternate_parent.clone()),
+            ),
+            &before.to_canonical_json().unwrap(),
+            &parent_request.to_canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert_context_edit_exact_delta(
+            before,
+            &parent_outcome,
+            fixture.quest_id,
+            &parent_request.description,
+            &alternate_parent,
+            &basis_giver,
+        );
+
+        let mut giver_request =
+            context_edit_request_v1(before, &head, &fixture.catalog, fixture.quest_id);
+        giver_request.giver_catalog_id = "g1r:npc:om_stt_viper_302".to_owned();
+        let giver_outcome = apply_revision3_quest_context_edit_transaction_v1(
+            prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+            &before.to_canonical_json().unwrap(),
+            &giver_request.to_canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert_context_edit_exact_delta(
+            before,
+            &giver_outcome,
+            fixture.quest_id,
+            &giver_request.description,
+            &basis_parent,
+            &viper,
+        );
+
+        let mut all_request =
+            context_edit_request_v1(before, &head, &fixture.catalog, fixture.quest_id);
+        all_request.description = "Description, parent, and giver changed together.".to_owned();
+        all_request.parent_catalog_id = "g1r:quest-parent:test-alternate".to_owned();
+        all_request.giver_catalog_id = "g1r:npc:om_stt_viper_302".to_owned();
+        let all_outcome = apply_revision3_quest_context_edit_transaction_v1(
+            prepare_context_edit_artifact_v1(
+                &fixture.store,
+                &head,
+                &fixture.catalog,
+                Some(alternate_parent.clone()),
+            ),
+            &before.to_canonical_json().unwrap(),
+            &all_request.to_canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert_context_edit_exact_delta(
+            before,
+            &all_outcome,
+            fixture.quest_id,
+            &all_request.description,
+            &alternate_parent,
+            &viper,
+        );
+        assert_eq!(all_outcome.basis_head(), &head);
+        assert_eq!(all_outcome.quest_id(), fixture.quest_id);
+        assert_eq!(all_outcome.script_module_id(), all_outcome.module_id());
+        assert_eq!(all_outcome.quest_revision(), 1);
+        assert_eq!(all_outcome.script_module_revision(), 1);
+        assert_eq!(
+            all_outcome.script_module_revision(),
+            all_outcome.module_revision()
+        );
+        assert_eq!(
+            all_outcome.build_status(),
+            Revision3QuestContextEditBuildStatusV1::Blocked
+        );
+        assert_eq!(
+            all_outcome.runtime_status(),
+            Revision3QuestContextEditRuntimeStatusV1::RuntimeUnqualified
+        );
+        assert_eq!(
+            all_outcome.publication_status(),
+            Revision3QuestContextEditPublicationStatusV1::NotSupported
+        );
+        assert_eq!(
+            gore_authoring::ProjectRevision3::from_json(all_outcome.canonical_project_json())
+                .unwrap(),
+            *all_outcome.project()
+        );
+    }
+
+    #[test]
+    fn revision3_context_edit_preserves_one_and_eight_objective_shapes() {
+        for objective_count in [1usize, 8] {
+            let mut fixture = s3_fixture(&format!("context-edit-objectives-{objective_count}"));
+            if objective_count == 8 {
+                let module_id = {
+                    let quest = s3_quest_mut(&mut fixture.project, fixture.quest_id);
+                    quest.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+                    quest.input.additional_objective_titles = (2..=8)
+                        .map(|ordinal| format!("Objective {ordinal}"))
+                        .collect();
+                    quest.script_module.id
+                };
+                let Revision3OriginRef::Generated {
+                    generator_version, ..
+                } = &mut fixture.project.entities.get_mut(&module_id).unwrap().origin
+                else {
+                    panic!("expected generated multi-objective module origin")
+                };
+                *generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+                regenerate_s3_pair_after_intent_change(&mut fixture.project, fixture.quest_id);
+            }
+            let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+            let before = fixture.project.clone();
+            let Revision3EntityPayload::QuestDraft(before_quest) =
+                &before.entities[&fixture.quest_id].payload
+            else {
+                panic!("expected context-edit Quest")
+            };
+            assert_eq!(
+                1 + before_quest.input.additional_objective_titles.len(),
+                objective_count
+            );
+            let expected_parent = before_quest.input.parent_quest.clone();
+            let expected_giver = before_quest.input.giver.clone();
+            let mut request =
+                context_edit_request_v1(&before, &head, &fixture.catalog, fixture.quest_id);
+            request.description = format!("Edit a Quest with {objective_count} objectives.");
+            let outcome = apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+                &before.to_canonical_json().unwrap(),
+                &request.to_canonical_json().unwrap(),
+            )
+            .unwrap();
+            assert_context_edit_exact_delta(
+                &before,
+                &outcome,
+                fixture.quest_id,
+                &request.description,
+                &expected_parent,
+                &expected_giver,
+            );
+            let Revision3EntityPayload::QuestDraft(after_quest) =
+                &outcome.project().entities[&fixture.quest_id].payload
+            else {
+                panic!("expected edited Quest")
+            };
+            assert_eq!(
+                after_quest.input.additional_objective_titles,
+                before_quest.input.additional_objective_titles
+            );
+        }
+    }
+
+    #[test]
+    fn revision3_context_edit_rejects_stale_unknown_noop_invalid_and_transport_inputs() {
+        let fixture = s3_fixture("context-edit-conflicts");
+        let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+        let project_json = fixture.project.to_canonical_json().unwrap();
+        let base_request =
+            context_edit_request_v1(&fixture.project, &head, &fixture.catalog, fixture.quest_id);
+        let evaluate = |request: &Revision3QuestContextEditRequestV1| {
+            apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+                &project_json,
+                &request.to_canonical_json().unwrap(),
+            )
+            .unwrap_err()
+        };
+
+        assert!(matches!(
+            evaluate(&base_request),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::NoChanges
+            )
+        ));
+        let mut stale_head = base_request.clone();
+        stale_head.expected_head.snapshot.sha256 = AuthoringSha256Digest::from_bytes([0xa1; 32]);
+        assert!(matches!(
+            evaluate(&stale_head),
+            Revision3QuestContextEditErrorV1::Binding(
+                Revision3QuestContextEditBindingErrorV1::CurrentHeadMismatch
+            )
+        ));
+        let mut stale_project_id = base_request.clone();
+        stale_project_id.expected_project_id = authoring_project_id(0xa2);
+        assert!(matches!(
+            evaluate(&stale_project_id),
+            Revision3QuestContextEditErrorV1::Binding(
+                Revision3QuestContextEditBindingErrorV1::ProjectIdentityMismatch
+            )
+        ));
+        let mut stale_revision = base_request.clone();
+        stale_revision.expected_revision += 1;
+        assert!(matches!(
+            evaluate(&stale_revision),
+            Revision3QuestContextEditErrorV1::Binding(
+                Revision3QuestContextEditBindingErrorV1::ProjectRevisionMismatch
+            )
+        ));
+        let mut stale_catalog = base_request.clone();
+        stale_catalog.expected_story_catalog_seal.byte_len += 1;
+        assert!(matches!(
+            evaluate(&stale_catalog),
+            Revision3QuestContextEditErrorV1::Binding(
+                Revision3QuestContextEditBindingErrorV1::StoryCatalogSealMismatch
+            )
+        ));
+        let mut stale_quest = base_request.clone();
+        stale_quest.expected_quest_revision += 1;
+        assert!(matches!(
+            evaluate(&stale_quest),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::QuestRevisionConflict { .. }
+            )
+        ));
+        let mut unknown_quest = base_request.clone();
+        unknown_quest.quest_id = authoring_entity_id(0xee);
+        assert!(matches!(
+            evaluate(&unknown_quest),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::InvalidQuestEntity { .. }
+            )
+        ));
+        let mut zero_quest = base_request.clone();
+        zero_quest.quest_id = authoring_entity_id(0);
+        assert!(matches!(
+            evaluate(&zero_quest),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::ZeroQuestId
+            )
+        ));
+        let mut unknown_parent = base_request.clone();
+        unknown_parent.parent_catalog_id = "g1r:quest-parent:missing".to_owned();
+        assert!(matches!(
+            evaluate(&unknown_parent),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::CatalogSelection(
+                    Revision3QuestCollisionCapabilityErrorV2::UnknownParent(_)
+                )
+            )
+        ));
+        let mut unknown_giver = base_request.clone();
+        unknown_giver.giver_catalog_id = "g1r:npc:missing".to_owned();
+        assert!(matches!(
+            evaluate(&unknown_giver),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::CatalogSelection(
+                    Revision3QuestCollisionCapabilityErrorV2::UnknownGiver(_)
+                )
+            )
+        ));
+        let mut invalid_description = base_request.clone();
+        invalid_description.description = "x".repeat(513);
+        assert!(matches!(
+            evaluate(&invalid_description),
+            Revision3QuestContextEditErrorV1::Conflict(
+                Revision3QuestContextEditConflictV1::InvalidQuestContext { .. }
+            )
+        ));
+
+        assert!(matches!(
+            apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None,),
+                &(project_json.clone() + "\n"),
+                &base_request.to_canonical_json().unwrap(),
+            ),
+            Err(Revision3QuestContextEditErrorV1::ProjectTransport(
+                Revision3QuestContextEditProjectTransportErrorV1::CurrentProjectSealMismatch
+            ))
+        ));
+        assert!(matches!(
+            apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None,),
+                &"x".repeat(MAX_PROJECT_JSON_BYTES + 1),
+                &base_request.to_canonical_json().unwrap(),
+            ),
+            Err(Revision3QuestContextEditErrorV1::ProjectTransport(
+                Revision3QuestContextEditProjectTransportErrorV1::InputTooLarge { .. }
+            ))
+        ));
+        assert!(matches!(
+            apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None,),
+                &project_json,
+                &"x".repeat(MAX_REVISION3_QUEST_CONTEXT_EDIT_REQUEST_JSON_BYTES_V1 + 1),
+            ),
+            Err(Revision3QuestContextEditErrorV1::Request(
+                Revision3QuestContextEditRequestJsonErrorV1::InputTooLarge { .. }
+            ))
+        ));
+        assert_eq!(fixture.project.to_canonical_json().unwrap(), project_json);
+    }
+
+    #[test]
+    fn revision3_context_edit_rejects_all_revision_overflows() {
+        #[derive(Clone, Copy)]
+        enum OverflowKind {
+            Project,
+            Quest,
+            Module,
+        }
+        for kind in [
+            OverflowKind::Project,
+            OverflowKind::Quest,
+            OverflowKind::Module,
+        ] {
+            let label = match kind {
+                OverflowKind::Project => "project",
+                OverflowKind::Quest => "quest",
+                OverflowKind::Module => "module",
+            };
+            let mut fixture = s3_fixture(&format!("context-edit-overflow-{label}"));
+            let module_id = {
+                let Revision3EntityPayload::QuestDraft(quest) =
+                    &fixture.project.entities[&fixture.quest_id].payload
+                else {
+                    panic!("expected overflow Quest")
+                };
+                quest.script_module.id
+            };
+            match kind {
+                OverflowKind::Project => fixture.project.revision = u64::MAX,
+                OverflowKind::Quest => {
+                    fixture
+                        .project
+                        .entities
+                        .get_mut(&fixture.quest_id)
+                        .unwrap()
+                        .revision = u64::MAX;
+                }
+                OverflowKind::Module => {
+                    fixture
+                        .project
+                        .entities
+                        .get_mut(&module_id)
+                        .unwrap()
+                        .revision = u64::MAX;
+                }
+            }
+            let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+            let mut request = context_edit_request_v1(
+                &fixture.project,
+                &head,
+                &fixture.catalog,
+                fixture.quest_id,
+            );
+            request.description = format!("Trigger {label} revision overflow.");
+            let error = apply_revision3_quest_context_edit_transaction_v1(
+                prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+                &fixture.project.to_canonical_json().unwrap(),
+                &request.to_canonical_json().unwrap(),
+            )
+            .unwrap_err();
+            match kind {
+                OverflowKind::Project => assert!(matches!(
+                    error,
+                    Revision3QuestContextEditErrorV1::Conflict(
+                        Revision3QuestContextEditConflictV1::ProjectRevisionOverflow
+                    )
+                )),
+                OverflowKind::Quest => assert!(matches!(
+                    error,
+                    Revision3QuestContextEditErrorV1::Conflict(
+                        Revision3QuestContextEditConflictV1::QuestRevisionOverflow { .. }
+                    )
+                )),
+                OverflowKind::Module => assert!(matches!(
+                    error,
+                    Revision3QuestContextEditErrorV1::Conflict(
+                        Revision3QuestContextEditConflictV1::ScriptModuleRevisionOverflow { .. }
+                    )
+                )),
+            }
+        }
+    }
+
+    #[test]
+    fn revision3_context_edit_cannot_acquire_authority_for_a_drifted_owned_module() {
+        let mut fixture = s3_fixture("context-edit-module-drift");
+        let module_id = {
+            let Revision3EntityPayload::QuestDraft(quest) =
+                &fixture.project.entities[&fixture.quest_id].payload
+            else {
+                panic!("expected drift Quest")
+            };
+            quest.script_module.id
+        };
+        let Revision3EntityPayload::ScriptModule(module) = &mut fixture
+            .project
+            .entities
+            .get_mut(&module_id)
+            .unwrap()
+            .payload
+        else {
+            panic!("expected drift ScriptModule")
+        };
+        module.source.push_str("// adversarial drift\n");
+        module.source_sha256 = AuthoringSha256Digest::from_bytes(
+            <Sha256 as sha2::Digest>::digest(module.source.as_bytes()).into(),
+        );
+        fixture.project.validate_closed_model().unwrap();
+        let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+        assert!(matches!(
+            fixture
+                .store
+                .prepare_current_revision3_quest_collision_source_v2(&head),
+            Err(gore_authoring::Revision3QuestCollisionSourceErrorV2::PersistedModuleDrift {
+                quest,
+                module,
+                ..
+            }) if quest == fixture.quest_id && module == module_id
         ));
     }
 
