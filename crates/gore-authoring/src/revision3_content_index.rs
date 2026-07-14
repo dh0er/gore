@@ -138,6 +138,8 @@ pub enum Revision3ContentEntitySummaryV1 {
         technical_id: String,
         title: String,
         objective_title: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        additional_objective_titles: Vec<String>,
         module_namespace: String,
         parent_runtime_class: String,
         giver_runtime_unique_name: String,
@@ -429,6 +431,7 @@ pub fn build_revision3_content_index_v1(
                     technical_id: value.input.technical_id.clone(),
                     title: value.input.title.clone(),
                     objective_title: value.input.objective_title.clone(),
+                    additional_objective_titles: value.input.additional_objective_titles.clone(),
                     module_namespace: value.input.module_namespace.clone(),
                     parent_runtime_class: value.input.parent_quest.runtime_class.clone(),
                     giver_runtime_unique_name: value.input.giver.runtime_unique_name.clone(),
@@ -669,8 +672,8 @@ mod tests {
     };
     use crate::{
         AssetMeta, AssetRef, AssetStoreIndex, FormatV2, ProjectMeta, SchemaRevisionV3,
-        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
-        REVISION3_QUEST_GENERATOR_VERSION,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+        REVISION3_QUEST_GENERATOR_ID,
     };
 
     fn project_id(value: u8) -> ProjectId {
@@ -948,7 +951,7 @@ mod tests {
                 revision: 0,
                 payload: EntityPayload::QuestDraft(QuestDraft {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
                     input: QuestDraftInput {
                         target: target(),
                         quest_id,
@@ -972,6 +975,10 @@ mod tests {
                         title: "The test".to_owned(),
                         description: "Do the thing".to_owned(),
                         objective_title: "Thing".to_owned(),
+                        additional_objective_titles: vec![
+                            "Inspect the thing".to_owned(),
+                            "Report the thing".to_owned(),
+                        ],
                         collision_catalog: QuestCollisionArtifactRef {
                             generation: target(),
                             catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),
@@ -995,13 +1002,13 @@ mod tests {
                 display_name: "A test quest source".to_owned(),
                 origin: OriginRef::Generated {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
                     owner: owner.clone(),
                 },
                 revision: 0,
                 payload: EntityPayload::ScriptModule(ScriptModule {
                     generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-                    generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+                    generator_version: REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
                     owner,
                     module_namespace: "PROJECT.QUESTS.TEST".to_owned(),
                     module_relative_path: "Project/Quests/Test.as".to_owned(),
@@ -1024,10 +1031,12 @@ mod tests {
             Revision3ContentEntitySummaryV1::QuestDraft {
                 technical_id,
                 title,
+                additional_objective_titles,
                 giver_runtime_unique_name,
                 ..
             } if technical_id == "GORE_QUEST_TEST"
                 && title == "The test"
+                && additional_objective_titles == &["Inspect the thing", "Report the thing"]
                 && giver_runtime_unique_name == "ASGHAN"
         ));
         assert_eq!(

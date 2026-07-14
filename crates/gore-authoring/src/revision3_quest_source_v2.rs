@@ -27,7 +27,8 @@ use crate::{
     migrate_revision2_to_revision3, project_revision3_quest_free_basis_to_revision2, ContentSeal,
     EntityId, GameGenerationAnchor, ProjectId, ProjectRevision2, ProjectRevision3,
     ProjectStoryCollisionIdentities, Sha256Digest, WorkingHead, WorkingStoreError,
-    MAX_PROJECT_JSON_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    MAX_PROJECT_JSON_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 
 pub const MAX_REVISION3_PRIOR_QUESTS_V2: usize = 14_285;
@@ -52,7 +53,7 @@ pub struct Revision3PriorQuestEvidenceV2 {
     source_sha256: Sha256Digest,
     module_namespace: String,
     module_relative_path: String,
-    symbols: [String; 5],
+    symbols: Vec<String>,
     parent: QuestParentInput,
     giver: QuestGiverInput,
 }
@@ -82,7 +83,7 @@ impl Revision3PriorQuestEvidenceV2 {
         &self.module_relative_path
     }
 
-    pub fn symbols(&self) -> &[String; 5] {
+    pub fn symbols(&self) -> &[String] {
         &self.symbols
     }
 
@@ -378,18 +379,7 @@ pub(crate) fn prepare_exact_revision3_quest_collision_source_v2(
             });
         }
 
-        let symbols: [String; 5] =
-            identity
-                .symbols
-                .try_into()
-                .map_err(|symbols: Vec<String>| {
-                    Revision3QuestCollisionSourceErrorV2::InvalidCurrentProject {
-                        reason: format!(
-                    "revision-3 Quest {quest_id} regenerated {} symbols; expected exactly 5",
-                    symbols.len()
-                ),
-                    }
-                })?;
+        let symbols = identity.symbols;
         let record = Revision3PriorQuestEvidenceV2 {
             quest_id: *quest_id,
             module_id,
@@ -563,7 +553,10 @@ fn validate_quest_pair<'a>(
 ) -> Result<&'a Entity, Revision3QuestCollisionSourceErrorV2> {
     let module_id = quest.script_module.id;
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || !matches!(
+            quest.generator_version,
+            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        )
     {
         return Err(Revision3QuestCollisionSourceErrorV2::ForeignGenerator {
             quest: quest_id,
@@ -594,7 +587,7 @@ fn validate_quest_pair<'a>(
         return Err(Revision3QuestCollisionSourceErrorV2::QuestOwnerDrift { quest: quest_id });
     }
     if module.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || module.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || module.generator_version != quest.generator_version
     {
         return Err(Revision3QuestCollisionSourceErrorV2::ForeignGenerator {
             quest: quest_id,
@@ -609,7 +602,7 @@ fn validate_quest_pair<'a>(
                 generator_version,
                 owner,
             } if generator_id == REVISION3_QUEST_GENERATOR_ID
-                && *generator_version == REVISION3_QUEST_GENERATOR_VERSION
+                && *generator_version == quest.generator_version
                 && owner == &expected_owner
         )
     {
@@ -701,9 +694,9 @@ fn validate_runtime_identities(
                 },
             );
         };
-        // Runtime IDs are a separate uniqueness domain, not artifact collision entries. The
-        // fixed seven identities per prior Quest are module + path + five symbols. Apply an
-        // independent finite map budget here without consuming that 100k collision-entry cap.
+        // Runtime IDs are a separate uniqueness domain, not artifact collision entries. Apply an
+        // independent finite map budget here without consuming the separately charged collision
+        // identities (module + path + every generator-version-specific symbol).
         charge_runtime_identity(authored_runtime_id, &mut count, &mut bytes)?;
         let folded = authored_runtime_id.to_ascii_lowercase();
         if let Some(first_owner) = seen.insert(folded, *id) {
@@ -1021,6 +1014,7 @@ mod tests {
                 title: "Exact prior".into(),
                 description: "Regenerated only from the exact current project".into(),
                 objective_title: "Reject every persisted drift".into(),
+                additional_objective_titles: Vec::new(),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: target.clone(),
                     catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),

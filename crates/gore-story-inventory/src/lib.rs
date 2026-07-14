@@ -826,7 +826,8 @@ mod tests {
         MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
         QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
         QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
-        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+        REVISION3_QUEST_GENERATOR_VERSION,
     };
     use sha2::Sha256;
     use std::collections::BTreeSet;
@@ -1760,6 +1761,7 @@ mod tests {
                 title: "Asghan Trial".to_owned(),
                 description: "Prove that the gate is secure.".to_owned(),
                 objective_title: "Report to Asghan".to_owned(),
+                additional_objective_titles: Vec::new(),
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
                     catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
@@ -1896,6 +1898,7 @@ mod tests {
                 title: format!("Authority Quest {ordinal}"),
                 description: "Exercise the exact-current multi-Quest transaction.".to_owned(),
                 objective_title: format!("Finish authority Quest {ordinal}"),
+                additional_objective_titles: Vec::new(),
             },
         }
     }
@@ -2048,6 +2051,7 @@ mod tests {
                 description: "Prove that repeated Quest authoring remains collision-safe."
                     .to_owned(),
                 objective_title: "Report to Asghan again".to_owned(),
+                additional_objective_titles: Vec::new(),
                 collision_catalog: first.input.collision_catalog,
             },
             script_module: Revision3TypedRef::new(
@@ -2186,7 +2190,7 @@ mod tests {
         let prior = source.prior_quests().get(&fixture.quest_id).unwrap();
         let prior_module = prior.module_namespace().to_owned();
         let prior_path = prior.module_relative_path().to_owned();
-        let prior_symbols = prior.symbols().clone();
+        let prior_symbols = prior.symbols().to_vec();
         let prior_evidence = source.prior_quest_evidence().clone();
         let nonquest_project = source.nonquest_basis().canonical_project().clone();
 
@@ -3123,7 +3127,11 @@ mod tests {
         let mut head = publish_revision3_head(&root, &store, &project);
 
         for ordinal in 1..=2 {
-            let request = request_v3(&project, &head, ordinal);
+            let mut request = request_v3(&project, &head, ordinal);
+            if ordinal == 1 {
+                request.intent.additional_objective_titles =
+                    vec!["Inspect the gate".to_owned(), "Report to Asghan".to_owned()];
+            }
             let outcome = apply_v3(&store, &head, &catalog, &project, &request);
             let prepared = prepare_revision3_quest_draft_persistence_v3(&store, outcome).unwrap();
 
@@ -3142,6 +3150,42 @@ mod tests {
                 .unwrap();
             assert_eq!(reopened.head, prepared.checkpoint.head);
             assert_eq!(reopened.project, prepared.project);
+            if ordinal == 1 {
+                let Revision3EntityPayload::QuestDraft(quest) =
+                    &reopened.project.entities[&request.quest_id].payload
+                else {
+                    panic!("expected persisted multi-objective Quest")
+                };
+                let Revision3EntityPayload::ScriptModule(module) =
+                    &reopened.project.entities[&request.script_module_id].payload
+                else {
+                    panic!("expected persisted multi-objective Quest module")
+                };
+                assert_eq!(
+                    quest.generator_version,
+                    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+                );
+                assert_eq!(
+                    quest.input.additional_objective_titles,
+                    ["Inspect the gate", "Report to Asghan"]
+                );
+                assert_eq!(module.generator_version, quest.generator_version);
+                let first = module
+                    .source
+                    .find("class UQuest_GORE_AUTHORITY_QUEST_1_OBJ_DONE")
+                    .unwrap();
+                let second = module
+                    .source
+                    .find("class UQuest_GORE_AUTHORITY_QUEST_1_OBJ_2")
+                    .unwrap();
+                let third = module
+                    .source
+                    .find("class UQuest_GORE_AUTHORITY_QUEST_1_OBJ_3")
+                    .unwrap();
+                assert!(first < second && second < third);
+                assert_eq!(module.source.matches("bSucceedParent = true").count(), 1);
+                assert!(module.source[third..].contains("default bSucceedParent = true;"));
+            }
             assert!(stored_asset_path(&root, prepared.imported_artifact.artifact.sha256).is_file());
 
             fs::write(

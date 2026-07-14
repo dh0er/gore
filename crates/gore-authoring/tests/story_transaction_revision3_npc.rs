@@ -212,6 +212,7 @@ fn project_with_valid_quest() -> ProjectRevision3 {
             title: "Existing Quest".to_owned(),
             description: "Already authored before the NPC.".to_owned(),
             objective_title: "Keep the exact Quest closure".to_owned(),
+            additional_objective_titles: Vec::new(),
             collision_catalog: artifact_ref.clone(),
         },
         script_module: Revision3TypedRef::new(

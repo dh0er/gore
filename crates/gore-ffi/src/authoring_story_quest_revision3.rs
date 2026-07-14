@@ -734,6 +734,10 @@ mod tests {
                 "title": format!("Native FFI Quest {ordinal}"),
                 "description": "Exercise the complete prepare-only native FFI path.",
                 "objective_title": format!("Finish native FFI Quest {ordinal}"),
+                "additional_objective_titles": [
+                    format!("Inspect native FFI Quest {ordinal}"),
+                    format!("Report native FFI Quest {ordinal}"),
+                ],
             }
         }))
         .unwrap();
@@ -989,6 +993,10 @@ mod tests {
         assert_eq!(first["runtime_status"], "runtime_unqualified");
         assert_eq!(first["artifact_authority"], "not_granted");
         assert_eq!(first["publication_status"], "not_supported");
+        assert!(first["project_json"]
+            .as_str()
+            .unwrap()
+            .contains("\"additional_objective_titles\":[\"Inspect native FFI Quest 1\",\"Report native FFI Quest 1\"]"));
         assert_eq!(
             fs::read(temp.path().join("gore-project.json")).unwrap(),
             published.head_bytes

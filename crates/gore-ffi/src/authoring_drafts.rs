@@ -603,6 +603,17 @@ fn quest_diagnostic(error: DraftQuestSkeletonError) -> Value {
             "QUEST_GENERATED_SYMBOL_COLLISION",
             "generated_symbols".to_owned(),
         ),
+        DraftQuestSkeletonError::TooManyObjectives { .. } => {
+            ("QUEST_TOO_MANY_OBJECTIVES", "objective_titles".to_owned())
+        }
+        DraftQuestSkeletonError::ObjectiveTitlesTooLarge { .. } => (
+            "QUEST_OBJECTIVE_TITLES_TOO_LARGE",
+            "objective_titles".to_owned(),
+        ),
+        DraftQuestSkeletonError::DuplicateObjectiveTitle { .. } => (
+            "QUEST_DUPLICATE_OBJECTIVE_TITLE",
+            "objective_titles".to_owned(),
+        ),
     };
     diagnostic(code, field, error.to_string())
 }
@@ -632,6 +643,11 @@ fn quest_field(field: DraftQuestField) -> String {
         DraftQuestField::Title => "title".to_owned(),
         DraftQuestField::Description => "description".to_owned(),
         DraftQuestField::ObjectiveTitle => "objective_title".to_owned(),
+        DraftQuestField::AdditionalObjectiveTitle { index } => {
+            // `index` is zero-based across the complete objective list, whose first entry is
+            // exposed separately as `objective_title`.
+            format!("additional_objective_titles[{}]", index.saturating_sub(1))
+        }
     }
 }
 
@@ -1007,6 +1023,20 @@ mod tests {
             "QUEST_INVALID_CHARACTER"
         );
         assert_eq!(response["diagnostics"][0]["field"], "title");
+    }
+
+    #[test]
+    fn additional_objective_diagnostics_use_list_local_indices() {
+        assert_eq!(
+            quest_field(DraftQuestField::AdditionalObjectiveTitle { index: 1 }),
+            "additional_objective_titles[0]"
+        );
+        assert_eq!(
+            quest_field(DraftQuestField::AdditionalObjectiveTitle {
+                index: gore_authoring::MAX_DRAFT_QUEST_OBJECTIVES - 1,
+            }),
+            "additional_objective_titles[6]"
+        );
     }
 
     #[test]

@@ -15,13 +15,13 @@ use crate::model_revision2::{
 };
 use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, ProjectRevision3, QuestDraft, QuestDraftInput,
-    ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use crate::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestCollisionCatalog,
-    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonV1, EntityId, FormatV2,
-    Sha256Digest,
+    DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonInputV2,
+    DraftQuestSkeletonV1, DraftQuestSkeletonV2, EntityId, FormatV2, Sha256Digest,
 };
 
 // This domain shipped first with the S3 verifier. Its exact bytes are retained so moving the
@@ -40,6 +40,10 @@ pub enum Revision3QuestGenerationError {
         actual_id: String,
         actual_version: u32,
     },
+    #[error(
+        "revision-3 Quest objective shape does not match generator version {generator_version}"
+    )]
+    ObjectiveGeneratorContract { generator_version: u32 },
     #[error("revision-3 Quest ScriptModule reference is zero, foreign, or mistyped")]
     InvalidScriptModuleReference,
     #[error("revision-3 Quest collision generation differs from its ArtifactRef")]
@@ -87,7 +91,10 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
     collision: QuestCollisionCatalogInput,
 ) -> Result<(ScriptModule, GeneratedStoryIdentity), Revision3QuestGenerationError> {
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || !matches!(
+            quest.generator_version,
+            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        )
     {
         return Err(Revision3QuestGenerationError::GeneratorContract {
             expected_id: REVISION3_QUEST_GENERATOR_ID,
@@ -148,7 +155,16 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         collision.symbols.into_iter().collect(),
     )
     .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?;
-    let generated = DraftQuestSkeletonV1::new(DraftQuestSkeletonInput {
+    if (quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION
+        && !quest.input.additional_objective_titles.is_empty())
+        || (quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+            && quest.input.additional_objective_titles.is_empty())
+    {
+        return Err(Revision3QuestGenerationError::ObjectiveGeneratorContract {
+            generator_version: quest.generator_version,
+        });
+    }
+    let base_input = DraftQuestSkeletonInput {
         target: quest.input.target.clone(),
         quest_id: quest.input.quest_id,
         module_namespace: quest.input.module_namespace.clone(),
@@ -160,32 +176,70 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         description: quest.input.description.clone(),
         objective_title: quest.input.objective_title.clone(),
         collision_catalog,
-    })
-    .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
-    .generate();
+    };
+    let (module_namespace, module_relative_path, source, source_sha256, symbols) =
+        if quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION {
+            let generated = DraftQuestSkeletonV1::new(base_input)
+                .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
+                .generate();
+            let names = generated.technical_names;
+            (
+                names.module_namespace,
+                names.module_relative_path,
+                generated.source,
+                generated.source_sha256,
+                vec![
+                    names.root_class,
+                    names.objective_class,
+                    names.text_helper,
+                    names.root_getter,
+                    names.objective_getter,
+                ],
+            )
+        } else {
+            let generated = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+                base: base_input,
+                additional_objective_titles: quest.input.additional_objective_titles.clone(),
+            })
+            .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
+            .generate();
+            let names = generated.technical_names;
+            let mut symbols = vec![
+                names.base.root_class,
+                names.base.objective_class,
+                names.base.text_helper,
+                names.base.root_getter,
+                names.base.objective_getter,
+            ];
+            for objective in names.additional_objectives {
+                symbols.push(objective.objective_class);
+                symbols.push(objective.objective_getter);
+            }
+            (
+                names.base.module_namespace,
+                names.base.module_relative_path,
+                generated.source,
+                generated.source_sha256,
+                symbols,
+            )
+        };
     let identity = GeneratedStoryIdentity {
-        module_namespace: generated.technical_names.module_namespace.clone(),
-        module_relative_path: generated.technical_names.module_relative_path.clone(),
-        symbols: vec![
-            generated.technical_names.root_class.clone(),
-            generated.technical_names.objective_class.clone(),
-            generated.technical_names.text_helper.clone(),
-            generated.technical_names.root_getter.clone(),
-            generated.technical_names.objective_getter.clone(),
-        ],
+        module_namespace: module_namespace.clone(),
+        module_relative_path: module_relative_path.clone(),
+        symbols,
     };
     let module = ScriptModule {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+        generator_version: quest.generator_version,
         owner: TypedRef::new(
             quest.script_module.project_id,
             quest.input.quest_id,
             EntityKind::QuestDraft,
         ),
-        module_namespace: generated.technical_names.module_namespace,
-        module_relative_path: generated.technical_names.module_relative_path,
-        source: generated.source,
-        source_sha256: generated.source_sha256,
+        module_namespace,
+        module_relative_path,
+        source,
+        source_sha256,
         input_fingerprint: revision3_quest_input_fingerprint_v2(&quest.input)?,
         status: ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
     };

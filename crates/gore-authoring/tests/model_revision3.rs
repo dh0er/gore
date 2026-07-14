@@ -17,7 +17,8 @@ use gore_authoring::{
     DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
     MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -106,6 +107,7 @@ fn quest_project() -> ProjectRevision3 {
             title: "Asghan's Trial".into(),
             description: "Prove that the gate is secure.".into(),
             objective_title: "Report to Asghan".into(),
+            additional_objective_titles: Vec::new(),
             collision_catalog: QuestCollisionArtifactRef {
                 generation: target(),
                 catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),
@@ -178,6 +180,7 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
     assert!(!canonical.contains("\"modules\""));
     assert!(!canonical.contains("\"relative_paths\""));
     assert!(!canonical.contains("\"symbols\""));
+    assert!(!canonical.contains("\"additional_objective_titles\""));
 
     let whitespace = format!(" {canonical}");
     assert!(matches!(
@@ -226,6 +229,52 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
     assert!(matches!(
         ProjectDocument::from_json(&invalid),
         Err(ProjectDocumentError::InvalidRevision3(_))
+    ));
+}
+
+#[test]
+fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
+    let mut project = quest_project();
+    let quest_id = entity_id(10);
+    let module_id = entity_id(11);
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&quest_id).unwrap().payload
+    else {
+        panic!("fixture Quest missing")
+    };
+    quest.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    quest.input.additional_objective_titles =
+        vec!["Inspect the gate".into(), "Report the secured mine".into()];
+    let Revision3EntityPayload::ScriptModule(module) =
+        &mut project.entities.get_mut(&module_id).unwrap().payload
+    else {
+        panic!("fixture module missing")
+    };
+    module.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    let Revision3OriginRef::Generated {
+        generator_version, ..
+    } = &mut project.entities.get_mut(&module_id).unwrap().origin
+    else {
+        panic!("fixture module origin missing")
+    };
+    *generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+
+    project.validate_closed_model().unwrap();
+    let canonical = project.to_canonical_json().unwrap();
+    assert!(canonical.contains(
+        "\"objective_title\":\"Report to Asghan\",\"additional_objective_titles\":[\"Inspect the gate\",\"Report the secured mine\"]"
+    ));
+    assert_eq!(ProjectRevision3::from_json(&canonical).unwrap(), project);
+
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&quest_id).unwrap().payload
+    else {
+        unreachable!()
+    };
+    quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+    assert!(matches!(
+        project.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
     ));
 }
 

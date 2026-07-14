@@ -52,6 +52,7 @@ pub const MAX_REVISION3_REFERENCED_ASSET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
 pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
+pub const REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION: u32 = 3;
 const MAX_CATALOG_LAYER_BYTES: usize = 128;
 
 pub(crate) fn quest_collision_artifact_media_for_layer(layer: &str) -> Option<&'static str> {
@@ -150,6 +151,10 @@ pub struct QuestDraftInput {
     pub title: String,
     pub description: String,
     pub objective_title: String,
+    /// Ordered objectives after the frozen first objective. Omitted when empty so all existing
+    /// generator-v2 project bytes remain canonical and byte-identical.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_objective_titles: Vec<String>,
     pub collision_catalog: QuestCollisionArtifactRef,
 }
 

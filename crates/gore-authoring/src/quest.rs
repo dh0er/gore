@@ -1,8 +1,9 @@
 //! Bounded, offline-only source generation for a discovery-shaped quest draft.
 //!
-//! The generated module contains exactly one `UG1RQuest` root, one subobjective, their generated
-//! defaults, and two read-only lookup helpers. It contains no transition predicate or action,
-//! dialog, effect, reward, journal, failure, filesystem, compiler, game, or save operation.
+//! Version 1 contains exactly one `UG1RQuest` root and one objective. Version 2 retains those
+//! identities and adds an ordered, bounded objective list. Both contain generated defaults and
+//! read-only lookup helpers but no transition predicate or action, dialog, effect, reward,
+//! journal, failure, filesystem, compiler, game, or save operation.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -14,9 +15,15 @@ use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 /// Stable generator identity for the discovery-only quest skeleton.
 pub const DRAFT_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 1;
+/// Generator version for the ordered multi-objective extension. Version 1 remains frozen so
+/// existing one-objective projects regenerate byte-for-byte.
+pub const DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION: u32 = 2;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
 pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES: usize = 128;
+pub const MAX_DRAFT_QUEST_OBJECTIVES: usize = 8;
+pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES: usize =
+    MAX_DRAFT_QUEST_OBJECTIVES * MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES;
 pub const MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES: usize = 128;
 
 const MAX_IDENTIFIER_BYTES: usize = 96;
@@ -108,6 +115,7 @@ pub enum DraftQuestField {
     Title,
     Description,
     ObjectiveTitle,
+    AdditionalObjectiveTitle { index: usize },
 }
 
 impl fmt::Display for DraftQuestField {
@@ -133,7 +141,10 @@ impl fmt::Display for DraftQuestField {
             Self::TextHelper => formatter.write_str("text helper identifier"),
             Self::Title => formatter.write_str("draft quest title"),
             Self::Description => formatter.write_str("draft quest description"),
-            Self::ObjectiveTitle => formatter.write_str("draft objective title"),
+            Self::ObjectiveTitle => formatter.write_str("draft objective title 1"),
+            Self::AdditionalObjectiveTitle { index } => {
+                write!(formatter, "draft objective title {}", index + 1)
+            }
         }
     }
 }
@@ -215,6 +226,12 @@ pub enum DraftQuestSkeletonError {
     },
     #[error("generated symbols {first:?} and {second:?} collide case-insensitively")]
     GeneratedSymbolCollision { first: String, second: String },
+    #[error("draft has {actual} objectives; maximum is {max}")]
+    TooManyObjectives { actual: usize, max: usize },
+    #[error("draft objective titles contain {actual} bytes; maximum is {max}")]
+    ObjectiveTitlesTooLarge { actual: usize, max: usize },
+    #[error("draft objective titles {first} and {second} are duplicates")]
+    DuplicateObjectiveTitle { first: usize, second: usize },
 }
 
 /// Exact giver identity from one sealed character catalog layer.
@@ -633,6 +650,277 @@ impl DraftQuestSkeletonV1 {
     }
 }
 
+/// Technical identities added by the ordered multi-objective generator. Objective 1 deliberately
+/// keeps the frozen version-1 class/getter names in [DraftQuestTechnicalNames].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestAdditionalObjectiveTechnicalNames {
+    pub ordinal: usize,
+    pub objective_class: String,
+    pub objective_getter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestMultiObjectiveTechnicalNames {
+    pub base: DraftQuestTechnicalNames,
+    pub additional_objectives: Vec<DraftQuestAdditionalObjectiveTechnicalNames>,
+}
+
+/// Version-2 input extends the frozen version-1 shell without changing its serialized or emitted
+/// shape. The additional list must be non-empty; callers with one objective continue to use V1.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSkeletonInputV2 {
+    pub base: DraftQuestSkeletonInput,
+    pub additional_objective_titles: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSkeletonV2 {
+    input: DraftQuestSkeletonInput,
+    additional_objective_titles: Vec<String>,
+    technical_names: DraftQuestMultiObjectiveTechnicalNames,
+    input_fingerprint: Sha256Digest,
+}
+
+/// Validate the complete ordered title list independently of source/collision inputs. This is
+/// shared by the closed revision-3 model and the generator so malformed persisted semantics fail
+/// before artifact authority is consulted.
+pub fn validate_draft_quest_objective_titles(
+    first: &str,
+    additional: &[String],
+) -> Result<(), DraftQuestSkeletonError> {
+    let objective_count = 1usize.saturating_add(additional.len());
+    if objective_count > MAX_DRAFT_QUEST_OBJECTIVES {
+        return Err(DraftQuestSkeletonError::TooManyObjectives {
+            actual: objective_count,
+            max: MAX_DRAFT_QUEST_OBJECTIVES,
+        });
+    }
+    let title_bytes = std::iter::once(first)
+        .chain(additional.iter().map(String::as_str))
+        .try_fold(0usize, |total, title| total.checked_add(title.len()))
+        .unwrap_or(usize::MAX);
+    if title_bytes > MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES {
+        return Err(DraftQuestSkeletonError::ObjectiveTitlesTooLarge {
+            actual: title_bytes,
+            max: MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES,
+        });
+    }
+
+    let mut folded_titles = std::collections::BTreeMap::<String, usize>::new();
+    for (zero_based_index, title) in std::iter::once(first)
+        .chain(additional.iter().map(String::as_str))
+        .enumerate()
+    {
+        let field = if zero_based_index == 0 {
+            DraftQuestField::ObjectiveTitle
+        } else {
+            DraftQuestField::AdditionalObjectiveTitle {
+                index: zero_based_index,
+            }
+        };
+        validate_literal_text(field, title, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES)?;
+        let folded = title.to_ascii_lowercase();
+        if let Some(first_index) = folded_titles.insert(folded, zero_based_index) {
+            return Err(DraftQuestSkeletonError::DuplicateObjectiveTitle {
+                first: first_index + 1,
+                second: zero_based_index + 1,
+            });
+        }
+    }
+    Ok(())
+}
+
+impl DraftQuestSkeletonV2 {
+    pub fn new(input: DraftQuestSkeletonInputV2) -> Result<Self, DraftQuestSkeletonError> {
+        let DraftQuestSkeletonInputV2 {
+            base,
+            additional_objective_titles,
+        } = input;
+        let objective_count = 1usize.saturating_add(additional_objective_titles.len());
+        if objective_count > MAX_DRAFT_QUEST_OBJECTIVES {
+            return Err(DraftQuestSkeletonError::TooManyObjectives {
+                actual: objective_count,
+                max: MAX_DRAFT_QUEST_OBJECTIVES,
+            });
+        }
+        if additional_objective_titles.is_empty() {
+            return Err(DraftQuestSkeletonError::EmptyValue {
+                field: DraftQuestField::AdditionalObjectiveTitle { index: 1 },
+            });
+        }
+
+        validate_draft_quest_objective_titles(&base.objective_title, &additional_objective_titles)?;
+
+        // V1 closes the complete old validation/collision surface first. This is what guarantees
+        // a version-2 extension cannot weaken the frozen one-objective contract.
+        let frozen = DraftQuestSkeletonV1::new(base)?;
+        let DraftQuestSkeletonV1 {
+            input,
+            technical_names: base_names,
+            ..
+        } = frozen;
+        let mut additional_names = Vec::with_capacity(additional_objective_titles.len());
+        for ordinal in 2..=objective_count {
+            additional_names.push(DraftQuestAdditionalObjectiveTechnicalNames {
+                ordinal,
+                objective_class: format!("UQuest_{}_OBJ_{ordinal}", input.technical_id),
+                objective_getter: format!("{}{}", base_names.objective_getter, ordinal),
+            });
+        }
+
+        validate_multi_objective_name_lengths(&additional_names)?;
+        check_multi_objective_symbol_collisions(&base_names, &additional_names)?;
+        for names in &additional_names {
+            if input
+                .parent_quest
+                .runtime_class
+                .eq_ignore_ascii_case(&names.objective_class)
+            {
+                return Err(DraftQuestSkeletonError::ParentClassCollision {
+                    class_name: input.parent_quest.runtime_class.clone(),
+                });
+            }
+            for symbol in [&names.objective_class, &names.objective_getter] {
+                if input
+                    .collision_catalog
+                    .contains(DraftQuestCollisionKind::Symbol, symbol)
+                {
+                    return Err(DraftQuestSkeletonError::GeneratedNameCollision {
+                        kind: DraftQuestCollisionKind::Symbol,
+                        name: symbol.clone(),
+                    });
+                }
+            }
+        }
+
+        let technical_names = DraftQuestMultiObjectiveTechnicalNames {
+            base: base_names,
+            additional_objectives: additional_names,
+        };
+        let input_fingerprint = fingerprint_multi_objective_input(
+            &input,
+            &additional_objective_titles,
+            &technical_names,
+        );
+        Ok(Self {
+            input,
+            additional_objective_titles,
+            technical_names,
+            input_fingerprint,
+        })
+    }
+
+    pub fn target(&self) -> &GameGenerationAnchor {
+        &self.input.target
+    }
+
+    pub fn quest_id(&self) -> EntityId {
+        self.input.quest_id
+    }
+
+    pub fn technical_names(&self) -> &DraftQuestMultiObjectiveTechnicalNames {
+        &self.technical_names
+    }
+
+    pub fn input_fingerprint(&self) -> Sha256Digest {
+        self.input_fingerprint
+    }
+
+    /// Emit a deterministic root followed by objectives in author order. The first objective
+    /// retains the V1 identities; only the final objective carries `bSucceedParent = true`.
+    /// This is source shape, not runtime transition qualification.
+    pub fn generate(&self) -> DraftQuestMultiObjectiveGeneratedSource {
+        let names = &self.technical_names.base;
+        let giver = self.input.giver.runtime_unique_name();
+        let mut source = format!(
+            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = {parent}::StaticClass();\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n    default bExternalStartTrigger = true;\n}}\n\n{root} {root_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({root}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{root}>(Quest);\n}}\n\n",
+            text_helper = names.text_helper,
+            root = names.root_class,
+            base = QUEST_BASE_CLASS,
+            parent = self.input.parent_quest.runtime_class(),
+            root_kind = ROOT_KIND,
+            hero = HERO_UNIQUE_NAME,
+            giver = giver,
+            title = self.input.title,
+            description = self.input.description,
+            root_getter = names.root_getter,
+        );
+
+        let objective_count = 1 + self.additional_objective_titles.len();
+        let objectives = std::iter::once((
+            names.objective_class.as_str(),
+            names.objective_getter.as_str(),
+            self.input.objective_title.as_str(),
+        ))
+        .chain(
+            self.technical_names
+                .additional_objectives
+                .iter()
+                .zip(&self.additional_objective_titles)
+                .map(|(names, title)| {
+                    (
+                        names.objective_class.as_str(),
+                        names.objective_getter.as_str(),
+                        title.as_str(),
+                    )
+                }),
+        );
+        for (zero_based_index, (objective, objective_getter, objective_title)) in
+            objectives.enumerate()
+        {
+            source.push_str(&format!(
+                "class {objective} : {base}\n{{\n    default ParentQuestClass = {root}::StaticClass();\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n    default bExternalStartTrigger = true;\n    default bExternalSuccessTrigger = true;\n",
+                base = QUEST_BASE_CLASS,
+                root = names.root_class,
+                objective_kind = OBJECTIVE_KIND,
+                text_helper = names.text_helper,
+            ));
+            if zero_based_index + 1 == objective_count {
+                source.push_str("    default bSucceedParent = true;\n");
+            }
+            source.push_str(&format!(
+                "}}\n\n{objective} {objective_getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({objective}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{objective}>(Quest);\n}}\n",
+            ));
+            if zero_based_index + 1 != objective_count {
+                source.push('\n');
+            }
+        }
+        let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
+        DraftQuestMultiObjectiveGeneratedSource {
+            target: self.input.target.clone(),
+            quest_id: self.input.quest_id,
+            generator_id: DRAFT_QUEST_GENERATOR_ID,
+            generator_version: DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION,
+            giver: self.input.giver.clone(),
+            parent_quest: self.input.parent_quest.clone(),
+            collision_catalog: self.input.collision_catalog.anchor(),
+            technical_names: self.technical_names.clone(),
+            fixed_shape: DraftQuestFixedShape::DISCOVERY_ONLY,
+            source,
+            source_sha256,
+            input_fingerprint: self.input_fingerprint,
+            status: DraftQuestCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestMultiObjectiveGeneratedSource {
+    pub target: GameGenerationAnchor,
+    pub quest_id: EntityId,
+    pub generator_id: &'static str,
+    pub generator_version: u32,
+    pub giver: CatalogQualifiedQuestGiver,
+    pub parent_quest: CatalogQualifiedParentQuest,
+    pub collision_catalog: DraftQuestCatalogLayerAnchor,
+    pub technical_names: DraftQuestMultiObjectiveTechnicalNames,
+    pub fixed_shape: DraftQuestFixedShape,
+    pub source: String,
+    pub source_sha256: Sha256Digest,
+    pub input_fingerprint: Sha256Digest,
+    pub status: DraftQuestCapabilityStatus,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DraftQuestGeneratedSource {
     pub target: GameGenerationAnchor,
@@ -894,6 +1182,62 @@ fn fingerprint_input(input: &DraftQuestSkeletonInput) -> Sha256Digest {
     Sha256Digest::from_bytes(hasher.finalize().into())
 }
 
+fn fingerprint_multi_objective_input(
+    input: &DraftQuestSkeletonInput,
+    additional_titles: &[String],
+    names: &DraftQuestMultiObjectiveTechnicalNames,
+) -> Sha256Digest {
+    let mut hasher = Sha256::new();
+    fingerprint_bytes(
+        &mut hasher,
+        "schema",
+        b"gore-authoring.draft-quest-skeleton-v2.input-fingerprint",
+    );
+    fingerprint_u64(
+        &mut hasher,
+        "generator.version",
+        u64::from(DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION),
+    );
+    fingerprint_bytes(
+        &mut hasher,
+        "frozen-v1.input-fingerprint",
+        fingerprint_input(input).as_bytes(),
+    );
+    fingerprint_u64(
+        &mut hasher,
+        "objective.count",
+        (1 + additional_titles.len()) as u64,
+    );
+    fingerprint_string(&mut hasher, "objective.title", &input.objective_title);
+    for (offset, (title, technical)) in additional_titles
+        .iter()
+        .zip(&names.additional_objectives)
+        .enumerate()
+    {
+        let ordinal = offset + 2;
+        fingerprint_string(&mut hasher, &format!("objective.{ordinal}.title"), title);
+        fingerprint_string(
+            &mut hasher,
+            &format!("objective.{ordinal}.class"),
+            &technical.objective_class,
+        );
+        fingerprint_string(
+            &mut hasher,
+            &format!("objective.{ordinal}.getter"),
+            &technical.objective_getter,
+        );
+    }
+    fingerprint_bytes(&mut hasher, "shape.last-objective-succeeds-parent", &[1]);
+    fingerprint_string(&mut hasher, "capability.authoring", "OfflineDraft");
+    fingerprint_string(&mut hasher, "capability.discovery", "RuntimeUnqualified");
+    fingerprint_string(
+        &mut hasher,
+        "capability.transitions",
+        "TransitionsRuntimeUnqualified",
+    );
+    Sha256Digest::from_bytes(hasher.finalize().into())
+}
+
 fn fingerprint_seal(hasher: &mut Sha256, field: &str, seal: &ContentSeal) {
     fingerprint_u64(hasher, &format!("{field}.byte-length"), seal.byte_len);
     fingerprint_bytes(hasher, &format!("{field}.sha256"), seal.sha256.as_bytes());
@@ -937,6 +1281,52 @@ fn check_generated_symbol_collisions(
             return Err(DraftQuestSkeletonError::GeneratedSymbolCollision {
                 first: first.to_owned(),
                 second: symbol.to_owned(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_multi_objective_name_lengths(
+    names: &[DraftQuestAdditionalObjectiveTechnicalNames],
+) -> Result<(), DraftQuestSkeletonError> {
+    for names in names {
+        for value in [&names.objective_class, &names.objective_getter] {
+            if value.len() > MAX_IDENTIFIER_BYTES {
+                return Err(DraftQuestSkeletonError::ValueTooLong {
+                    field: DraftQuestField::TechnicalId,
+                    actual: value.len(),
+                    max: MAX_IDENTIFIER_BYTES,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_multi_objective_symbol_collisions(
+    base: &DraftQuestTechnicalNames,
+    additional: &[DraftQuestAdditionalObjectiveTechnicalNames],
+) -> Result<(), DraftQuestSkeletonError> {
+    let mut seen = std::collections::BTreeMap::<String, String>::new();
+    for symbol in [
+        &base.root_class,
+        &base.objective_class,
+        &base.text_helper,
+        &base.root_getter,
+        &base.objective_getter,
+    ]
+    .into_iter()
+    .chain(
+        additional
+            .iter()
+            .flat_map(|names| [&names.objective_class, &names.objective_getter]),
+    ) {
+        let key = symbol.to_ascii_lowercase();
+        if let Some(first) = seen.insert(key, symbol.clone()) {
+            return Err(DraftQuestSkeletonError::GeneratedSymbolCollision {
+                first,
+                second: symbol.clone(),
             });
         }
     }

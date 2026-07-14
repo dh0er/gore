@@ -122,6 +122,7 @@ fn add_quest(
             title: format!("Quest {suffix}"),
             description: "Exact current-project source evidence".into(),
             objective_title: "Regenerate without historical authority".into(),
+            additional_objective_titles: Vec::new(),
             collision_catalog: artifact,
         },
         script_module: Revision3TypedRef::new(

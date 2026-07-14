@@ -2,8 +2,10 @@ use gore_authoring::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, ContentSeal,
     DraftQuestAuthoringStatus, DraftQuestCollisionCatalog, DraftQuestCollisionKind,
     DraftQuestDiscoveryStatus, DraftQuestSkeletonError, DraftQuestSkeletonInput,
-    DraftQuestSkeletonV1, DraftQuestTransitionStatus, EntityId, GameGenerationAnchor, Sha256Digest,
-    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
+    DraftQuestSkeletonInputV2, DraftQuestSkeletonV1, DraftQuestSkeletonV2,
+    DraftQuestTransitionStatus, EntityId, GameGenerationAnchor, Sha256Digest,
+    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION,
+    DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
 };
 
@@ -917,4 +919,111 @@ fn collision_error_names_its_domain() {
             ..
         })
     ));
+}
+
+#[test]
+fn multi_objective_source_is_ordered_and_only_the_last_objective_succeeds_parent() {
+    let generated = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+        base: input(),
+        additional_objective_titles: vec![
+            "Find the guard captain".into(),
+            "Report the secured gate".into(),
+        ],
+    })
+    .unwrap()
+    .generate();
+
+    assert_eq!(
+        generated.generator_version,
+        DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION
+    );
+    let first = generated
+        .source
+        .find("class UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_DONE")
+        .unwrap();
+    let second = generated
+        .source
+        .find("class UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_2")
+        .unwrap();
+    let third = generated
+        .source
+        .find("class UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_3")
+        .unwrap();
+    assert!(first < second && second < third);
+    assert_eq!(generated.source.matches("bSucceedParent = true").count(), 1);
+    assert!(generated.source[third..].contains("default bSucceedParent = true;"));
+    assert!(!generated.source[first..second].contains("bSucceedParent"));
+    assert!(!generated.source[second..third].contains("bSucceedParent"));
+}
+
+#[test]
+fn multi_objective_titles_are_closed_bounded_unique_and_order_sensitive() {
+    assert!(matches!(
+        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+            base: input(),
+            additional_objective_titles: vec![],
+        }),
+        Err(DraftQuestSkeletonError::EmptyValue { .. })
+    ));
+    assert!(matches!(
+        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+            base: input(),
+            additional_objective_titles: vec!["Step".into(); 8],
+        }),
+        Err(DraftQuestSkeletonError::TooManyObjectives { .. })
+    ));
+    assert!(matches!(
+        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+            base: input(),
+            additional_objective_titles: vec!["talk to asghan once more".into()],
+        }),
+        Err(DraftQuestSkeletonError::DuplicateObjectiveTitle { .. })
+    ));
+    assert!(matches!(
+        DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+            base: input(),
+            additional_objective_titles: vec![" ".into()],
+        }),
+        Err(DraftQuestSkeletonError::NonCanonicalText { .. })
+    ));
+
+    let first = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+        base: input(),
+        additional_objective_titles: vec!["Inspect the gate".into(), "Report back".into()],
+    })
+    .unwrap();
+    let second = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+        base: input(),
+        additional_objective_titles: vec!["Report back".into(), "Inspect the gate".into()],
+    })
+    .unwrap();
+    assert_ne!(first.input_fingerprint(), second.input_fingerprint());
+}
+
+#[test]
+fn every_added_objective_symbol_is_reserved_against_the_catalog() {
+    for symbol in [
+        "UQuest_GORE_PROBE_ASGHAN_MINI_OBJ_2",
+        "GetGoreProbeAsghanMiniObjective2",
+    ] {
+        let target = generation("11");
+        let catalog = collision_catalog(
+            &target,
+            "33",
+            COLLISION_LAYER,
+            vec![],
+            vec![],
+            vec![symbol.into()],
+        );
+        assert!(matches!(
+            DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
+                base: input_with_catalog(catalog),
+                additional_objective_titles: vec!["Inspect the gate".into()],
+            }),
+            Err(DraftQuestSkeletonError::GeneratedNameCollision {
+                kind: DraftQuestCollisionKind::Symbol,
+                ..
+            })
+        ));
+    }
 }

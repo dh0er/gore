@@ -552,6 +552,9 @@ fn quest_error_field(error: &DraftQuestSkeletonError) -> String {
         | DraftQuestSkeletonError::DuplicateCollisionEntry { kind, .. }
         | DraftQuestSkeletonError::GeneratedNameCollision { kind, .. } => collision_field(*kind),
         DraftQuestSkeletonError::GeneratedSymbolCollision { .. } => "generated_symbols".to_owned(),
+        DraftQuestSkeletonError::TooManyObjectives { .. }
+        | DraftQuestSkeletonError::ObjectiveTitlesTooLarge { .. }
+        | DraftQuestSkeletonError::DuplicateObjectiveTitle { .. } => "objective_titles".to_owned(),
     }
 }
 
@@ -580,6 +583,11 @@ fn quest_field(field: DraftQuestField) -> String {
         DraftQuestField::Title => "title".to_owned(),
         DraftQuestField::Description => "description".to_owned(),
         DraftQuestField::ObjectiveTitle => "objective_title".to_owned(),
+        DraftQuestField::AdditionalObjectiveTitle { index } => {
+            // `index` is zero-based across the complete objective list, whose first entry is
+            // exposed separately as `objective_title`.
+            format!("additional_objective_titles[{}]", index.saturating_sub(1))
+        }
     }
 }
 
@@ -614,4 +622,23 @@ fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
                 right.related_entities.as_slice(),
             ))
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn additional_objective_diagnostics_use_list_local_indices() {
+        assert_eq!(
+            quest_field(DraftQuestField::AdditionalObjectiveTitle { index: 1 }),
+            "additional_objective_titles[0]"
+        );
+        assert_eq!(
+            quest_field(DraftQuestField::AdditionalObjectiveTitle {
+                index: crate::MAX_DRAFT_QUEST_OBJECTIVES - 1,
+            }),
+            "additional_objective_titles[6]"
+        );
+    }
 }

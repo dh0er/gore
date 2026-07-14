@@ -8,7 +8,8 @@ use gore_authoring::{
     Revision3QuestDraftInput, Revision3QuestGenerationError, Revision3QuestGiverInput,
     Revision3QuestParentInput, Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3,
     Sha256Digest, WorkingHead, WorkingStoreFormat, QUEST_COLLISION_CATALOG_LAYER,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
 };
 use gore_story_inventory::{QuestCollisionCapabilityArtifactV1, VerifiedQuestCollisionCapability};
 use sha2::{Digest as _, Sha256};
@@ -95,6 +96,7 @@ fn quest(project: ProjectId) -> Revision3QuestDraft {
             title: "Asghan Trial".to_owned(),
             description: "Prove that the gate is secure.".to_owned(),
             objective_title: "Report to Asghan".to_owned(),
+            additional_objective_titles: Vec::new(),
             collision_catalog: artifact_ref(),
         },
         script_module: Revision3TypedRef::new(
@@ -216,6 +218,52 @@ fn v2_lowering_is_deterministic_and_checks_the_moved_collision_set() {
         regenerate_revision3_quest_module(&draft, collision),
         Err(Revision3QuestInspectionError::InvalidQuestIntent(
             DraftQuestSkeletonError::GeneratedNameCollision { .. }
+        ))
+    ));
+}
+
+#[test]
+fn v3_multi_objective_lowering_preserves_order_and_reserves_every_symbol() {
+    let mut draft = quest(project_id(8));
+    draft.generator_version = REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION;
+    draft.input.additional_objective_titles = vec![
+        "Inspect the gate".to_owned(),
+        "Report the secured gate".to_owned(),
+    ];
+    let generated = regenerate_revision3_quest_module(&draft, collision_input()).unwrap();
+    assert_eq!(
+        generated.generator_version,
+        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+    );
+    let first = generated.source.find("_OBJ_DONE").unwrap();
+    let second = generated.source.find("_OBJ_2").unwrap();
+    let third = generated.source.find("_OBJ_3").unwrap();
+    assert!(first < second && second < third);
+    assert_eq!(generated.source.matches("bSucceedParent = true").count(), 1);
+
+    for symbol in [
+        "UQuest_GORE_ASGHAN_TRIAL_OBJ_2",
+        "GetGoreAsghanTrialObjective3",
+    ] {
+        let mut collision = collision_input();
+        collision.symbols.insert(symbol.to_owned());
+        assert!(matches!(
+            regenerate_revision3_quest_module(&draft, collision),
+            Err(Revision3QuestInspectionError::InvalidQuestIntent(
+                DraftQuestSkeletonError::GeneratedNameCollision {
+                    kind: gore_authoring::DraftQuestCollisionKind::Symbol,
+                    ..
+                }
+            ))
+        ));
+    }
+
+    let mut wrong_version = draft.clone();
+    wrong_version.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+    assert!(matches!(
+        regenerate_revision3_quest_module(&wrong_version, collision_input()),
+        Err(Revision3QuestInspectionError::SharedQuestGeneration(
+            Revision3QuestGenerationError::ObjectiveGeneratorContract { .. }
         ))
     ));
 }

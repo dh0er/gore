@@ -7,10 +7,12 @@ use crate::model_revision3::{
     ProjectRevision3, ProjectRevision3ValidationError, ScriptModuleStatus,
     MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
     MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use crate::{
-    Revision3TypedRef, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+    validate_draft_quest_objective_titles, Revision3TypedRef, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION,
 };
 
 impl ProjectRevision3 {
@@ -209,13 +211,29 @@ impl ProjectRevision3 {
             quest: quest_id,
             reason: reason.to_owned(),
         };
-        if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-            || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
-        {
+        let supported_version = matches!(
+            quest.generator_version,
+            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        );
+        if quest.generator_id != REVISION3_QUEST_GENERATOR_ID || !supported_version {
             return Err(invalid(
-                "generator contract is not revision-3 Quest version 2",
+                "generator contract is not supported revision-3 Quest version 2 or 3",
             ));
         }
+        if (quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION
+            && !quest.input.additional_objective_titles.is_empty())
+            || (quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+                && quest.input.additional_objective_titles.is_empty())
+        {
+            return Err(invalid(
+                "Quest objective list does not match its generator version",
+            ));
+        }
+        validate_draft_quest_objective_titles(
+            &quest.input.objective_title,
+            &quest.input.additional_objective_titles,
+        )
+        .map_err(|_| invalid("Quest objective list is not closed and bounded"))?;
         if quest.input.quest_id != quest_id {
             return Err(invalid("quest input id does not match its entity id"));
         }
@@ -302,7 +320,7 @@ impl ProjectRevision3 {
             || module.owner.id != quest_id
             || module.owner.expected_kind != EntityKind::QuestDraft
             || module.generator_id != REVISION3_QUEST_GENERATOR_ID
-            || module.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+            || module.generator_version != quest.generator_version
             || module.status != ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED
         {
             return Err(
@@ -318,7 +336,7 @@ impl ProjectRevision3 {
                     generator_version,
                     owner,
                 } if generator_id == REVISION3_QUEST_GENERATOR_ID
-                    && *generator_version == REVISION3_QUEST_GENERATOR_VERSION
+                    && *generator_version == quest.generator_version
                     && owner == &module.owner
             )
         {

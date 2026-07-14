@@ -22,6 +22,7 @@ mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_npc;
+mod story_transaction_revision3_voice;
 mod strict_json;
 mod validate;
 mod validate_revision2;
@@ -86,8 +87,8 @@ pub use model_revision3::{
     MAX_REVISION3_SNAPSHOT_BYTES, QUEST_COLLISION_ARTIFACT_FORMAT,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     QUEST_COLLISION_ARTIFACT_SCHEMA_REVISION, QUEST_COLLISION_CATALOG_LAYER,
-    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 pub use npc::{
     LogicalNpcCloneAuthoringStatus, LogicalNpcCloneCapabilityStatus, LogicalNpcCloneClassNames,
@@ -98,14 +99,18 @@ pub use npc::{
     MAX_LOGICAL_NPC_UNIQUE_NAME_BYTES,
 };
 pub use quest::{
-    CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestAuthoringStatus,
+    validate_draft_quest_objective_titles, CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver,
+    DraftQuestAdditionalObjectiveTechnicalNames, DraftQuestAuthoringStatus,
     DraftQuestCapabilityStatus, DraftQuestCatalogLayerAnchor, DraftQuestCollisionCatalog,
     DraftQuestCollisionKind, DraftQuestDiscoveryStatus, DraftQuestField, DraftQuestFixedShape,
-    DraftQuestGeneratedSource, DraftQuestSkeletonError, DraftQuestSkeletonInput,
-    DraftQuestSkeletonV1, DraftQuestTechnicalNames, DraftQuestTransitionStatus,
-    DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
-    MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
-    MAX_DRAFT_QUEST_TITLE_BYTES,
+    DraftQuestGeneratedSource, DraftQuestMultiObjectiveGeneratedSource,
+    DraftQuestMultiObjectiveTechnicalNames, DraftQuestSkeletonError, DraftQuestSkeletonInput,
+    DraftQuestSkeletonInputV2, DraftQuestSkeletonV1, DraftQuestSkeletonV2,
+    DraftQuestTechnicalNames, DraftQuestTransitionStatus, DRAFT_QUEST_GENERATOR_ID,
+    DRAFT_QUEST_GENERATOR_VERSION, DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION,
+    MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES, MAX_DRAFT_QUEST_DESCRIPTION_BYTES,
+    MAX_DRAFT_QUEST_OBJECTIVES, MAX_DRAFT_QUEST_OBJECTIVE_TITLES_BYTES,
+    MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES, MAX_DRAFT_QUEST_TITLE_BYTES,
 };
 pub use revision3_content_index::{
     build_revision3_content_index_v1, Revision3ContentAssetClassV1,
@@ -163,10 +168,24 @@ pub use story_transaction_revision3_npc::{
     MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
     REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
 };
+pub use story_transaction_revision3_voice::{
+    apply_revision3_voice_take_transaction_v1, preflight_revision3_voice_take_transaction_v1,
+    Revision3VoiceBuildStatusV1, Revision3VoiceEntityRoleV1, Revision3VoicePublicationStatusV1,
+    Revision3VoiceRuntimeStatusV1, Revision3VoiceTakePreflightEvaluationV1,
+    Revision3VoiceTakeStageConflictV1, Revision3VoiceTakeStageErrorV1,
+    Revision3VoiceTakeStageEvaluationV1, Revision3VoiceTakeStageOutcomeV1,
+    Revision3VoiceTakeStageRejectionV1, Revision3VoiceTakeStageRequestJsonErrorV1,
+    Revision3VoiceTakeStageRequestV1, Revision3VoiceTargetAuthorityV1,
+    MAX_REVISION3_VOICE_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1,
+    MAX_REVISION3_VOICE_REQUEST_JSON_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
+    MAX_REVISION3_VOICE_TEXT_BYTES_V1, REVISION3_VOICE_SLOT_GENERATOR_ID_V1,
+    REVISION3_VOICE_SLOT_GENERATOR_VERSION_V1, REVISION3_VOICE_TAKE_IMPORTER_ID_V1,
+};
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
     AssetVerification, CheckpointPreparation, ImportedOgg, ImportedQuestCollisionArtifactV1,
-    ImportedQuestCollisionArtifactV2, OpenedCheckpoint, OpenedDocumentCheckpoint,
-    OpenedRevision3Checkpoint, Revision3CheckpointPreparation, Revision3SnapshotManifest,
-    WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
+    ImportedQuestCollisionArtifactV2, OggImportError, OggImportFailureContext, OpenedCheckpoint,
+    OpenedDocumentCheckpoint, OpenedRevision3Checkpoint, PreparedOggImport,
+    Revision3CheckpointPreparation, Revision3SnapshotManifest, WorkingHead, WorkingProjectStore,
+    WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
 };

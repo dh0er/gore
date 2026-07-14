@@ -21,8 +21,8 @@ use gore_authoring::{
     Revision3TypedRef as TypedRef, Sha256Digest as AuthoringSha256Digest, WorkingHead,
     MAX_PROJECT_JSON_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
     MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -50,6 +50,10 @@ pub struct Revision3QuestDraftIntentV3 {
     pub title: String,
     pub description: String,
     pub objective_title: String,
+    /// Ordered objectives after objective 1. Empty is omitted to retain the exact canonical v3
+    /// request spelling accepted by existing clients.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_objective_titles: Vec<String>,
 }
 
 /// Exact basis-CAS-bound request for one authority-sensitive revision-3 Quest transaction.
@@ -394,6 +398,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
         title,
         description,
         objective_title,
+        additional_objective_titles,
     } = intent;
 
     let raw_artifact = authoring_seal(collision_artifact.artifact_seal());
@@ -429,7 +434,11 @@ pub fn apply_revision3_quest_draft_transaction_v3(
     );
     let quest = QuestDraft {
         generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-        generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+        generator_version: if additional_objective_titles.is_empty() {
+            REVISION3_QUEST_GENERATOR_VERSION
+        } else {
+            REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        },
         input: QuestDraftInput {
             target: project.target.clone(),
             quest_id,
@@ -441,6 +450,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
             title,
             description,
             objective_title,
+            additional_objective_titles,
             collision_catalog: artifact_reference,
         },
         script_module: module_ref,
@@ -482,6 +492,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
             .insert(raw_artifact.sha256, artifact_meta);
         debug_assert!(replaced.is_none());
     }
+    let quest_generator_version = quest.generator_version;
     let quest_entity = Entity {
         id: quest_id,
         display_name,
@@ -496,7 +507,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
         display_name: module.module_namespace.clone(),
         origin: OriginRef::Generated {
             generator_id: REVISION3_QUEST_GENERATOR_ID.to_owned(),
-            generator_version: REVISION3_QUEST_GENERATOR_VERSION,
+            generator_version: quest_generator_version,
             owner,
         },
         revision: 0,
@@ -843,14 +854,16 @@ mod tests {
                 title: "Request v3".to_owned(),
                 description: "Strict request transport".to_owned(),
                 objective_title: "Stay canonical".to_owned(),
+                additional_objective_titles: Vec::new(),
             },
         }
     }
 
     #[test]
     fn request_v3_is_exact_canonical_bounded_and_duplicate_free() {
-        let request = request();
-        let canonical = request.to_canonical_json().unwrap();
+        let base_request = request();
+        let canonical = base_request.to_canonical_json().unwrap();
+        assert!(!canonical.contains("additional_objective_titles"));
         for forbidden in [
             "\"expected_target\":",
             "\"collision_catalog\":",
@@ -869,7 +882,7 @@ mod tests {
         }
         assert_eq!(
             Revision3QuestDraftInsertRequestV3::from_json(&canonical).unwrap(),
-            request
+            base_request
         );
         assert!(matches!(
             Revision3QuestDraftInsertRequestV3::from_json(&(canonical.clone() + "\n")),
@@ -899,6 +912,18 @@ mod tests {
             ),
             Err(Revision3QuestDraftInsertRequestJsonErrorV3::InputTooLarge { .. })
         ));
+
+        let mut multi = request();
+        multi.intent.additional_objective_titles =
+            vec!["Inspect the gate".to_owned(), "Report to Asghan".to_owned()];
+        let multi_json = multi.to_canonical_json().unwrap();
+        assert!(multi_json.contains(
+            "\"additional_objective_titles\":[\"Inspect the gate\",\"Report to Asghan\"]"
+        ));
+        assert_eq!(
+            Revision3QuestDraftInsertRequestV3::from_json(&multi_json).unwrap(),
+            multi
+        );
     }
 
     #[test]

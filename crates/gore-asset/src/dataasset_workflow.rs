@@ -8,8 +8,8 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs;
-use std::io::Read;
+use std::fs::{self, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -549,6 +549,7 @@ pub struct VerifiedFixedLeafStageInput {
     usmap: Vec<u8>,
     sidecars: Vec<VerifiedFixedLeafStageSidecar>,
     game_root: PathBuf,
+    retained_source_roots: Vec<PathBuf>,
     executable: VerifiedGameExecutableAnchor,
 }
 
@@ -630,15 +631,20 @@ impl VerifiedFixedLeafStageInput {
         Ok(())
     }
 
-    /// Require a managed Store root to be completely outside the live game tree, in both
-    /// containment directions, without revealing the retained game-root path.
+    /// Require a managed Store root to be completely outside the live game tree and every
+    /// retained extract/patch source root, in both containment directions and without revealing
+    /// any retained path.
     pub fn require_store_root_disjoint(&self, store_root: &Path) -> Result<()> {
         let store_root =
             validate_existing_path_no_reparse(store_root, true, "ASSET_STAGE_STORE_ROOT")?;
-        let game_root =
-            validate_existing_path_no_reparse(&self.game_root, true, "ASSET_STAGE_GAME_ROOT")?;
-        if store_root.starts_with(&game_root) || game_root.starts_with(&store_root) {
-            bail!("ASSET_STAGE_STORE_ROOT: managed Store and live game tree must be disjoint");
+        for source_root in std::iter::once(&self.game_root).chain(&self.retained_source_roots) {
+            let source_root =
+                validate_existing_path_no_reparse(source_root, true, "ASSET_STAGE_SOURCE_ROOT")?;
+            if store_root.starts_with(&source_root) || source_root.starts_with(&store_root) {
+                bail!(
+                    "ASSET_STAGE_STORE_ROOT: managed Store and verified DataAsset sources must be disjoint"
+                );
+            }
         }
         Ok(())
     }
@@ -660,6 +666,219 @@ pub fn verify_fixed_leaf_stage_input(
             probe_current_generation_receipt(game_root, asset, expected, "ASSET_STAGE_GENERATION")
         },
     )
+}
+
+/// Turn one extract-v2 capability plus an offset-free selector into the same opaque managed-stage
+/// authority as a separately authored PatchReceipt v2.
+///
+/// The patch pair and receipt are materialized only inside a private, game-disjoint temporary
+/// directory. They pass the complete existing PatchReceipt/live-generation verifier before this
+/// function returns, then the temporary tree is deleted. Callers receive neither paths nor raw
+/// offsets, and the returned authority remains build-, runtime-, deployment-, and publication-
+/// neutral.
+pub fn verify_fixed_leaf_stage_edit(
+    extract: VerifiedExtractReceipt,
+    selector: FixedLeafSelector,
+    replacement_hex: &str,
+) -> Result<VerifiedFixedLeafStageInput> {
+    verify_fixed_leaf_stage_edit_with_live_source_in(
+        extract,
+        selector,
+        replacement_hex,
+        &std::env::temp_dir(),
+        |game_root, asset, _expected| {
+            capture_live_converted_stage_source(game_root, asset, "ASSET_STAGE_GENERATION")
+        },
+        |game_root, asset, expected| {
+            probe_current_generation_receipt(game_root, asset, expected, "ASSET_STAGE_GENERATION")
+        },
+    )
+}
+
+fn verify_fixed_leaf_stage_edit_with_live_source_in<F, G>(
+    extract: VerifiedExtractReceipt,
+    selector: FixedLeafSelector,
+    replacement_hex: &str,
+    private_parent: &Path,
+    live_source: F,
+    final_generation_probe: G,
+) -> Result<VerifiedFixedLeafStageInput>
+where
+    F: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<LiveConvertedStageSource>,
+    G: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<AssetGenerationReceipt>,
+{
+    let (private_patch, patch) =
+        materialize_private_fixed_leaf_patch(extract, selector, replacement_hex, private_parent)?;
+    let mut verified =
+        verify_fixed_leaf_stage_input_with_live_source(patch, live_source, final_generation_probe)?;
+    let private_root =
+        validate_existing_path_no_reparse(private_patch.path(), true, "ASSET_STAGE_EDIT_TEMP")?;
+    verified
+        .retained_source_roots
+        .retain(|root| root != &private_root);
+    private_patch
+        .close()
+        .context("ASSET_STAGE_EDIT_TEMP: removing private patch chain")?;
+    Ok(verified)
+}
+
+fn materialize_private_fixed_leaf_patch(
+    extract: VerifiedExtractReceipt,
+    selector: FixedLeafSelector,
+    replacement_hex: &str,
+    private_parent: &Path,
+) -> Result<(tempfile::TempDir, VerifiedPatchReceipt)> {
+    let receipt = extract.receipt();
+    let binding = extract.binding();
+    let game_root = Path::new(&receipt.source.game_root);
+    let private = create_disjoint_private_conversion_dir_in(
+        game_root,
+        private_parent,
+        "ASSET_STAGE_EDIT_TEMP",
+    )?;
+
+    let usmap_path = binding
+        .output_root()
+        .join(&binding.copied_usmap().relative_path);
+    let usmap = read_verified_file_bounded(&usmap_path, MAX_USMAP_BYTES, "ASSET_STAGE_EDIT_USMAP")?;
+    if !receipt.generation.usmap.matches_verified_input(&usmap) {
+        bail!("ASSET_STAGE_EDIT_USMAP: copied USMAP differs from the extract generation");
+    }
+    let schemas = SchemaDb::from_usmap_bounded(usmap.bytes(), UsmapLimits::default())
+        .context("ASSET_STAGE_EDIT_USMAP: parsing exact copied USMAP")?;
+
+    let source_uasset = binding.output_root().join(&binding.uasset().relative_path);
+    let mut carrier = PackageCarrier::load(&source_uasset, asset_package_limits())
+        .context("ASSET_STAGE_EDIT_INPUT: loading extracted package pair")?;
+    let input_package_seal = PackagePairSeal::capture(&carrier);
+    if input_package_seal != receipt.package_seal {
+        bail!("ASSET_STAGE_EDIT_INPUT: extracted package differs from its receipt");
+    }
+    validate_extract_receipt_components(&extract, &carrier, &usmap)
+        .context("ASSET_STAGE_EDIT_INPUT: validating the complete extracted artifact set")?;
+
+    let width = selector.kind.width();
+    if !is_canonical_hex(replacement_hex, width) {
+        bail!(
+            "ASSET_STAGE_EDIT_REPLACEMENT: replacement must be exactly {width} lowercase wire bytes"
+        );
+    }
+    let expected = selector
+        .expected_bytes()
+        .context("ASSET_STAGE_EDIT_SELECTOR: decoding sealed current value")?;
+    let replacement = decode_canonical_hex(replacement_hex, width, "ASSET_STAGE_EDIT_REPLACEMENT")?;
+    let patch =
+        apply_fixed_leaf_selector_patch(&mut carrier, &schemas, &selector, &expected, &replacement)
+            .context("ASSET_STAGE_EDIT_SEMANTICS: applying offset-free fixed-leaf edit")?;
+    let output_package_seal = PackagePairSeal::capture(&carrier);
+
+    let output_uasset = private.path().join("Patched.uasset");
+    let written = carrier
+        .write_new(&output_uasset)
+        .context("ASSET_STAGE_EDIT_OUTPUT: writing private patched pair")?;
+
+    let mut output_sidecars = Vec::with_capacity(binding.sidecars().len());
+    for sidecar in binding.sidecars() {
+        let source = binding.output_root().join(&sidecar.file_name);
+        let input = read_verified_file_bounded(
+            &source,
+            MAX_OPTIONAL_SIDECAR_BYTES,
+            "ASSET_STAGE_EDIT_SIDECAR",
+        )?;
+        if input.length() != sidecar.length || encode_hex(input.sha256()) != sidecar.sha256 {
+            bail!("ASSET_STAGE_EDIT_SIDECAR: extracted sidecar changed after validation");
+        }
+        let (file_name, output) =
+            sidecar_path(&output_uasset, sidecar.role, "ASSET_STAGE_EDIT_SIDECAR")?;
+        write_private_new(&output, input.bytes(), "ASSET_STAGE_EDIT_SIDECAR")?;
+        output_sidecars.push(SidecarReceipt {
+            role: sidecar.role,
+            file_name,
+            length: input.length(),
+            sha256: encode_hex(input.sha256()),
+        });
+    }
+
+    let receipt_path = private
+        .path()
+        .join(format!("Patched{PATCH_RECEIPT_SUFFIX}"));
+    let patch_receipt = PatchReceiptEnvelope {
+        format: "gore.asset.patch-fixed.v2".to_owned(),
+        status: "patched".to_owned(),
+        asset: receipt.asset.clone(),
+        generation_bound: true,
+        provenance: PatchReceiptProvenance {
+            extract_receipt: ReceiptFileSeal {
+                path: extract.input().path().display().to_string(),
+                length: extract.input().length(),
+                sha256: encode_hex(extract.input().sha256()),
+            },
+            generation: receipt.generation.clone(),
+            usmap: GenerationFileAnchor {
+                file_name: binding.copied_usmap().relative_path.clone(),
+                length: binding.copied_usmap().length,
+                sha256: binding.copied_usmap().sha256.clone(),
+            },
+            extract_components: binding.components().to_vec(),
+            extracted_sidecars: binding.sidecars().to_vec(),
+        },
+        input_package_seal,
+        output_package_seal,
+        output_sidecars: output_sidecars.clone(),
+        input_selector: selector,
+        output_requires_reinspect: true,
+        expected_hex: encode_hex(&expected),
+        replacement_hex: encode_hex(&replacement),
+        patch: PatchOperationProof {
+            before: patch.before,
+            after: patch.after,
+            export_index: patch.export_index,
+            component: patch.component,
+            absolute_offset: patch.absolute_offset,
+            length: patch.length,
+            kind: patch.kind,
+        },
+        output: PatchReceiptOutput {
+            uasset: ComponentDigestProof {
+                path: canonical_leaf_path(&written.uasset.path, "ASSET_STAGE_EDIT_OUTPUT")?
+                    .display()
+                    .to_string(),
+                length: written.uasset.length,
+                sha256: encode_hex(&written.uasset.sha256),
+            },
+            uexp: ComponentDigestProof {
+                path: canonical_leaf_path(&written.uexp.path, "ASSET_STAGE_EDIT_OUTPUT")?
+                    .display()
+                    .to_string(),
+                length: written.uexp.length,
+                sha256: encode_hex(&written.uexp.sha256),
+            },
+            sidecars: output_sidecars,
+            receipt: receipt_path.display().to_string(),
+        },
+    };
+    validate_patch_receipt_envelope(&patch_receipt, &receipt_path)?;
+    let bytes = serde_json::to_vec(&patch_receipt)
+        .context("ASSET_STAGE_EDIT_RECEIPT: serializing private PatchReceipt v2")?;
+    if bytes.len() > MAX_RECEIPT_BYTES as usize {
+        bail!("ASSET_STAGE_EDIT_RECEIPT: private PatchReceipt exceeds its resource limit");
+    }
+    write_private_new(&receipt_path, &bytes, "ASSET_STAGE_EDIT_RECEIPT")?;
+    let verified = read_patch_receipt_v2(&receipt_path)?;
+    Ok((private, verified))
+}
+
+fn write_private_new(path: &Path, bytes: &[u8], code: &'static str) -> Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("{code}: creating private output"))?;
+    file.write_all(bytes)
+        .with_context(|| format!("{code}: writing private output"))?;
+    file.sync_all()
+        .with_context(|| format!("{code}: syncing private output"))?;
+    Ok(())
 }
 
 fn verify_fixed_leaf_stage_input_with_live_source<F, G>(
@@ -819,6 +1038,17 @@ where
     let source = patched_pair
         .source_paths()
         .context("ASSET_STAGE_INPUT: patched pair has no source paths")?;
+    let extract_root = validate_existing_path_no_reparse(
+        extract_binding.output_root(),
+        true,
+        "ASSET_STAGE_EXTRACT_ROOT",
+    )?;
+    let patched_root = source
+        .uasset()
+        .parent()
+        .context("ASSET_STAGE_INPUT: patched pair has no parent")?;
+    let patched_root =
+        validate_existing_path_no_reparse(patched_root, true, "ASSET_STAGE_PATCH_ROOT")?;
     if PackagePairSeal::capture(&patched_pair) != patch_receipt.output_package_seal {
         bail!("ASSET_STAGE_INPUT: patched pair differs from PatchReceipt v2 output seal");
     }
@@ -883,6 +1113,11 @@ where
         usmap,
         sidecars,
         game_root,
+        retained_source_roots: if patched_root == extract_root {
+            vec![extract_root]
+        } else {
+            vec![extract_root, patched_root]
+        },
         executable,
     })
 }
@@ -3553,6 +3788,86 @@ mod tests {
         assert!(!debug.contains(&fixture.game_root.display().to_string()));
         assert!(!debug.contains(&fixture.output_root.display().to_string()));
         assert!(!debug.contains(&fixture.patch_path.display().to_string()));
+    }
+
+    #[test]
+    fn direct_semantic_stage_edit_uses_private_patch_chain_and_leaves_no_artifacts() {
+        let (fixture, existing_stage) = verified_stage_fixture();
+        let private_parent = tempfile::tempdir().unwrap();
+        let extract =
+            read_extract_receipt_v2(&fixture.output_root.join(EXTRACT_RECEIPT_NAME)).unwrap();
+        let live_uasset = fixture.original_uasset.clone();
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+        let stage = verify_fixed_leaf_stage_edit_with_live_source_in(
+            extract,
+            existing_stage.selector().clone(),
+            "00",
+            private_parent.path(),
+            move |_game_root, _asset, expected| {
+                Ok(LiveConvertedStageSource {
+                    generation: expected.clone(),
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_game_root, _asset, expected| Ok(expected.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(stage.target_path(), "/Game/TestAsset");
+        assert_eq!(stage.replacement_hex(), "00");
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uasset),
+            fixture.patched_uasset
+        );
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uexp),
+            fixture.patched_uexp
+        );
+        assert_eq!(stage.sidecars()[0].bytes(), fixture.sidecar);
+        assert_eq!(fs::read_dir(private_parent.path()).unwrap().count(), 0);
+
+        let outside_store = tempfile::tempdir().unwrap();
+        stage
+            .require_store_root_disjoint(outside_store.path())
+            .unwrap();
+        assert!(stage
+            .require_store_root_disjoint(&fixture.output_root)
+            .is_err());
+    }
+
+    #[test]
+    fn direct_semantic_stage_edit_rejects_noncanonical_and_noop_values_before_live_use() {
+        for replacement in ["01", "0A", "0000"] {
+            let (fixture, existing_stage) = verified_stage_fixture();
+            let private_parent = tempfile::tempdir().unwrap();
+            let extract =
+                read_extract_receipt_v2(&fixture.output_root.join(EXTRACT_RECEIPT_NAME)).unwrap();
+            let error = verify_fixed_leaf_stage_edit_with_live_source_in(
+                extract,
+                existing_stage.selector().clone(),
+                replacement,
+                private_parent.path(),
+                |_game_root, _asset, _expected| {
+                    panic!("invalid semantic value must fail before live conversion")
+                },
+                |_game_root, _asset, _expected| {
+                    panic!("invalid semantic value must fail before final generation probe")
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("replacement")
+                    || error.contains("NoChange")
+                    || error.contains("no change")
+                    || error.contains("ASSET_STAGE_EDIT_SEMANTICS"),
+                "replacement {replacement:?}: {error}"
+            );
+            assert_eq!(fs::read_dir(private_parent.path()).unwrap().count(), 0);
+        }
     }
 
     #[test]

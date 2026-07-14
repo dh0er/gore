@@ -19,7 +19,8 @@ use gore_authoring::{
     Revision3ScriptModule, Revision3TypedRef, ScriptModuleStatus, Sha256Digest,
     WorkingProjectStore, WorkingStoreError, MAX_ANGELSCRIPT_MODULE_NAMESPACE_BYTES,
     MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
 };
 use gore_story_inventory::{
     reopen_quest_collision_capability_artifact_v1, QuestCollisionCapabilityArtifactError,
@@ -317,7 +318,11 @@ impl Revision3QuestSourceInspectionPlanV2 {
             || self.module.script_module.id == self.module.quest.id
             || self.module.generated.owner != self.module.quest
             || self.module.generated.generator_id != REVISION3_QUEST_GENERATOR_ID
-            || self.module.generated.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+            || !matches!(
+                self.module.generated.generator_version,
+                REVISION3_QUEST_GENERATOR_VERSION
+                    | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+            )
             || self.module.generated.status != ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED
         {
             return Err(Revision3QuestInspectionError::PlanInvariant(
@@ -668,7 +673,10 @@ fn validate_current_quest(
     project: &ProjectRevision3,
 ) -> Result<(), Revision3QuestInspectionError> {
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || quest.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || !matches!(
+            quest.generator_version,
+            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+        )
     {
         return Err(Revision3QuestInspectionError::ForeignGenerator { entity: quest_id });
     }
@@ -720,7 +728,7 @@ fn validate_module_owner(
         || quest.script_module.expected_kind != Revision3EntityKind::ScriptModule
         || module.owner != owner
         || module.generator_id != REVISION3_QUEST_GENERATOR_ID
-        || module.generator_version != REVISION3_QUEST_GENERATOR_VERSION
+        || module.generator_version != quest.generator_version
         || module.status != ScriptModuleStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED
         || !matches!(
             &module_entity.origin,
@@ -729,7 +737,7 @@ fn validate_module_owner(
                 generator_version,
                 owner: origin_owner,
             } if generator_id == REVISION3_QUEST_GENERATOR_ID
-                && *generator_version == REVISION3_QUEST_GENERATOR_VERSION
+                && *generator_version == quest.generator_version
                 && origin_owner == &owner
         )
     {

@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gore_authoring::{
     ArchiveSeal, AssetMeta, AssetStoreIndex, AssetVerification, ContentSeal, DiagnosticCode,
     DiagnosticSeverity, DialogLine, Entity, EntityId, EntityKind, EntityPayload, FormatV2,
-    GameGenerationAnchor, LocaleCode, LocalizationEntry, OggCodec, OriginRef, ProjectId,
-    ProjectMeta, ProjectV2, SchemaRevisionV1, Sha256Digest, TypedRef, ValidationProfile,
-    VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus, VoiceTarget,
-    VoiceTargetResolution, WorkingHead, WorkingProjectStore, WorkingStoreError, WorkingStoreLimits,
+    GameGenerationAnchor, LocaleCode, LocalizationEntry, OggCodec, OggImportFailureContext,
+    OriginRef, ProjectId, ProjectMeta, ProjectV2, SchemaRevisionV1, Sha256Digest, TypedRef,
+    ValidationProfile, VoiceMemberProof, VoiceOperation, VoiceSlot, VoiceTake, VoiceTakeStatus,
+    VoiceTarget, VoiceTargetResolution, WorkingHead, WorkingProjectStore, WorkingStoreError,
+    WorkingStoreLimits,
 };
 use sha2::{Digest, Sha256};
 
@@ -402,6 +403,47 @@ fn valid_ogg_import_deduplicates_and_survives_source_deletion() {
 }
 
 #[test]
+fn prepared_ogg_is_non_publishing_until_consumed_and_legacy_import_still_deduplicates() {
+    let root = TestRoot::new("ogg-prepare-install");
+    let source = root.path().join("source.ogg");
+    fs::write(&source, vorbis_ogg(44_100)).unwrap();
+    let store = store(&root);
+
+    let prepared = store
+        .prepare_ogg_import_classified(&source, "first.ogg")
+        .unwrap();
+    let preview = prepared.preview();
+    assert_eq!(preview.ogg.sample_rate, 44_100);
+    assert!(!preview.deduplicated);
+    let redacted_debug = format!("{prepared:?}");
+    assert!(redacted_debug.contains("verified_bytes_len"));
+    assert!(redacted_debug.len() < 1024);
+    assert_eq!(count_files(&root.path().join("assets")), 0);
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+
+    let repeated = store
+        .prepare_ogg_import_classified(&source, "first.ogg")
+        .unwrap();
+    assert!(prepared.has_same_content(&repeated));
+    assert_eq!(count_files(&root.path().join("assets")), 0);
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+
+    let installed = store.install_prepared_ogg(prepared, None).unwrap();
+    assert_eq!(installed.asset, preview.asset);
+    assert_eq!(installed.ogg, preview.ogg);
+    assert!(!installed.deduplicated);
+    assert_eq!(count_files(&root.path().join("assets")), 1);
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+
+    let legacy = store.import_ogg(&source, "legacy.ogg", None).unwrap();
+    assert_eq!(legacy.asset.sha256, installed.asset.sha256);
+    assert_eq!(legacy.ogg, installed.ogg);
+    assert!(legacy.deduplicated);
+    assert_eq!(count_files(&root.path().join("assets")), 1);
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+}
+
+#[test]
 fn static_hardlink_alias_makes_an_immutable_blob_unsafe() {
     let root = TestRoot::new("hardlink-alias");
     let source = root.path().join("source.ogg");
@@ -729,6 +771,58 @@ fn oversize_ogg_and_invalid_logical_names_are_rejected_before_install() {
         Err(WorkingStoreError::LimitExceeded { .. })
     ));
     assert_eq!(count_files(&root.path().join("assets")), 0);
+}
+
+#[test]
+fn classified_ogg_import_separates_source_failures_from_store_failures() {
+    let root = TestRoot::new("ogg-source-context");
+    let source = root.path().join("take.ogg");
+    fs::write(&source, vorbis_ogg(48_000)).unwrap();
+    let limited = WorkingProjectStore::at(
+        root.path(),
+        WorkingStoreLimits {
+            max_ogg_bytes: 16,
+            ..WorkingStoreLimits::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        limited
+            .import_ogg_classified(&source, "take.ogg", None)
+            .unwrap_err()
+            .context(),
+        OggImportFailureContext::SourceLimit
+    );
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+
+    let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+    assert_eq!(
+        store
+            .import_ogg_classified(root.path().join("missing.ogg"), "missing.ogg", None)
+            .unwrap_err()
+            .context(),
+        OggImportFailureContext::SourceMissing
+    );
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+    assert_eq!(
+        store
+            .import_ogg_classified(root.path(), "directory.ogg", None)
+            .unwrap_err()
+            .context(),
+        OggImportFailureContext::SourceUnsafe
+    );
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
+    let invalid = root.path().join("invalid.ogg");
+    fs::write(&invalid, b"not an Ogg stream").unwrap();
+    assert_eq!(
+        store
+            .import_ogg_classified(&invalid, "invalid.ogg", None)
+            .unwrap_err()
+            .context(),
+        OggImportFailureContext::SourceInvalid
+    );
+    assert_eq!(count_files(&root.path().join("assets")), 0);
+    assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);
 }
 
 #[test]

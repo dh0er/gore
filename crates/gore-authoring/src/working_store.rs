@@ -251,6 +251,117 @@ pub struct ImportedOgg {
     pub deduplicated: bool,
 }
 
+/// Bounded, fully parsed Ogg source bytes that have not been installed in immutable Store CAS.
+///
+/// Fields stay private so callers cannot forge a source preparation. A preparation may be
+/// previewed for filesystem-free semantic/capacity evaluation, compared with a second source
+/// read, and finally consumed by [`WorkingProjectStore::install_prepared_ogg`]. Preparing a source
+/// never creates a Store staging file or asset object.
+#[derive(PartialEq, Eq)]
+pub struct PreparedOggImport {
+    bytes: Vec<u8>,
+    asset: AssetRef,
+    ogg: OggMetadata,
+}
+
+impl std::fmt::Debug for PreparedOggImport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedOggImport")
+            .field("verified_bytes_len", &self.bytes.len())
+            .field("asset", &self.asset)
+            .field("ogg", &self.ogg)
+            .finish_non_exhaustive()
+    }
+}
+
+impl PreparedOggImport {
+    /// Immutable receipt preview for filesystem-free authoring evaluation.
+    ///
+    /// `deduplicated` is necessarily `false` until Store installation determines whether the
+    /// exact immutable object already exists. Callers must replace this preview with the actual
+    /// receipt returned by [`WorkingProjectStore::install_prepared_ogg`] before exposing it.
+    pub fn preview(&self) -> ImportedOgg {
+        ImportedOgg {
+            asset: self.asset.clone(),
+            ogg: self.ogg.clone(),
+            deduplicated: false,
+        }
+    }
+
+    /// Compare every accepted source byte and all derived metadata with a second preparation.
+    pub fn has_same_content(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// Stable context for failures produced while importing an external Ogg.
+///
+/// Store/CAS failures remain distinct from correctable source-file failures,
+/// while [`WorkingProjectStore::import_ogg`] preserves its legacy flattened
+/// [`WorkingStoreError`] API for existing callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OggImportFailureContext {
+    Store,
+    SourceMissing,
+    SourceUnavailable,
+    SourceUnsafe,
+    SourceLimit,
+    SourceInvalid,
+    SourceChanged,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("{source}")]
+pub struct OggImportError {
+    context: OggImportFailureContext,
+    #[source]
+    source: WorkingStoreError,
+}
+
+impl OggImportError {
+    pub fn context(&self) -> OggImportFailureContext {
+        self.context
+    }
+
+    pub fn into_store_error(self) -> WorkingStoreError {
+        self.source
+    }
+
+    fn source(context: OggImportFailureContext, source: WorkingStoreError) -> Self {
+        Self { context, source }
+    }
+}
+
+impl From<WorkingStoreError> for OggImportError {
+    fn from(source: WorkingStoreError) -> Self {
+        Self::source(OggImportFailureContext::Store, source)
+    }
+}
+
+fn classify_ogg_source_error(error: WorkingStoreError, missing_hint: bool) -> OggImportError {
+    let context = match &error {
+        WorkingStoreError::Io(source)
+            if missing_hint && source.kind() == io::ErrorKind::NotFound =>
+        {
+            OggImportFailureContext::SourceMissing
+        }
+        WorkingStoreError::Io(_) => OggImportFailureContext::SourceUnavailable,
+        WorkingStoreError::UnsafePath { .. } => OggImportFailureContext::SourceUnsafe,
+        WorkingStoreError::LimitExceeded {
+            kind: "Ogg bytes", ..
+        } => OggImportFailureContext::SourceLimit,
+        WorkingStoreError::InvalidOgg(_) => OggImportFailureContext::SourceInvalid,
+        WorkingStoreError::Invariant(message)
+            if message.starts_with("Ogg source length changed while reading") =>
+        {
+            OggImportFailureContext::SourceChanged
+        }
+        _ => OggImportFailureContext::Store,
+    };
+    OggImportError::source(context, error)
+}
+
 /// Content-addressed result of installing one upstream-verified canonical Quest artifact.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1641,87 +1752,165 @@ impl WorkingProjectStore {
         logical_name: impl Into<String>,
         expected_head: Option<&WorkingHead>,
     ) -> Result<ImportedOgg, WorkingStoreError> {
+        self.import_ogg_classified(source, logical_name, expected_head)
+            .map_err(OggImportError::into_store_error)
+    }
+
+    /// Import an Ogg while preserving whether a failure belongs to the user
+    /// source or to the managed Store/CAS boundary.
+    pub fn import_ogg_classified(
+        &self,
+        source: impl AsRef<Path>,
+        logical_name: impl Into<String>,
+        expected_head: Option<&WorkingHead>,
+    ) -> Result<ImportedOgg, OggImportError> {
         self.ensure_root_safe()?;
         self.check_expected_head(expected_head)?;
+
+        let prepared = self.prepare_ogg_import_classified(source, logical_name)?;
+        self.install_prepared_ogg(prepared, expected_head)
+            .map_err(OggImportError::from)
+    }
+
+    /// Read, bound, hash, and parse one external Ogg without creating Store staging or CAS state.
+    ///
+    /// Source failures retain their classified context. Store-root and logical-name failures are
+    /// Store failures. The returned value is opaque and owns the exact verified bytes so a later
+    /// install never has to trust or reopen the external source.
+    pub fn prepare_ogg_import_classified(
+        &self,
+        source: impl AsRef<Path>,
+        logical_name: impl Into<String>,
+    ) -> Result<PreparedOggImport, OggImportError> {
+        self.ensure_root_safe()?;
         let logical_name = logical_name.into();
         self.validate_logical_name(&logical_name)?;
 
-        let source = absolute_path(source.as_ref())?;
-        ensure_safe_existing_chain(&source)?;
-        let source_meta = fs::symlink_metadata(&source)?;
-        ensure_regular_no_link(&source, &source_meta)?;
+        let source = absolute_path(source.as_ref())
+            .map_err(|error| classify_ogg_source_error(error, false))?;
+        ensure_safe_existing_chain(&source)
+            .map_err(|error| classify_ogg_source_error(error, false))?;
+        let source_meta = fs::symlink_metadata(&source)
+            .map_err(|error| classify_ogg_source_error(WorkingStoreError::Io(error), true))?;
+        ensure_regular_no_link(&source, &source_meta)
+            .map_err(|error| classify_ogg_source_error(error, false))?;
         if source_meta.len() > self.limits.max_ogg_bytes as u64 {
-            return Err(WorkingStoreError::LimitExceeded {
-                kind: "Ogg bytes",
-                actual: source_meta.len(),
-                limit: self.limits.max_ogg_bytes as u64,
-            });
+            return Err(OggImportError::source(
+                OggImportFailureContext::SourceLimit,
+                WorkingStoreError::LimitExceeded {
+                    kind: "Ogg bytes",
+                    actual: source_meta.len(),
+                    limit: self.limits.max_ogg_bytes as u64,
+                },
+            ));
         }
 
-        let mut input = open_regular_read_no_follow(&source)?;
-        let (temp_path, mut temp) = self.create_temp_file()?;
-        let result = (|| {
-            let mut bytes = Vec::with_capacity(source_meta.len() as usize);
-            let mut hasher = Sha256::new();
-            let mut total = 0usize;
-            let mut buffer = [0u8; COPY_BUFFER_BYTES];
-            loop {
-                let count = input.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                total = total
-                    .checked_add(count)
-                    .ok_or(WorkingStoreError::LimitExceeded {
+        let mut input = open_regular_read_no_follow(&source)
+            .map_err(|error| classify_ogg_source_error(error, true))?;
+        let mut bytes = Vec::with_capacity(source_meta.len() as usize);
+        let mut hasher = Sha256::new();
+        let mut total = 0usize;
+        let mut buffer = [0u8; COPY_BUFFER_BYTES];
+        loop {
+            let count = input.read(&mut buffer).map_err(|error| {
+                OggImportError::source(
+                    OggImportFailureContext::SourceUnavailable,
+                    WorkingStoreError::Io(error),
+                )
+            })?;
+            if count == 0 {
+                break;
+            }
+            total = total.checked_add(count).ok_or_else(|| {
+                OggImportError::source(
+                    OggImportFailureContext::SourceLimit,
+                    WorkingStoreError::LimitExceeded {
                         kind: "Ogg bytes",
                         actual: u64::MAX,
                         limit: self.limits.max_ogg_bytes as u64,
-                    })?;
-                enforce_limit("Ogg bytes", total, self.limits.max_ogg_bytes)?;
-                hasher.update(&buffer[..count]);
-                temp.write_all(&buffer[..count])?;
-                bytes.extend_from_slice(&buffer[..count]);
+                    },
+                )
+            })?;
+            if total > self.limits.max_ogg_bytes {
+                return Err(OggImportError::source(
+                    OggImportFailureContext::SourceLimit,
+                    WorkingStoreError::LimitExceeded {
+                        kind: "Ogg bytes",
+                        actual: total as u64,
+                        limit: self.limits.max_ogg_bytes as u64,
+                    },
+                ));
             }
-            temp.flush()?;
-            temp.sync_all()?;
-            if total as u64 != source_meta.len() {
-                return Err(WorkingStoreError::Invariant(format!(
+            hasher.update(&buffer[..count]);
+            bytes.extend_from_slice(&buffer[..count]);
+        }
+        if total as u64 != source_meta.len() {
+            return Err(OggImportError::source(
+                OggImportFailureContext::SourceChanged,
+                WorkingStoreError::Invariant(format!(
                     "Ogg source length changed while reading: expected {}, read {total}",
                     source_meta.len()
-                )));
-            }
-
-            let ogg = self.derive_ogg_metadata(&bytes)?;
-            let digest = digest_from_hasher(hasher);
-            let seal = ContentSeal {
-                byte_len: total as u64,
-                sha256: digest,
-            };
-            let destination = self.asset_path(digest);
-            self.check_expected_head(expected_head)?;
-            // Close the only writable handle before the immutable path becomes visible.
-            drop(temp);
-            let deduplicated = self.install_staged_file(&temp_path, &destination, &seal)?;
-            self.verify_seal_at(&destination, &seal, AssetVerification::Full, false)?;
-            Ok(ImportedOgg {
-                asset: AssetRef {
-                    sha256: digest,
-                    byte_len: total as u64,
-                    logical_name,
-                },
-                ogg,
-                deduplicated,
-            })
-        })();
-        let cleanup = cleanup_staged_file(&temp_path);
-        match (result, cleanup) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Ok(_), Err(source)) => Err(WorkingStoreError::StagingCleanup {
-                path: temp_path,
-                source,
-            }),
-            (Err(error), _) => Err(error),
+                )),
+            ));
         }
+
+        let ogg = self
+            .derive_ogg_metadata(&bytes)
+            .map_err(|error| match error {
+                WorkingStoreError::InvalidOgg(_) => {
+                    OggImportError::source(OggImportFailureContext::SourceInvalid, error)
+                }
+                _ => error.into(),
+            })?;
+        let digest = digest_from_hasher(hasher);
+        Ok(PreparedOggImport {
+            bytes,
+            asset: AssetRef {
+                sha256: digest,
+                byte_len: total as u64,
+                logical_name,
+            },
+            ogg,
+        })
+    }
+
+    /// Consume one verified source preparation and install its exact bytes under fixed-head CAS.
+    ///
+    /// No external source is reopened. Installation and cleanup failures are Store failures. A
+    /// concurrent head advance may leave only a fully verified immutable orphan and returns a
+    /// head conflict rather than an accepted receipt.
+    pub fn install_prepared_ogg(
+        &self,
+        prepared: PreparedOggImport,
+        expected_head: Option<&WorkingHead>,
+    ) -> Result<ImportedOgg, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)?;
+        self.validate_logical_name(&prepared.asset.logical_name)?;
+        enforce_limit("Ogg bytes", prepared.bytes.len(), self.limits.max_ogg_bytes)?;
+
+        let seal = ContentSeal {
+            byte_len: prepared.asset.byte_len,
+            sha256: prepared.asset.sha256,
+        };
+        if seal_bytes(&prepared.bytes) != seal
+            || self.derive_ogg_metadata(&prepared.bytes)? != prepared.ogg
+        {
+            return Err(WorkingStoreError::Invariant(
+                "prepared Ogg bytes differ from their verified receipt".to_owned(),
+            ));
+        }
+
+        let destination = self.asset_path(prepared.asset.sha256);
+        self.check_expected_head(expected_head)?;
+        let deduplicated = self.install_immutable_bytes(&destination, &prepared.bytes, &seal)?;
+        self.verify_seal_at(&destination, &seal, AssetVerification::Full, false)?;
+        self.check_expected_head(expected_head)?;
+        Ok(ImportedOgg {
+            asset: prepared.asset,
+            ogg: prepared.ogg,
+            deduplicated,
+        })
     }
 
     /// Verify one logical asset reference against its content-addressed object.
