@@ -504,10 +504,29 @@ fn validate_unambiguous_container_priorities(
     store: &dyn IoStoreTrait,
     limits: PackageIndexLimits,
 ) -> Result<(), PackageIndexError> {
+    validate_unambiguous_container_priority_names(
+        store
+            .child_containers()
+            .map(|container| container.container_name()),
+        limits,
+    )
+}
+
+/// Apply the exact package-index container-priority validation before a composite IoStore is
+/// opened.
+///
+/// The installed path orchestrator uses this crate-private seam after its bounded filesystem
+/// preflight. Keeping the normalization here prevents the pre-open check from drifting away from
+/// the defense-in-depth check over Retoc's opened child containers.
+pub(crate) fn validate_unambiguous_container_priority_names<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    limits: PackageIndexLimits,
+) -> Result<(), PackageIndexError> {
+    let limits = limits.validate()?;
     let mut child_count = 0u64;
     let mut aggregate_name_bytes = 0usize;
     let mut bounded_names = Vec::with_capacity(limits.max_child_containers_scanned.min(32));
-    for child in store.child_containers() {
+    for name in names {
         child_count = child_count
             .checked_add(1)
             .ok_or(PackageIndexError::CounterOverflow)?;
@@ -517,7 +536,6 @@ fn validate_unambiguous_container_priorities(
                 limit: limits.max_child_containers_scanned,
             });
         }
-        let name = child.container_name();
         if name.len() > limits.max_container_priority_name_bytes {
             return Err(PackageIndexError::ContainerPriorityNameLimit {
                 actual: name.len(),
