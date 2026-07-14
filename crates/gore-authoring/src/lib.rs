@@ -25,6 +25,7 @@ mod story_transaction_revision3;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_voice;
+mod story_transaction_revision3_voice_selection;
 mod story_transaction_revision3_voice_target;
 mod strict_json;
 mod validate;
@@ -199,6 +200,14 @@ pub use story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_REQUEST_JSON_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
     MAX_REVISION3_VOICE_TEXT_BYTES_V1, REVISION3_VOICE_SLOT_GENERATOR_ID_V1,
     REVISION3_VOICE_SLOT_GENERATOR_VERSION_V1, REVISION3_VOICE_TAKE_IMPORTER_ID_V1,
+};
+pub use story_transaction_revision3_voice_selection::{
+    apply_revision3_voice_take_selection_transaction_v1, Revision3VoiceTakeSelectionBuildStatusV1,
+    Revision3VoiceTakeSelectionConflictV1, Revision3VoiceTakeSelectionErrorV1,
+    Revision3VoiceTakeSelectionEvaluationV1, Revision3VoiceTakeSelectionOutcomeV1,
+    Revision3VoiceTakeSelectionRejectionV1, Revision3VoiceTakeSelectionRequestJsonErrorV1,
+    Revision3VoiceTakeSelectionRequestV1, Revision3VoiceTakeSelectionRuntimeStatusV1,
+    MAX_REVISION3_VOICE_TAKE_SELECTION_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_voice_target::{
     apply_revision3_voice_target_resolution_transaction_v1,
