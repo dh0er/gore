@@ -9,6 +9,8 @@ import 'core_service.dart';
 
 export '../dataasset/domain/dataasset_inspection.dart';
 
+part '../project/revision3_dataasset_stage.dart';
+
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
 const _maxVoiceOggPathBytes = 32 * 1024;
@@ -21,6 +23,10 @@ const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
 const _maxAuthoringRevision3ContentIndexJsonBytes = 32 * 1024 * 1024;
+const _maxAuthoringRevision3DataAssetResponseBytes = 64 * 1024 * 1024;
+const _maxAuthoringRevision3DataAssetStages = 1024;
+const _maxAuthoringRevision3DataAssetManifestBytes = 8 * 1024 * 1024;
+const _maxAuthoringRevision3DataAssetManifestStringBytes = 32 * 1024;
 const _maxAuthoringRevision3QuestRequestJsonBytes = 64 * 1024;
 const _maxAuthoringRevision3QuestCollisionArtifactBytes = 24 * 1024 * 1024;
 const _authoringRevision3QuestGeneratorId =
@@ -677,6 +683,89 @@ class ModFfi {
     return AuthoringRevision3QuestDraftPreparation.fromJson(response);
   }
 
+  /// Verify one PatchReceipt-v2 chain and prepare a fixed-leaf DataAsset stage without
+  /// publishing the fixed revision-3 head.
+  ///
+  /// The receipt path is an input capability only. It is never retained by the returned DTO,
+  /// which exposes only the closed, offset-free stage manifest and an unpublished candidate.
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  authoringStorePrepareRevision3DataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_dataasset_stage_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(patchReceiptPath, 'patchReceiptPath');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('patchReceiptPath', patchReceiptPath),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'patch_receipt_path': patchReceiptPath,
+      'root': root,
+    });
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  /// List all verified fixed-leaf DataAsset stages at one exact published revision-3 head.
+  ///
+  /// This command is read-only and grants no artifact, build, runtime, pack, deployment, or
+  /// publication authority.
+  Future<AuthoringRevision3DataAssetStageListResult>
+  authoringStoreListRevision3DataAssetStagesV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_list_revision3_dataasset_stages_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    return AuthoringRevision3DataAssetStageListResult.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  /// Prepare removal of one exact managed DataAsset stage without publishing the candidate.
+  Future<AuthoringRevision3DataAssetStageRemovalPreparation>
+  authoringStorePrepareRemoveRevision3DataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  }) async {
+    const command =
+        'authoring_store_prepare_remove_revision3_dataasset_stage_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3DataAssetTargetPath(targetPath, 'targetPath');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('expectedHead', expectedHead.canonicalJson),
+      ('root', root),
+      ('targetPath', targetPath),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+      'target_path': targetPath,
+    });
+    return AuthoringRevision3DataAssetStageRemovalPreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      requestedTargetPath: targetPath,
+    );
+  }
+
   /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.
   Future<AuthoringStoreOpenedResult> authoringStoreOpenHeadBytes({
     required String root,
@@ -1077,6 +1166,54 @@ void _authoringRevision3QuestPrepareEnvelopePreflight(
     encodedBytes,
   );
   _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
+}
+
+void _authoringRevision3DataAssetEnvelopePreflight(
+  String command,
+  List<(String, String)> fields,
+) {
+  // This deliberately overcounts punctuation. It prevents a large escaped path from allocating
+  // a transport envelope before the native route can apply its tighter command-local budget.
+  var encodedBytes = 256 + command.length;
+  for (final (name, value) in fields) {
+    encodedBytes = _authoringAddEscapedJsonStringBytes(
+      value,
+      name,
+      encodedBytes,
+    );
+  }
+}
+
+void _authoringRevision3DataAssetTargetPath(String value, String field) {
+  _authoringRevision3RequestString(value, field, 512);
+  final segments = value.startsWith('/Game/')
+      ? value.substring('/Game/'.length).split('/')
+      : const <String>[];
+  if (segments.isEmpty ||
+      segments.length > 32 ||
+      segments.any(
+        (segment) =>
+            segment.isEmpty ||
+            !_authoringRevision3DataAssetSegmentPattern.hasMatch(segment) ||
+            _authoringRevision3DataAssetWindowsReservedName(segment),
+      )) {
+    throw ArgumentError.value(
+      value,
+      field,
+      'must be a canonical extensionless /Game asset path',
+    );
+  }
+}
+
+final _authoringRevision3DataAssetSegmentPattern = RegExp(r'^[A-Za-z0-9_]+$');
+
+bool _authoringRevision3DataAssetWindowsReservedName(String value) {
+  final upper = value.toUpperCase();
+  return const <String>{'CON', 'PRN', 'AUX', 'NUL'}.contains(upper) ||
+      (upper.length == 4 &&
+          (upper.startsWith('COM') || upper.startsWith('LPT')) &&
+          upper.codeUnitAt(3) >= 0x31 &&
+          upper.codeUnitAt(3) <= 0x39);
 }
 
 void _voiceOggInspectPath(String value) {
@@ -1794,7 +1931,7 @@ _authoringRequireCanonicalProjectJson(String projectJson) {
   );
 }
 
-({String projectId, int revision})
+({Map<String, Object?> project, String projectId, int revision})
 _authoringRequireCanonicalRevision3ProjectJson(String projectJson) {
   final project = _authoringDecodeDuplicateSafeObject(
     projectJson,
@@ -1837,7 +1974,7 @@ _authoringRequireCanonicalRevision3ProjectJson(String projectJson) {
       'authoring revision-3 store project JSON is not canonical',
     );
   }
-  return (projectId: projectId, revision: revision);
+  return (project: project, projectId: projectId, revision: revision);
 }
 
 Map<String, Object?> _authoringDraftObjectField(

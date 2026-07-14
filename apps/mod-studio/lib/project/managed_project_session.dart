@@ -117,6 +117,44 @@ final class ManagedRevision3QuestDraftCheckpoint {
   final bool artifactDeduplicated;
 }
 
+/// One DataAsset stage returned only after its candidate was fully reopened, fixed-head CAS
+/// published, and fully reopened again. It carries no build, runtime, pack, deploy, or native
+/// publication claim.
+final class ManagedRevision3DataAssetStageCheckpoint {
+  const ManagedRevision3DataAssetStageCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.stage,
+    required this.deduplicatedBlobs,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final AuthoringRevision3DataAssetStage stage;
+  final int deduplicatedBlobs;
+}
+
+/// One registry removal returned only after guarded publication and full reopen.
+final class ManagedRevision3DataAssetStageRemovalCheckpoint {
+  const ManagedRevision3DataAssetStageRemovalCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.removed,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final AuthoringRevision3DataAssetStage removed;
+}
+
 /// Narrow seam over the native managed-store document API.
 ///
 /// The interface keeps session durability and ordering independently testable;
@@ -220,6 +258,24 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String root,
     required AuthoringWorkingHead expectedHead,
   });
+
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  });
+
+  Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  });
+
+  Future<AuthoringRevision3DataAssetStageRemovalPreparation>
+  prepareRemoveDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  });
 }
 
 final class ModFfiManagedRevision3AuthoringStore
@@ -276,6 +332,38 @@ final class ModFfiManagedRevision3AuthoringStore
   }) => ffi.authoringStoreReadRevision3ContentIndexV1(
     root: root,
     expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  }) => ffi.authoringStorePrepareRevision3DataAssetStageV1(
+    root: root,
+    expectedHead: expectedHead,
+    patchReceiptPath: patchReceiptPath,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreListRevision3DataAssetStagesV1(
+    root: root,
+    expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStageRemovalPreparation>
+  prepareRemoveDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  }) => ffi.authoringStorePrepareRemoveRevision3DataAssetStageV1(
+    root: root,
+    expectedHead: expectedHead,
+    targetPath: targetPath,
   );
 }
 
@@ -566,90 +654,231 @@ class ManagedRevision3AuthoringProjectSession {
     required String displayName,
     required AuthoringRevision3QuestDraftIntentV3 intent,
   }) =>
-      _core._publishPreparedRevision3QuestCheckpoint<
+      _core._publishPreparedRevision3Checkpoint<
         ManagedRevision3QuestDraftCheckpoint
-      >((basis) async {
-        final projectId = basis.projectId;
-        final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Quest transaction has no exact project identity',
+      >(
+        operation: 'prepareAndPublishQuestDraftV3',
+        handlePrepareError: _core._throwRevision3QuestPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest transaction has no exact project identity',
+            );
+          }
+          final request = AuthoringRevision3QuestDraftRequestV3(
+            expectedHead: basis.head,
+            expectedProjectId: projectId,
+            expectedRevision: projectRevision,
+            questId: questId,
+            scriptModuleId: scriptModuleId,
+            displayName: displayName,
+            intent: intent,
           );
-        }
-        final request = AuthoringRevision3QuestDraftRequestV3(
-          expectedHead: basis.head,
-          expectedProjectId: projectId,
-          expectedRevision: projectRevision,
-          questId: questId,
-          scriptModuleId: scriptModuleId,
-          displayName: displayName,
-          intent: intent,
-        );
-        final prepared = await _store.prepareQuestDraftV3(
-          root: root.path,
-          gameRoot: gameRoot,
-          currentProjectJson: basis.projectJson,
-          questRequestJson: request.canonicalJson,
-        );
-        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
-            prepared.projectId != projectId ||
-            prepared.revision != projectRevision + 1 ||
-            prepared.questId != request.questId ||
-            prepared.scriptModuleId != request.scriptModuleId ||
-            prepared.displayName != request.displayName ||
-            prepared.moduleNamespace != request.intent.moduleNamespace ||
-            prepared.technicalId != request.intent.technicalId ||
-            prepared.textHelper != request.intent.textHelper ||
-            prepared.title != request.intent.title ||
-            prepared.description != request.intent.description ||
-            prepared.objectiveTitle != request.intent.objectiveTitle) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 Quest preparation disagrees with its exact session basis or request',
+          final prepared = await _store.prepareQuestDraftV3(
+            root: root.path,
+            gameRoot: gameRoot,
+            currentProjectJson: basis.projectJson,
+            questRequestJson: request.canonicalJson,
           );
-        }
-        return _ManagedPreparedCheckpoint<ManagedRevision3QuestDraftCheckpoint>(
-          head: prepared.head,
-          projectJson: prepared.projectJson,
-          value: ManagedRevision3QuestDraftCheckpoint._(
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.questId != request.questId ||
+              prepared.scriptModuleId != request.scriptModuleId ||
+              prepared.displayName != request.displayName ||
+              prepared.moduleNamespace != request.intent.moduleNamespace ||
+              prepared.technicalId != request.intent.technicalId ||
+              prepared.textHelper != request.intent.textHelper ||
+              prepared.title != request.intent.title ||
+              prepared.description != request.intent.description ||
+              prepared.objectiveTitle != request.intent.objectiveTitle) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3QuestDraftCheckpoint
+          >(
             head: prepared.head,
             projectJson: prepared.projectJson,
-            projectId: prepared.projectId,
-            projectRevision: prepared.revision,
-            questId: prepared.questId,
-            scriptModuleId: prepared.scriptModuleId,
-            artifactDeduplicated: prepared.artifactDeduplicated,
-          ),
-        );
-      });
+            value: ManagedRevision3QuestDraftCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              questId: prepared.questId,
+              scriptModuleId: prepared.scriptModuleId,
+              artifactDeduplicated: prepared.artifactDeduplicated,
+            ),
+          );
+        },
+      );
+
+  /// Verify a PatchReceipt-v2 input and publish its closed fixed-leaf DataAsset stage through the
+  /// session's existing full-reopen, crash-repair and exact byte-CAS lane.
+  Future<ManagedRevision3DataAssetStageCheckpoint>
+  prepareAndPublishDataAssetStageV1({required String patchReceiptPath}) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3DataAssetStageCheckpoint
+      >(
+        operation: 'prepareAndPublishDataAssetStageV1',
+        handlePrepareError: _core._throwRevision3DataAssetError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset transaction has no exact project identity',
+            );
+          }
+          final prepared = await _store.prepareDataAssetStageV1(
+            root: root.path,
+            expectedHead: basis.head,
+            patchReceiptPath: patchReceiptPath,
+          );
+          final stage = prepared.stage;
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              stage.projectId != projectId ||
+              stage.basisHead.canonicalJson != basis.head.canonicalJson ||
+              stage.basisProjectRevision != projectRevision ||
+              stage.stagedProjectRevision != prepared.revision) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset preparation disagrees with its exact session basis',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3DataAssetStageCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3DataAssetStageCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              stage: stage,
+              deduplicatedBlobs: prepared.deduplicatedBlobs,
+            ),
+          );
+        },
+      );
+
+  /// Read the exact current managed DataAsset stage registry without preparing or publishing.
+  Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() =>
+      _core.readExact<List<AuthoringRevision3DataAssetStage>>(
+        (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset read has no exact project identity',
+            );
+          }
+          final result = await _store.listDataAssetStagesV1(
+            root: root.path,
+            expectedHead: basis.head,
+          );
+          if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+              result.revision != projectRevision ||
+              result.stages.any(
+                (stage) =>
+                    stage.projectId != projectId ||
+                    stage.stagedProjectRevision > projectRevision,
+              )) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset list disagrees with its exact session basis',
+            );
+          }
+          return result.stages;
+        },
+        operation: 'listDataAssetStagesV1',
+        handleReadError: _core._throwRevision3DataAssetError,
+      );
+
+  /// Remove one managed stage registry entry through the guarded fixed-head publication lane.
+  Future<ManagedRevision3DataAssetStageRemovalCheckpoint>
+  prepareAndPublishRemoveDataAssetStageV1({required String targetPath}) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3DataAssetStageRemovalCheckpoint
+      >(
+        operation: 'prepareAndPublishRemoveDataAssetStageV1',
+        handlePrepareError: _core._throwRevision3DataAssetError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset removal has no exact project identity',
+            );
+          }
+          final prepared = await _store.prepareRemoveDataAssetStageV1(
+            root: root.path,
+            expectedHead: basis.head,
+            targetPath: targetPath,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.removed.projectId != projectId ||
+              prepared.removed.targetPath.toLowerCase() !=
+                  targetPath.toLowerCase() ||
+              prepared.removed.stagedProjectRevision > projectRevision) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 DataAsset removal disagrees with its exact session basis',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3DataAssetStageRemovalCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3DataAssetStageRemovalCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              removed: prepared.removed,
+            ),
+          );
+        },
+      );
 
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
   /// The operation shares the session's serialized lane, verifies the fixed head before and after
   /// native projection, and never prepares objects or enters the publication path.
   Future<Revision3ContentIndex> readContentIndex() =>
-      _core.readExact<Revision3ContentIndex>((basis) async {
-        final projectId = basis.projectId;
-        final projectRevision = basis.projectRevision;
-        if (projectId == null || projectRevision == null) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 content read has no exact project identity',
+      _core.readExact<Revision3ContentIndex>(
+        (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 content read has no exact project identity',
+            );
+          }
+          final result = await _store.readContentIndex(
+            root: root.path,
+            expectedHead: basis.head,
           );
-        }
-        final result = await _store.readContentIndex(
-          root: root.path,
-          expectedHead: basis.head,
-        );
-        if (result.head.canonicalJson != basis.head.canonicalJson ||
-            result.projectId != projectId ||
-            result.projectRevision != projectRevision ||
-            result.index.projectId != projectId ||
-            result.index.projectRevision != projectRevision) {
-          throw const ManagedProjectVerificationException(
-            'revision-3 content read disagrees with its exact session basis',
-          );
-        }
-        return result.index;
-      }, operation: 'readContentIndex');
+          if (result.head.canonicalJson != basis.head.canonicalJson ||
+              result.projectId != projectId ||
+              result.projectRevision != projectRevision ||
+              result.index.projectId != projectId ||
+              result.index.projectRevision != projectRevision) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 content read disagrees with its exact session basis',
+            );
+          }
+          return result.index;
+        },
+        operation: 'readContentIndex',
+        handleReadError: _core._throwRevision3ContentReadError,
+      );
 
   /// Reopen the exact currently-published checkpoint with full asset
   /// verification without preparing or publishing a new checkpoint.
@@ -857,6 +1086,8 @@ class _ManagedProjectSessionCore {
   Future<T> readExact<T>(
     Future<T> Function(_ManagedOpenedCheckpoint basis) read, {
     required String operation,
+    required Never Function(Object error, StackTrace stackTrace)
+    handleReadError,
   }) {
     if (_isActiveDeriveCallbackZone) {
       return _reentrantOperation<T>(operation);
@@ -876,7 +1107,7 @@ class _ManagedProjectSessionCore {
       } catch (error, stackTrace) {
         // If native work raced an external head write, that drift is the stronger failure.
         await _requireExactPublishedHead(operations, basis.head);
-        _throwRevision3ContentReadError(error, stackTrace);
+        handleReadError(error, stackTrace);
       }
       await _requireExactPublishedHead(operations, basis.head);
       return result;
@@ -888,14 +1119,17 @@ class _ManagedProjectSessionCore {
   /// The callback receives the exact fully-opened basis only inside the serialized lane. It may
   /// install immutable CAS objects, but it must not touch the fixed head. Its candidate is fully
   /// reopened here before any publication is attempted.
-  Future<T> _publishPreparedRevision3QuestCheckpoint<T>(
-    Future<_ManagedPreparedCheckpoint<T>> Function(
+  Future<T> _publishPreparedRevision3Checkpoint<T>({
+    required String operation,
+    required Future<_ManagedPreparedCheckpoint<T>> Function(
       _ManagedOpenedCheckpoint basis,
     )
     prepare,
-  ) {
+    required Never Function(Object error, StackTrace stackTrace)
+    handlePrepareError,
+  }) {
     if (_isActiveDeriveCallbackZone) {
-      return _reentrantOperation<T>('prepareAndPublishQuestDraftV3');
+      return _reentrantOperation<T>(operation);
     }
     return _enqueue(() async {
       _requireWritableState();
@@ -915,10 +1149,7 @@ class _ManagedProjectSessionCore {
         // the stronger integrity failure and must poison the session even when preparation also
         // reports a semantic or transport error.
         await _requireExactPublishedHead(operations, basis.head);
-        if (error is ModFfiException) {
-          _throwRevision3QuestPrepareError(error, stackTrace);
-        }
-        Error.throwWithStackTrace(error, stackTrace);
+        handlePrepareError(error, stackTrace);
       }
 
       await _requireExactPublishedHead(operations, basis.head);
@@ -1007,25 +1238,67 @@ class _ManagedProjectSessionCore {
     }
   }
 
-  Never _throwRevision3QuestPrepareError(
-    ModFfiException error,
-    StackTrace stackTrace,
-  ) {
-    if (error.code == 'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT') {
-      _requiresReopen = true;
-      Error.throwWithStackTrace(
-        ManagedProjectHeadConflictException(error.message),
-        stackTrace,
-      );
+  Never _throwRevision3QuestPrepareError(Object error, StackTrace stackTrace) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3QuestPrepareErrorRequiresReopen(error.code)) {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectVerificationException(error.message),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     }
-    if (_revision3QuestPrepareErrorRequiresReopen(error.code)) {
-      _requiresReopen = true;
-      Error.throwWithStackTrace(
-        ManagedProjectVerificationException(error.message),
-        stackTrace,
-      );
-    }
+    // Preserve the Quest lane's established behavior for local request construction and the
+    // session's own explicit verification exceptions. The exact disk head was checked again by
+    // the caller before reaching this handler.
     Error.throwWithStackTrace(error, stackTrace);
+  }
+
+  Never _throwRevision3DataAssetError(Object error, StackTrace stackTrace) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DataAssetErrorRequiresReopen(error.code)) {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectVerificationException(error.message),
+          stackTrace,
+        );
+      }
+      // Resource/input/capacity/semantic failures, including RESPONSE_LIMIT, are retryable after
+      // the exact fixed head has been rechecked above. Native preparation may leave only safe
+      // immutable CAS orphans.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is ArgumentError) {
+      // ModFfi's allocation-free path/envelope preflight is entirely local and occurs before the
+      // native command. The exact disk head was rechecked, so the caller may fix the input and
+      // retry without reopening the project.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 DataAsset operation could not be verified exactly',
+      ),
+      stackTrace,
+    );
   }
 
   Never _throwRevision3ContentReadError(Object error, StackTrace stackTrace) {
@@ -1315,6 +1588,27 @@ bool _revision3ContentReadErrorRequiresReopen(String code) => const {
   'AUTHORING_REVISION3_CONTENT_STORE_PATH_UNSAFE',
   'AUTHORING_REVISION3_CONTENT_STORE_ROOT_MISSING',
   'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
+}.contains(code);
+
+bool _revision3DataAssetErrorRequiresReopen(String code) => const {
+  ModFfiException.malformedNativeResponseCode,
+  'AUTHORING_REVISION3_DATAASSET_HEAD_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_HEAD_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_HEAD_MISSING',
+  'AUTHORING_REVISION3_DATAASSET_HEAD_NONCANONICAL',
+  'AUTHORING_REVISION3_DATAASSET_INVARIANT',
+  'AUTHORING_REVISION3_DATAASSET_MANIFEST_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_PROJECT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_REQUEST_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_STORE_COLLISION',
+  'AUTHORING_REVISION3_DATAASSET_STORE_INVARIANT',
+  'AUTHORING_REVISION3_DATAASSET_STORE_IO',
+  'AUTHORING_REVISION3_DATAASSET_STORE_JSON_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_STORE_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_STORE_OBJECT_MISSING',
+  'AUTHORING_REVISION3_DATAASSET_STORE_PATH_UNSAFE',
+  'AUTHORING_REVISION3_DATAASSET_STORE_ROOT_MISSING',
+  'AUTHORING_REVISION3_DATAASSET_STORE_SEAL_MISMATCH',
 }.contains(code);
 
 Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {

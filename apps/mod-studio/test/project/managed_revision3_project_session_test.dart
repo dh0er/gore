@@ -12,6 +12,7 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:path/path.dart' as p;
 
+import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
 
 void main() {
@@ -355,6 +356,193 @@ void main() {
       expect(session.projectJson, project);
       expect(await session.headFile.readAsBytes(), headBytes);
       expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'DataAsset prepare, list, and remove share guarded full-reopen publication',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_roundtrip');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset roundtrip'),
+      );
+      final initialPrepareCalls = store.prepareCalls;
+      final initialHeadOpenCalls = store.headVerifications.length;
+      final initialHead = session.head.canonicalJson;
+
+      expect(await session.listDataAssetStagesV1(), isEmpty);
+      expect(session.head.canonicalJson, initialHead);
+      final staged = await session.prepareAndPublishDataAssetStageV1(
+        patchReceiptPath: r'C:\Receipts\managed-patch.v2.json',
+      );
+
+      expect(staged.projectId, session.projectId);
+      expect(staged.projectRevision, 1);
+      expect(staged.head.canonicalJson, session.head.canonicalJson);
+      expect(staged.stage.targetPath, revision3DataAssetTargetPath);
+      expect(staged.stage.basisProjectRevision, 0);
+      expect(staged.stage.stagedProjectRevision, 1);
+      expect(store.dataAssetPrepareCalls, 1);
+      expect(store.prepareCalls, initialPrepareCalls);
+      expect(
+        store.headVerifications.length,
+        greaterThanOrEqualTo(initialHeadOpenCalls + 2),
+      );
+      expect(
+        store.headVerifications
+            .skip(initialHeadOpenCalls)
+            .every((value) => value == AuthoringAssetVerification.full),
+        isTrue,
+      );
+
+      final exactPublishedHead = await session.headFile.readAsBytes();
+      final listed = await session.listDataAssetStagesV1();
+      expect(listed, hasLength(1));
+      expect(
+        listed.single.manifestAsset.sha256,
+        staged.stage.manifestAsset.sha256,
+      );
+      expect(await session.headFile.readAsBytes(), exactPublishedHead);
+
+      final removed = await session.prepareAndPublishRemoveDataAssetStageV1(
+        targetPath: revision3DataAssetTargetPath.toLowerCase(),
+      );
+      expect(removed.projectRevision, 2);
+      expect(removed.removed.targetPath, revision3DataAssetTargetPath);
+      expect(session.projectRevision, 2);
+      expect(await session.listDataAssetStagesV1(), isEmpty);
+      expect(store.dataAssetRemoveCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'DataAsset head drift during native prepare never clobbers the winner',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_race');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'DataAsset race');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final externalProject = _projectJson(
+        revision: 90,
+        name: 'External DataAsset winner',
+      );
+      final externalHead = store.register(externalProject);
+      store.afterDataAssetPrepare = (rootPath, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: r'C:\Receipts\race.v2.json',
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
+    'DataAsset response limits and local preflight are retryable; integrity failures poison',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'dataasset_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset retry'),
+      );
+      retryStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_RESPONSE_LIMIT',
+        message: 'fake bounded list response limit',
+      );
+      await expectLater(
+        retrySession.listDataAssetStagesV1(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DATAASSET_RESPONSE_LIMIT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+
+      retryStore.nextDataAssetError = ArgumentError(
+        'fake local path preflight',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: 'bad input',
+        ),
+        throwsArgumentError,
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.listDataAssetStagesV1(), isEmpty);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dataasset_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(revision: 0, name: 'DataAsset poison'),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_STORE_SEAL_MISMATCH',
+        message: 'fake DataAsset integrity failure',
+      );
+      await expectLater(
+        poisonSession.listDataAssetStagesV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'DataAsset malformed candidate response poisons without publication',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dataasset_mismatch');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'DataAsset mismatch'),
+      );
+      final exactHead = await session.headFile.readAsBytes();
+      store.nextDataAssetResponseMismatch = 'revision';
+
+      await expectLater(
+        session.prepareAndPublishDataAssetStageV1(
+          patchReceiptPath: r'C:\Receipts\mismatch.v2.json',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+
+      expect(await session.headFile.readAsBytes(), exactHead);
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
       await session.close();
     },
   );
@@ -1146,6 +1334,22 @@ void main() {
           throwsA(isA<ManagedProjectReentrantOperationException>()),
         );
         await expectLater(
+          session.listDataAssetStagesV1(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.prepareAndPublishDataAssetStageV1(
+            patchReceiptPath: r'C:\fixtures\patch-receipt.json',
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.prepareAndPublishRemoveDataAssetStageV1(
+            targetPath: revision3DataAssetTargetPath,
+          ),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
           session.close(),
           throwsA(isA<ManagedProjectReentrantOperationException>()),
         );
@@ -1230,6 +1434,16 @@ typedef _AfterContentRead =
       String projectJson,
     );
 
+typedef _AfterDataAssetPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+    );
+
+typedef _AfterDataAssetList =
+    FutureOr<void> Function(String root, AuthoringWorkingHead expectedHead);
+
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final Map<String, String> _projectsByHead = <String, String>{};
   final List<AuthoringAssetVerification> openVerifications =
@@ -1241,9 +1455,14 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int prepareCalls = 0;
   int questPrepareCalls = 0;
   int contentReadCalls = 0;
+  int dataAssetPrepareCalls = 0;
+  int dataAssetListCalls = 0;
+  int dataAssetRemoveCalls = 0;
   _AfterPrepare? afterPrepare;
   _AfterQuestPrepare? afterQuestPrepare;
   _AfterContentRead? afterContentRead;
+  _AfterDataAssetPrepare? afterDataAssetPrepare;
+  _AfterDataAssetList? afterDataAssetList;
   final List<String> questGameRoots = <String>[];
   final List<String> questCurrentProjects = <String>[];
   final List<AuthoringRevision3QuestDraftRequestV3> questRequests =
@@ -1252,10 +1471,14 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   ModFfiException? nextQuestError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
+  Object? nextDataAssetError;
+  String? nextDataAssetResponseMismatch;
   final List<String> contentExpectedHeads = <String>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
+  final Map<String, Revision3DataAssetFixture> _dataAssetByHead =
+      <String, Revision3DataAssetFixture>{};
 
   AuthoringWorkingHead register(String projectJson) {
     _sequence++;
@@ -1492,6 +1715,126 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
             : null,
       ),
       expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  }) async {
+    dataAssetPrepareCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dataasset_stage_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final response = fixture.prepareResponse();
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStageListResult> listDataAssetStagesV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    dataAssetListCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_list_revision3_dataasset_stages_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+        message: 'fake native DataAsset list CAS rejected',
+      );
+    }
+    final hook = afterDataAssetList;
+    afterDataAssetList = null;
+    await hook?.call(root, expectedHead);
+    final fixture = _dataAssetByHead[expectedHead.canonicalJson];
+    final response =
+        fixture?.listResponse() ??
+        <String, Object?>{
+          'ok': true,
+          'outcome': 'listed_exact_head',
+          'basis_head_json': expectedHead.canonicalJson,
+          'revision':
+              (jsonDecode(project) as Map<String, Object?>)['revision']! as int,
+          'stages': <Object?>[],
+          'build_status': 'blocked',
+          'runtime_status': 'runtime_unqualified',
+          'artifact_authority': 'not_granted',
+          'publication_status': 'not_supported',
+        };
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStageListResult.fromJson(
+      response,
+      expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DataAssetStageRemovalPreparation>
+  prepareRemoveDataAssetStageV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  }) async {
+    dataAssetRemoveCalls++;
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final fixture = _dataAssetByHead[actual];
+    if (actual != expectedHead.canonicalJson || fixture == null) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_TARGET_MISSING',
+        message: 'fake native DataAsset target is absent',
+      );
+    }
+    _projectsByHead[fixture.removedHead.canonicalJson] =
+        fixture.removedProjectJson;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.removedHead);
+    final response = fixture.removalResponse();
+    final mismatch = nextDataAssetResponseMismatch;
+    nextDataAssetResponseMismatch = null;
+    if (mismatch == 'revision') response['revision'] = 99;
+    return AuthoringRevision3DataAssetStageRemovalPreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      requestedTargetPath: targetPath,
     );
   }
 }
