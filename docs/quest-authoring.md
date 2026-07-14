@@ -267,13 +267,15 @@ fully reopens the published result. The result remains `blocked`,
 
 ### Managed revision-3 existing-Quest outline edit V1
 
-The managed R3 Content Library now exposes **Edit quest outline** for one
-selected, exact-current `QuestDraft`. This count-preserving editor may change
+The managed R3 Content Library now exposes **Edit Quest** -> **Name &
+objectives** for one selected, exact-current `QuestDraft`. This
+count-preserving editor may change
 only the Quest's name in the project library, its player-facing title, and the
-text/order of its existing one through eight objectives. The objective count
-cannot change in this operation. Description, Quest family/parent, giver,
+text/order of its existing one through eight objectives. In this outline
+operation the objective count, description, Quest family/parent, giver,
 technical identities, stable Quest and ScriptModule IDs, ownership, provenance,
-and the retained `QuestCollisionArtifactRef` remain byte-for-byte unchanged.
+and the retained `QuestCollisionArtifactRef` remain byte-for-byte unchanged;
+the separate context action below owns description and connection changes.
 The project, Quest entity, and owned ScriptModule revisions each advance exactly
 once only when at least one editable value changes.
 
@@ -299,6 +301,58 @@ success. The operation remains `build_status: blocked`,
 `publication_status: not_supported` at the native boundary. It performs no
 compile, package, deployment, game-installation write, game launch, or save-file
 read/write.
+
+### Managed revision-3 existing-Quest context edit V1
+
+The same selected exact-current `QuestDraft` now has a separate **Description &
+connections** action beside **Name & objectives**. This transaction may change
+only the player-facing description, Quest family/parent, and giver. It preserves
+the library name, title, objective count/text/order, stable Quest and
+ScriptModule IDs, technical module identity, ownership, origin/provenance, and
+the retained `QuestCollisionArtifactRef`. The project, Quest, and owned module
+revisions advance exactly once only when at least one of the three editable
+values changes.
+
+Opening the context editor reads the exact description from the managed
+project and rebuilds a fresh Story catalog from the configured game
+installation. The Quest's current parent runtime class and giver runtime name
+must each resolve to exactly one current catalog choice. Missing or ambiguous
+current mappings make the operation unavailable; V1 does not guess a default,
+silently replace either connection, or act as a hotfix migration tool. The UI
+shows friendly family/giver labels while keeping catalog and runtime identities
+out of the normal authoring surface.
+
+Immediately before Save, Studio rebuilds the catalog again. It revalidates the
+exact current mappings and selected choices and requires the same catalog seal
+the author reviewed. The canonical request carries that seal as
+`expected_story_catalog_seal`; any changed seal, missing choice, ambiguous
+mapping, project/head drift, or no-op fails closed and publishes nothing. After
+a catalog change the author must review the fresh choices again rather than
+having a replacement selected automatically.
+
+The pure `apply_revision3_quest_context_edit_transaction_v1` consumes fresh
+prepared collision authority, proves the existing Quest/module closure by
+deterministic regeneration, preserves its technical identity, applies only the
+three context fields, and requires canonical candidate reopen. The strict
+prepare-only `authoring_store_prepare_revision3_quest_context_edit_v1` payload
+contains exactly `root`, `game_root`, `current_project_json`, and
+`quest_context_request_json`. Native code fully opens the exact fixed head,
+rebuilds pristine game/catalog/collision evidence, binds the requested catalog
+seal and Quest revision, revalidates game inputs around preparation, and fully
+reopens only an immutable unpublished candidate. It never replaces the fixed
+head; the managed session alone may publish by guarded exact-head byte CAS,
+repair journal, and full published reopen.
+
+The operation remains `build_status: blocked`,
+`runtime_status: runtime_unqualified`, and
+`publication_status: not_supported`. Native preparation may write only immutable
+candidate objects in the managed working Store; only guarded managed-session
+publication changes the current project head. It performs no game-installation,
+save-file, deployment, package, launch, or runtime mutation. Together, the
+outline and context actions are still not a complete Quest editor:
+transition/state authoring, conditions/effects, journal/reward workflows,
+complete source diagnostics and build lowering, and runtime qualification
+remain future work.
 
 ## Safe qualification order
 
