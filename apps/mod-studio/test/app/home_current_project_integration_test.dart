@@ -345,6 +345,94 @@ void main() {
   );
 
   testWidgets(
+    'selected Library Quest Source & checks reaches the exact managed lease',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_quest_source_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final fixture = Revision3QuestOutlineFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\quest-source-inspection'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (_) => fixture.contentIndex(),
+        onQuestSourceInspection: (lease, requestedGameRoot, questId) async {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(questId, revision3QuestOutlineQuestId);
+          throw const ModFfiException(
+            command: 'authoring_store_inspect_revision3_quest_source_v1',
+            code: 'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_MISSING',
+            message: 'fixture input is intentionally absent',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final menu = find.byKey(
+        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
+      );
+      if (menu.evaluate().isEmpty) {
+        await tester.tap(
+          find.byKey(
+            const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        if (menu.evaluate().isEmpty) {
+          await tester.drag(
+            find.byKey(const Key('revision3-content-entity-details')),
+            const Offset(0, -300),
+          );
+          await tester.pump();
+        }
+      }
+      expect(menu, findsOneWidget);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      final inspect = find.byKey(
+        const Key(
+          'revision3-content-inspect-quest-source-$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(inspect, findsOneWidget);
+      await tester.tap(inspect);
+      await tester.pumpAndSettle();
+
+      expect(managed.questSourceInspectionCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-quest-source-inspection-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-source-inspection-error')),
+        findsOneWidget,
+      );
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  testWidgets(
     'selected Library Quest context edit reloads catalog and refreshes revision',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -1731,6 +1819,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.verificationError,
     this.onNpcPublish,
     this.onQuestPublish,
+    this.onQuestSourceInspection,
     this.onQuestOutlinePublish,
     this.onQuestTransitionsSeed,
     this.onQuestTransitionsPublish,
@@ -1768,6 +1857,12 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestDraftAuthoringInput input,
   )?
   onQuestPublish;
+  final Future<AuthoringRevision3QuestSourceInspectionResult> Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    String questId,
+  )?
+  onQuestSourceInspection;
   final Revision3QuestOutlineEditPublication Function(
     _FakeManagedLease lease,
     Revision3QuestOutlineEditInput input,
@@ -1851,6 +1946,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int contentReadCalls = 0;
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int questSourceInspectionCalls = 0;
   int questOutlinePublishCalls = 0;
   int questTransitionsSeedCalls = 0;
   int questTransitionsPublishCalls = 0;
@@ -1877,6 +1973,21 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     contentReadCalls++;
     return contentIndexBuilder?.call(this) ??
         (throw StateError('fake managed lease has no content index'));
+  }
+
+  @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String gameRoot,
+    required String questId,
+  }) async {
+    questSourceInspectionCalls++;
+    final inspect = onQuestSourceInspection;
+    if (inspect == null) {
+      throw UnimplementedError(
+        'fake managed lease has no Quest source inspector',
+      );
+    }
+    return inspect(this, gameRoot, questId);
   }
 
   @override

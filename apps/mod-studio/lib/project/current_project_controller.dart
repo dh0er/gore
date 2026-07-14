@@ -99,6 +99,16 @@ final class CurrentProjectCoordinatorClosedException
     : super('the current-project coordinator is shutting down or disposed');
 }
 
+final class Revision3QuestSourceInspectionRequiresReopenException
+    implements Exception {
+  const Revision3QuestSourceInspectionRequiresReopenException();
+}
+
+final class Revision3QuestSourceInspectionStaleCheckpointException
+    implements Exception {
+  const Revision3QuestSourceInspectionStaleCheckpointException();
+}
+
 /// Diagnostic evidence that one terminal lease close failed.
 ///
 /// The coordinator deliberately retains no reference to the lease itself and
@@ -137,6 +147,10 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   bool get requiresReopen;
 
   Future<Revision3ContentIndex> readContentIndex();
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String gameRoot,
+    required String questId,
+  });
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
@@ -294,6 +308,12 @@ final class _ManagedRevision3SessionLease
   @override
   Future<Revision3ContentIndex> readContentIndex() =>
       _session.readContentIndex();
+
+  @override
+  Future<AuthoringRevision3QuestSourceInspectionResult> inspectQuestSourceV1({
+    required String gameRoot,
+    required String questId,
+  }) => _session.inspectQuestSourceV1(gameRoot: gameRoot, questId: questId);
 
   @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
@@ -841,6 +861,65 @@ final class CurrentProjectCoordinator
       if (current.lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3ContentRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Verify and expose the generated source for one Quest in the exact visible
+  /// managed revision-3 checkpoint. This is a read-only inspection: it neither
+  /// prepares nor publishes project state and grants no build/runtime authority.
+  Future<AuthoringRevision3QuestSourceInspectionResult>
+  inspectCurrentRevision3QuestSource({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required String questId,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest source inspection is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestSourceInspectionRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for Quest source inspection',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestSourceInspectionStaleCheckpointException();
+    }
+    try {
+      final inspection = await lease.inspectQuestSourceV1(
+        gameRoot: gameRoot,
+        questId: questId,
+      );
+      if (inspection.head.canonicalJson != expectedHead.canonicalJson ||
+          inspection.projectId != expectedProjectId ||
+          inspection.projectRevision != expectedProjectRevision ||
+          inspection.questId != questId) {
+        throw const Revision3QuestSourceInspectionStaleCheckpointException();
+      }
+      return inspection;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestSourceInspectionRequiresReopenException(),
           stackTrace,
         );
       }

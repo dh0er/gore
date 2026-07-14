@@ -40,6 +40,7 @@ import 'project/revision3_quest_context_authoring.dart';
 import 'project/revision3_quest_context_dialog.dart';
 import 'project/revision3_quest_outline_authoring.dart';
 import 'project/revision3_quest_outline_dialog.dart';
+import 'project/revision3_quest_source_inspection_dialog.dart';
 import 'project/revision3_quest_transitions_authoring.dart';
 import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
@@ -827,6 +828,16 @@ class _HomePageState extends ConsumerState<HomePage>
                 gameRoot: gameRoot,
                 plan: plan,
               ),
+          inspectQuestSource: ({required gameRoot, required questId}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .inspectCurrentRevision3QuestSource(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                gameRoot: gameRoot,
+                questId: questId,
+              ),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -977,6 +988,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.editQuestTransitions,
     required this.loadQuestContextSeed,
     required this.editQuestContext,
+    required this.inspectQuestSource,
   });
 
   final ManagedRevision3CurrentProjectState project;
@@ -1007,6 +1019,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3QuestTransitionsTechnicalPublisher editQuestTransitions;
   final Revision3QuestContextSeedLoader loadQuestContextSeed;
   final Revision3QuestContextTechnicalPublisher editQuestContext;
+  final Revision3QuestSourceInspectionLoader inspectQuestSource;
 
   @override
   Widget build(BuildContext context) {
@@ -1299,6 +1312,15 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                                           index,
                                           quest,
                                         ),
+                              inspectQuestSource:
+                                  project.requiresReopen || gameRoot == null
+                                  ? null
+                                  : (index, quest) =>
+                                        _openQuestSourceInspection(
+                                          context,
+                                          index,
+                                          quest,
+                                        ),
                             ),
                             Revision3DataAssetStagePanel(
                               projectRoot: project.root.path,
@@ -1523,6 +1545,24 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
         content: Text(
           'Quest states and transitions saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
         ),
+      ),
+    );
+  }
+
+  Future<void> _openQuestSourceInspection(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity quest,
+  ) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null || project.requiresReopen) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => Revision3QuestSourceInspectionDialog(
+        questTitle: quest.summary.primaryIdentity,
+        questId: quest.id,
+        gameRoot: configuredGameRoot,
+        inspect: inspectQuestSource,
       ),
     );
   }
