@@ -530,14 +530,44 @@ direct activation in order to reach a quest callsite. Dialog selection and
 quest effects must be exercised through a natural conversation on a disposable
 save.
 
+## Exact-current source inspection
+
+The read-only FFI command
+`authoring_store_inspect_revision3_quest_source_v1` accepts only a managed Store
+root, a game root, the caller's exact canonical head, and one Quest ID. Native
+code fully reopens that head, reads the persisted version-2 collision artifact,
+reconstructs its immutable historical basis, rebuilds fresh executable,
+Shipping-cache, Binds, catalog, and base-inventory inputs, and consumes a
+dedicated one-shot inspection capability. Clients cannot supply project JSON,
+artifact bytes, catalog data, collision selections, or a reusable capability.
+
+The resulting schema-3 plan regenerates the selected version-2, version-3, or
+version-4 Quest module and requires byte-exact equality with the persisted
+ScriptModule. Its provenance binds the exact current project, historical
+collision head and project, non-Quest basis, prior-Quest evidence, raw artifact,
+and semantic collision source. Native code then revalidates the game inputs and
+fully reopens the unchanged current Store head before returning the sealed plan.
+The route performs no Store, game, or save write. A retained real-install test
+uses a temporary Store and proves that the Store tree is byte-identical before
+and after inspection.
+
+Mod Studio exposes this as **Source & checks** on an existing managed Quest. The
+default view explains the successful source/input/head checks and keeps the
+negative boundaries visible. Advanced disclosure shows the generated
+AngelScript, module path, IDs, and seals. This is not a compiler invocation:
+`build_status` remains `blocked`, runtime remains `runtime_unqualified`, and
+publication remains `not_supported`. The inspection grants no artifact,
+authoring, compile, build, deploy, runtime, or fixed-head authority.
+
 ## Mod Studio boundary
 
 Mod Studio now provides the bounded Draft wizard, count-preserving legacy
-outline edit, catalog-bound context edit, and the V4 behavior table described
-above. A synchronized transcript/general graph, journal/reward/item authoring,
-arbitrary source, complete diagnostics, build lowering, deployment, and runtime
-test workflow are not part of this slice. The deterministic generator itself
-does not invoke the compiler or compose a cache.
+outline edit, catalog-bound context edit, the V4 behavior table, and the
+read-only generated-source inspection described above. A synchronized
+transcript/general graph, journal/reward/item authoring, arbitrary source,
+complete diagnostics, build lowering, deployment, and runtime test workflow are
+not part of this slice. The deterministic generator itself does not invoke the
+compiler or compose a cache.
 
 Offline compiler/compose/reopen evidence now covers the listed lifecycle
 field/hook/handler/getter/call shapes, but not one exact renderer-produced

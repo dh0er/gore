@@ -366,6 +366,30 @@ Map keys, object/package references, `FName` values, variable-width values,
 collection shape changes, header changes, and unknown wire forms remain
 unsupported.
 
+## Installed package-index foundation
+
+The native `gore-tex` package-index foundation discovers candidate `/Game`
+packages from IoStore Directory Index metadata without parsing Zen package
+headers or reading any `ExportBundleData` payload. It scans physical chunk
+metadata under a hard, caller-tightenable budget, reproduces first-winner
+priority locally, and accepts only canonical package chunk index 0 with a
+winner-specific `../../../G1R/Content/*.uasset` path whose derived package ID
+matches the chunk ID. Candidates are sorted deterministically.
+
+Missing or noncanonical Directory Index paths, noncanonical ExportBundle chunk
+IDs, and package-ID mismatches produce an explicit `partial_index` with reason
+counts. Ambiguous sibling container names that collapse to the same Retoc
+priority key are rejected rather than choosing a filesystem-enumeration winner.
+The current foundation operates on an already opened IoStore; the future
+path-based installed browser must also preflight sibling filenames before
+opening the composite container.
+
+This is not yet an FFI command or Studio browser. A candidate path grants no
+package contents, class, schema, selector, extraction, patch, build, or runtime
+authority. Selection must still be followed by fresh exact extraction and the
+existing sealed inspection/edit pipeline. Manual `/Game` input remains the
+fallback until that complete browser and path-free live-snapshot CAS are wired.
+
 ## Receipts, source proofs, and limits
 
 Extract, patch, and pack form a mandatory receipt chain. Extract and pack place
