@@ -10,6 +10,7 @@ mod legacy_preflight;
 pub mod package;
 pub mod patch;
 pub mod primitive;
+pub mod reviewed_dataasset;
 pub mod schema;
 pub mod span;
 pub mod unversioned;
@@ -35,6 +36,13 @@ pub use patch::{
 pub use primitive::{
     PrimitiveError, PrimitiveKind, PrimitiveProperty, PrimitivePropertyBlock, PrimitiveValue,
     PropertyPayload,
+};
+pub use reviewed_dataasset::{
+    prepare_reviewed_footstep_preset_size_v1, reviewed_footstep_preset_target_from_ids_v1,
+    ReviewedDataAssetErrorV1, ReviewedFootstepPresetReplacementV1, ReviewedFootstepPresetSizeV1,
+    ReviewedFootstepPresetTargetV1, REVIEWED_DATAASSET_FORMAT_V1,
+    REVIEWED_FEET_TEXTURE_SIZE_FIELD_ID, REVIEWED_FOOTSTEP_PRESET_SCHEMA_ID,
+    REVIEWED_FOOTSTEP_PRESET_SCHEMA_REVISION,
 };
 pub use schema::{PropertySlot, SchemaDb, SchemaError, SchemaId, SchemaKind, SchemaRecord};
 pub use span::{

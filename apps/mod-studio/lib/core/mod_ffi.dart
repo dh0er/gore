@@ -5,11 +5,13 @@ import 'package:crypto/crypto.dart' as crypto;
 
 import '../dataasset/domain/dataasset_inspection.dart';
 import '../dataasset/domain/dataasset_semantic_edit.dart';
+import '../dataasset/domain/reviewed_dataasset_schema.dart';
 import '../project/revision3_content_index.dart';
 import 'core_service.dart';
 
 export '../dataasset/domain/dataasset_inspection.dart';
 export '../dataasset/domain/dataasset_semantic_edit.dart';
+export '../dataasset/domain/reviewed_dataasset_schema.dart';
 
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_dataasset_package_index.dart';
@@ -47,6 +49,9 @@ const _maxAuthoringRevision3InstalledDataAssetEditRequestBytes =
     (_maxAuthoringStorePathBytes * 2 + _maxAuthoringHeadJsonBytes) * 6 +
     8 * 1024 +
     8 * 1024 * 1024;
+const _maxAuthoringRevision3ReviewedInstalledDataAssetEditRequestBytes =
+    (_maxAuthoringStorePathBytes * 2 + _maxAuthoringHeadJsonBytes) * 6 +
+    12 * 1024;
 const _maxAuthoringRevision3DataAssetStages = 1024;
 const _maxAuthoringRevision3DataAssetManifestBytes = 8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetManifestStringBytes = 32 * 1024;
@@ -938,6 +943,62 @@ class ModFfi {
           prepared.stage.replacementByteLength != selector.kind.width) {
         throw const FormatException(
           'prepared stage does not match the installed typed selector shape',
+        );
+      }
+      return prepared;
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one closed reviewed edit from an exact installed inspection.
+  ///
+  /// Only the candidate ordinal, snapshot seals, and semantic schema/value
+  /// cross the wire. Native code rediscovers the target and exact selector,
+  /// lowers the value, and returns an unpublished managed stage candidate.
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  authoringStorePrepareRevision3ReviewedInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    if (intent.snapshot.head.canonicalJson != expectedHead.canonicalJson ||
+        intent.inspection.head.canonicalJson != expectedHead.canonicalJson) {
+      throw ArgumentError(
+        'reviewed installed DataAsset edit must use the exact requested head',
+        'intent',
+      );
+    }
+    final payload = <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      ...intent.toNativeFields(),
+      'game_root': gameRoot,
+      'root': root,
+    };
+    _authoringRevision3DataAssetEditEnvelopePreflight(
+      command,
+      payload,
+      maxBytes:
+          _maxAuthoringRevision3ReviewedInstalledDataAssetEditRequestBytes,
+    );
+    final response = await _call(command, payload);
+    try {
+      final prepared = AuthoringRevision3DataAssetStagePreparation.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedIntentBindingSha256: intent.expectedStageIntentBindingSha256,
+        expectedReviewedInstalledIntent: intent,
+      );
+      if (prepared.installedSource == null ||
+          prepared.reviewedEdit == null ||
+          prepared.stage.targetPath != intent.expectedTargetPath) {
+        throw const FormatException(
+          'prepared stage does not match the reviewed installed intent',
         );
       }
       return prepared;

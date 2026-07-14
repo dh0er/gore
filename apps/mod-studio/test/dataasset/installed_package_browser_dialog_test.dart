@@ -382,6 +382,126 @@ void main() {
     },
   );
 
+  testWidgets(
+    'reviewed preset is curated before search and keeps its expert leaf',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final snapshot = _packageIndexResult(reviewedWolf: true);
+      final candidate = snapshot.index.candidates.single;
+      final exactInspection = _installedInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+        inspection: _reviewedWolfInspectionResponse(),
+      );
+      expect(
+        ReviewedFootstepPresetInspection.tryMatch(
+          packagePath: exactInspection.targetPath,
+          inspection: exactInspection.inspection,
+        ),
+        isNotNull,
+      );
+      ReviewedInstalledDataAssetEditIntent? publishedIntent;
+      await tester.pumpWidget(
+        _BrowserHost(
+          load: ({required gameRoot}) async => snapshot,
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async => exactInspection,
+          publish: (intent) async => DataAssetSemanticStagePublication(
+            targetPath: intent.expectedTargetPath,
+            revision: 8,
+          ),
+          publishReviewed: (intent) async {
+            publishedIntent = intent;
+            return DataAssetSemanticStagePublication(
+              targetPath: intent.expectedTargetPath,
+              revision: 9,
+            );
+          },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('installed-package-browser-reviewed-presets')),
+        findsOneWidget,
+      );
+      expect(find.text('Wolf footsteps'), findsOneWidget);
+      expect(
+        find.byKey(const Key('installed-package-browser-search-prompt')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('installed-package-reviewed-open-0')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('reviewed-footstep-preset-entry')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('expert path'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('dataasset-export-tile-0')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('dataasset-edit-leaf-0-1')), findsOneWidget);
+
+      final guidedEdit = find.byKey(const Key('reviewed-footstep-preset-edit'));
+      await tester.ensureVisible(guidedEdit);
+      await tester.pumpAndSettle();
+      await tester.tap(guidedEdit);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('reviewed-footstep-preset-dialog')),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('reviewed-footstep-x')),
+        '11',
+      );
+      await tester.enterText(
+        find.byKey(const Key('reviewed-footstep-y')),
+        '12',
+      );
+      await tester.tap(find.byKey(const Key('reviewed-footstep-preview')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('reviewed-footstep-stage')));
+      await tester.pumpAndSettle();
+
+      final intent = publishedIntent!;
+      expect(identical(intent.snapshot, snapshot), isTrue);
+      expect(intent.request.toJson(), <String, Object>{
+        'format': 1,
+        'schema_id': 'g1r.tracking.footstep-preset',
+        'schema_revision': 1,
+        'field_id': 'feet_texture_size',
+        'value': <String, String>{'x': '11', 'y': '12'},
+      });
+      expect(intent.request.toJson(), isNot(contains('target_path')));
+      expect(intent.request.toJson(), isNot(contains('selector')));
+      expect(intent.request.toJson(), isNot(contains('replacement_hex')));
+      expect(intent.toNativeFields().keys, <String>[
+        'candidate_ordinal',
+        'expected_package_index_seal',
+        'expected_source_snapshot_seal',
+        'reviewed_edit',
+      ]);
+      expect(
+        find.byKey(const Key('installed-package-browser-dialog')),
+        findsNothing,
+      );
+      expect(find.textContaining('project revision 9'), findsOneWidget);
+    },
+  );
+
   testWidgets('stages only a typed leaf from the exact installed inspection', (
     tester,
   ) async {
@@ -793,12 +913,14 @@ class _BrowserHost extends StatelessWidget {
     required this.load,
     this.inspect,
     this.publish,
+    this.publishReviewed,
     this.textScale,
   });
 
   final Revision3InstalledPackageIndexLoader load;
   final Revision3InstalledDataAssetInspector? inspect;
   final InstalledDataAssetSemanticStagePublisher? publish;
+  final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
   final double? textScale;
 
   @override
@@ -822,6 +944,7 @@ class _BrowserHost extends StatelessWidget {
               load: load,
               inspect: inspect,
               publish: publish,
+              publishReviewed: publishReviewed,
             ),
           ),
           child: const Text('Open'),
@@ -833,6 +956,7 @@ class _BrowserHost extends StatelessWidget {
 
 AuthoringRevision3DataAssetPackageIndexResult _packageIndexResult({
   bool partial = false,
+  bool reviewedWolf = false,
 }) {
   final head = AuthoringWorkingHead.fromCanonicalJson(
     jsonEncode(<String, Object?>{
@@ -841,21 +965,29 @@ AuthoringRevision3DataAssetPackageIndexResult _packageIndexResult({
     }),
   );
   final candidates = <Object?>[
-    <String, Object?>{
-      'target_path': '/Game/Characters/DA_Asghan',
-      'package_id_hex': '0123456789abcdef',
-    },
-    if (!partial)
+    if (reviewedWolf)
       <String, Object?>{
-        'target_path': '/Game/Characters/DA_Viper',
-        'package_id_hex': 'fedcba9876543210',
+        'target_path':
+            '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps',
+        'package_id_hex': '01e173a19ea374c9',
       },
+    if (!reviewedWolf) ...[
+      <String, Object?>{
+        'target_path': '/Game/Characters/DA_Asghan',
+        'package_id_hex': '0123456789abcdef',
+      },
+      if (!partial)
+        <String, Object?>{
+          'target_path': '/Game/Characters/DA_Viper',
+          'package_id_hex': 'fedcba9876543210',
+        },
+    ],
   ];
   final packageIndexJson = jsonEncode(<String, Object?>{
     'status': partial ? 'partial_index' : 'complete_index',
-    'physical_chunk_count': partial ? 3 : 2,
-    'winning_export_bundle_count': partial ? 2 : 2,
-    'directory_indexed_export_bundle_count': partial ? 1 : 2,
+    'physical_chunk_count': partial ? 3 : candidates.length,
+    'winning_export_bundle_count': partial ? 2 : candidates.length,
+    'directory_indexed_export_bundle_count': partial ? 1 : candidates.length,
     'out_of_scope_export_bundle_count': 0,
     'candidates': candidates,
     'partial_reasons': partial
@@ -908,13 +1040,14 @@ AuthoringRevision3InstalledDataAssetInspectionResult
 _installedInspectionResult({
   required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
   required AuthoringRevision3DataAssetPackageCandidate candidate,
+  Map<String, Object?>? inspection,
 }) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
   <String, Object?>{
     'authority_status': 'not_granted',
     'build_status': 'not_evaluated',
     'candidate_ordinal': candidate.ordinal,
     'head_json': expectedSnapshot.head.canonicalJson,
-    'inspection': validDataAssetInspectionResponse(),
+    'inspection': inspection ?? validDataAssetInspectionResponse(),
     'mutation_status': 'not_supported',
     'ok': true,
     'outcome': 'inspection_only',
@@ -939,3 +1072,132 @@ _installedInspectionResult({
   expectedSnapshot: expectedSnapshot,
   requestedOrdinal: candidate.ordinal,
 );
+
+Map<String, Object?> _reviewedWolfInspectionResponse() => <String, Object?>{
+  'ok': true,
+  'format': 'gore.dataasset.fixed-inspect.v1',
+  'status': 'walked',
+  'summary': <String, Object?>{
+    'package_exports': 1,
+    'reported_exports': 1,
+    'walked_exports': 1,
+    'editable_leaves': 2,
+  },
+  'selector_format': <String, Object?>{'format': 1, 'profile': 'g1r_ue5_4'},
+  'binding': <String, Object?>{
+    'package_seal': <String, Object?>{
+      'uasset_sha256': 'a' * 64,
+      'uexp_sha256': 'b' * 64,
+    },
+    'usmap_sha256': 'c' * 64,
+  },
+  'input': <String, Object?>{
+    'uasset_length': 1290,
+    'uexp_length': 90,
+    'usmap_length': 256,
+  },
+  'selection': <String, Object?>{'export_index': null},
+  'exports': <Object?>[
+    <String, Object?>{
+      'index': 0,
+      'object_name': 'DA_WolfFootsteps',
+      'class_path': '/Script/G1R.FootstepTag',
+      'component': 'uexp',
+      'length': 86,
+      'status': 'walked',
+      'failure': null,
+      'schema': '/Script/G1R.FootstepTag',
+      'property_bytes': 82,
+      'native_suffix_bytes': 4,
+      'leaves': <Object?>[
+        <String, Object?>{
+          'index': 0,
+          'editable': true,
+          'selector': _reviewedWolfSelector(),
+        },
+        <String, Object?>{
+          'index': 1,
+          'editable': true,
+          'selector': <String, Object?>{
+            'format': 1,
+            'profile': 'g1r_ue5_4',
+            'package_seal': <String, Object?>{
+              'uasset_sha256': 'a' * 64,
+              'uexp_sha256': 'b' * 64,
+            },
+            'usmap_sha256': 'c' * 64,
+            'export_index': 0,
+            'object_name': 'DA_WolfFootsteps',
+            'class_path': '/Script/G1R.FootstepTag',
+            'component': 'uexp',
+            'export_sha256': 'd' * 64,
+            'role': 'property_value',
+            'kind': 'bool',
+            'path': <Object?>[
+              <String, Object?>{
+                'step': 'property',
+                'schema_index': 1,
+                'property_name': 'InvertX',
+                'array_index': 0,
+                'array_dimension': 1,
+                'declaring_schema_name': 'FootstepTag',
+                'declaring_module_path': '/Script/G1R',
+                'property_type': <String, Object?>{'type': 'bool'},
+              },
+            ],
+            'expected_hex': '00',
+          },
+        },
+      ],
+    },
+  ],
+};
+
+Map<String, Object?> _reviewedWolfSelector() => <String, Object?>{
+  'format': 1,
+  'profile': 'g1r_ue5_4',
+  'package_seal': <String, Object?>{
+    'uasset_sha256': 'a' * 64,
+    'uexp_sha256': 'b' * 64,
+  },
+  'usmap_sha256': 'c' * 64,
+  'export_index': 0,
+  'object_name': 'DA_WolfFootsteps',
+  'class_path': '/Script/G1R.FootstepTag',
+  'component': 'uexp',
+  'export_sha256': 'd' * 64,
+  'role': 'property_value',
+  'kind': 'vector4_f64x4',
+  'path': <Object?>[
+    <String, Object?>{
+      'step': 'property',
+      'schema_index': 0,
+      'property_name': 'BoneData',
+      'array_index': 0,
+      'array_dimension': 1,
+      'declaring_schema_name': 'FootstepTag',
+      'declaring_module_path': '/Script/G1R',
+      'property_type': <String, Object?>{
+        'type': 'struct',
+        'name': 'BoneFeetData',
+      },
+    },
+    <String, Object?>{
+      'step': 'struct',
+      'name': 'BoneFeetData',
+      'schema_name': '/Script/G1R.BoneFeetData',
+    },
+    <String, Object?>{
+      'step': 'property',
+      'schema_index': 0,
+      'property_name': 'FeetTextureSize',
+      'array_index': 0,
+      'array_dimension': 1,
+      'declaring_schema_name': 'BoneFeetData',
+      'declaring_module_path': '/Script/G1R',
+      'property_type': <String, Object?>{'type': 'struct', 'name': 'Vector4'},
+    },
+  ],
+  'expected_hex':
+      '000000000000244000000000000024400000000000000000000000000000f03f',
+};

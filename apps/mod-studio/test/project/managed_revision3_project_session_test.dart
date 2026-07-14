@@ -2072,6 +2072,133 @@ void main() {
   );
 
   test(
+    'reviewed installed DataAsset edit forwards only its closed intent and publishes',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'reviewed_installed_dataasset_edit',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Reviewed installed DataAsset edit',
+        ),
+      );
+      final intent = _reviewedInstalledDataAssetIntent(session);
+
+      final published = await session
+          .prepareAndPublishReviewedInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: intent,
+          );
+
+      expect(store.reviewedInstalledDataAssetEditPrepareCalls, 1);
+      expect(store.reviewedInstalledDataAssetEditGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.reviewedInstalledDataAssetEditIntents.single, same(intent));
+      expect(intent.toNativeFields().keys, <String>[
+        'candidate_ordinal',
+        'expected_package_index_seal',
+        'expected_source_snapshot_seal',
+        'reviewed_edit',
+      ]);
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, _reviewedWolfTarget);
+      expect(published.stage.selectorKind, 'vector4_f64x4');
+      expect(session.projectRevision, 1);
+      expect(await session.listDataAssetStagesV1(), hasLength(1));
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'reviewed installed DataAsset edit keeps request rejections retryable and poisons invariants',
+    () async {
+      final retryableCodes = <String>[
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID',
+      ];
+      for (var index = 0; index < retryableCodes.length; index++) {
+        final code = retryableCodes[index];
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'reviewed_installed_dataasset_retry_$index',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(
+            revision: 0,
+            name: 'Reviewed installed DataAsset retry $index',
+          ),
+        );
+        store.nextDataAssetError = ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+          code: code,
+          message: 'fake reviewed installed DataAsset request rejection',
+        );
+
+        await expectLater(
+          session.prepareAndPublishReviewedInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: _reviewedInstalledDataAssetIntent(session),
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.projectRevision, 0, reason: code);
+        expect(store.reviewedInstalledDataAssetEditPrepareCalls, 1);
+        await session.close();
+      }
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'reviewed_installed_dataasset_invariant',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Reviewed installed DataAsset invariant',
+            ),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVARIANT',
+        message: 'fake reviewed installed DataAsset invariant failure',
+      );
+
+      await expectLater(
+        poisonSession.prepareAndPublishReviewedInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _reviewedInstalledDataAssetIntent(poisonSession),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+
+      expect(poisonSession.requiresReopen, isTrue);
+      expect(poisonSession.projectRevision, 0);
+      expect(poisonStore.reviewedInstalledDataAssetEditPrepareCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
     'installed DataAsset edit classifies drift, head conflict, and integrity separately',
     () async {
       final retryRoot = await _projectRoot(
@@ -4218,6 +4345,38 @@ DataAssetInstalledSemanticEditIntent _installedSemanticDataAssetIntent(
   );
 }
 
+const _reviewedWolfTarget =
+    '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps';
+const _reviewedWolfVectorHex =
+    '000000000000244000000000000024400000000000000000000000000000f03f';
+
+ReviewedInstalledDataAssetEditIntent _reviewedInstalledDataAssetIntent(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    _dataAssetPackageIndexResponse(
+      session.head,
+      session.projectJson,
+      targetPath: _reviewedWolfTarget,
+      packageIdHex: '01e173a19ea374c9',
+    ),
+    expectedHead: session.head,
+  );
+  final candidate = snapshot.index.candidates.single;
+  final inspection = _installedDataAssetInspectionResult(
+    expectedSnapshot: snapshot,
+    candidate: candidate,
+    usmapSha256: '3' * 64,
+    reviewedFootstep: true,
+  );
+  return ReviewedInstalledDataAssetEditIntent.fromInspection(
+    snapshot: snapshot,
+    candidate: candidate,
+    inspection: inspection,
+    request: ReviewedDataAssetEditRequest.feetTextureSize(x: '12.5', y: '8'),
+  );
+}
+
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
 
@@ -4245,6 +4404,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int dataAssetPackageIndexReadCalls = 0;
   int installedDataAssetInspectionCalls = 0;
   int installedDataAssetEditPrepareCalls = 0;
+  int reviewedInstalledDataAssetEditPrepareCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
@@ -4327,6 +4487,10 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> installedDataAssetEditGameRoots = <String>[];
   final List<DataAssetInstalledSemanticEditIntent>
   installedDataAssetEditIntents = <DataAssetInstalledSemanticEditIntent>[];
+  final List<String> reviewedInstalledDataAssetEditGameRoots = <String>[];
+  final List<ReviewedInstalledDataAssetEditIntent>
+  reviewedInstalledDataAssetEditIntents =
+      <ReviewedInstalledDataAssetEditIntent>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
@@ -5342,6 +5506,127 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareReviewedInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) async {
+    reviewedInstalledDataAssetEditPrepareCalls++;
+    reviewedInstalledDataAssetEditGameRoots.add(gameRoot);
+    reviewedInstalledDataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+        code:
+            'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message:
+            'fake native reviewed installed DataAsset edit basis CAS rejected',
+      );
+    }
+    final change = DataAssetSemanticValueEditor.fromLeaf(intent.evidence.leaf)
+        .changeComponents(
+          values: <String>[
+            intent.request.x,
+            intent.request.y,
+            intent.evidence.currentZ,
+            intent.evidence.currentW,
+          ],
+        );
+    final selector = intent.evidence.leaf.selector;
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: selector.toJson(),
+      replacementHex: _semanticReplacementWireHex(change.replacement),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final inspected = intent.inspection.inspection;
+    Map<String, Object?> inspectedSeal(int byteLength, String sha256) =>
+        <String, Object?>{'byte_len': byteLength, 'sha256': sha256};
+    final outerIntentBinding = change.replacement.intentBindingSha256For(
+      expectedTargetPath: intent.expectedTargetPath,
+      selector: selector,
+    );
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = outerIntentBinding
+      ..['installed_proof_binding_sha256'] = intent.installedProofBindingSha256
+      ..['installed_source'] = <String, Object?>{
+        'candidate_ordinal': intent.candidate.ordinal,
+        'format': 'gore.authoring.revision3-installed-dataasset-source.v1',
+        'inspection_binding': <String, Object?>{
+          'uasset': inspectedSeal(
+            inspected.input.uassetLength,
+            inspected.binding.packageSeal.uassetSha256,
+          ),
+          'uexp': inspectedSeal(
+            inspected.input.uexpLength,
+            inspected.binding.packageSeal.uexpSha256,
+          ),
+          'usmap': inspectedSeal(
+            inspected.input.usmapLength,
+            inspected.binding.usmapSha256,
+          ),
+        },
+        'package_index_seal': <String, Object?>{
+          'byte_len': intent.snapshot.packageIndexSeal.byteLength,
+          'sha256': intent.snapshot.packageIndexSeal.sha256,
+        },
+        'source_snapshot_seal': <String, Object?>{
+          'byte_len': intent.snapshot.sourceSnapshotSeal.byteLength,
+          'sha256': intent.snapshot.sourceSnapshotSeal.sha256,
+        },
+        'usmap_content_seal': <String, Object?>{
+          'byte_len': intent.inspection.usmapContentSeal.byteLength,
+          'sha256': intent.inspection.usmapContentSeal.sha256,
+        },
+        'usmap_inventory_seal': <String, Object?>{
+          'byte_len': intent.inspection.usmapInventorySeal.byteLength,
+          'sha256': intent.inspection.usmapInventorySeal.sha256,
+        },
+      }
+      ..['reviewed_edit'] = <String, Object?>{
+        'format': reviewedDataAssetEditRequestFormat,
+        'schema_id': footstepPresetSchemaId,
+        'schema_revision': footstepPresetSchemaRevision,
+        'field_id': feetTextureSizeFieldId,
+        'target_id': 'g1r:dataasset:footstep-preset:wolf',
+      }
+      ..['reviewed_before'] = <String, Object?>{
+        'x': _reviewedResponseDecimal(intent.evidence.currentX),
+        'y': _reviewedResponseDecimal(intent.evidence.currentY),
+        'z': _reviewedResponseDecimal(intent.evidence.currentZ),
+        'w': _reviewedResponseDecimal(intent.evidence.currentW),
+      }
+      ..['reviewed_after'] = <String, Object?>{
+        'x': _reviewedResponseDecimal(intent.request.x),
+        'y': _reviewedResponseDecimal(intent.request.y),
+        'z': _reviewedResponseDecimal(intent.evidence.currentZ),
+        'w': _reviewedResponseDecimal(intent.evidence.currentW),
+      }
+      ..['reviewed_intent_binding_sha256'] =
+          intent.expectedReviewedIntentBindingSha256;
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedReviewedInstalledIntent: intent,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -5516,6 +5801,17 @@ String _semanticReplacementHex(DataAssetSemanticEditIntent intent) =>
 String _installedSemanticReplacementHex(
   DataAssetInstalledSemanticEditIntent intent,
 ) => _semanticReplacementWireHex(intent.replacement);
+
+String _reviewedResponseDecimal(String source) {
+  var rendered = double.parse(source).toString().replaceFirst('e+', 'e');
+  final exponentIndex = rendered.indexOf('e');
+  final mantissaEnd = exponentIndex < 0 ? rendered.length : exponentIndex;
+  if (rendered.substring(0, mantissaEnd).endsWith('.0')) {
+    rendered =
+        '${rendered.substring(0, mantissaEnd - 2)}${rendered.substring(mantissaEnd)}';
+  }
+  return rendered;
+}
 
 String _semanticReplacementWireHex(DataAssetSemanticReplacement replacement) {
   final wire = replacement.toJson();
@@ -5707,8 +6003,11 @@ _installedDataAssetInspectionResult({
   required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
   required AuthoringRevision3DataAssetPackageCandidate candidate,
   String usmapSha256 = '',
+  bool reviewedFootstep = false,
 }) {
-  final inspection = validDataAssetInspectionResponse();
+  final inspection = reviewedFootstep
+      ? _reviewedFootstepInspectionResponse()
+      : validDataAssetInspectionResponse();
   final expectedUsmap = usmapSha256.isEmpty ? 'c' * 64 : usmapSha256;
   (inspection['binding']! as Map<String, Object?>)['usmap_sha256'] =
       expectedUsmap;
@@ -5750,6 +6049,52 @@ _installedDataAssetInspectionResult({
     expectedSnapshot: expectedSnapshot,
     requestedOrdinal: candidate.ordinal,
   );
+}
+
+Map<String, Object?> _reviewedFootstepInspectionResponse() {
+  final inspection = validDataAssetInspectionResponse(
+    objectName: 'DA_WolfFootsteps',
+  );
+  final export = dataAssetExport(inspection);
+  export
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['schema'] = '/Script/G1R.FootstepTag';
+  final selector = dataAssetSelector(inspection);
+  selector
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['kind'] = 'vector4_f64x4'
+    ..['path'] = <Object?>[
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'BoneData',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'FootstepTag',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{
+          'type': 'struct',
+          'name': 'BoneFeetData',
+        },
+      },
+      <String, Object?>{
+        'step': 'struct',
+        'name': 'BoneFeetData',
+        'schema_name': '/Script/G1R.BoneFeetData',
+      },
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'FeetTextureSize',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'BoneFeetData',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{'type': 'struct', 'name': 'Vector4'},
+      },
+    ]
+    ..['expected_hex'] = _reviewedWolfVectorHex;
+  return inspection;
 }
 
 AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({

@@ -2812,6 +2812,174 @@ void main() {
   );
 
   test(
+    'reviewed installed DataAsset edit forwards the closed intent and refreshes state',
+    () async {
+      final stage = _dataAssetStage(targetPath: _controllerReviewedWolfTarget);
+      final initialHead = _head(4);
+      final intent = _controllerReviewedDataAssetIntent(
+        head: initialHead,
+        projectId: stage.projectId,
+        projectRevision: 4,
+      );
+      late _FakeManagedLease managed;
+      managed = _FakeManagedLease(
+        root: Directory('managed-reviewed-installed-dataasset-edit'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: initialHead,
+        onReviewedInstalledDataAssetEditPublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'D:\Games\Gothic Remake');
+          expect(received, same(intent));
+          expect(received.toNativeFields().keys, <String>[
+            'candidate_ordinal',
+            'expected_package_index_seal',
+            'expected_source_snapshot_seal',
+            'reviewed_edit',
+          ]);
+          lease.projectRevision = 5;
+          lease.head = _head(5);
+          return Revision3DataAssetStagePublication(
+            projectId: stage.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 0,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final published = await coordinator
+          .addCurrentRevision3ReviewedInstalledDataAssetEdit(
+            expectedRoot: managed.root.path,
+            expectedProjectId: stage.projectId,
+            expectedProjectRevision: 4,
+            expectedHead: initialHead,
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: intent,
+          );
+
+      expect(published.stage, same(stage));
+      expect(managed.reviewedInstalledDataAssetEditPublishCalls, 1);
+      expect(
+        managed.reviewedInstalledDataAssetEditIntents.single,
+        same(intent),
+      );
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 5);
+      expect(state.head.canonicalJson, _head(5).canonicalJson);
+    },
+  );
+
+  test(
+    'reviewed installed DataAsset native rejections distinguish stale evidence from preparation failures',
+    () async {
+      final scenarios = <({String code, bool staleEvidence})>[
+        (
+          code:
+              'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID',
+          staleEvidence: true,
+        ),
+        (
+          code:
+              'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID',
+          staleEvidence: true,
+        ),
+        (
+          code:
+              'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID',
+          staleEvidence: false,
+        ),
+        (
+          code: 'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID',
+          staleEvidence: false,
+        ),
+      ];
+
+      for (var index = 0; index < scenarios.length; index++) {
+        final scenario = scenarios[index];
+        final stage = _dataAssetStage(
+          targetPath: _controllerReviewedWolfTarget,
+        );
+        final initialHead = _head(4);
+        final intent = _controllerReviewedDataAssetIntent(
+          head: initialHead,
+          projectId: stage.projectId,
+          projectRevision: 4,
+        );
+        final managed = _FakeManagedLease(
+          root: Directory('managed-reviewed-installed-dataasset-error-$index'),
+          projectIdValue: stage.projectId,
+          projectRevision: 4,
+          head: initialHead,
+          onReviewedInstalledDataAssetEditPublish: (_, _, _) =>
+              throw ModFfiException(
+                command:
+                    'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
+                code: scenario.code,
+                message: 'fake reviewed installed DataAsset native rejection',
+              ),
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        await coordinator.openManagedRevision3(managed.root);
+
+        final operation = coordinator
+            .addCurrentRevision3ReviewedInstalledDataAssetEdit(
+              expectedRoot: managed.root.path,
+              expectedProjectId: stage.projectId,
+              expectedProjectRevision: 4,
+              expectedHead: initialHead,
+              gameRoot: r'D:\Games\Gothic Remake',
+              intent: intent,
+            );
+        if (scenario.staleEvidence) {
+          await expectLater(
+            operation,
+            throwsA(
+              isA<
+                Revision3InstalledDataAssetEditSourceEvidenceStaleException
+              >(),
+            ),
+          );
+        } else {
+          await expectLater(
+            operation,
+            throwsA(
+              isA<Revision3InstalledDataAssetEditRejectedException>().having(
+                (error) => error.reason,
+                'reason',
+                Revision3InstalledDataAssetEditRejectionReason
+                    .preparationFailed,
+              ),
+            ),
+          );
+        }
+
+        expect(
+          managed.reviewedInstalledDataAssetEditPublishCalls,
+          1,
+          reason: scenario.code,
+        );
+        final state = coordinator.state as ManagedRevision3CurrentProjectState;
+        expect(state.projectRevision, 4, reason: scenario.code);
+        expect(state.requiresReopen, isFalse, reason: scenario.code);
+      }
+    },
+  );
+
+  test(
     'installed DataAsset source drift closes evidence without poisoning the project',
     () async {
       final stage = _dataAssetStage();
@@ -3423,6 +3591,12 @@ typedef _InstalledDataAssetEditPublishHook =
       String gameRoot,
       DataAssetInstalledSemanticEditIntent intent,
     );
+typedef _ReviewedInstalledDataAssetEditPublishHook =
+    FutureOr<Revision3DataAssetStagePublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      ReviewedInstalledDataAssetEditIntent intent,
+    );
 typedef _VoiceSelectionPublishHook =
     FutureOr<Revision3VoiceTakeSelectionPublication> Function(
       _FakeManagedLease lease,
@@ -3470,6 +3644,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
     this.onInstalledDataAssetEditPublish,
+    this.onReviewedInstalledDataAssetEditPublish,
     this.onDataAssetRemove,
     this.onDataAssetPackageIndexRead,
     this.onInstalledDataAssetInspection,
@@ -3503,6 +3678,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _DataAssetPublishHook? onDataAssetPublish;
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _InstalledDataAssetEditPublishHook? onInstalledDataAssetEditPublish;
+  final _ReviewedInstalledDataAssetEditPublishHook?
+  onReviewedInstalledDataAssetEditPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
   final _DataAssetPackageIndexReadHook? onDataAssetPackageIndexRead;
   final _InstalledDataAssetInspectionHook? onInstalledDataAssetInspection;
@@ -3536,6 +3713,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final List<String> installedDataAssetEditGameRoots = <String>[];
   final List<DataAssetInstalledSemanticEditIntent>
   installedDataAssetEditIntents = <DataAssetInstalledSemanticEditIntent>[];
+  int reviewedInstalledDataAssetEditPublishCalls = 0;
+  final List<String> reviewedInstalledDataAssetEditGameRoots = <String>[];
+  final List<ReviewedInstalledDataAssetEditIntent>
+  reviewedInstalledDataAssetEditIntents =
+      <ReviewedInstalledDataAssetEditIntent>[];
   int dataAssetRemoveCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
@@ -3646,6 +3828,24 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     if (publish == null) {
       throw StateError(
         'fake managed lease has no installed DataAsset edit publisher',
+      );
+    }
+    return publish(this, gameRoot, intent);
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication>
+  prepareAndPublishReviewedInstalledDataAssetEditV1({
+    required String gameRoot,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) async {
+    reviewedInstalledDataAssetEditPublishCalls++;
+    reviewedInstalledDataAssetEditGameRoots.add(gameRoot);
+    reviewedInstalledDataAssetEditIntents.add(intent);
+    final publish = onReviewedInstalledDataAssetEditPublish;
+    if (publish == null) {
+      throw StateError(
+        'fake managed lease has no reviewed installed DataAsset edit publisher',
       );
     }
     return publish(this, gameRoot, intent);
@@ -4032,13 +4232,16 @@ AuthoringRevision3InstalledDataAssetInspectionResult
 _controllerInstalledDataAssetInspectionResult({
   required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
   required AuthoringRevision3DataAssetPackageCandidate candidate,
+  bool reviewedFootstep = false,
 }) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
   <String, Object?>{
     'authority_status': 'not_granted',
     'build_status': 'not_evaluated',
     'candidate_ordinal': candidate.ordinal,
     'head_json': expectedSnapshot.head.canonicalJson,
-    'inspection': validDataAssetInspectionResponse(),
+    'inspection': reviewedFootstep
+        ? _controllerReviewedFootstepInspectionResponse()
+        : validDataAssetInspectionResponse(),
     'mutation_status': 'not_supported',
     'ok': true,
     'outcome': 'inspection_only',
@@ -4069,6 +4272,82 @@ _controllerInstalledDataAssetInspectionResult({
   expectedSnapshot: expectedSnapshot,
   requestedOrdinal: candidate.ordinal,
 );
+
+const _controllerReviewedWolfTarget =
+    '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps';
+
+Map<String, Object?> _controllerReviewedFootstepInspectionResponse() {
+  final inspection = validDataAssetInspectionResponse(
+    objectName: 'DA_WolfFootsteps',
+  );
+  final export = dataAssetExport(inspection);
+  export
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['schema'] = '/Script/G1R.FootstepTag';
+  final selector = dataAssetSelector(inspection);
+  selector
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['kind'] = 'vector4_f64x4'
+    ..['path'] = <Object?>[
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'BoneData',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'FootstepTag',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{
+          'type': 'struct',
+          'name': 'BoneFeetData',
+        },
+      },
+      <String, Object?>{
+        'step': 'struct',
+        'name': 'BoneFeetData',
+        'schema_name': '/Script/G1R.BoneFeetData',
+      },
+      <String, Object?>{
+        'step': 'property',
+        'schema_index': 0,
+        'property_name': 'FeetTextureSize',
+        'array_index': 0,
+        'array_dimension': 1,
+        'declaring_schema_name': 'BoneFeetData',
+        'declaring_module_path': '/Script/G1R',
+        'property_type': <String, Object?>{'type': 'struct', 'name': 'Vector4'},
+      },
+    ]
+    ..['expected_hex'] =
+        '000000000000244000000000000024400000000000000000000000000000f03f';
+  return inspection;
+}
+
+ReviewedInstalledDataAssetEditIntent _controllerReviewedDataAssetIntent({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) {
+  final snapshot = _controllerDataAssetPackageIndexResult(
+    head: head,
+    projectId: projectId,
+    projectRevision: projectRevision,
+    targetPath: _controllerReviewedWolfTarget,
+    packageIdHex: '01e173a19ea374c9',
+  );
+  final candidate = snapshot.index.candidates.single;
+  final inspection = _controllerInstalledDataAssetInspectionResult(
+    expectedSnapshot: snapshot,
+    candidate: candidate,
+    reviewedFootstep: true,
+  );
+  return ReviewedInstalledDataAssetEditIntent.fromInspection(
+    snapshot: snapshot,
+    candidate: candidate,
+    inspection: inspection,
+    request: ReviewedDataAssetEditRequest.feetTextureSize(x: '12.5', y: '8'),
+  );
+}
 
 AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
   required AuthoringWorkingHead head,
@@ -4169,8 +4448,15 @@ AuthoringRevision3QuestSourceInspectionResult _controllerQuestInspectionResult({
   );
 }
 
-AuthoringRevision3DataAssetStage _dataAssetStage() {
-  final fixture = revision3DataAssetNativeGoldenFixture();
+AuthoringRevision3DataAssetStage _dataAssetStage({String? targetPath}) {
+  final basis = revision3DataAssetNativeGoldenFixture();
+  final fixture = targetPath == null
+      ? basis
+      : Revision3DataAssetFixture.fromBasis(
+          basisHead: basis.basisHead,
+          basisProjectJson: basis.basisProjectJson,
+          targetPath: targetPath,
+        );
   return AuthoringRevision3DataAssetStageListResult.fromJson(
     fixture.listResponse(),
     expectedHead: fixture.stagedHead,

@@ -539,6 +539,14 @@ abstract interface class ManagedRevision3AuthoringStore {
     required DataAssetInstalledSemanticEditIntent intent,
   });
 
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareReviewedInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -751,6 +759,20 @@ final class ModFfiManagedRevision3AuthoringStore
     required AuthoringWorkingHead expectedHead,
     required DataAssetInstalledSemanticEditIntent intent,
   }) => ffi.authoringStorePrepareRevision3InstalledDataAssetEditV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    intent: intent,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareReviewedInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) => ffi.authoringStorePrepareRevision3ReviewedInstalledDataAssetEditV1(
     root: root,
     gameRoot: gameRoot,
     expectedHead: expectedHead,
@@ -1926,6 +1948,35 @@ class ManagedRevision3AuthoringProjectSession {
         );
       }
       return _store.prepareInstalledDataAssetEditV1(
+        root: root.path,
+        gameRoot: gameRoot,
+        expectedHead: basis.head,
+        intent: intent,
+      );
+    },
+  );
+
+  /// Revalidate and natively lower one closed reviewed installed DataAsset
+  /// intent, then publish only its prepared stage through fixed-head byte CAS.
+  Future<ManagedRevision3DataAssetStageCheckpoint>
+  prepareAndPublishReviewedInstalledDataAssetEditV1({
+    required String gameRoot,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) => _prepareAndPublishDataAssetStage(
+    operation: 'prepareAndPublishReviewedInstalledDataAssetEditV1',
+    handlePrepareError: _core._throwRevision3InstalledDataAssetEditError,
+    prepare: (basis) {
+      if (intent.snapshot.head.canonicalJson != basis.head.canonicalJson ||
+          intent.snapshot.projectId != basis.projectId ||
+          intent.snapshot.projectRevision != basis.projectRevision ||
+          intent.inspection.head.canonicalJson != basis.head.canonicalJson ||
+          intent.inspection.projectId != basis.projectId ||
+          intent.inspection.projectRevision != basis.projectRevision) {
+        throw const ManagedProjectVerificationException(
+          'reviewed installed DataAsset edit is not bound to the exact session basis',
+        );
+      }
+      return _store.prepareReviewedInstalledDataAssetEditV1(
         root: root.path,
         gameRoot: gameRoot,
         expectedHead: basis.head,
@@ -3918,6 +3969,13 @@ bool _revision3InstalledDataAssetEditErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
   'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH',
   'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_INVENTORY_MISMATCH',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_HEAD_INVALID',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT',
 }.contains(code);
 
 Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {

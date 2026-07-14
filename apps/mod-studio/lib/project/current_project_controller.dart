@@ -272,6 +272,11 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required DataAssetInstalledSemanticEditIntent intent,
   });
+  Future<Revision3DataAssetStagePublication>
+  prepareAndPublishReviewedInstalledDataAssetEditV1({
+    required String gameRoot,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  });
   Future<Revision3DataAssetStageRemovalPublication>
   prepareAndPublishRemoveDataAssetStageV1({required String targetPath});
   Future<void> verifyCurrentHead();
@@ -693,6 +698,25 @@ final class _ManagedRevision3SessionLease
       gameRoot: gameRoot,
       intent: intent,
     );
+    return Revision3DataAssetStagePublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      stage: checkpoint.stage,
+      deduplicatedBlobs: checkpoint.deduplicatedBlobs,
+    );
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication>
+  prepareAndPublishReviewedInstalledDataAssetEditV1({
+    required String gameRoot,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) async {
+    final checkpoint = await _session
+        .prepareAndPublishReviewedInstalledDataAssetEditV1(
+          gameRoot: gameRoot,
+          intent: intent,
+        );
     return Revision3DataAssetStagePublication(
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
@@ -2177,6 +2201,101 @@ final class CurrentProjectCoordinator
     }
   });
 
+  /// Publish one closed reviewed installed DataAsset edit. The UI supplies
+  /// only semantic schema values; native code rediscovers selector and bytes.
+  Future<Revision3DataAssetStagePublication>
+  addCurrentRevision3ReviewedInstalledDataAssetEdit({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required ReviewedInstalledDataAssetEditIntent intent,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Reviewed installed DataAsset edits are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    final snapshot = intent.snapshot;
+    final inspection = intent.inspection;
+    if (gameRoot.isEmpty ||
+        lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        snapshot.head.canonicalJson != expectedHead.canonicalJson ||
+        snapshot.projectId != expectedProjectId ||
+        snapshot.projectRevision != expectedProjectRevision ||
+        inspection.head.canonicalJson != expectedHead.canonicalJson ||
+        inspection.projectId != expectedProjectId ||
+        inspection.projectRevision != expectedProjectRevision) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    try {
+      final publication = await lease
+          .prepareAndPublishReviewedInstalledDataAssetEditV1(
+            gameRoot: gameRoot,
+            intent: intent,
+          );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.stage.projectId != expectedProjectId ||
+          publication.stage.targetPath != intent.expectedTargetPath ||
+          publication.stage.stagedProjectRevision !=
+              publication.projectRevision) {
+        throw const CurrentProjectCoordinatorException(
+          'published reviewed installed DataAsset edit disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException) {
+        if (_revision3InstalledDataAssetEditSourceEvidenceIsStale(error.code)) {
+          Error.throwWithStackTrace(
+            const Revision3InstalledDataAssetEditSourceEvidenceStaleException(),
+            stackTrace,
+          );
+        }
+        Error.throwWithStackTrace(
+          Revision3InstalledDataAssetEditRejectedException(
+            error.code == 'AUTHORING_REVISION3_DATAASSET_TARGET_EXISTS'
+                ? Revision3InstalledDataAssetEditRejectionReason
+                      .targetAlreadyStaged
+                : Revision3InstalledDataAssetEditRejectionReason
+                      .preparationFailed,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ArgumentError || error is FormatException) {
+        Error.throwWithStackTrace(
+          const Revision3InstalledDataAssetEditRejectedException(
+            Revision3InstalledDataAssetEditRejectionReason.preparationFailed,
+          ),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
   bool _revision3InstalledDataAssetEditSourceEvidenceIsStale(String code) =>
       code.startsWith('AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_') ||
       const {
@@ -2189,6 +2308,8 @@ final class CurrentProjectCoordinator
         'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
         'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH',
         'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_INVENTORY_MISMATCH',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID',
+        'AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID',
         'AUTHORING_REVISION3_DATAASSET_EXECUTABLE_MISMATCH',
         'AUTHORING_REVISION3_DATAASSET_INPUT_INVALID',
         'AUTHORING_REVISION3_DATAASSET_INPUT_MISSING',

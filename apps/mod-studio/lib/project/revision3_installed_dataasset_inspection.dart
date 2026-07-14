@@ -264,13 +264,21 @@ final class AuthoringRevision3InstalledDataAssetInspectionResult {
   }
 }
 
+abstract interface class _InstalledDataAssetProofExpectation {
+  AuthoringRevision3DataAssetPackageIndexResult get snapshot;
+  AuthoringRevision3DataAssetPackageCandidate get candidate;
+  AuthoringRevision3InstalledDataAssetInspectionResult get inspection;
+  String get installedProofBindingSha256;
+}
+
 /// A typed fixed-leaf value change bound to one exact installed package
 /// snapshot and its exact read-only inspection evidence.
 ///
 /// Native selection remains ordinal-only. Target paths, package IDs, raw
 /// package bytes, offsets, receipts, and output paths never cross this wire as
 /// caller authority.
-final class DataAssetInstalledSemanticEditIntent {
+final class DataAssetInstalledSemanticEditIntent
+    implements _InstalledDataAssetProofExpectation {
   DataAssetInstalledSemanticEditIntent._({
     required this.snapshot,
     required this.candidate,
@@ -278,8 +286,11 @@ final class DataAssetInstalledSemanticEditIntent {
     required this.change,
   });
 
+  @override
   final AuthoringRevision3DataAssetPackageIndexResult snapshot;
+  @override
   final AuthoringRevision3DataAssetPackageCandidate candidate;
+  @override
   final AuthoringRevision3InstalledDataAssetInspectionResult inspection;
   final DataAssetSemanticValueChange change;
 
@@ -293,28 +304,15 @@ final class DataAssetInstalledSemanticEditIntent {
     required AuthoringRevision3InstalledDataAssetInspectionResult inspection,
     required DataAssetSemanticValueChange change,
   }) {
-    final ordinal = candidate.ordinal;
     final ownsSelector = inspection.inspection.exports.any(
       (export) => export.leaves.any(
         (leaf) => leaf.editable && identical(leaf.selector, change.selector),
       ),
     );
-    if (ordinal < 0 ||
-        ordinal >= snapshot.index.candidates.length ||
-        !identical(candidate, snapshot.index.candidates[ordinal]) ||
-        inspection.head.canonicalJson != snapshot.head.canonicalJson ||
-        inspection.projectId != snapshot.projectId ||
-        inspection.projectRevision != snapshot.projectRevision ||
-        inspection.candidateOrdinal != ordinal ||
-        inspection.targetPath != candidate.targetPath ||
-        inspection.packageIdHex != candidate.packageIdHex ||
-        !_installedDataAssetSameSeal(
-          inspection.packageIndexSeal,
-          snapshot.packageIndexSeal,
-        ) ||
-        !_installedDataAssetSameSeal(
-          inspection.sourceSnapshotSeal,
-          snapshot.sourceSnapshotSeal,
+    if (!_installedDataAssetIntentIdentityMatches(
+          snapshot: snapshot,
+          candidate: candidate,
+          inspection: inspection,
         ) ||
         !ownsSelector) {
       throw ArgumentError(
@@ -369,6 +367,7 @@ final class DataAssetInstalledSemanticEditIntent {
     selector: selector,
   );
 
+  @override
   String get installedProofBindingSha256 => computeInstalledProofBindingSha256(
     candidateOrdinal: candidate.ordinal,
     packageIndex: (
@@ -452,6 +451,189 @@ final class DataAssetInstalledSemanticEditIntent {
   }
 }
 
+/// A reviewed semantic edit bound to one exact installed inspection.
+///
+/// The narrow request carries no target, package identity, inspector binding,
+/// selector, or encoded replacement bytes. Native code resolves those facts
+/// again from the retained ordinal and sealed snapshot.
+final class ReviewedInstalledDataAssetEditIntent
+    implements _InstalledDataAssetProofExpectation {
+  ReviewedInstalledDataAssetEditIntent._({
+    required this.snapshot,
+    required this.candidate,
+    required this.inspection,
+    required this.request,
+    required this.evidence,
+  });
+
+  @override
+  final AuthoringRevision3DataAssetPackageIndexResult snapshot;
+  @override
+  final AuthoringRevision3DataAssetPackageCandidate candidate;
+  @override
+  final AuthoringRevision3InstalledDataAssetInspectionResult inspection;
+  final ReviewedDataAssetEditRequest request;
+  final ReviewedFootstepPresetInspection evidence;
+
+  String get expectedTargetPath => inspection.targetPath;
+
+  /// Reconstruct the ordinary fixed-leaf stage binding locally without
+  /// granting selector or replacement-byte authority to the request wire.
+  /// This makes a natively self-consistent but semantically different stage
+  /// fail closed at the Dart boundary.
+  String get expectedStageIntentBindingSha256 {
+    final change = DataAssetSemanticValueEditor.fromLeaf(evidence.leaf)
+        .changeComponents(
+          values: <String>[
+            request.x,
+            request.y,
+            evidence.currentZ,
+            evidence.currentW,
+          ],
+        );
+    return change.replacement.intentBindingSha256For(
+      expectedTargetPath: expectedTargetPath,
+      selector: evidence.leaf.selector,
+    );
+  }
+
+  /// Recompute the native reviewed-schema binding over the complete exact
+  /// selector and replacement. This is independent of the ordinary stage
+  /// binding and prevents an arbitrary digest echo from becoming evidence.
+  String get expectedReviewedIntentBindingSha256 {
+    final replacement = ByteData(32)
+      ..setFloat64(0, double.parse(request.x), Endian.little)
+      ..setFloat64(8, double.parse(request.y), Endian.little)
+      ..setFloat64(16, double.parse(evidence.currentZ), Endian.little)
+      ..setFloat64(24, double.parse(evidence.currentW), Endian.little);
+    final format = ByteData(4)
+      ..setUint32(0, reviewedDataAssetEditRequestFormat, Endian.little);
+    final revision = ByteData(4)
+      ..setUint32(0, footstepPresetSchemaRevision, Endian.little);
+    final bytes = BytesBuilder(copy: false)
+      ..add(
+        utf8.encode(
+          'gore-asset.reviewed-dataasset.footstep-preset.feet-texture-size.v1\u0000',
+        ),
+      );
+    for (final value in <List<int>>[
+      format.buffer.asUint8List(),
+      utf8.encode(footstepPresetSchemaId),
+      revision.buffer.asUint8List(),
+      utf8.encode(feetTextureSizeFieldId),
+      utf8.encode(_reviewedFootstepTargetId(evidence.target)),
+      utf8.encode(expectedTargetPath),
+      utf8.encode(jsonEncode(evidence.leaf.selector.toJson())),
+      replacement.buffer.asUint8List(),
+    ]) {
+      final length = ByteData(8)..setUint64(0, value.length, Endian.little);
+      bytes
+        ..add(length.buffer.asUint8List())
+        ..add(value);
+    }
+    return crypto.sha256.convert(bytes.takeBytes()).toString();
+  }
+
+  factory ReviewedInstalledDataAssetEditIntent.fromInspection({
+    required AuthoringRevision3DataAssetPackageIndexResult snapshot,
+    required AuthoringRevision3DataAssetPackageCandidate candidate,
+    required AuthoringRevision3InstalledDataAssetInspectionResult inspection,
+    required ReviewedDataAssetEditRequest request,
+  }) {
+    final evidence = ReviewedFootstepPresetInspection.tryMatch(
+      packagePath: inspection.targetPath,
+      inspection: inspection.inspection,
+    );
+    if (!_installedDataAssetIntentIdentityMatches(
+          snapshot: snapshot,
+          candidate: candidate,
+          inspection: inspection,
+        ) ||
+        evidence == null) {
+      throw ArgumentError(
+        'reviewed installed DataAsset edit must use one exact snapshot, candidate, inspection, and reviewed leaf',
+        'inspection',
+      );
+    }
+    return ReviewedInstalledDataAssetEditIntent._(
+      snapshot: snapshot,
+      candidate: candidate,
+      inspection: inspection,
+      request: request,
+      evidence: evidence,
+    );
+  }
+
+  Map<String, Object?> toNativeFields() => <String, Object?>{
+    'candidate_ordinal': candidate.ordinal,
+    'expected_package_index_seal': _installedDataAssetSealJson(
+      snapshot.packageIndexSeal,
+    ),
+    'expected_source_snapshot_seal': _installedDataAssetSealJson(
+      snapshot.sourceSnapshotSeal,
+    ),
+    'reviewed_edit': request.toJson(),
+  };
+
+  @override
+  String get installedProofBindingSha256 =>
+      DataAssetInstalledSemanticEditIntent.computeInstalledProofBindingSha256(
+        candidateOrdinal: candidate.ordinal,
+        packageIndex: (
+          byteLength: snapshot.packageIndexSeal.byteLength,
+          sha256: snapshot.packageIndexSeal.sha256,
+        ),
+        sourceSnapshot: (
+          byteLength: snapshot.sourceSnapshotSeal.byteLength,
+          sha256: snapshot.sourceSnapshotSeal.sha256,
+        ),
+        usmapContent: (
+          byteLength: inspection.usmapContentSeal.byteLength,
+          sha256: inspection.usmapContentSeal.sha256,
+        ),
+        usmapInventory: (
+          byteLength: inspection.usmapInventorySeal.byteLength,
+          sha256: inspection.usmapInventorySeal.sha256,
+        ),
+        uasset: (
+          byteLength: inspection.inspection.input.uassetLength,
+          sha256: inspection.inspection.binding.packageSeal.uassetSha256,
+        ),
+        uexp: (
+          byteLength: inspection.inspection.input.uexpLength,
+          sha256: inspection.inspection.binding.packageSeal.uexpSha256,
+        ),
+        usmap: (
+          byteLength: inspection.inspection.input.usmapLength,
+          sha256: inspection.inspection.binding.usmapSha256,
+        ),
+      );
+}
+
+bool _installedDataAssetIntentIdentityMatches({
+  required AuthoringRevision3DataAssetPackageIndexResult snapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+  required AuthoringRevision3InstalledDataAssetInspectionResult inspection,
+}) {
+  final ordinal = candidate.ordinal;
+  if (ordinal < 0 || ordinal >= snapshot.index.candidates.length) return false;
+  return identical(candidate, snapshot.index.candidates[ordinal]) &&
+      inspection.head.canonicalJson == snapshot.head.canonicalJson &&
+      inspection.projectId == snapshot.projectId &&
+      inspection.projectRevision == snapshot.projectRevision &&
+      inspection.candidateOrdinal == ordinal &&
+      inspection.targetPath == candidate.targetPath &&
+      inspection.packageIdHex == candidate.packageIdHex &&
+      _installedDataAssetSameSeal(
+        inspection.packageIndexSeal,
+        snapshot.packageIndexSeal,
+      ) &&
+      _installedDataAssetSameSeal(
+        inspection.sourceSnapshotSeal,
+        snapshot.sourceSnapshotSeal,
+      );
+}
+
 Uint8List _installedDataAssetSha256Bytes(String value) {
   if (!_authoringSha256Pattern.hasMatch(value)) {
     throw const FormatException('installed DataAsset proof SHA-256 is invalid');
@@ -485,7 +667,7 @@ final class AuthoringRevision3InstalledDataAssetSourceProof {
 
   factory AuthoringRevision3InstalledDataAssetSourceProof._fromJson(
     Object? value, {
-    required DataAssetInstalledSemanticEditIntent expected,
+    required _InstalledDataAssetProofExpectation expected,
   }) {
     final json = _authoringRequiredObject(
       value,

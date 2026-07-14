@@ -318,13 +318,46 @@ revision, and head; each success advances and reloads the visible checkpoint. A
 registry removal does not modify the source receipt or game installation.
 
 The visible registry manages independently receipt-verified fixed-size edits;
-the new semantic component is the first typed value-editor slice, not a general
-DataAsset editor. Neither grants build, pack, deploy, gameplay, runtime, or
-future-reinspection authority. Reviewed gameplay-domain schemas and units,
+the generic semantic component remains a typed value-editor slice, not a
+general DataAsset editor. Neither grants build, pack, deploy, gameplay,
+runtime, or future-reinspection authority. The first closed reviewed schema now
+covers only the `FeetTextureSize` X/Y field of the exact Human, Scavenger, and
+Wolf footstep presets. Broader gameplay schemas, gameplay-qualified units,
 multi-edit transactions, undo, build lowering, post-pack verification,
 structural edits, and the sealed Unreal handoff remain separate work. The typed
 workflow writes only immutable objects and the guarded fixed head inside the
 managed project; it never writes the installed game or any save file.
+
+### First reviewed installed schema
+
+The installed-package browser recognizes three exact targets under
+`/Game/Blueprints/TrackingSystem/FootstepsPresets`: Human, Scavenger, and Wolf.
+Recognition requires one unambiguous editable `vector4_f64x4` leaf on export 0,
+class `/Script/G1R.FootstepTag`, with the fully reviewed
+`BoneData/BoneFeetData/FeetTextureSize` schema path. Familiar basenames,
+near-match classes or paths, duplicate reviewed leaves, non-finite current
+components, and unknown targets stay on the generic path.
+
+The guided form exposes only positive finite X and Y values plus 50/100/150/200
+percent presets. Z and W are shown as preserved technical components and are
+carried forward byte-for-byte. The form labels all values as raw asset units;
+their gameplay meaning and runtime effect are not qualified.
+
+`authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1`
+receives only the exact head, candidate ordinal, package/source snapshot seals,
+and the closed schema/field/X/Y intent. It receives no target path, selector,
+USMAP identity, replacement bytes, offset, receipt, output, build, or deployment
+authority. Native code independently rebuilds the installed evidence, resolves
+the reviewed selector, lowers X/Y while preserving Z/W, then reuses the normal
+installed typed-stage executor for a second complete drift-guarded pass. The
+response binds the semantic identity and before/after components separately
+from the ordinary selector/replacement stage binding and the complete installed
+source proof. Dart recomputes the ordinary stage binding from the prior exact
+inspection and requested value before the managed session may publish.
+
+The result is still only a managed-project stage. Build is blocked, runtime is
+unqualified, native publication is unsupported, and neither the game
+installation nor a save file is written.
 
 ### Direct installed fixed-leaf staging
 

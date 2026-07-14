@@ -62,9 +62,72 @@ void main() {
       expect(info.abi, goreCoreAbi);
       expect(info.version, '0.1.0-test');
       expect(info.commands, requiredStudioCoreCommands);
+      expect(info.supportsCommand('authoring_project_check'), isTrue);
+      expect(
+        info.supportsCommand('authoring_unreal_handoff_capabilities_v1'),
+        isFalse,
+      );
       expect(info.isStudioCompatible, isTrue);
       expect(info.missingRequiredCommands, isEmpty);
       expect(() => info.commands.add('validate'), throwsUnsupportedError);
+    });
+
+    test(
+      'negotiates additive commands without changing baseline compatibility',
+      () {
+        const optionalCommand = 'authoring_unreal_handoff_capabilities_v1';
+        final commandsWithOptional = <String>[
+          ...requiredStudioCoreCommands,
+          optionalCommand,
+        ]..sort();
+
+        final withOptional = GoreCoreInfo.parseResponse(
+          _coreInfoResponse(commands: commandsWithOptional),
+        );
+        final withoutOptional = GoreCoreInfo.parseResponse(_coreInfoResponse());
+        final incompleteBaseline = GoreCoreInfo.parseResponse(
+          _coreInfoResponse(
+            commands: commandsWithOptional
+                .where((command) => command != 'authoring_project_check')
+                .toList(),
+          ),
+        );
+
+        expect(withOptional.supportsCommand(optionalCommand), isTrue);
+        expect(withOptional.isStudioCompatible, isTrue);
+        expect(withOptional.missingRequiredCommands, isEmpty);
+        expect(
+          GoreCoreInfo.tryParseCompatibleResponse(
+            _coreInfoResponse(commands: commandsWithOptional),
+          ),
+          isNotNull,
+        );
+
+        expect(withoutOptional.supportsCommand(optionalCommand), isFalse);
+        expect(withoutOptional.isStudioCompatible, isTrue);
+        expect(withoutOptional.missingRequiredCommands, isEmpty);
+
+        expect(incompleteBaseline.supportsCommand(optionalCommand), isTrue);
+        expect(incompleteBaseline.isStudioCompatible, isFalse);
+        expect(incompleteBaseline.missingRequiredCommands, [
+          'authoring_project_check',
+        ]);
+      },
+    );
+
+    test('accepts the native command length boundary and rejects one over', () {
+      final atLimit = 'a' * 256;
+      final parsed = GoreCoreInfo.parseResponse(
+        _coreInfoResponse(commands: <String>[atLimit]),
+      );
+      expect(parsed.commands.single, atLimit);
+
+      expect(
+        () => GoreCoreInfo.parseResponse(
+          _coreInfoResponse(commands: <String>['a' * 257]),
+        ),
+        throwsFormatException,
+      );
     });
 
     test(

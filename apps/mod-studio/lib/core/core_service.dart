@@ -75,6 +75,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_revision3_quest_draft_v3',
   'authoring_store_prepare_revision3_quest_outline_edit_v1',
   'authoring_store_prepare_revision3_quest_transitions_edit_v1',
+  'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
   'authoring_store_prepare_revision3_voice_take_selection_v1',
   'authoring_store_prepare_revision3_voice_take_v1',
   'authoring_store_prepare_revision3_voice_target_v1',
@@ -106,7 +107,9 @@ const requiredStudioCoreCommands = <String>[
 
 const _maxCoreInfoResponseBytes = 64 * 1024;
 const _maxCoreInfoCommands = 256;
-const _maxCoreInfoCommandBytes = 64;
+// Keep this aligned with gore-ffi's MAX_DISPATCH_COMMAND_BYTES. The handshake
+// must accept every command the bounded native dispatcher can advertise.
+const _maxCoreInfoCommandBytes = 256;
 const _maxCoreInfoVersionBytes = 256;
 const _coreInfoRequest = '{"command":"core_info","payload":{}}';
 final _coreCommandPattern = RegExp(r'^[a-z][a-z0-9_]*$');
@@ -123,6 +126,14 @@ class GoreCoreInfo {
   final int abi;
   final String version;
   final List<String> commands;
+
+  /// Whether this exact core advertises one optional or baseline command.
+  ///
+  /// Startup compatibility remains defined exclusively by
+  /// [missingRequiredCommands]. Feature-specific callers can use this method
+  /// to negotiate additive commands without turning them into global startup
+  /// requirements.
+  bool supportsCommand(String command) => commands.contains(command);
 
   bool get isStudioCompatible =>
       abi == goreCoreAbi && missingRequiredCommands.isEmpty;

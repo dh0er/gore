@@ -227,6 +227,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_prepare_revision3_quest_outline_edit_v1",
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
+    "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_voice_take_selection_v1",
     "authoring_store_prepare_revision3_voice_take_v1",
     "authoring_store_prepare_revision3_voice_target_v1",
@@ -530,6 +531,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_prepare_revision3_quest_transitions_edit_v1" => Some(
             authoring_story_quest_transitions_revision3::prepare_revision3_quest_transitions_edit_v1_raw,
+        ),
+        "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1" => Some(
+            authoring_installed_dataasset_inspection_revision3::prepare_revision3_reviewed_installed_dataasset_edit_v1_raw,
         ),
         "authoring_store_prepare_revision3_voice_take_selection_v1" => {
             Some(authoring_voice_selection_revision3::prepare_revision3_voice_take_selection_v1_raw)
@@ -1585,6 +1589,7 @@ mod tests {
                     "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_prepare_revision3_quest_outline_edit_v1",
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
+                    "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
                     "authoring_store_prepare_revision3_voice_take_v1",
                     "authoring_store_prepare_revision3_voice_target_v1",
@@ -1701,6 +1706,8 @@ mod tests {
         assert!(commands.iter().any(
             |command| command == "authoring_store_prepare_revision3_quest_transitions_edit_v1"
         ));
+        assert!(commands.iter().any(|command| command
+            == "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_selection_v1"));

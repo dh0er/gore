@@ -174,6 +174,7 @@ final class AuthoringRevision3DataAssetStagePreparation {
     required this.artifactAuthority,
     required this.publicationStatus,
     this.installedSource,
+    this.reviewedEdit,
   });
 
   final AuthoringWorkingHead basisHead;
@@ -188,13 +189,23 @@ final class AuthoringRevision3DataAssetStagePreparation {
   final AuthoringRevision3DataAssetArtifactAuthority artifactAuthority;
   final AuthoringRevision3DataAssetNativePublicationStatus publicationStatus;
   final AuthoringRevision3InstalledDataAssetSourceProof? installedSource;
+  final AuthoringRevision3ReviewedDataAssetPreparationEvidence? reviewedEdit;
 
   factory AuthoringRevision3DataAssetStagePreparation.fromJson(
     Map<String, Object?> json, {
     required AuthoringWorkingHead expectedHead,
     String? expectedIntentBindingSha256,
     DataAssetInstalledSemanticEditIntent? expectedInstalledIntent,
+    ReviewedInstalledDataAssetEditIntent? expectedReviewedInstalledIntent,
   }) {
+    if (expectedInstalledIntent != null &&
+        expectedReviewedInstalledIntent != null) {
+      throw const FormatException(
+        'authoring revision-3 DataAsset response has ambiguous installed intent expectations',
+      );
+    }
+    final expectedInstalledProof =
+        expectedReviewedInstalledIntent ?? expectedInstalledIntent;
     _dataAssetResponsePreflight(json, <String>{
       'ok',
       'outcome',
@@ -208,9 +219,16 @@ final class AuthoringRevision3DataAssetStagePreparation {
       'runtime_status',
       'artifact_authority',
       'publication_status',
-      if (expectedIntentBindingSha256 != null) 'intent_binding_sha256',
-      if (expectedInstalledIntent != null) 'installed_proof_binding_sha256',
-      if (expectedInstalledIntent != null) 'installed_source',
+      if (expectedIntentBindingSha256 != null ||
+          expectedReviewedInstalledIntent != null)
+        'intent_binding_sha256',
+      if (expectedInstalledProof != null) 'installed_proof_binding_sha256',
+      if (expectedInstalledProof != null) 'installed_source',
+      if (expectedReviewedInstalledIntent != null) 'reviewed_edit',
+      if (expectedReviewedInstalledIntent != null) 'reviewed_before',
+      if (expectedReviewedInstalledIntent != null) 'reviewed_after',
+      if (expectedReviewedInstalledIntent != null)
+        'reviewed_intent_binding_sha256',
     }, 'revision-3 DataAsset preparation response');
     if (json['ok'] != true || json['outcome'] != 'prepared_unpublished') {
       throw const FormatException(
@@ -237,7 +255,9 @@ final class AuthoringRevision3DataAssetStagePreparation {
       json['stage'],
       'revision-3 DataAsset prepared stage',
     );
-    if (expectedIntentBindingSha256 != null) {
+    String? actualIntentBinding;
+    if (expectedIntentBindingSha256 != null ||
+        expectedReviewedInstalledIntent != null) {
       final actualBinding = _dataAssetString(
         json,
         'intent_binding_sha256',
@@ -245,15 +265,17 @@ final class AuthoringRevision3DataAssetStagePreparation {
         maxBytes: 64,
       );
       if (!_authoringSha256Pattern.hasMatch(actualBinding) ||
-          actualBinding != expectedIntentBindingSha256 ||
-          stage._intentBindingSha256 != expectedIntentBindingSha256) {
+          stage._intentBindingSha256 != actualBinding ||
+          (expectedIntentBindingSha256 != null &&
+              actualBinding != expectedIntentBindingSha256)) {
         throw const FormatException(
           'authoring revision-3 DataAsset response changed the exact typed edit binding',
         );
       }
+      actualIntentBinding = actualBinding;
     }
     AuthoringRevision3InstalledDataAssetSourceProof? installedSource;
-    if (expectedInstalledIntent != null) {
+    if (expectedInstalledProof != null) {
       final actualProofBinding = _dataAssetString(
         json,
         'installed_proof_binding_sha256',
@@ -262,7 +284,7 @@ final class AuthoringRevision3DataAssetStagePreparation {
       );
       if (!_authoringSha256Pattern.hasMatch(actualProofBinding) ||
           actualProofBinding !=
-              expectedInstalledIntent.installedProofBindingSha256) {
+              expectedInstalledProof.installedProofBindingSha256) {
         throw const FormatException(
           'authoring revision-3 DataAsset response changed the exact installed proof binding',
         );
@@ -270,9 +292,17 @@ final class AuthoringRevision3DataAssetStagePreparation {
       installedSource =
           AuthoringRevision3InstalledDataAssetSourceProof._fromJson(
             json['installed_source'],
-            expected: expectedInstalledIntent,
+            expected: expectedInstalledProof,
           );
     }
+    final reviewedEdit = expectedReviewedInstalledIntent == null
+        ? null
+        : AuthoringRevision3ReviewedDataAssetPreparationEvidence._fromJson(
+            json,
+            expected: expectedReviewedInstalledIntent,
+            stage: stage,
+            outerIntentBindingSha256: actualIntentBinding!,
+          );
     if (stage.projectId != candidate.projectId ||
         !stage.projectTargetExecutable._same(candidate.targetExecutable) ||
         stage.basisHead.canonicalJson != basisHead.canonicalJson ||
@@ -310,9 +340,156 @@ final class AuthoringRevision3DataAssetStagePreparation {
       artifactAuthority: statuses.artifact,
       publicationStatus: statuses.publication,
       installedSource: installedSource,
+      reviewedEdit: reviewedEdit,
     );
   }
 }
+
+/// Strict path-free evidence for one native-lowered reviewed DataAsset edit.
+///
+/// This is descriptive proof only. It grants no build, deployment, package,
+/// filesystem, or runtime authority.
+final class AuthoringRevision3ReviewedDataAssetPreparationEvidence {
+  const AuthoringRevision3ReviewedDataAssetPreparationEvidence._({
+    required this.targetId,
+    required this.before,
+    required this.after,
+    required this.intentBindingSha256,
+  });
+
+  final String targetId;
+  final ({double x, double y, double z, double w}) before;
+  final ({double x, double y, double z, double w}) after;
+  final String intentBindingSha256;
+
+  static AuthoringRevision3ReviewedDataAssetPreparationEvidence _fromJson(
+    Map<String, Object?> response, {
+    required ReviewedInstalledDataAssetEditIntent expected,
+    required AuthoringRevision3DataAssetStage stage,
+    required String outerIntentBindingSha256,
+  }) {
+    final identity = _dataAssetObject(
+      response['reviewed_edit'],
+      'revision-3 reviewed DataAsset identity',
+    );
+    _authoringExactFields(identity, const <String>{
+      'format',
+      'schema_id',
+      'schema_revision',
+      'field_id',
+      'target_id',
+    }, 'revision-3 reviewed DataAsset identity');
+    final targetId = _reviewedFootstepTargetId(expected.evidence.target);
+    if (identity['format'] != reviewedDataAssetEditRequestFormat ||
+        identity['schema_id'] != footstepPresetSchemaId ||
+        identity['schema_revision'] != footstepPresetSchemaRevision ||
+        identity['field_id'] != feetTextureSizeFieldId ||
+        identity['target_id'] != targetId) {
+      throw const FormatException(
+        'authoring revision-3 reviewed DataAsset response changed the closed schema identity',
+      );
+    }
+
+    final before = _reviewedDataAssetComponents(
+      response['reviewed_before'],
+      'revision-3 reviewed DataAsset before value',
+    );
+    final after = _reviewedDataAssetComponents(
+      response['reviewed_after'],
+      'revision-3 reviewed DataAsset after value',
+    );
+    final inspected = expected.evidence.currentComponents
+        .map(double.parse)
+        .toList(growable: false);
+    final requestedX = double.parse(expected.request.x);
+    final requestedY = double.parse(expected.request.y);
+    if (!_reviewedDataAssetSameF64(before.x, inspected[0]) ||
+        !_reviewedDataAssetSameF64(before.y, inspected[1]) ||
+        !_reviewedDataAssetSameF64(before.z, inspected[2]) ||
+        !_reviewedDataAssetSameF64(before.w, inspected[3]) ||
+        !_reviewedDataAssetSameF64(after.x, requestedX) ||
+        !_reviewedDataAssetSameF64(after.y, requestedY) ||
+        !_reviewedDataAssetSameF64(after.z, before.z) ||
+        !_reviewedDataAssetSameF64(after.w, before.w) ||
+        (_reviewedDataAssetSameF64(after.x, before.x) &&
+            _reviewedDataAssetSameF64(after.y, before.y)) ||
+        stage.targetPath != expected.expectedTargetPath ||
+        stage.selectorKind != FixedWireKind.vector4F64x4.wireName ||
+        stage.selectorPathDepth !=
+            expected.evidence.leaf.selector.path.length ||
+        stage.replacementByteLength != FixedWireKind.vector4F64x4.width ||
+        stage._intentBindingSha256 != outerIntentBindingSha256) {
+      throw const FormatException(
+        'authoring revision-3 reviewed DataAsset response changed the reviewed value or stage shape',
+      );
+    }
+    final binding = _dataAssetString(
+      response,
+      'reviewed_intent_binding_sha256',
+      'revision-3 reviewed DataAsset response',
+      maxBytes: 64,
+    );
+    if (!_authoringSha256Pattern.hasMatch(binding) ||
+        binding != expected.expectedReviewedIntentBindingSha256) {
+      throw const FormatException(
+        'authoring revision-3 reviewed DataAsset response changed the reviewed intent binding',
+      );
+    }
+    return AuthoringRevision3ReviewedDataAssetPreparationEvidence._(
+      targetId: targetId,
+      before: before,
+      after: after,
+      intentBindingSha256: binding,
+    );
+  }
+}
+
+({double x, double y, double z, double w}) _reviewedDataAssetComponents(
+  Object? raw,
+  String context,
+) {
+  final json = _dataAssetObject(raw, context);
+  _authoringExactFields(json, const <String>{'x', 'y', 'z', 'w'}, context);
+  double component(String name) {
+    final source = _dataAssetString(json, name, context, maxBytes: 64);
+    if (!_reviewedDataAssetResponseDecimal.hasMatch(source)) {
+      throw FormatException('authoring $context component $name is invalid');
+    }
+    final value = double.tryParse(source);
+    if (value == null || !value.isFinite) {
+      throw FormatException('authoring $context component $name is invalid');
+    }
+    return value;
+  }
+
+  return (
+    x: component('x'),
+    y: component('y'),
+    z: component('z'),
+    w: component('w'),
+  );
+}
+
+final _reviewedDataAssetResponseDecimal = RegExp(
+  r'^-?(?:0|[1-9][0-9]*)(?:\.[0-9]*[1-9])?(?:e-?[1-9][0-9]*)?$',
+);
+
+bool _reviewedDataAssetSameF64(double left, double right) {
+  final leftBits = ByteData(8)..setFloat64(0, left, Endian.little);
+  final rightBits = ByteData(8)..setFloat64(0, right, Endian.little);
+  return leftBits.getUint64(0, Endian.little) ==
+      rightBits.getUint64(0, Endian.little);
+}
+
+String _reviewedFootstepTargetId(ReviewedDataAssetTarget target) =>
+    switch (target.assetName) {
+      'DA_HumanFootsteps' => 'g1r:dataasset:footstep-preset:human',
+      'DA_ScavengerFootsteps' => 'g1r:dataasset:footstep-preset:scavenger',
+      'DA_WolfFootsteps' => 'g1r:dataasset:footstep-preset:wolf',
+      _ => throw const FormatException(
+        'authoring reviewed DataAsset target is outside the closed registry',
+      ),
+    };
 
 /// Strict, read-only listing at one exact published revision-3 head.
 final class AuthoringRevision3DataAssetStageListResult {

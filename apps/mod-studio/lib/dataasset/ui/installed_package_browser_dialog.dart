@@ -6,7 +6,9 @@ import 'package:flutter/services.dart';
 import '../../core/mod_ffi.dart';
 import '../../project/current_project_controller.dart';
 import 'dataasset_lab.dart';
+import 'dataasset_semantic_edit_panel.dart';
 import 'installed_dataasset_semantic_edit_dialog.dart';
+import 'reviewed_footstep_preset_dialog.dart';
 
 typedef Revision3InstalledPackageIndexLoader =
     Future<AuthoringRevision3DataAssetPackageIndexResult> Function({
@@ -20,6 +22,11 @@ typedef Revision3InstalledDataAssetInspector =
       required AuthoringRevision3DataAssetPackageCandidate candidate,
     });
 
+typedef ReviewedInstalledDataAssetStagePublisher =
+    Future<DataAssetSemanticStagePublication> Function(
+      ReviewedInstalledDataAssetEditIntent intent,
+    );
+
 /// Search-first browser over one exact installed package snapshot. Candidate
 /// paths remain discovery metadata only. An optional typed publisher can
 /// promote a proven editable leaf without granting caller-selected paths,
@@ -30,6 +37,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
     required this.load,
     this.inspect,
     this.publish,
+    this.publishReviewed,
     super.key,
   });
 
@@ -37,6 +45,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
   final Revision3InstalledPackageIndexLoader load;
   final Revision3InstalledDataAssetInspector? inspect;
   final InstalledDataAssetSemanticStagePublisher? publish;
+  final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
 
   @override
   State<InstalledPackageBrowserDialog> createState() =>
@@ -147,6 +156,15 @@ class _InstalledPackageBrowserDialogState
     AuthoringRevision3DataAssetPackageIndexResult result,
   ) {
     final candidates = result.index.candidates;
+    final reviewedCandidates = candidates
+        .where(
+          (candidate) =>
+              footstepPresetReviewedSchema.matchInstalledTarget(
+                candidate.targetPath,
+              ) !=
+              null,
+        )
+        .toList(growable: false);
     final visible = <AuthoringRevision3DataAssetPackageCandidate>[];
     var totalMatches = 0;
     if (_query.isNotEmpty) {
@@ -208,6 +226,57 @@ class _InstalledPackageBrowserDialogState
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           SliverToBoxAdapter(
             child: _InstalledPackageInspectionError(error: _inspectionError!),
+          ),
+        ],
+        if (reviewedCandidates.isNotEmpty) ...[
+          const SliverToBoxAdapter(child: SizedBox(height: 10)),
+          const SliverToBoxAdapter(
+            child: Text(
+              'Reviewed presets',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SliverToBoxAdapter(child: SizedBox(height: 4)),
+          SliverList(
+            key: const Key('installed-package-browser-reviewed-presets'),
+            delegate: SliverChildBuilderDelegate((context, index) {
+              final candidate = reviewedCandidates[index];
+              final target = footstepPresetReviewedSchema.matchInstalledTarget(
+                candidate.targetPath,
+              )!;
+              return Card(
+                child: ListTile(
+                  key: ValueKey(
+                    'installed-package-reviewed-${candidate.ordinal}',
+                  ),
+                  leading: const Icon(Icons.bookmark_outline),
+                  title: Text(target.friendlyName),
+                  subtitle: const Text(
+                    'Known reviewed target candidate; inspect the exact installed structure before editing.',
+                  ),
+                  trailing: _inspectingOrdinal == candidate.ordinal
+                      ? const SizedBox.square(
+                          dimension: 36,
+                          child: Padding(
+                            padding: EdgeInsets.all(8),
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        )
+                      : IconButton.filledTonal(
+                          key: ValueKey(
+                            'installed-package-reviewed-open-${candidate.ordinal}',
+                          ),
+                          tooltip: 'Inspect reviewed preset',
+                          onPressed:
+                              widget.inspect != null &&
+                                  _inspectingOrdinal == null
+                              ? () => _inspectCandidate(result, candidate)
+                              : null,
+                          icon: const Icon(Icons.tune_outlined),
+                        ),
+                ),
+              );
+            }, childCount: reviewedCandidates.length),
           ),
         ],
         const SliverToBoxAdapter(child: SizedBox(height: 10)),
@@ -472,6 +541,10 @@ class _InstalledPackageBrowserDialogState
     AuthoringRevision3DataAssetPackageCandidate candidate,
     AuthoringRevision3InstalledDataAssetInspectionResult result,
   ) {
+    final reviewedEvidence = ReviewedFootstepPresetInspection.tryMatch(
+      packagePath: result.targetPath,
+      inspection: result.inspection,
+    );
     final viewport = MediaQuery.sizeOf(context);
     final textScale = MediaQuery.textScalerOf(context).scale(1);
     final width = (viewport.width - 72).clamp(320.0, 1040.0).toDouble();
@@ -508,15 +581,62 @@ class _InstalledPackageBrowserDialogState
                       Navigator.of(dialogContext).pop(editResult);
                     }
                   },
-            header: Card(
-              color: Theme.of(dialogContext).colorScheme.secondaryContainer,
-              child: const ListTile(
-                leading: Icon(Icons.policy_outlined),
-                title: Text('Installed package — exact evidence'),
-                subtitle: Text(
-                  'Extracted to bounded memory from one exact installed snapshot. Proven value leaves can be staged only after a fresh native re-read; build, runtime, and deployment remain unavailable.',
+            header: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Card(
+                  color: Theme.of(dialogContext).colorScheme.secondaryContainer,
+                  child: const ListTile(
+                    leading: Icon(Icons.policy_outlined),
+                    title: Text('Installed package — exact evidence'),
+                    subtitle: Text(
+                      'Extracted to bounded memory from one exact installed snapshot. Proven value leaves can be staged only after a fresh native re-read; build, runtime, and deployment remain unavailable.',
+                    ),
+                  ),
                 ),
-              ),
+                if (reviewedEvidence != null && widget.publishReviewed != null)
+                  Card(
+                    key: const Key('reviewed-footstep-preset-entry'),
+                    color: Theme.of(dialogContext).colorScheme.primaryContainer,
+                    child: ListTile(
+                      leading: const Icon(Icons.verified_outlined),
+                      title: Text(reviewedEvidence.target.friendlyName),
+                      subtitle: const Text(
+                        'Guided reviewed editor for footprint texture X/Y size. Raw property editing remains available below as an expert path.',
+                      ),
+                      trailing: FilledButton.icon(
+                        key: const Key('reviewed-footstep-preset-edit'),
+                        onPressed: () async {
+                          final editResult =
+                              await showDialog<
+                                InstalledDataAssetSemanticEditResult
+                              >(
+                                context: dialogContext,
+                                barrierDismissible: false,
+                                builder: (context) => ReviewedFootstepPresetDialog(
+                                  evidence: reviewedEvidence,
+                                  publish: (request) {
+                                    final intent =
+                                        ReviewedInstalledDataAssetEditIntent.fromInspection(
+                                          snapshot: snapshot,
+                                          candidate: candidate,
+                                          inspection: result,
+                                          request: request,
+                                        );
+                                    return widget.publishReviewed!(intent);
+                                  },
+                                ),
+                              );
+                          if (editResult != null && dialogContext.mounted) {
+                            Navigator.of(dialogContext).pop(editResult);
+                          }
+                        },
+                        icon: const Icon(Icons.tune_outlined),
+                        label: const Text('Guided edit'),
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
         ),

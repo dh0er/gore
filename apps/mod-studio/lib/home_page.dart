@@ -744,6 +744,45 @@ class _HomePageState extends ConsumerState<HomePage>
               };
             }
           },
+          publishReviewedInstalledDataAssetEdit: (intent) async {
+            final configuredGameRoot = gameRoot;
+            if (configuredGameRoot == null) {
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+            }
+            try {
+              final publication = await ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .addCurrentRevision3ReviewedInstalledDataAssetEdit(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    gameRoot: configuredGameRoot,
+                    intent: intent,
+                  );
+              return DataAssetSemanticStagePublication(
+                targetPath: publication.stage.targetPath,
+                revision: publication.projectRevision,
+              );
+            } on Revision3DataAssetStaleCheckpointException {
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+            } on Revision3DataAssetRequiresReopenException {
+              throw const DataAssetSemanticStageUnavailableException.requiresReopen();
+            } on Revision3InstalledDataAssetEditSourceEvidenceStaleException {
+              throw const DataAssetSemanticStageUnavailableException.sourceEvidenceStale();
+            } on Revision3InstalledDataAssetEditRejectedException catch (
+              error
+            ) {
+              throw switch (error.reason) {
+                Revision3InstalledDataAssetEditRejectionReason
+                    .targetAlreadyStaged =>
+                  const DataAssetSemanticStageUnavailableException.targetAlreadyStaged(),
+                Revision3InstalledDataAssetEditRejectionReason
+                    .preparationFailed =>
+                  const DataAssetSemanticStageUnavailableException.preparationRejected(),
+              };
+            }
+          },
           publishDataAssetStage: ({required patchReceiptPath}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .addCurrentRevision3DataAssetStage(
@@ -1048,6 +1087,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.loadInstalledPackageIndex,
     required this.inspectInstalledDataAsset,
     required this.publishInstalledDataAssetSemanticEdit,
+    required this.publishReviewedInstalledDataAssetEdit,
     required this.publishDataAssetStage,
     required this.publishDataAssetSemanticEdit,
     required this.removeDataAssetStage,
@@ -1084,6 +1124,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3InstalledDataAssetInspector inspectInstalledDataAsset;
   final InstalledDataAssetSemanticStagePublisher
   publishInstalledDataAssetSemanticEdit;
+  final ReviewedInstalledDataAssetStagePublisher
+  publishReviewedInstalledDataAssetEdit;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
   final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
   final Revision3DataAssetStageRemover removeDataAssetStage;
@@ -1689,6 +1731,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       load: loadInstalledPackageIndex,
       inspect: inspectInstalledDataAsset,
       publish: publishInstalledDataAssetSemanticEdit,
+      publishReviewed: publishReviewedInstalledDataAssetEdit,
     ),
   );
 

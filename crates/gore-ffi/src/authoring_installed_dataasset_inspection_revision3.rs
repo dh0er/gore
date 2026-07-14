@@ -12,7 +12,11 @@ use std::io;
 use std::path::Path;
 
 use gore_asset::dataasset_workflow::verify_fixed_leaf_stage_edit_from_installed_snapshot_v1;
-use gore_asset::FixedLeafSelector;
+use gore_asset::{
+    prepare_reviewed_footstep_preset_size_v1, reviewed_footstep_preset_target_from_ids_v1,
+    FixedLeafSelector, ReviewedDataAssetErrorV1, ReviewedFootstepPresetReplacementV1,
+    ReviewedFootstepPresetSizeV1, ReviewedFootstepPresetTargetV1,
+};
 use gore_authoring::{
     AssetVerification, OpenedRevision3Checkpoint, ProjectRevision3, WorkingHead,
     WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
@@ -34,12 +38,15 @@ use crate::{dataasset, err};
 pub(super) const COMMAND: &str = "authoring_store_inspect_revision3_installed_dataasset_v1";
 pub(super) const PREPARE_EDIT_COMMAND: &str =
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1";
+pub(super) const PREPARE_REVIEWED_EDIT_COMMAND: &str =
+    "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
 const MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 const MAX_WIRE_BYTES: usize = (MAX_PATH_BYTES * 2 + MAX_HEAD_JSON_BYTES) * 6 + 8 * 1024;
 const MAX_PREPARE_EDIT_WIRE_BYTES: usize = MAX_WIRE_BYTES + 8 * 1024 * 1024;
+const MAX_PREPARE_REVIEWED_EDIT_WIRE_BYTES: usize = MAX_WIRE_BYTES + 4 * 1024;
 const MAX_RESPONSE_BYTES: usize = crate::transport::MAX_TRANSPORT_RESPONSE_BYTES;
 const MAX_TARGET_PATH_BYTES: usize = 512;
 const INSTALLED_SOURCE_FORMAT: &str = "gore.authoring.revision3-installed-dataasset-source.v1";
@@ -76,6 +83,35 @@ struct PrepareInstalledDataAssetEditWirePayload {
     replacement: SemanticReplacementWire,
     root: String,
     selector: FixedLeafSelector,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareReviewedInstalledDataAssetEditWirePayload {
+    candidate_ordinal: u64,
+    expected_head_json: String,
+    expected_package_index_seal: ExpectedSealWire,
+    expected_source_snapshot_seal: ExpectedSealWire,
+    game_root: String,
+    reviewed_edit: ReviewedInstalledDataAssetEditWire,
+    root: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewedInstalledDataAssetEditWire {
+    field_id: String,
+    format: u32,
+    schema_id: String,
+    schema_revision: u32,
+    value: ReviewedFootstepPresetSizeWire,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewedFootstepPresetSizeWire {
+    x: String,
+    y: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -119,6 +155,11 @@ pub(super) fn inspect_revision3_installed_dataasset_v1_raw(input: &str) -> Value
 
 pub(super) fn prepare_revision3_installed_dataasset_edit_v1_raw(input: &str) -> Value {
     prepare_revision3_installed_dataasset_edit_v1_inner(input, MAX_RESPONSE_BYTES)
+        .unwrap_or_else(Failure::response)
+}
+
+pub(super) fn prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(input: &str) -> Value {
+    prepare_revision3_reviewed_installed_dataasset_edit_v1_inner(input, MAX_RESPONSE_BYTES)
         .unwrap_or_else(Failure::response)
 }
 
@@ -326,6 +367,25 @@ fn prepare_revision3_installed_dataasset_edit_v1_inner(
     response_limit: usize,
 ) -> Result<Value, Failure> {
     let payload: PrepareInstalledDataAssetEditWirePayload = parse_exact_edit_wire(input)?;
+    prepare_revision3_installed_dataasset_edit_v1_payload(payload, response_limit)
+}
+
+fn prepare_revision3_installed_dataasset_edit_v1_payload(
+    payload: PrepareInstalledDataAssetEditWirePayload,
+    response_limit: usize,
+) -> Result<Value, Failure> {
+    prepare_revision3_installed_dataasset_edit_v1_payload_with_response(payload, move |response| {
+        enforce_edit_response_budget(response, response_limit)
+    })
+}
+
+fn prepare_revision3_installed_dataasset_edit_v1_payload_with_response<F>(
+    payload: PrepareInstalledDataAssetEditWirePayload,
+    finish_response: F,
+) -> Result<Value, Failure>
+where
+    F: FnOnce(Value) -> Result<Value, Failure>,
+{
     validate_edit_path(&payload.root)?;
     validate_edit_path(&payload.game_root)?;
     validate_edit_candidate_ordinal(payload.candidate_ordinal)?;
@@ -602,7 +662,7 @@ fn prepare_revision3_installed_dataasset_edit_v1_inner(
             Value::String(proof_binding),
         );
         object.insert("installed_source".to_owned(), installed_source);
-        enforce_edit_response_budget(response, response_limit)
+        finish_response(response)
     })();
 
     // Package, USMAP, and published Store drift always outrank parsing, patching, staging, and
@@ -617,6 +677,268 @@ fn prepare_revision3_installed_dataasset_edit_v1_inner(
         &payload.expected_head_json,
     )?;
     operation_result
+}
+
+fn prepare_revision3_reviewed_installed_dataasset_edit_v1_inner(
+    input: &str,
+    response_limit: usize,
+) -> Result<Value, Failure> {
+    let payload: PrepareReviewedInstalledDataAssetEditWirePayload =
+        parse_exact_reviewed_edit_wire(input)?;
+    // The target is deliberately server-selected from the exact installed candidate. A fixed
+    // registry target is used here only to validate the target-independent schema identity before
+    // any filesystem access; the candidate's actual target is still matched natively below.
+    reviewed_footstep_preset_target_from_ids_v1(
+        payload.reviewed_edit.format,
+        &payload.reviewed_edit.schema_id,
+        payload.reviewed_edit.schema_revision,
+        &payload.reviewed_edit.field_id,
+        ReviewedFootstepPresetTargetV1::Wolf.id(),
+    )
+    .map_err(|_| reviewed_edit_invalid_request())?;
+    let requested = ReviewedFootstepPresetSizeV1::try_new(
+        parse_reviewed_positive_canonical_decimal(&payload.reviewed_edit.value.x)?,
+        parse_reviewed_positive_canonical_decimal(&payload.reviewed_edit.value.y)?,
+    )
+    .map_err(|_| reviewed_edit_invalid_request())?;
+
+    validate_reviewed_edit_path(&payload.root)?;
+    validate_reviewed_edit_path(&payload.game_root)?;
+    validate_reviewed_edit_candidate_ordinal(payload.candidate_ordinal)?;
+    validate_reviewed_edit_expected_seal(&payload.expected_package_index_seal)?;
+    validate_reviewed_edit_expected_seal(&payload.expected_source_snapshot_seal)?;
+    parse_canonical_reviewed_edit_head(&payload.expected_head_json)?;
+
+    // Mint a fresh native inspection from only the client's exact-current head/package/source
+    // basis. This first pass owns and closes its full Store/package/USMAP drift window.
+    let inspection_request = json!({
+        "command": COMMAND,
+        "payload": {
+            "candidate_ordinal": payload.candidate_ordinal,
+            "expected_head_json": payload.expected_head_json,
+            "expected_package_index_seal": payload.expected_package_index_seal,
+            "expected_source_snapshot_seal": payload.expected_source_snapshot_seal,
+            "game_root": payload.game_root,
+            "root": payload.root,
+        },
+    })
+    .to_string();
+    let inspected =
+        inspect_revision3_installed_dataasset_v1_inner(&inspection_request, MAX_RESPONSE_BYTES)?;
+    let target_path = inspected
+        .get("target_path")
+        .and_then(Value::as_str)
+        .ok_or_else(reviewed_edit_invariant_failure)?;
+    let nested_inspection = inspected
+        .get("inspection")
+        .ok_or_else(reviewed_edit_invariant_failure)?;
+    let reviewed = select_exact_reviewed_edit(target_path, nested_inspection, requested)?;
+
+    let actual_inspection_binding =
+        inspection_binding(nested_inspection).map_err(|_| reviewed_edit_invariant_failure())?;
+    let usmap_content = trusted_response_seal(&inspected, "usmap_content_seal")?;
+    let usmap_inventory = trusted_response_seal(&inspected, "usmap_inventory_seal")?;
+    if actual_inspection_binding.usmap != usmap_content {
+        return Err(reviewed_edit_invariant_failure());
+    }
+
+    let current = reviewed.current_components();
+    let replacement = reviewed.replacement_components();
+    let reviewed_binding = reviewed.binding_sha256();
+    let reviewed_format = reviewed.format();
+    let reviewed_schema_id = reviewed.schema_id();
+    let reviewed_schema_revision = reviewed.schema_revision();
+    let reviewed_field_id = reviewed.field_id();
+    let reviewed_target_id = reviewed.target().id();
+    let selector = reviewed.selector().clone();
+    let replacement_wire = SemanticReplacementWire::Vector4F64x4 {
+        x: reviewed_decimal_string(replacement[0])?,
+        y: reviewed_decimal_string(replacement[1])?,
+        z: reviewed_decimal_string(replacement[2])?,
+        w: reviewed_decimal_string(replacement[3])?,
+    };
+
+    // Lower to the existing typed installed edit executor. It rebuilds every proof again, checks
+    // the first pass's USMAP/inspection seals, runs the shared semantic verifier/stager, and closes
+    // the complete second drift window. Thus any change between the two native passes also wins.
+    let typed_payload = PrepareInstalledDataAssetEditWirePayload {
+        candidate_ordinal: payload.candidate_ordinal,
+        expected_head_json: payload.expected_head_json,
+        expected_inspection_binding: actual_inspection_binding,
+        expected_package_index_seal: payload.expected_package_index_seal,
+        expected_source_snapshot_seal: payload.expected_source_snapshot_seal,
+        expected_usmap_content_seal: usmap_content,
+        expected_usmap_inventory_seal: usmap_inventory,
+        game_root: payload.game_root,
+        replacement: replacement_wire,
+        root: payload.root,
+        selector,
+    };
+    prepare_revision3_installed_dataasset_edit_v1_payload_with_response(
+        typed_payload,
+        move |mut response| {
+            let object = response
+                .as_object_mut()
+                .ok_or_else(reviewed_edit_invariant_failure)?;
+            object.insert(
+                "reviewed_edit".to_owned(),
+                json!({
+                    "format": reviewed_format,
+                    "schema_id": reviewed_schema_id,
+                    "schema_revision": reviewed_schema_revision,
+                    "field_id": reviewed_field_id,
+                    "target_id": reviewed_target_id,
+                }),
+            );
+            object.insert(
+                "reviewed_before".to_owned(),
+                reviewed_components_value(current)?,
+            );
+            object.insert(
+                "reviewed_after".to_owned(),
+                reviewed_components_value(replacement)?,
+            );
+            object.insert(
+                "reviewed_intent_binding_sha256".to_owned(),
+                Value::String(hex_digest(reviewed_binding)),
+            );
+            enforce_reviewed_edit_response_budget(response, response_limit)
+        },
+    )
+}
+
+fn select_exact_reviewed_edit(
+    target_path: &str,
+    inspection: &Value,
+    requested: ReviewedFootstepPresetSizeV1,
+) -> Result<ReviewedFootstepPresetReplacementV1, Failure> {
+    let exports = inspection
+        .get("exports")
+        .and_then(Value::as_array)
+        .ok_or_else(reviewed_edit_invariant_failure)?;
+    let mut match_count = 0_u64;
+    let mut selected = None;
+    let mut no_change = false;
+    for leaf in exports
+        .iter()
+        .filter_map(|export| export.get("leaves").and_then(Value::as_array))
+        .flatten()
+        .filter(|leaf| leaf.get("editable") == Some(&Value::Bool(true)))
+    {
+        let selector: FixedLeafSelector = serde_json::from_value(
+            leaf.get("selector")
+                .cloned()
+                .ok_or_else(reviewed_edit_invariant_failure)?,
+        )
+        .map_err(|_| reviewed_edit_invariant_failure())?;
+        match prepare_reviewed_footstep_preset_size_v1(target_path, &selector, requested) {
+            Ok(candidate) => {
+                match_count = match_count
+                    .checked_add(1)
+                    .ok_or_else(reviewed_edit_invariant_failure)?;
+                if selected.replace(candidate).is_some() {
+                    return Err(reviewed_edit_match_invalid());
+                }
+            }
+            Err(ReviewedDataAssetErrorV1::NoChange) => {
+                match_count = match_count
+                    .checked_add(1)
+                    .ok_or_else(reviewed_edit_invariant_failure)?;
+                no_change = true;
+            }
+            Err(
+                ReviewedDataAssetErrorV1::InvalidExpectedBytes
+                | ReviewedDataAssetErrorV1::NonFiniteCurrentComponent { .. }
+                | ReviewedDataAssetErrorV1::BindingSerialization,
+            ) => return Err(reviewed_edit_semantic_invalid()),
+            Err(_) => {}
+        }
+    }
+    if match_count != 1 {
+        return Err(reviewed_edit_match_invalid());
+    }
+    if no_change {
+        return Err(reviewed_edit_semantic_invalid());
+    }
+    selected.ok_or_else(reviewed_edit_invariant_failure)
+}
+
+fn trusted_response_seal(response: &Value, field: &str) -> Result<ExpectedSealWire, Failure> {
+    let seal: ExpectedSealWire = serde_json::from_value(
+        response
+            .get(field)
+            .cloned()
+            .ok_or_else(reviewed_edit_invariant_failure)?,
+    )
+    .map_err(|_| reviewed_edit_invariant_failure())?;
+    validate_edit_expected_seal(&seal).map_err(|_| reviewed_edit_invariant_failure())?;
+    Ok(seal)
+}
+
+fn reviewed_components_value(components: [f64; 4]) -> Result<Value, Failure> {
+    Ok(json!({
+        "x": reviewed_decimal_string(components[0])?,
+        "y": reviewed_decimal_string(components[1])?,
+        "z": reviewed_decimal_string(components[2])?,
+        "w": reviewed_decimal_string(components[3])?,
+    }))
+}
+
+fn reviewed_decimal_string(value: f64) -> Result<String, Failure> {
+    if !value.is_finite() {
+        return Err(reviewed_edit_invariant_failure());
+    }
+    let mut encoded = value.to_string();
+    if encoded.len() > 64 {
+        encoded = format!("{value:e}");
+    }
+    let round_trip = encoded
+        .parse::<f64>()
+        .map_err(|_| reviewed_edit_invariant_failure())?;
+    if encoded.len() > 64
+        || !is_canonical_reviewed_response_decimal(&encoded)
+        || round_trip.to_bits() != value.to_bits()
+    {
+        return Err(reviewed_edit_invariant_failure());
+    }
+    Ok(encoded)
+}
+
+fn is_canonical_reviewed_response_decimal(value: &str) -> bool {
+    if value.is_empty() || !value.is_ascii() || value.contains(['+', 'E']) {
+        return false;
+    }
+    let unsigned = value.strip_prefix('-').unwrap_or(value);
+    let (mantissa, exponent) = match unsigned.split_once('e') {
+        Some((mantissa, exponent)) if !exponent.contains('e') => (mantissa, Some(exponent)),
+        Some(_) => return false,
+        None => (unsigned, None),
+    };
+    let (whole, fraction) = match mantissa.split_once('.') {
+        Some((whole, fraction)) if !fraction.contains('.') => (whole, Some(fraction)),
+        Some(_) => return false,
+        None => (mantissa, None),
+    };
+    let whole_is_canonical = whole == "0"
+        || (whole
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && whole.bytes().all(|byte| byte.is_ascii_digit()));
+    let fraction_is_canonical = fraction.is_none_or(|fraction| {
+        !fraction.is_empty()
+            && fraction.bytes().all(|byte| byte.is_ascii_digit())
+            && !fraction.ends_with('0')
+    });
+    let exponent_is_canonical = exponent.is_none_or(|exponent| {
+        let magnitude = exponent.strip_prefix('-').unwrap_or(exponent);
+        magnitude
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && magnitude.bytes().all(|byte| byte.is_ascii_digit())
+    });
+    whole_is_canonical && fraction_is_canonical && exponent_is_canonical
 }
 
 fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
@@ -651,6 +973,91 @@ fn parse_exact_edit_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure>
         return Err(edit_invalid_request());
     }
     Ok(request.payload)
+}
+
+fn parse_exact_reviewed_edit_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
+    if input.len() > MAX_PREPARE_REVIEWED_EDIT_WIRE_BYTES {
+        return Err(Failure::new(
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT",
+            format!(
+                "reviewed installed DataAsset edit request exceeds the {MAX_PREPARE_REVIEWED_EDIT_WIRE_BYTES}-byte limit"
+            ),
+        ));
+    }
+    let request: ExactWireRequest<P> =
+        serde_json::from_str(input).map_err(|_| reviewed_edit_invalid_request())?;
+    if request.command != PREPARE_REVIEWED_EDIT_COMMAND {
+        return Err(reviewed_edit_invalid_request());
+    }
+    Ok(request.payload)
+}
+
+fn validate_reviewed_edit_path(path: &str) -> Result<(), Failure> {
+    if path.is_empty() || path.len() > MAX_PATH_BYTES || path.contains('\0') {
+        return Err(reviewed_edit_invalid_request());
+    }
+    Ok(())
+}
+
+fn validate_reviewed_edit_candidate_ordinal(value: u64) -> Result<(), Failure> {
+    if value > i64::MAX as u64 {
+        return Err(reviewed_edit_candidate_invalid());
+    }
+    Ok(())
+}
+
+fn validate_reviewed_edit_expected_seal(seal: &ExpectedSealWire) -> Result<(), Failure> {
+    if seal.byte_len == 0
+        || seal.byte_len > i64::MAX as u64
+        || seal.sha256.len() != 64
+        || !is_lower_hex(&seal.sha256)
+    {
+        return Err(reviewed_edit_invalid_request());
+    }
+    Ok(())
+}
+
+fn parse_canonical_reviewed_edit_head(input: &str) -> Result<WorkingHead, Failure> {
+    if input.is_empty() || input.len() > MAX_HEAD_JSON_BYTES {
+        return Err(reviewed_edit_head_invalid());
+    }
+    let head: WorkingHead =
+        serde_json::from_str(input).map_err(|_| reviewed_edit_head_invalid())?;
+    if serde_json::to_string(&head).map_err(|_| reviewed_edit_invariant_failure())? != input {
+        return Err(reviewed_edit_head_invalid());
+    }
+    Ok(head)
+}
+
+fn parse_reviewed_positive_canonical_decimal(value: &str) -> Result<f64, Failure> {
+    if value.is_empty() || value.len() > 64 || !value.is_ascii() {
+        return Err(reviewed_edit_invalid_request());
+    }
+    let (whole, fraction) = match value.split_once('.') {
+        Some((whole, fraction)) => (whole, Some(fraction)),
+        None => (value, None),
+    };
+    let whole_is_canonical = whole == "0"
+        || (whole
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| matches!(byte, b'1'..=b'9'))
+            && whole.bytes().all(|byte| byte.is_ascii_digit()));
+    let fraction_is_canonical = fraction.is_none_or(|fraction| {
+        !fraction.is_empty()
+            && fraction.bytes().all(|byte| byte.is_ascii_digit())
+            && !fraction.ends_with('0')
+    });
+    if !whole_is_canonical || !fraction_is_canonical {
+        return Err(reviewed_edit_invalid_request());
+    }
+    let parsed = value
+        .parse::<f64>()
+        .map_err(|_| reviewed_edit_invalid_request())?;
+    if !parsed.is_finite() || parsed <= 0.0 {
+        return Err(reviewed_edit_invalid_request());
+    }
+    Ok(parsed)
 }
 
 fn validate_edit_path(path: &str) -> Result<(), Failure> {
@@ -1075,6 +1482,25 @@ fn enforce_edit_response_budget(response: Value, limit: usize) -> Result<Value, 
     Ok(response)
 }
 
+fn enforce_reviewed_edit_response_budget(response: Value, limit: usize) -> Result<Value, Failure> {
+    let mut counter = BoundedResponseCounter {
+        bytes: 0,
+        limit,
+        exceeded: false,
+    };
+    if serde_json::to_writer(&mut counter, &response).is_err() {
+        return if counter.exceeded {
+            Err(Failure::new(
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT",
+                "reviewed installed DataAsset edit response exceeds its bounded transport budget",
+            ))
+        } else {
+            Err(reviewed_edit_invariant_failure())
+        };
+    }
+    Ok(response)
+}
+
 fn ffi_store_limits() -> WorkingStoreLimits {
     WorkingStoreLimits {
         max_referenced_entity_bytes: MAX_PROJECT_JSON_BYTES as u64,
@@ -1093,6 +1519,48 @@ fn edit_invalid_request() -> Failure {
     Failure::new(
         "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
         "request must contain exactly the installed snapshot seals, prior inspection binding, candidate ordinal, exact head, roots, selector, and typed replacement",
+    )
+}
+
+fn reviewed_edit_invalid_request() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+        "request must contain only exact-current installed snapshot evidence and one closed reviewed footstep-preset size intent",
+    )
+}
+
+fn reviewed_edit_head_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_HEAD_INVALID",
+        "expected_head_json is not one exact duplicate-free canonical revision-3 head",
+    )
+}
+
+fn reviewed_edit_candidate_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID",
+        "candidate_ordinal is outside the supported exact installed snapshot range",
+    )
+}
+
+fn reviewed_edit_match_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID",
+        "the exact installed candidate does not contain exactly one matching reviewed editable leaf",
+    )
+}
+
+fn reviewed_edit_semantic_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID",
+        "the reviewed footstep-preset edit cannot be lowered from this exact installed value",
+    )
+}
+
+fn reviewed_edit_invariant_failure() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVARIANT",
+        "the native reviewed installed DataAsset edit failed an internal invariant",
     )
 }
 
@@ -1526,7 +1994,7 @@ mod tests {
     use super::*;
 
     const EXE_BYTES: &[u8] = b"gore-ffi installed DataAsset inspection executable fixture v1";
-    const TARGET: &str = "/Game/Characters/DA_Asghan";
+    const TARGET: &str = "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps";
 
     fn project() -> ProjectRevision3 {
         ProjectRevision3 {
@@ -1623,12 +2091,34 @@ mod tests {
         })
     }
 
+    fn valid_reviewed_edit_shape() -> Value {
+        json!({
+            "candidate_ordinal": 0,
+            "expected_head_json": "{}",
+            "expected_package_index_seal": seal_json(40, '4'),
+            "expected_source_snapshot_seal": seal_json(50, '5'),
+            "game_root": "C:/missing-game",
+            "reviewed_edit": {
+                "format": gore_asset::REVIEWED_DATAASSET_FORMAT_V1,
+                "schema_id": gore_asset::REVIEWED_FOOTSTEP_PRESET_SCHEMA_ID,
+                "schema_revision": gore_asset::REVIEWED_FOOTSTEP_PRESET_SCHEMA_REVISION,
+                "field_id": gore_asset::REVIEWED_FEET_TEXTURE_SIZE_FIELD_ID,
+                "value": {"x": "125.5", "y": "225"},
+            },
+            "root": "C:/missing-store",
+        })
+    }
+
     fn raw_request(payload: Value) -> String {
         json!({"command": COMMAND, "payload": payload}).to_string()
     }
 
     fn raw_edit_request(payload: Value) -> String {
         json!({"command": PREPARE_EDIT_COMMAND, "payload": payload}).to_string()
+    }
+
+    fn raw_reviewed_edit_request(payload: Value) -> String {
+        json!({"command": PREPARE_REVIEWED_EDIT_COMMAND, "payload": payload}).to_string()
     }
 
     fn tree_bytes(root: &Path) -> BTreeMap<String, Option<Vec<u8>>> {
@@ -1811,6 +2301,166 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_installed_edit_wire_is_closed_and_uses_strict_canonical_decimals() {
+        let parsed: PrepareReviewedInstalledDataAssetEditWirePayload =
+            parse_exact_reviewed_edit_wire(&raw_reviewed_edit_request(valid_reviewed_edit_shape()))
+                .unwrap();
+        assert_eq!(parsed.candidate_ordinal, 0);
+        assert_eq!(parsed.reviewed_edit.value.x, "125.5");
+
+        for forbidden in [
+            "target_path",
+            "target_id",
+            "package_id_hex",
+            "selector",
+            "replacement",
+            "expected_inspection_binding",
+            "expected_usmap_content_seal",
+            "expected_usmap_inventory_seal",
+            "uasset_path",
+            "uexp_path",
+            "usmap_path",
+            "raw_bytes",
+            "project_json",
+        ] {
+            let mut payload = valid_reviewed_edit_shape();
+            payload[forbidden] = json!("forged-authority");
+            assert_eq!(
+                prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                    &raw_reviewed_edit_request(payload),
+                )["error"]["code"],
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+                "accepted forbidden field {forbidden}"
+            );
+        }
+        for forbidden in ["target_path", "target_id", "selector", "replacement_bytes"] {
+            let mut payload = valid_reviewed_edit_shape();
+            payload["reviewed_edit"][forbidden] = json!("forged-authority");
+            assert_eq!(
+                prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                    &raw_reviewed_edit_request(payload),
+                )["error"]["code"],
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+                "accepted forbidden reviewed field {forbidden}"
+            );
+        }
+        for required in [
+            "candidate_ordinal",
+            "expected_head_json",
+            "expected_package_index_seal",
+            "expected_source_snapshot_seal",
+            "game_root",
+            "reviewed_edit",
+            "root",
+        ] {
+            let mut payload = valid_reviewed_edit_shape();
+            payload.as_object_mut().unwrap().remove(required);
+            assert_eq!(
+                prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                    &raw_reviewed_edit_request(payload),
+                )["error"]["code"],
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+                "accepted missing field {required}"
+            );
+        }
+
+        for (field, invalid) in [
+            ("format", json!(2)),
+            ("schema_id", json!("g1r.tracking.near-match")),
+            ("schema_revision", json!(2)),
+            ("field_id", json!("feet_texture_scale")),
+        ] {
+            let mut payload = valid_reviewed_edit_shape();
+            payload["reviewed_edit"][field] = invalid;
+            assert_eq!(
+                prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                    &raw_reviewed_edit_request(payload),
+                )["error"]["code"],
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+            );
+        }
+        for invalid in [
+            json!(""),
+            json!("0"),
+            json!("01"),
+            json!("1.0"),
+            json!("1."),
+            json!("+1"),
+            json!("-1"),
+            json!("1e2"),
+            json!(" 1"),
+            json!(1),
+        ] {
+            let mut payload = valid_reviewed_edit_shape();
+            payload["reviewed_edit"]["value"]["x"] = invalid;
+            assert_eq!(
+                prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                    &raw_reviewed_edit_request(payload),
+                )["error"]["code"],
+                "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+            );
+        }
+        for valid in ["1", "0.5", "10000000000000000000", "1.0000000000000001"] {
+            assert!(
+                parse_reviewed_positive_canonical_decimal(valid).is_ok(),
+                "{valid}"
+            );
+        }
+
+        let payload = valid_reviewed_edit_shape();
+        let payload_json = serde_json::to_string(&payload).unwrap();
+        let duplicate_command = format!(
+            "{{\"command\":\"{PREPARE_REVIEWED_EDIT_COMMAND}\",\"command\":\"{PREPARE_REVIEWED_EDIT_COMMAND}\",\"payload\":{payload_json}}}"
+        );
+        assert_eq!(
+            prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(&duplicate_command)["error"]
+                ["code"],
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+        );
+        assert_eq!(
+            prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+                &" ".repeat(MAX_PREPARE_REVIEWED_EDIT_WIRE_BYTES + 1),
+            )["error"]["code"],
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT"
+        );
+    }
+
+    #[test]
+    fn reviewed_response_decimals_are_bounded_canonical_and_bit_exact() {
+        let values = [
+            0.0,
+            -0.0,
+            f64::MAX,
+            -f64::MAX,
+            f64::MIN_POSITIVE,
+            -f64::MIN_POSITIVE,
+            f64::from_bits(1),
+            -f64::from_bits(1),
+            1.234_567_890_123_456_7,
+        ];
+        for value in values {
+            let encoded = reviewed_decimal_string(value).unwrap();
+            assert!(encoded.len() <= 64, "{encoded}");
+            assert!(
+                is_canonical_reviewed_response_decimal(&encoded),
+                "{encoded}"
+            );
+            assert!(!encoded.contains(['+', 'E']), "{encoded}");
+            assert_eq!(encoded.parse::<f64>().unwrap().to_bits(), value.to_bits());
+        }
+        assert_eq!(
+            reviewed_decimal_string(f64::MAX).unwrap(),
+            "1.7976931348623157e308"
+        );
+        assert_eq!(
+            reviewed_decimal_string(f64::from_bits(1)).unwrap(),
+            "5e-324"
+        );
+        assert!(reviewed_decimal_string(f64::NAN).is_err());
+        assert!(reviewed_decimal_string(f64::INFINITY).is_err());
+    }
+
+    #[test]
     fn installed_proof_digest_contract_is_domain_separated_and_stable() {
         let native = |byte_len: u64, byte: char| InstalledPackageContentSealV1 {
             byte_len,
@@ -1967,6 +2617,9 @@ mod tests {
             .iter()
             .any(|command| command == PREPARE_EDIT_COMMAND));
         assert!(commands
+            .iter()
+            .any(|command| command == PREPARE_REVIEWED_EDIT_COMMAND));
+        assert!(commands
             .windows(2)
             .all(|pair| { pair[0].as_str().unwrap() < pair[1].as_str().unwrap() }));
     }
@@ -2070,7 +2723,7 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn write_valid_zen_fixture(utoc: &Path) {
+    fn write_valid_zen_fixture(utoc: &Path, components: [f64; 4]) {
         use std::collections::HashMap;
         use std::io::Cursor;
         use std::sync::Arc;
@@ -2099,8 +2752,8 @@ mod tests {
         let core_uobject = package.name_map.store("/Script/CoreUObject");
         let package_class = package.name_map.store("Package");
         let class_class = package.name_map.store("Class");
-        let module_name = package.name_map.store("/Script/Test");
-        let class_name = package.name_map.store("Fixture");
+        let module_name = package.name_map.store("/Script/G1R");
+        let class_name = package.name_map.store("FootstepTag");
         let module_index = package.imports.len();
         package.imports.push(FObjectImport {
             class_package: core_uobject,
@@ -2116,19 +2769,36 @@ mod tests {
             object_name: class_name,
             ..FObjectImport::default()
         });
-        let object_name = package.name_map.store("Fixture");
+        let object_name = package.name_map.store("DA_WolfFootsteps");
+        let mut exports = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x05];
+        exports.extend_from_slice(&[0x00, 0x09]);
+        for value in components {
+            exports.extend_from_slice(&value.to_le_bytes());
+        }
+        exports.extend_from_slice(&1_i32.to_le_bytes());
+        exports.extend_from_slice(&2_i32.to_le_bytes());
+        exports.extend_from_slice(&3_i32.to_le_bytes());
+        exports.extend_from_slice(&0_i32.to_le_bytes());
+        exports.extend_from_slice(&2_i32.to_le_bytes());
+        exports.extend_from_slice(&11_i32.to_le_bytes());
+        exports.extend_from_slice(&0_i32.to_le_bytes());
+        exports.extend_from_slice(&[0x80, 0x03, 0x01]);
+        exports.extend_from_slice(&22_i32.to_le_bytes());
+        exports.extend_from_slice(&1_i32.to_le_bytes());
+        exports.extend_from_slice(&[0x00, 0x03, 0x01]);
+        assert_eq!(exports.len(), 82);
+        exports.extend_from_slice(&[0_u8; 4]);
         package.exports.push(FObjectExport {
             class_index: FPackageIndex::create_import(class_index as u32),
             object_name,
             serial_offset: 0,
-            serial_size: 3,
+            serial_size: exports.len() as i64,
             ..FObjectExport::default()
         });
         let mut header = Cursor::new(Vec::new());
         package
             .serialize(&mut header, None, &Log::no_log())
             .unwrap();
-        let mut exports = vec![0x00, 0x03, 0x01];
         exports.extend_from_slice(&FLegacyPackageFileSummary::PACKAGE_FILE_TAG.to_le_bytes());
         let bundle = FSerializedAssetBundle {
             asset_file_buffer: header.into_inner(),
@@ -2136,14 +2806,14 @@ mod tests {
             ..FSerializedAssetBundle::default()
         };
         let mut global_name_map = FNameMap::create(EMappedNameType::Global);
-        let package_name = global_name_map.store("/Script/Test");
-        let imported_class_name = global_name_map.store("Fixture");
-        let default_object_name = global_name_map.store("Default__Fixture");
-        let package_index = FPackageObjectIndex::create_script_import("/Script/Test");
+        let package_name = global_name_map.store("/Script/G1R");
+        let imported_class_name = global_name_map.store("FootstepTag");
+        let default_object_name = global_name_map.store("Default__FootstepTag");
+        let package_index = FPackageObjectIndex::create_script_import("/Script/G1R");
         let imported_class_index =
-            FPackageObjectIndex::create_script_import("/Script/Test.Fixture");
+            FPackageObjectIndex::create_script_import("/Script/G1R.FootstepTag");
         let default_object_index =
-            FPackageObjectIndex::create_script_import("/Script/Test.Default__Fixture");
+            FPackageObjectIndex::create_script_import("/Script/G1R.Default__FootstepTag");
         let script_entries = vec![
             FScriptObjectEntry {
                 object_name: package_name,
@@ -2175,7 +2845,9 @@ mod tests {
         let mut converted = build_zen_asset(
             bundle,
             &HashMap::new(),
-            UEPath::new("../../../G1R/Content/Characters/DA_Asghan.uasset"),
+            UEPath::new(
+                "../../../G1R/Content/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps.uasset",
+            ),
             Some(version.package_file_version()),
             version.container_header_version(),
             false,
@@ -2228,30 +2900,125 @@ mod tests {
     fn write_valid_usmap(path: &Path) {
         let mapping = usmap::Usmap {
             enums: Vec::new(),
-            structs: vec![usmap::Struct {
-                name: "Fixture".to_owned(),
-                super_struct: None,
-                properties: vec![usmap::Property {
-                    name: "Enabled".to_owned(),
-                    array_dim: 1,
-                    index: 0,
-                    inner: usmap::PropertyInner::Bool,
-                }],
-            }],
+            structs: vec![
+                usmap::Struct {
+                    name: "FootstepTag".to_owned(),
+                    super_struct: None,
+                    properties: vec![
+                        usmap::Property {
+                            name: "BoneData".to_owned(),
+                            array_dim: 1,
+                            index: 0,
+                            inner: usmap::PropertyInner::Struct {
+                                name: "BoneFeetData".to_owned(),
+                            },
+                        },
+                        usmap::Property {
+                            name: "BonesToTrack".to_owned(),
+                            array_dim: 1,
+                            index: 1,
+                            inner: usmap::PropertyInner::Map {
+                                key: Box::new(usmap::PropertyInner::Name),
+                                value: Box::new(usmap::PropertyInner::Struct {
+                                    name: "BoneTrackedData".to_owned(),
+                                }),
+                            },
+                        },
+                    ],
+                },
+                usmap::Struct {
+                    name: "BoneFeetData".to_owned(),
+                    super_struct: None,
+                    properties: vec![
+                        usmap::Property {
+                            name: "FeetTextureSize".to_owned(),
+                            array_dim: 1,
+                            index: 0,
+                            inner: usmap::PropertyInner::Struct {
+                                name: "Vector4".to_owned(),
+                            },
+                        },
+                        usmap::Property {
+                            name: "Diffuse".to_owned(),
+                            array_dim: 1,
+                            index: 1,
+                            inner: usmap::PropertyInner::Object,
+                        },
+                        usmap::Property {
+                            name: "Normal".to_owned(),
+                            array_dim: 1,
+                            index: 2,
+                            inner: usmap::PropertyInner::Object,
+                        },
+                        usmap::Property {
+                            name: "AO".to_owned(),
+                            array_dim: 1,
+                            index: 3,
+                            inner: usmap::PropertyInner::Object,
+                        },
+                    ],
+                },
+                usmap::Struct {
+                    name: "BoneTrackedData".to_owned(),
+                    super_struct: None,
+                    properties: vec![usmap::Property {
+                        name: "InvertX".to_owned(),
+                        array_dim: 1,
+                        index: 0,
+                        inner: usmap::PropertyInner::Bool,
+                    }],
+                },
+                usmap::Struct {
+                    name: "Vector4".to_owned(),
+                    super_struct: None,
+                    properties: ["X", "Y", "Z", "W"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, name)| usmap::Property {
+                            name: name.to_owned(),
+                            array_dim: 1,
+                            index: index as u16,
+                            inner: usmap::PropertyInner::Double,
+                        })
+                        .collect(),
+                },
+            ],
             cext: None,
             ppth: Some(usmap::ExtPpth {
                 version: 0,
                 enums: Vec::new(),
-                structs: vec!["/Script/Test".to_owned()],
+                structs: vec![
+                    "/Script/G1R".to_owned(),
+                    "/Script/G1R".to_owned(),
+                    "/Script/G1R".to_owned(),
+                    "/Script/CoreUObject".to_owned(),
+                ],
             }),
             eatr: Some(usmap::ExtEatr {
                 version: 0,
                 enum_flags: Vec::new(),
-                struct_flags: vec![usmap::StructFlags {
-                    type_: usmap::FlagsType::Class,
-                    value: 0,
-                    prop_flags: Vec::new(),
-                }],
+                struct_flags: vec![
+                    usmap::StructFlags {
+                        type_: usmap::FlagsType::Class,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    },
+                    usmap::StructFlags {
+                        type_: usmap::FlagsType::Struct,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    },
+                    usmap::StructFlags {
+                        type_: usmap::FlagsType::Struct,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    },
+                    usmap::StructFlags {
+                        type_: usmap::FlagsType::Struct,
+                        value: 0,
+                        prop_flags: Vec::new(),
+                    },
+                ],
             }),
             envp: None,
         };
@@ -2271,6 +3038,14 @@ mod tests {
         }
 
         fn with_valid_payload(valid: bool) -> Self {
+            Self::with_valid_payload_and_components(valid, [100.0, 200.0, 300.0, 400.0])
+        }
+
+        fn valid_with_components(components: [f64; 4]) -> Self {
+            Self::with_valid_payload_and_components(true, components)
+        }
+
+        fn with_valid_payload_and_components(valid: bool, components: [f64; 4]) -> Self {
             use retoc::iostore_writer::IoStoreWriter;
             use retoc::version::EngineVersion;
             use retoc::{EIoChunkType, FIoChunkId, FIoContainerId, FPackageId, UEPath, UEPathBuf};
@@ -2292,7 +3067,7 @@ mod tests {
             fs::write(&executable, EXE_BYTES).unwrap();
 
             if valid {
-                write_valid_zen_fixture(&paks.join("G1R-Windows.utoc"));
+                write_valid_zen_fixture(&paks.join("G1R-Windows.utoc"), components);
             } else {
                 let version = EngineVersion::UE5_4;
                 let mut writer = IoStoreWriter::new(
@@ -2307,7 +3082,7 @@ mod tests {
                     .write_chunk(
                         FIoChunkId::from_package_id(package_id, 0, EIoChunkType::ExportBundleData),
                         Some(UEPath::new(
-                            "../../../G1R/Content/Characters/DA_Asghan.uasset",
+                            "../../../G1R/Content/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps.uasset",
                         )),
                         b"invalid payload is indexed but must fail closed during extraction",
                     )
@@ -2375,6 +3150,15 @@ mod tests {
         }
 
         fn edit_payload(&self, inspection: &Value) -> Value {
+            let selector = inspection["inspection"]["exports"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|export| export["leaves"].as_array().unwrap())
+                .find_map(|leaf| {
+                    (leaf["selector"]["kind"] == "vector4_f64x4").then(|| leaf["selector"].clone())
+                })
+                .unwrap();
             json!({
                 "candidate_ordinal": inspection["candidate_ordinal"],
                 "expected_head_json": self.head_json,
@@ -2397,9 +3181,33 @@ mod tests {
                 "expected_usmap_content_seal": inspection["usmap_content_seal"],
                 "expected_usmap_inventory_seal": inspection["usmap_inventory_seal"],
                 "game_root": self.game_root,
-                "replacement": {"kind": "bool", "value": false},
+                "replacement": {
+                    "kind": "vector4_f64x4",
+                    "x": "125",
+                    "y": "225",
+                    "z": "300",
+                    "w": "400",
+                },
                 "root": self.store_root,
-                "selector": inspection["inspection"]["exports"][0]["leaves"][0]["selector"],
+                "selector": selector,
+            })
+        }
+
+        fn reviewed_payload(&self, x: &str, y: &str) -> Value {
+            json!({
+                "candidate_ordinal": 0,
+                "expected_head_json": self.head_json,
+                "expected_package_index_seal": self.package_wire(),
+                "expected_source_snapshot_seal": self.source_wire(),
+                "game_root": self.game_root,
+                "reviewed_edit": {
+                    "format": gore_asset::REVIEWED_DATAASSET_FORMAT_V1,
+                    "schema_id": gore_asset::REVIEWED_FOOTSTEP_PRESET_SCHEMA_ID,
+                    "schema_revision": gore_asset::REVIEWED_FOOTSTEP_PRESET_SCHEMA_REVISION,
+                    "field_id": gore_asset::REVIEWED_FEET_TEXTURE_SIZE_FIELD_ID,
+                    "value": {"x": x, "y": y},
+                },
+                "root": self.store_root,
             })
         }
     }
@@ -2485,14 +3293,14 @@ mod tests {
         assert!(response["inspection"]["selection"]["export_index"].is_null());
         assert_eq!(response["inspection"]["status"], "walked");
         assert_eq!(response["inspection"]["summary"]["walked_exports"], 1);
-        assert_eq!(response["inspection"]["summary"]["editable_leaves"], 1);
+        assert_eq!(response["inspection"]["summary"]["editable_leaves"], 2);
         assert_eq!(
             response["inspection"]["exports"][0]["class_path"],
-            "/Script/Test.Fixture"
+            "/Script/G1R.FootstepTag"
         );
         assert_eq!(
             response["inspection"]["exports"][0]["leaves"][0]["selector"]["expected_hex"],
-            "01"
+            "000000000000594000000000000069400000000000c072400000000000007940"
         );
         assert_eq!(tree_bytes(&fixture.store_root), store_before);
         assert_eq!(tree_bytes(&fixture.game_root), game_before);
@@ -2581,7 +3389,10 @@ mod tests {
             assert!(is_lower_hex(digest));
         }
         assert_eq!(response["stage"]["manifest"]["target_path"], TARGET);
-        assert_eq!(response["stage"]["manifest"]["replacement_hex"], "00");
+        assert_eq!(
+            response["stage"]["manifest"]["replacement_hex"],
+            "0000000000405f400000000000206c400000000000c072400000000000007940"
+        );
         assert_eq!(
             fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
             fixed_head_before
@@ -2617,6 +3428,228 @@ mod tests {
             fixed_head_before
         );
         assert_eq!(tree_bytes(&fixture.game_root), game_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reviewed_footstep_intent_server_selects_and_prepares_one_unpublished_stage() {
+        let fixture = WindowsFixture::valid();
+        let fixed_head_before = fs::read(fixture.store_root.join("gore-project.json")).unwrap();
+        let game_before = tree_bytes(&fixture.game_root);
+
+        let response = prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+            &raw_reviewed_edit_request(fixture.reviewed_payload("125", "225")),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["outcome"], "prepared_unpublished");
+        assert_eq!(response["revision"], 10);
+        assert_eq!(response["build_status"], "blocked");
+        assert_eq!(response["runtime_status"], "runtime_unqualified");
+        assert_eq!(response["artifact_authority"], "not_granted");
+        assert_eq!(response["publication_status"], "not_supported");
+        assert_eq!(
+            response["reviewed_edit"],
+            json!({
+                "format": 1,
+                "schema_id": "g1r.tracking.footstep-preset",
+                "schema_revision": 1,
+                "field_id": "feet_texture_size",
+                "target_id": "g1r:dataasset:footstep-preset:wolf",
+            })
+        );
+        assert_eq!(
+            response["reviewed_before"],
+            json!({"x": "100", "y": "200", "z": "300", "w": "400"})
+        );
+        assert_eq!(
+            response["reviewed_after"],
+            json!({"x": "125", "y": "225", "z": "300", "w": "400"})
+        );
+        assert_eq!(response["stage"]["manifest"]["target_path"], TARGET);
+        assert_eq!(
+            response["stage"]["manifest"]["replacement_hex"],
+            "0000000000405f400000000000206c400000000000c072400000000000007940"
+        );
+        assert_eq!(response["installed_source"]["candidate_ordinal"], 0);
+        for digest_field in [
+            "intent_binding_sha256",
+            "installed_proof_binding_sha256",
+            "reviewed_intent_binding_sha256",
+        ] {
+            let digest = response[digest_field].as_str().unwrap();
+            assert_eq!(digest.len(), 64);
+            assert!(is_lower_hex(digest));
+        }
+        assert_eq!(
+            fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
+            fixed_head_before
+        );
+        assert_eq!(tree_bytes(&fixture.game_root), game_before);
+        let encoded = response.to_string();
+        assert!(!encoded.contains(&fixture.store_root.to_string_lossy().to_string()));
+        assert!(!encoded.contains(&fixture.game_root.to_string_lossy().to_string()));
+        for forbidden in [
+            "patch_receipt_path",
+            "extract_receipt_path",
+            "uasset_path",
+            "uexp_path",
+            "usmap_path",
+            "output_path",
+            "raw_bytes",
+        ] {
+            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+        }
+
+        let inspection = inspect_revision3_installed_dataasset_v1_raw(&fixture.request(
+            0,
+            &fixture.package_wire(),
+            &fixture.source_wire(),
+        ));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        let requested = ReviewedFootstepPresetSizeV1::try_new(125.0, 225.0).unwrap();
+        assert!(select_exact_reviewed_edit(TARGET, &inspection["inspection"], requested,).is_ok());
+        assert_eq!(
+            select_exact_reviewed_edit(
+                "/Game/Characters/DA_Asghan",
+                &inspection["inspection"],
+                requested,
+            )
+            .unwrap_err()
+            .code,
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID"
+        );
+
+        let mut duplicate = inspection["inspection"].clone();
+        let matching_leaf = duplicate["exports"][0]["leaves"][0].clone();
+        duplicate["exports"][0]["leaves"]
+            .as_array_mut()
+            .unwrap()
+            .push(matching_leaf);
+        assert_eq!(
+            select_exact_reviewed_edit(TARGET, &duplicate, requested)
+                .unwrap_err()
+                .code,
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_MATCH_INVALID"
+        );
+
+        let mut near_match = inspection["inspection"].clone();
+        let mut near_leaf = near_match["exports"][0]["leaves"][0].clone();
+        near_leaf["selector"]["path"][2]["property_name"] = json!("FeetTextureSizeNearMatch");
+        near_match["exports"][0]["leaves"]
+            .as_array_mut()
+            .unwrap()
+            .push(near_leaf);
+        assert!(select_exact_reviewed_edit(TARGET, &near_match, requested).is_ok());
+
+        let no_change = prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+            &raw_reviewed_edit_request(fixture.reviewed_payload("100", "200")),
+        );
+        assert_eq!(
+            no_change["error"]["code"],
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_INVALID"
+        );
+        assert!(!no_change.to_string().contains("project_json"));
+        assert_eq!(
+            prepare_revision3_reviewed_installed_dataasset_edit_v1_inner(
+                &raw_reviewed_edit_request(fixture.reviewed_payload("125", "225")),
+                128,
+            )
+            .unwrap_err()
+            .code,
+            "AUTHORING_REVISION3_REVIEWED_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT"
+        );
+        assert_eq!(
+            fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
+            fixed_head_before
+        );
+        assert_eq!(tree_bytes(&fixture.game_root), game_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reviewed_extreme_requested_and_preserved_components_round_trip_exactly() {
+        let current_z = -f64::MAX;
+        let current_w = f64::from_bits(1);
+        let fixture = WindowsFixture::valid_with_components([100.0, 200.0, current_z, current_w]);
+        let requested_x = "9".repeat(64);
+        let requested_y = format!("0.{}1", "0".repeat(61));
+        assert_eq!(requested_x.len(), 64);
+        assert_eq!(requested_y.len(), 64);
+
+        let response = prepare_revision3_reviewed_installed_dataasset_edit_v1_raw(
+            &raw_reviewed_edit_request(fixture.reviewed_payload(&requested_x, &requested_y)),
+        );
+        assert_eq!(response["ok"], true, "{response}");
+
+        let component_bits = |container: &str, component: &str| {
+            response[container][component]
+                .as_str()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap()
+                .to_bits()
+        };
+        assert_eq!(
+            component_bits("reviewed_after", "x"),
+            requested_x.parse::<f64>().unwrap().to_bits()
+        );
+        assert_eq!(
+            component_bits("reviewed_after", "y"),
+            requested_y.parse::<f64>().unwrap().to_bits()
+        );
+        assert_eq!(component_bits("reviewed_before", "z"), current_z.to_bits());
+        assert_eq!(component_bits("reviewed_before", "w"), current_w.to_bits());
+        assert_eq!(component_bits("reviewed_after", "z"), current_z.to_bits());
+        assert_eq!(component_bits("reviewed_after", "w"), current_w.to_bits());
+        assert_eq!(response["reviewed_after"]["x"], "1e64");
+        assert_eq!(response["reviewed_before"]["z"], "-1.7976931348623157e308");
+        assert_eq!(response["reviewed_before"]["w"], "5e-324");
+
+        for container in ["reviewed_before", "reviewed_after"] {
+            for component in ["x", "y", "z", "w"] {
+                let encoded = response[container][component].as_str().unwrap();
+                assert!(encoded.len() <= 64, "{container}.{component}: {encoded}");
+                assert!(
+                    is_canonical_reviewed_response_decimal(encoded),
+                    "{container}.{component}: {encoded}"
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn final_drift_check_outranks_decorator_and_response_budget_failure() {
+        let fixture = WindowsFixture::valid();
+        let inspection = inspect_revision3_installed_dataasset_v1_raw(&fixture.request(
+            0,
+            &fixture.package_wire(),
+            &fixture.source_wire(),
+        ));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        let payload: PrepareInstalledDataAssetEditWirePayload =
+            serde_json::from_value(fixture.edit_payload(&inspection)).unwrap();
+        let late_source = fixture.paks.join("drift-during-response-decoration.txt");
+        let decorated = std::cell::Cell::new(false);
+
+        let failure = prepare_revision3_installed_dataasset_edit_v1_payload_with_response(
+            payload,
+            |mut response| {
+                response
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("reviewed_decoration_probe".to_owned(), json!(true));
+                decorated.set(true);
+                fs::write(&late_source, b"drift inside bounded response decorator").unwrap();
+                enforce_reviewed_edit_response_budget(response, 1)
+            },
+        )
+        .unwrap_err();
+        assert!(decorated.get());
+        assert_eq!(
+            failure.code,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED"
+        );
     }
 
     #[cfg(windows)]
