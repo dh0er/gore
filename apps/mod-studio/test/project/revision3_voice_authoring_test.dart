@@ -66,6 +66,45 @@ void main() {
     },
   );
 
+  test('catalog and target plan share the exact archive stem contract', () {
+    Map<String, Object?> withLocId(String locId) {
+      final json = revision3VoiceContentIndexJsonFixture();
+      final localization = _entity(json, revision3VoiceContentLocalizationId);
+      final summary = (localization['summary']! as Map).cast<String, Object?>();
+      final data = (summary['data']! as Map).cast<String, Object?>();
+      data['loc_id'] = locId;
+      return json;
+    }
+
+    final boundary = Revision3VoiceCatalog.fromContentIndex(
+      Revision3ContentIndex.fromJsonObject(withLocId('A' * 1020)),
+    );
+    final plan = Revision3VoiceTargetTechnicalPlan.forCheckpoint(
+      catalog: boundary,
+      lineId: revision3VoiceContentLineId,
+      locale: 'de',
+    );
+    expect(plan.locId, hasLength(1020));
+
+    for (final invalid in <String>[
+      'A' * 1021,
+      'CON',
+      r'CONOUT$',
+      'LPT9.txt',
+      'trailing.',
+      'bad:name',
+      'nön-ascii',
+    ]) {
+      expect(
+        () => Revision3VoiceCatalog.fromContentIndex(
+          Revision3ContentIndex.fromJsonObject(withLocId(invalid)),
+        ),
+        throwsFormatException,
+        reason: invalid,
+      );
+    }
+  });
+
   test(
     'duplicate visible lines are searchable and disambiguated without IDs',
     () {
@@ -101,6 +140,10 @@ void main() {
       final summary = catalog.lines.single.slotSummaryForLocale('de')!;
       expect(summary.candidateCount, testCase.$1);
       expect(summary.hasSelectedTake, testCase.$2);
+      expect(
+        summary.targetResolution,
+        Revision3ContentVoiceTargetResolution.unresolved,
+      );
     }
   });
 
@@ -288,7 +331,7 @@ void main() {
   });
 
   test(
-    'unsafe existing slots are blocked while another clean locale stays usable',
+    'sealed target states remain extensible while malformed slot graphs stay blocked',
     () {
       for (final resolution in const ['ambiguous', 'resolved']) {
         final catalog = Revision3VoiceCatalog.fromContentIndex(
@@ -296,15 +339,19 @@ void main() {
             existingSlotTargetResolution: resolution,
           ),
         );
-        expect(catalog.lines.single.isLocaleAuthorable('de'), isFalse);
+        expect(catalog.lines.single.isLocaleAuthorable('de'), isTrue);
         expect(catalog.lines.single.isLocaleAuthorable('en'), isTrue);
+        final plan = Revision3VoiceTakeTechnicalPlan.forCheckpoint(
+          catalog: catalog,
+          input: _input(locale: 'de'),
+        );
+        expect(plan.expectsSlotCreated, isFalse, reason: resolution);
         expect(
-          () => Revision3VoiceTakeTechnicalPlan.forCheckpoint(
-            catalog: catalog,
-            input: _input(locale: 'de'),
-          ),
-          throwsFormatException,
-          reason: resolution,
+          catalog.lines.single
+              .slotSummaryForLocale('de')!
+              .targetResolution
+              .name,
+          resolution,
         );
       }
 
@@ -336,25 +383,54 @@ void main() {
     },
   );
 
-  test('selected take must be an approved exact candidate', () {
-    final json = revision3VoiceContentIndexJsonFixture(
-      existingSlotCandidateCount: 1,
-      existingSlotHasSelectedTake: true,
-    );
-    _takeData(json)['status'] = 'reviewed';
-    final catalog = Revision3VoiceCatalog.fromContentIndex(
-      Revision3ContentIndex.fromJsonObject(json),
-    );
-    expect(catalog.lines.single.isLocaleAuthorable('de'), isFalse);
-    expect(catalog.lines.single.slotSummaryForLocale('de'), isNull);
-    expect(
-      () => Revision3VoiceTakeTechnicalPlan.forCheckpoint(
+  test(
+    'selected non-approved take stays editable and build-blocked upstream',
+    () {
+      final json = revision3VoiceContentIndexJsonFixture(
+        existingSlotCandidateCount: 1,
+        existingSlotHasSelectedTake: true,
+      );
+      _takeData(json)['status'] = 'reviewed';
+      final catalog = Revision3VoiceCatalog.fromContentIndex(
+        Revision3ContentIndex.fromJsonObject(json),
+      );
+      expect(catalog.lines.single.isLocaleAuthorable('de'), isTrue);
+      expect(catalog.lines.single.slotSummaryForLocale('de'), isNotNull);
+      final plan = Revision3VoiceTakeTechnicalPlan.forCheckpoint(
         catalog: catalog,
         input: _input(locale: 'de'),
-      ),
-      throwsFormatException,
-    );
-  });
+      );
+      expect(plan.expectsSlotCreated, isFalse);
+    },
+  );
+
+  test(
+    'full intact slot blocks another take but remains target-resolvable',
+    () {
+      final catalog = Revision3VoiceCatalog.fromContentIndex(
+        revision3VoiceContentIndexFixture(existingSlotCandidateCount: 1024),
+      );
+      final line = catalog.lines.single;
+
+      expect(line.isLocaleAuthorable('de'), isFalse);
+      expect(line.isLocaleTargetable('de'), isTrue);
+      expect(
+        () => Revision3VoiceTakeTechnicalPlan.forCheckpoint(
+          catalog: catalog,
+          input: _input(locale: 'de'),
+        ),
+        throwsFormatException,
+      );
+
+      final target = Revision3VoiceTargetTechnicalPlan.forCheckpoint(
+        catalog: catalog,
+        lineId: revision3VoiceContentLineId,
+        locale: 'de',
+      );
+      expect(target.slotId, revision3VoiceContentSlotId);
+      expect(target.locId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+    },
+  );
 
   test('a VoiceSlot shared by another line or locale is never offered', () {
     final json = revision3VoiceContentIndexJsonFixture(duplicateLine: true);
@@ -563,6 +639,59 @@ void main() {
         service.publish(checkpoint: checkpoint, input: input),
         throwsA(isA<Revision3VoiceTakeRequiresReopenException>()),
       );
+    },
+  );
+
+  test(
+    'target service refreshes exact content and binds only line slot locale and LocID',
+    () async {
+      var current = revision3VoiceContentIndexFixture();
+      var publishes = 0;
+      final service = Revision3VoiceTargetAuthoringService(
+        loadContentIndex: () async => current,
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              expect(plan.lineId, revision3VoiceContentLineId);
+              expect(plan.slotId, revision3VoiceContentSlotId);
+              expect(plan.locale, 'de');
+              expect(plan.locId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+              return Revision3VoiceTargetPublication(
+                projectId: expectedProjectId,
+                projectRevision: expectedProjectRevision + 1,
+                lineId: plan.lineId,
+                slotId: plan.slotId,
+                locale: plan.locale,
+                locId: plan.locId,
+                resolution:
+                    AuthoringRevision3VoiceTargetResolutionState.resolved,
+                matchCount: 1,
+              );
+            },
+      );
+      final checkpoint = await service.loadCatalog();
+      final result = await service.resolve(
+        checkpoint: checkpoint,
+        lineId: revision3VoiceContentLineId,
+        locale: 'de',
+      );
+      expect(result.matchCount, 1);
+      expect(publishes, 1);
+
+      current = revision3VoiceContentIndexFixture(revision: 8);
+      await expectLater(
+        service.resolve(
+          checkpoint: checkpoint,
+          lineId: revision3VoiceContentLineId,
+          locale: 'de',
+        ),
+        throwsA(isA<Revision3VoiceTargetStaleCheckpointException>()),
+      );
+      expect(publishes, 1);
     },
   );
 }

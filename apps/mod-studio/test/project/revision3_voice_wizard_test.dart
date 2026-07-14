@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_wizard.dart';
 
@@ -257,9 +258,20 @@ void main() {
     await _useLargeSurface(tester);
     var publishes = 0;
     final service = Revision3VoiceAuthoringService(
-      loadContentIndex: () async => revision3VoiceContentIndexFixture(
-        existingSlotTargetResolution: 'resolved',
-      ),
+      loadContentIndex: () async {
+        final json = revision3VoiceContentIndexJsonFixture(
+          existingSlotCandidateCount: 1,
+          existingSlotTargetResolution: 'resolved',
+        );
+        final entities = (json['entities']! as List).cast<Object?>();
+        final take = (entities.cast<Map<String, Object?>>().singleWhere(
+          (entity) => entity['kind'] == 'voice_take',
+        ));
+        final summary = (take['summary']! as Map).cast<String, Object?>();
+        final data = (summary['data']! as Map).cast<String, Object?>();
+        data['locale'] = 'en';
+        return Revision3ContentIndex.fromJsonObject(json);
+      },
       publishTechnicalPlan:
           ({
             required expectedProjectId,

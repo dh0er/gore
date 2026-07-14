@@ -256,6 +256,7 @@ void main() {
         (command) => command.contains('revision3'),
       ),
       <String>[
+        'authoring_store_build_revision3_voice_v1',
         'authoring_store_list_revision3_dataasset_stages_v1',
         'authoring_store_open_revision3',
         'authoring_store_open_revision3_head_bytes',
@@ -266,6 +267,7 @@ void main() {
         'authoring_store_prepare_revision3_npc_draft_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
         'authoring_store_prepare_revision3_voice_take_v1',
+        'authoring_store_prepare_revision3_voice_target_v1',
         'authoring_store_read_revision3_content_index_v1',
       ],
     );

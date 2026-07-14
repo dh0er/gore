@@ -23,6 +23,13 @@ typedef Revision3VoiceTechnicalPublisher =
       required Revision3VoiceTakeTechnicalPlan plan,
     });
 
+typedef Revision3VoiceTargetTechnicalPublisher =
+    Future<Revision3VoiceTargetPublication> Function({
+      required String expectedProjectId,
+      required int expectedProjectRevision,
+      required Revision3VoiceTargetTechnicalPlan plan,
+    });
+
 /// One normal-mode dialog-line choice projected from an exact content index.
 ///
 /// Technical identities remain available to the transaction planner but are
@@ -74,10 +81,27 @@ final class Revision3VoiceDialogLineChoice {
   Revision3VoiceExistingSlotSummary? slotSummaryForLocale(String locale) =>
       _slotSummariesByLocale[locale];
 
+  List<String> get existingSlotLocales {
+    final locales = _slotIdsByLocale.keys.toList(growable: false)..sort();
+    return List.unmodifiable(locales);
+  }
+
   /// False means this exact line already owns a projected slot for [locale],
   /// but that slot graph is not safe enough to extend.
-  bool isLocaleAuthorable(String locale) =>
-      !_blockedExistingSlotLocales.contains(locale);
+  bool isLocaleAuthorable(String locale) {
+    if (_blockedExistingSlotLocales.contains(locale)) return false;
+    final summary = _slotSummariesByLocale[locale];
+    return summary == null || summary.candidateCount < _maxVoiceSlotCandidates;
+  }
+
+  /// Whether this line owns one structurally intact existing slot for [locale].
+  ///
+  /// Unlike [isLocaleAuthorable], this deliberately ignores candidate
+  /// capacity: resolving installed archive evidence does not add a take.
+  bool isLocaleTargetable(String locale) =>
+      !_blockedExistingSlotLocales.contains(locale) &&
+      _slotIdsByLocale.containsKey(locale) &&
+      _slotSummariesByLocale.containsKey(locale);
 }
 
 /// Friendly facts about an existing line/language Voice slot. The hidden slot
@@ -86,10 +110,12 @@ final class Revision3VoiceExistingSlotSummary {
   const Revision3VoiceExistingSlotSummary({
     required this.candidateCount,
     required this.hasSelectedTake,
+    required this.targetResolution,
   });
 
   final int candidateCount;
   final bool hasSelectedTake;
+  final Revision3ContentVoiceTargetResolution targetResolution;
 }
 
 /// Closed, friendly projection of all Voice-authorable lines in one exact R3
@@ -132,7 +158,7 @@ final class Revision3VoiceCatalog {
               Revision3ContentEntityKind.localizationEntry ||
           localizationEntity.problemCount != 0 ||
           localization.target.entityId == entity.id ||
-          !_voiceLocalizationIdentityIsSafe(
+          !authoringRevision3VoiceArchiveBasenameStemIsSafe(
             localizationEntity.summary.primaryIdentity,
           )) {
         continue;
@@ -341,11 +367,6 @@ Map<String, List<_Revision3VoiceSlotOwner>> _voiceSlotOwners(
   return owners;
 }
 
-bool _voiceLocalizationIdentityIsSafe(String value) =>
-    value.isNotEmpty &&
-    utf8.encode(value).length <= 1024 &&
-    !value.runes.any(_voiceControl);
-
 Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
   required Revision3ContentIndex index,
   required String lineId,
@@ -368,10 +389,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
       entity.kind != Revision3ContentEntityKind.voiceSlot ||
       entity.problemCount != 0 ||
       entity.summary.primaryIdentity != locale ||
-      details == null ||
-      details.targetResolution !=
-          Revision3ContentVoiceTargetResolution.unresolved ||
-      details.candidateCount >= _maxVoiceSlotCandidates) {
+      details == null) {
     return null;
   }
 
@@ -408,15 +426,14 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
         chosen.resolution != Revision3ContentReferenceResolution.resolved ||
         chosen.target.projectId != index.projectId ||
         chosen.target.expectedKind != Revision3ContentEntityKind.voiceTake ||
-        !candidates.containsKey(chosen.target.entityId) ||
-        candidates[chosen.target.entityId]!.summary.voiceTake!.status !=
-            Revision3ContentVoiceTakeStatus.approved) {
+        !candidates.containsKey(chosen.target.entityId)) {
       return null;
     }
   }
   return Revision3VoiceExistingSlotSummary(
     candidateCount: details.candidateCount,
     hasSelectedTake: details.hasSelectedTake,
+    targetResolution: details.targetResolution,
   );
 }
 
@@ -629,12 +646,113 @@ final class Revision3VoiceTakePublication {
   final bool selected;
 }
 
+/// Exact installed-archive target intent derived from a fresh content index.
+/// Normal-mode users choose only the visible line and language.
+final class Revision3VoiceTargetTechnicalPlan {
+  Revision3VoiceTargetTechnicalPlan._({
+    required this.lineId,
+    required this.slotId,
+    required this.locale,
+    required this.locId,
+  });
+
+  factory Revision3VoiceTargetTechnicalPlan.forCheckpoint({
+    required Revision3VoiceCatalog catalog,
+    required String lineId,
+    required String locale,
+  }) {
+    final line = catalog.line(lineId);
+    if (line == null) {
+      throw const Revision3VoiceTargetStaleCheckpointException();
+    }
+    if (!line.isLocaleTargetable(locale) ||
+        !authoringRevision3VoiceArchiveBasenameStemIsSafe(
+          line.localizationIdentity,
+        )) {
+      throw const FormatException(
+        'Choose an intact existing Voice slot from the current project.',
+      );
+    }
+    final slotId = line.slotIdForLocale(locale)!;
+    return Revision3VoiceTargetTechnicalPlan._(
+      lineId: line.lineId,
+      slotId: slotId,
+      locale: locale,
+      locId: line.localizationIdentity,
+    );
+  }
+
+  final String lineId;
+  final String slotId;
+  final String locale;
+  final String locId;
+}
+
+final class Revision3VoiceTargetPublication {
+  Revision3VoiceTargetPublication({
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.slotId,
+    required this.locale,
+    required this.locId,
+    required this.resolution,
+    required this.matchCount,
+  }) {
+    if (!_voiceEntityIdPattern.hasMatch(projectId) ||
+        _isZeroId(projectId) ||
+        projectRevision < 0 ||
+        projectRevision > 0x7fffffffffffffff ||
+        [
+          lineId,
+          slotId,
+        ].any((id) => !_voiceEntityIdPattern.hasMatch(id) || _isZeroId(id)) ||
+        !revision3VoiceLocaleIsCanonical(locale) ||
+        !authoringRevision3VoiceArchiveBasenameStemIsSafe(locId) ||
+        matchCount < 0 ||
+        (resolution ==
+                AuthoringRevision3VoiceTargetResolutionState.unresolved &&
+            matchCount != 0) ||
+        (resolution == AuthoringRevision3VoiceTargetResolutionState.resolved &&
+            matchCount != 1) ||
+        (resolution == AuthoringRevision3VoiceTargetResolutionState.ambiguous &&
+            matchCount < 2)) {
+      throw const FormatException('Voice target publication is invalid.');
+    }
+  }
+
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String slotId;
+  final String locale;
+  final String locId;
+  final AuthoringRevision3VoiceTargetResolutionState resolution;
+  final int matchCount;
+}
+
 final class Revision3VoiceTakeRequiresReopenException implements Exception {
   const Revision3VoiceTakeRequiresReopenException();
 }
 
 final class Revision3VoiceTakeStaleCheckpointException implements Exception {
   const Revision3VoiceTakeStaleCheckpointException();
+}
+
+final class Revision3VoiceTargetRequiresReopenException implements Exception {
+  const Revision3VoiceTargetRequiresReopenException();
+}
+
+final class Revision3VoiceTargetStaleCheckpointException implements Exception {
+  const Revision3VoiceTargetStaleCheckpointException();
+}
+
+final class Revision3VoiceBuildRequiresReopenException implements Exception {
+  const Revision3VoiceBuildRequiresReopenException();
+}
+
+final class Revision3VoiceBuildStaleCheckpointException implements Exception {
+  const Revision3VoiceBuildStaleCheckpointException();
 }
 
 /// Fresh-index service boundary for the visible Voice wizard. The injected
@@ -677,6 +795,55 @@ final class Revision3VoiceAuthoringService {
         publication.slotCreated != plan.expectsSlotCreated ||
         publication.selected != plan.selectTake) {
       throw const Revision3VoiceTakeRequiresReopenException();
+    }
+    return publication;
+  }
+}
+
+/// Fresh-index service for installed Voice target resolution.
+final class Revision3VoiceTargetAuthoringService {
+  const Revision3VoiceTargetAuthoringService({
+    required this.loadContentIndex,
+    required this.publishTechnicalPlan,
+  });
+
+  final Revision3VoiceContentIndexLoader loadContentIndex;
+  final Revision3VoiceTargetTechnicalPublisher publishTechnicalPlan;
+
+  Future<Revision3VoiceCatalog> loadCatalog() async {
+    try {
+      return Revision3VoiceCatalog.fromContentIndex(await loadContentIndex());
+    } on Revision3ContentRequiresReopenException {
+      throw const Revision3VoiceTargetRequiresReopenException();
+    }
+  }
+
+  Future<Revision3VoiceTargetPublication> resolve({
+    required Revision3VoiceCatalog checkpoint,
+    required String lineId,
+    required String locale,
+  }) async {
+    final fresh = await loadCatalog();
+    if (!checkpoint.sameCheckpoint(fresh)) {
+      throw const Revision3VoiceTargetStaleCheckpointException();
+    }
+    final plan = Revision3VoiceTargetTechnicalPlan.forCheckpoint(
+      catalog: fresh,
+      lineId: lineId,
+      locale: locale,
+    );
+    final publication = await publishTechnicalPlan(
+      expectedProjectId: fresh.projectId,
+      expectedProjectRevision: fresh.projectRevision,
+      plan: plan,
+    );
+    if (publication.projectId != fresh.projectId ||
+        publication.projectRevision != fresh.projectRevision + 1 ||
+        publication.lineId != plan.lineId ||
+        publication.slotId != plan.slotId ||
+        publication.locale != plan.locale ||
+        publication.locId != plan.locId) {
+      throw const Revision3VoiceTargetRequiresReopenException();
     }
     return publication;
   }

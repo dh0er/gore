@@ -68,6 +68,247 @@ String revision3VoiceFixtureProjectJson({int revision = 7}) => jsonEncode(
   },
 );
 
+/// Canonical managed project with one existing Voice slot and an exact number
+/// of candidate takes. All candidates reuse the same immutable Ogg asset; only
+/// their entity identities differ.
+String revision3VoiceFixtureProjectWithExistingSlotJson({
+  int candidateCount = 1,
+  AuthoringRevision3VoiceTakeStatus selectedStatus =
+      AuthoringRevision3VoiceTakeStatus.approved,
+}) {
+  if (candidateCount < 1 || candidateCount > 1024) {
+    throw ArgumentError.value(candidateCount, 'candidateCount');
+  }
+  final basisProjectJson = revision3VoiceFixtureProjectJson();
+  final basisHead = _headFor(basisProjectJson);
+  final request = AuthoringRevision3VoiceTakeRequestV1.forProject(
+    expectedHead: basisHead,
+    currentProjectJson: basisProjectJson,
+    lineId: revision3VoiceFixtureLineId,
+    slotId: revision3VoiceFixtureSlotId,
+    takeId: revision3VoiceFixtureTakeId,
+    locale: 'de',
+    takeDisplayName: 'Asghan selected take',
+    logicalName: 'GRD_263_ASGHAN_OPEN_INFO_06_02.ogg',
+    status: selectedStatus,
+    selectTake: selectedStatus == AuthoringRevision3VoiceTakeStatus.approved,
+  );
+  final fixture = Revision3VoiceFixture.fromBasis(
+    basisHead: basisHead,
+    basisProjectJson: basisProjectJson,
+    request: request,
+  );
+  final project = (jsonDecode(fixture.candidateProjectJson) as Map)
+      .cast<String, Object?>();
+  final entities = SplayTreeMap<String, Object?>.from(
+    (project['entities']! as Map).cast<String, Object?>(),
+  );
+  final selectedTake = (entities[revision3VoiceFixtureTakeId]! as Map)
+      .cast<String, Object?>();
+  final slot = (entities[revision3VoiceFixtureSlotId]! as Map)
+      .cast<String, Object?>();
+  final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+  final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+  final candidates = <Object?>[
+    _typedRef(revision3VoiceFixtureTakeId, 'voice_take'),
+  ];
+  for (var index = 1; index < candidateCount; index++) {
+    final id = (0x1000 + index).toRadixString(16).padLeft(32, '0');
+    final take = (jsonDecode(jsonEncode(selectedTake)) as Map)
+        .cast<String, Object?>();
+    take['id'] = id;
+    take['display_name'] = 'Asghan alternate take $index';
+    entities[id] = take;
+    candidates.add(_typedRef(id, 'voice_take'));
+  }
+  slotData['candidates'] = candidates;
+  // A reviewed selection is legal project history and intentionally remains
+  // build-blocked. The transaction that creates a new selection still only
+  // permits Approved takes.
+  if (selectedStatus != AuthoringRevision3VoiceTakeStatus.approved) {
+    slotData['selected'] = _typedRef(revision3VoiceFixtureTakeId, 'voice_take');
+  }
+  slotPayload['data'] = slotData;
+  slot['payload'] = slotPayload;
+  entities[revision3VoiceFixtureSlotId] = slot;
+  project['entities'] = entities;
+  return jsonEncode(project);
+}
+
+/// Canonical test project with an exact number of uniquely owned VoiceSlots.
+/// The slots intentionally have no selected takes so the same project can
+/// exercise strict blocked-receipt counts without constructing Ogg assets.
+String revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+  int slotCount, {
+  String projectId = revision3VoiceFixtureProjectId,
+  int projectRevision = 7,
+}) {
+  if (slotCount < 0 || slotCount > 2048) {
+    throw ArgumentError.value(slotCount, 'slotCount');
+  }
+  final project = (jsonDecode(revision3VoiceFixtureProjectJson()) as Map)
+      .cast<String, Object?>();
+  project['project_id'] = projectId;
+  project['revision'] = projectRevision;
+  final entities = SplayTreeMap<String, Object?>.from(
+    (project['entities']! as Map).cast<String, Object?>(),
+  );
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  final linePayload = (line['payload']! as Map).cast<String, Object?>();
+  final lineData = (linePayload['data']! as Map).cast<String, Object?>();
+  final localizationRef = (lineData['localization']! as Map)
+      .cast<String, Object?>();
+  localizationRef['project_id'] = projectId;
+  lineData['localization'] = localizationRef;
+  final slotsByLocale = SplayTreeMap<String, Object?>();
+  final locales = <String>[];
+  for (var index = 0; index < slotCount; index++) {
+    final locale = index == 0 ? 'de' : 'de-x$index';
+    final slotId = (0x100000 + index).toRadixString(16).padLeft(32, '0');
+    locales.add(locale);
+    slotsByLocale[locale] = _typedRefForProject(
+      projectId,
+      slotId,
+      'voice_slot',
+    );
+    entities[slotId] = <String, Object?>{
+      'id': slotId,
+      'display_name': 'Voice $locale',
+      'origin': _importedOrigin('5'),
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'voice_slot',
+        'data': <String, Object?>{
+          'locale': locale,
+          'target_resolution': <String, Object?>{'state': 'unresolved'},
+          'candidates': <Object?>[],
+        },
+      },
+    };
+  }
+  lineData['voice_slots'] = slotsByLocale;
+  linePayload['data'] = lineData;
+  line['payload'] = linePayload;
+  entities[revision3VoiceFixtureLineId] = line;
+  locales.sort();
+  project['authoring_locales'] = locales;
+  project['entities'] = entities;
+  return jsonEncode(project);
+}
+
+/// Canonical build-ready project whose selected Ogg payload is counted once
+/// for every slot, even though all takes reuse one immutable asset seal.
+String revision3VoiceFixtureBuildReadyProjectJson({
+  int slotCount = 1,
+  int assetBytes = 100,
+  String projectId = revision3VoiceFixtureProjectId,
+  int projectRevision = 7,
+  List<String>? archives,
+  bool sharedMember = false,
+}) {
+  if (archives != null && archives.length != slotCount) {
+    throw ArgumentError.value(archives, 'archives');
+  }
+  final project =
+      (jsonDecode(
+                revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+                  slotCount,
+                  projectId: projectId,
+                  projectRevision: projectRevision,
+                ),
+              )
+              as Map)
+          .cast<String, Object?>();
+  final entities = SplayTreeMap<String, Object?>.from(
+    (project['entities']! as Map).cast<String, Object?>(),
+  );
+  final slotIds = entities.entries
+      .where((entry) {
+        final entity = (entry.value! as Map).cast<String, Object?>();
+        final payload = (entity['payload']! as Map).cast<String, Object?>();
+        return payload['kind'] == 'voice_slot';
+      })
+      .map((entry) => entry.key)
+      .toList(growable: false);
+  for (var index = 0; index < slotIds.length; index++) {
+    final slotId = slotIds[index];
+    final takeId = (0x200000 + index).toRadixString(16).padLeft(32, '0');
+    final takeRef = _typedRefForProject(projectId, takeId, 'voice_take');
+    final slot = (entities[slotId]! as Map).cast<String, Object?>();
+    final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+    final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+    final locale = slotData['locale']! as String;
+    slotData['target_resolution'] = <String, Object?>{
+      'state': 'resolved',
+      'target': _buildReadyTarget(
+        archive: archives?[index] ?? 'german_new.zip',
+        member: sharedMember
+            ? 'Npc/Test/shared.ogg'
+            : 'Npc/Test/voice_$locale.ogg',
+      ),
+    };
+    slotData['candidates'] = <Object?>[takeRef];
+    slotData['selected'] = takeRef;
+    slotPayload['data'] = slotData;
+    slot['payload'] = slotPayload;
+    entities[slotId] = slot;
+    entities[takeId] = <String, Object?>{
+      'id': takeId,
+      'display_name': 'Approved $locale take',
+      'origin': _importedOrigin('6'),
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'voice_take',
+        'data': <String, Object?>{
+          'locale': locale,
+          'asset': <String, Object?>{
+            'sha256': revision3VoiceFixtureAssetSha256,
+            'byte_len': assetBytes,
+            'logical_name': 'shared.ogg',
+          },
+          'ogg': <String, Object?>{
+            'codec': 'vorbis',
+            'channels': 1,
+            'sample_rate': 48000,
+            'pages': 3,
+            'logical_streams': 1,
+          },
+          'status': 'approved',
+        },
+      },
+    };
+  }
+  project['entities'] = SplayTreeMap<String, Object?>.from(entities);
+  project['asset_store'] = <String, Object?>{
+    'assets': <String, Object?>{
+      revision3VoiceFixtureAssetSha256: <String, Object?>{
+        'byte_len': assetBytes,
+        'media_type': 'audio/ogg',
+      },
+    },
+  };
+  return jsonEncode(project);
+}
+
+Map<String, Object?> _buildReadyTarget({
+  required String archive,
+  required String member,
+}) => <String, Object?>{
+  'archive': archive,
+  'member': member,
+  'operation': 'replace',
+  'archive_seal': <String, Object?>{
+    'byte_len': 4096,
+    'sha256': List<String>.filled(64, 'd').join(),
+  },
+  'member_proof': <String, Object?>{
+    'state': 'present',
+    'uncompressed_size': 100,
+    'crc32': 123,
+  },
+};
+
 Map<String, Object?> _importedOrigin(String digit) => <String, Object?>{
   'type': 'imported',
   'importer': 'tests',
@@ -245,6 +486,16 @@ final class Revision3VoiceFixture {
 
 Map<String, Object?> _typedRef(String id, String kind) => <String, Object?>{
   'project_id': revision3VoiceFixtureProjectId,
+  'id': id,
+  'expected_kind': kind,
+};
+
+Map<String, Object?> _typedRefForProject(
+  String projectId,
+  String id,
+  String kind,
+) => <String, Object?>{
+  'project_id': projectId,
   'id': id,
   'expected_kind': kind,
 };

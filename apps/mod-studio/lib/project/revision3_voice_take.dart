@@ -858,6 +858,11 @@ void _authoringRevision3VoiceRequireExactCandidate(
       lineId: request.lineId,
       slotId: request.slotId,
       locale: request.locale,
+      locId: locId,
+    );
+    _authoringRevision3VoiceRequireAddTakeCapacity(
+      baseEntities,
+      slotId: request.slotId,
     );
   }
 
@@ -1064,6 +1069,7 @@ void _authoringRevision3VoiceValidateExistingSlot(
   required String lineId,
   required String slotId,
   required String locale,
+  required String locId,
 }) {
   final slot = _authoringRevision3VoiceEntity(
     entities,
@@ -1082,26 +1088,15 @@ void _authoringRevision3VoiceValidateExistingSlot(
       'authoring revision-3 Voice existing slot locale disagrees',
     );
   }
-  final resolution = _authoringRequiredObject(
+  _authoringRevision3VoiceTargetResolution(
     slot.data['target_resolution'],
-    'revision-3 Voice existing slot target resolution',
+    locId: locId,
+    context: 'revision-3 Voice existing slot target resolution',
   );
-  if (!_authoringRevision3VoiceDeepEqual(resolution, const <String, Object?>{
-    'state': 'unresolved',
-  })) {
-    throw const FormatException(
-      'authoring revision-3 Voice existing slot lacks sealed target authority',
-    );
-  }
   final candidates = _authoringRevision3VoiceObjectList(
     slot.data['candidates'],
     'existing slot candidates',
   );
-  if (candidates.length >= _maxAuthoringRevision3VoiceSlotCandidates) {
-    throw const FormatException(
-      'authoring revision-3 Voice existing slot candidate limit is exhausted',
-    );
-  }
   final candidateIds = <String>{};
   for (final candidate in candidates) {
     final ref = _authoringRevision3VoiceTypedRef(
@@ -1146,17 +1141,6 @@ void _authoringRevision3VoiceValidateExistingSlot(
         'authoring revision-3 Voice selected take is not a candidate',
       );
     }
-    final take = _authoringRevision3VoiceEntity(
-      entities,
-      ref.id,
-      'voice_take',
-      'basis selected take',
-    );
-    if (take.data['status'] != 'approved') {
-      throw const FormatException(
-        'authoring revision-3 Voice selected take is not approved',
-      );
-    }
   }
   for (final entry in entities.entries) {
     final entity = _authoringRequiredObject(
@@ -1189,6 +1173,30 @@ void _authoringRevision3VoiceValidateExistingSlot(
         );
       }
     }
+  }
+}
+
+/// Capacity is an add-take concern, not part of the exact existing-slot graph
+/// contract. Target resolution must still be able to parse and update an
+/// intact slot whose 1024 candidate positions are already occupied.
+void _authoringRevision3VoiceRequireAddTakeCapacity(
+  Map<String, Object?> entities, {
+  required String slotId,
+}) {
+  final slot = _authoringRevision3VoiceEntity(
+    entities,
+    slotId,
+    'voice_slot',
+    'basis existing slot capacity',
+  );
+  final candidates = _authoringRevision3VoiceObjectList(
+    slot.data['candidates'],
+    'existing slot candidates',
+  );
+  if (candidates.length >= _maxAuthoringRevision3VoiceSlotCandidates) {
+    throw const FormatException(
+      'authoring revision-3 Voice existing slot candidate limit is exhausted',
+    );
   }
 }
 

@@ -484,6 +484,282 @@ void main() {
   );
 
   test(
+    'Voice target publishes sealed archive evidence and build is an exact non-publishing read',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_target_build');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      await session.prepareAndPublishVoiceTakeV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        source: r'D:\Recordings\asghan.ogg',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        takeId: revision3VoiceFixtureTakeId,
+        locale: 'de',
+        takeDisplayName: 'Asghan approved take',
+        logicalName: 'GRD_263_ASGHAN_OPEN_INFO_06_02.ogg',
+        status: AuthoringRevision3VoiceTakeStatus.approved,
+        selectTake: true,
+      );
+
+      final target = await session.prepareAndPublishVoiceTargetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      );
+      expect(target.projectRevision, 9);
+      expect(
+        target.resolution,
+        AuthoringRevision3VoiceTargetResolutionState.resolved,
+      );
+      expect(target.targets.single.archive, 'german_new.zip');
+      expect(target.archiveObservation!.sha256, 'c' * 64);
+      expect(store.voiceTargetPrepareCalls, 1);
+      expect(store.voiceTargetRequests.single.expectedRevision, 8);
+      expect(await session.headFile.readAsString(), target.head.canonicalJson);
+
+      final fixedHead = await session.headFile.readAsBytes();
+      final result = await session.buildVoiceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        output: p.join(fixture.path, 'voice-bundle'),
+      );
+      expect(result.isBuilt, isTrue);
+      expect(result.projectRevision, 9);
+      expect(store.voiceBuildCalls, 1);
+      expect(store.voiceBuildGameRoots, <String>[r'D:\Games\Gothic Remake']);
+      expect(session.projectRevision, 9);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice target and build classify retryable output/input failures separately from Store integrity',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_target_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final retryHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceTargetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_ARCHIVE_UNAVAILABLE',
+        message: 'fake archive unavailable',
+      );
+      await expectLater(
+        retrySession.prepareAndPublishVoiceTargetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        ),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        await retrySession.headFile.readAsBytes(),
+        orderedEquals(retryHead),
+      );
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_BUILD_OUTPUT_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_BUILD_STORE_GAME_ALIAS',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_OUTPUT_ALIAS',
+        'AUTHORING_REVISION3_VOICE_BUILD_EXECUTABLE_UNAVAILABLE',
+        'AUTHORING_REVISION3_VOICE_BUILD_EXECUTABLE_MISMATCH',
+        'AUTHORING_REVISION3_VOICE_BUILD_PROMOTION_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_CLEANUP_FAILED',
+        'AUTHORING_REVISION3_VOICE_BUILD_GAME_ROOT_CHANGED',
+        'AUTHORING_REVISION3_VOICE_BUILD_OUTPUT_ROOT_CHANGED',
+      ]) {
+        retryStore.nextVoiceBuildError = ModFfiException(
+          command: 'authoring_store_build_revision3_voice_v1',
+          code: code,
+          message: 'fake retryable Voice build failure',
+        );
+        await expectLater(
+          retrySession.buildVoiceV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            output: p.join(fixture.path, 'exists'),
+          ),
+          throwsA(isA<ModFfiException>()),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+        expect(
+          await retrySession.headFile.readAsBytes(),
+          orderedEquals(retryHead),
+          reason: code,
+        );
+      }
+
+      retryStore.nextVoiceBuildError = const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_PUBLICATION_UNCONFIRMED',
+        message: 'fake ambiguous output publication',
+      );
+      await expectLater(
+        retrySession.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'ambiguous-output'),
+        ),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_BUILD_PUBLICATION_UNCONFIRMED',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_target_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      poisonStore.nextVoiceTargetError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_STORE_SEAL_MISMATCH',
+        message: 'fake Store integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishVoiceTargetV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          lineId: revision3VoiceFixtureLineId,
+          slotId: revision3VoiceFixtureSlotId,
+          locale: 'de',
+          expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+
+      final buildPoisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_build_store_root_poison',
+      );
+      final buildPoisonStore = _FakeRevision3Store();
+      final buildPoisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: buildPoisonRoot,
+            store: buildPoisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      buildPoisonStore.nextVoiceBuildError = const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_STORE_ROOT_CHANGED',
+        message: 'fake Store-root identity drift',
+      );
+      await expectLater(
+        buildPoisonSession.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'store-drift-output'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(buildPoisonSession.requiresReopen, isTrue);
+      await buildPoisonSession.close();
+    },
+  );
+
+  test(
+    'Voice target publication preserves an intact full 1024-candidate slot',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_target_full');
+      final store = _FakeRevision3Store();
+      final fullProject = revision3VoiceFixtureProjectWithExistingSlotJson(
+        candidateCount: 1024,
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: fullProject,
+      );
+
+      final target = await session.prepareAndPublishVoiceTargetV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        lineId: revision3VoiceFixtureLineId,
+        slotId: revision3VoiceFixtureSlotId,
+        locale: 'de',
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+      );
+
+      expect(target.projectRevision, 9);
+      expect(
+        target.resolution,
+        AuthoringRevision3VoiceTargetResolutionState.resolved,
+      );
+      expect(store.voiceTargetPrepareCalls, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice build returns its basis receipt and marks reopen after a later head drift',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_build_snapshot');
+      final store = _FakeRevision3Store();
+      final basisProject = revision3VoiceFixtureBuildReadyProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: basisProject,
+      );
+      final externalProject = (jsonDecode(basisProject) as Map)
+          .cast<String, Object?>();
+      externalProject['revision'] = (externalProject['revision']! as int) + 1;
+      final externalHead = store.register(jsonEncode(externalProject));
+      store.afterVoiceBuild = (storeRoot, _) async {
+        await File(
+          p.join(storeRoot, 'gore-project.json'),
+        ).writeAsString(externalHead.canonicalJson, flush: true);
+      };
+
+      final result = await session.buildVoiceV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        output: p.join(fixture.path, 'snapshot-voice-bundle'),
+      );
+
+      expect(result.isBuilt, isTrue);
+      expect(result.projectRevision, session.projectRevision);
+      expect(result.output, p.join(fixture.path, 'snapshot-voice-bundle'));
+      expect(session.requiresReopen, isTrue);
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      await expectLater(
+        session.buildVoiceV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          output: p.join(fixture.path, 'another-voice-bundle'),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      await session.close();
+    },
+  );
+
+  test(
     'Voice local and source rejections retry without changing the exact head',
     () async {
       final root = await _projectRoot(fixture, suffix: 'voice_errors');
@@ -2173,6 +2449,12 @@ typedef _AfterDataAssetPrepare =
 typedef _AfterDataAssetList =
     FutureOr<void> Function(String root, AuthoringWorkingHead expectedHead);
 
+typedef _AfterVoiceBuild =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3VoiceBuildResult result,
+    );
+
 DataAssetSemanticEditIntent _semanticDataAssetIntent() {
   final response = validDataAssetInspectionResponse();
   (response['binding']! as Map<String, Object?>)['usmap_sha256'] = '3' * 64;
@@ -2201,6 +2483,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int questPrepareCalls = 0;
   int npcPrepareCalls = 0;
   int voicePrepareCalls = 0;
+  int voiceTargetPrepareCalls = 0;
+  int voiceBuildCalls = 0;
   int contentReadCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
@@ -2212,6 +2496,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _AfterContentRead? afterContentRead;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
+  _AfterVoiceBuild? afterVoiceBuild;
   final List<String> questGameRoots = <String>[];
   final List<String> questCurrentProjects = <String>[];
   final List<AuthoringRevision3QuestDraftRequestV3> questRequests =
@@ -2225,10 +2510,16 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> voiceCurrentProjects = <String>[];
   final List<AuthoringRevision3VoiceTakeRequestV1> voiceRequests =
       <AuthoringRevision3VoiceTakeRequestV1>[];
+  final List<AuthoringRevision3VoiceTargetRequestV1> voiceTargetRequests =
+      <AuthoringRevision3VoiceTargetRequestV1>[];
+  final List<String> voiceBuildOutputs = <String>[];
+  final List<String> voiceBuildGameRoots = <String>[];
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
   Object? nextNpcError;
   Object? nextVoiceError;
+  Object? nextVoiceTargetError;
+  Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
   Object? nextDataAssetError;
@@ -2533,6 +2824,134 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       currentProjectJson: currentProjectJson,
       request: request,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTargetPreparation> prepareVoiceTargetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTargetRequestV1 request,
+  }) async {
+    voiceTargetPrepareCalls++;
+    voiceTargetRequests.add(request);
+    final injectedError = nextVoiceTargetError;
+    nextVoiceTargetError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_target_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TARGET_HEAD_CONFLICT',
+        message: 'fake native Voice target basis CAS rejected',
+      );
+    }
+    final target = <String, Object?>{
+      'archive': 'german_new.zip',
+      'member': 'Voices/Hero/${request.expectedLocId}.ogg',
+      'operation': 'replace',
+      'archive_seal': <String, Object?>{'byte_len': 4096, 'sha256': 'c' * 64},
+      'member_proof': <String, Object?>{
+        'state': 'present',
+        'uncompressed_size': 8192,
+        'crc32': 42,
+      },
+    };
+    final resolution = <String, Object?>{'state': 'resolved', 'target': target};
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = (slot['revision']! as int) + 1;
+    final payload = (slot['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    data['target_resolution'] = resolution;
+    payload['data'] = data;
+    slot['payload'] = payload;
+    entities[request.slotId] = slot;
+    candidate['entities'] = entities;
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3VoiceTargetPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': revision3VoiceFixtureLocalizationId,
+        'slot_id': request.slotId,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'resolution': 'resolved',
+        'match_count': 1,
+        'target_resolution': resolution,
+        'archive_observation': <String, Object?>{
+          'archive': 'german_new.zip',
+          'archive_seal': <String, Object?>{
+            'byte_len': 4096,
+            'sha256': 'c' * 64,
+          },
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    voiceBuildCalls++;
+    voiceBuildGameRoots.add(gameRoot);
+    voiceBuildOutputs.add(output);
+    final injectedError = nextVoiceBuildError;
+    nextVoiceBuildError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_build_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT',
+        message: 'fake native Voice build basis CAS rejected',
+      );
+    }
+    final project = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    final result = AuthoringRevision3VoiceBuildResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'built',
+        'basis_head_json': expectedHead.canonicalJson,
+        'project_id': project['project_id'],
+        'project_revision': project['revision'],
+        'output': output,
+        'edit_count': 1,
+        'file_count': 3,
+        'bundle_bytes': 1234,
+        'bundle_sha256': 'd' * 64,
+        'build_authority': 'generation_sealed_existing_member_bundle_v1',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+      expectedOutput: output,
+    );
+    await afterVoiceBuild?.call(root, result);
+    return result;
   }
 
   @override

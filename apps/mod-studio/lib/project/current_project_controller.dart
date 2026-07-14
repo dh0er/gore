@@ -145,6 +145,14 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required Revision3VoiceTakeTechnicalPlan plan,
   });
+  Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
+    required String gameRoot,
+    required Revision3VoiceTargetTechnicalPlan plan,
+  });
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String gameRoot,
+    required String output,
+  });
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1();
   Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
     required String patchReceiptPath,
@@ -330,6 +338,36 @@ final class _ManagedRevision3SessionLease
       selected: checkpoint.selected,
     );
   }
+
+  @override
+  Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
+    required String gameRoot,
+    required Revision3VoiceTargetTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishVoiceTargetV1(
+      gameRoot: gameRoot,
+      lineId: plan.lineId,
+      slotId: plan.slotId,
+      locale: plan.locale,
+      expectedLocId: plan.locId,
+    );
+    return Revision3VoiceTargetPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      slotId: checkpoint.slotId,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      resolution: checkpoint.resolution,
+      matchCount: checkpoint.targets.length,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String gameRoot,
+    required String output,
+  }) => _session.buildVoiceV1(gameRoot: gameRoot, output: output);
 
   @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() =>
@@ -620,12 +658,18 @@ final class CurrentProjectCoordinator
       );
     }
     if (current.lease.requiresReopen) {
-      throw const CurrentProjectOperationUnsupportedException(
-        'managed revision-3 content is blocked until the project is reopened',
-      );
+      throw const Revision3ContentRequiresReopenException();
     }
     try {
       return await current.lease.readContentIndex();
+    } catch (error, stackTrace) {
+      if (current.lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ContentRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     } finally {
       _refreshCurrentIfUnchanged(current);
     }
@@ -815,6 +859,131 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTakeRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Resolve one installed-archive target for an exact current Voice slot and
+  /// publish only the sealed evidence checkpoint.
+  Future<Revision3VoiceTargetPublication> resolveCurrentRevision3VoiceTarget({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required Revision3VoiceTargetTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice target resolution is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTargetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTargetStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for Voice target resolution',
+      );
+    }
+    try {
+      final publication = await lease.prepareAndPublishVoiceTargetV1(
+        gameRoot: gameRoot,
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.slotId != plan.slotId ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId) {
+        throw const CurrentProjectCoordinatorException(
+          'published Voice target disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTargetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Build the exact current Voice graph into a new offline bundle. The
+  /// managed checkpoint remains unchanged whether the result is built or
+  /// structurally blocked.
+  Future<AuthoringRevision3VoiceBuildResult> buildCurrentRevision3Voice({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required String output,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice bundle build is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceBuildRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceBuildStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required to keep Voice build output outside the game',
+      );
+    }
+    try {
+      final result = await lease.buildVoiceV1(
+        gameRoot: gameRoot,
+        output: output,
+      );
+      if (result.projectId != expectedProjectId ||
+          result.projectId != lease.projectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.projectRevision != lease.projectRevision ||
+          result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        throw const CurrentProjectCoordinatorException(
+          'Voice build disagrees with the current managed checkpoint',
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceBuildRequiresReopenException(),
           stackTrace,
         );
       }

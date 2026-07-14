@@ -37,6 +37,8 @@ import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_voice_authoring.dart';
+import 'project/revision3_voice_build_dialog.dart';
+import 'project/revision3_voice_target_dialog.dart';
 import 'project/revision3_voice_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
@@ -470,6 +472,7 @@ class _HomePageState extends ConsumerState<HomePage>
             },
           ),
           PopupMenuButton<String>(
+            key: const Key('project-menu'),
             icon: const Icon(Icons.folder_open_outlined),
             tooltip: 'Project',
             onSelected: (value) async {
@@ -598,6 +601,50 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          publishVoiceTarget:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final configuredGameRoot = gameRoot;
+                if (configuredGameRoot == null) {
+                  throw StateError(
+                    'Configure the Gothic 1 Remake installation before resolving a Voice target.',
+                  );
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .resolveCurrentRevision3VoiceTarget(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: currentProject.head,
+                      gameRoot: configuredGameRoot,
+                      plan: plan,
+                    );
+              },
+          buildVoiceBundle: (output) {
+            final configuredGameRoot = gameRoot;
+            if (configuredGameRoot == null) {
+              throw StateError(
+                'Configure the Gothic 1 Remake installation before building a Voice bundle.',
+              );
+            }
+            return ref
+                .read(currentProjectCoordinatorProvider.notifier)
+                .buildCurrentRevision3Voice(
+                  expectedRoot: currentProject.root.path,
+                  expectedProjectId: currentProject.projectId,
+                  expectedProjectRevision: currentProject.projectRevision,
+                  expectedHead: currentProject.head,
+                  gameRoot: configuredGameRoot,
+                  output: output,
+                );
+          },
+          pickVoiceBuildParent: () => ref.read(
+            managedRevision3DirectoryPickerProvider,
+          )('Choose Voice bundle parent'),
           loadDataAssetStages: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .listCurrentRevision3DataAssetStages(
@@ -814,6 +861,9 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.gameRoot,
     required this.loadContentIndex,
     required this.publishVoiceTake,
+    required this.publishVoiceTarget,
+    required this.buildVoiceBundle,
+    required this.pickVoiceBuildParent,
     required this.loadDataAssetStages,
     required this.publishDataAssetStage,
     required this.publishDataAssetSemanticEdit,
@@ -835,6 +885,9 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final String? gameRoot;
   final Revision3ContentIndexLoader loadContentIndex;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
+  final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
+  final Revision3VoiceExactBuild buildVoiceBundle;
+  final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
   final Revision3DataAssetStageLoader loadDataAssetStages;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
   final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
@@ -882,6 +935,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                       ],
                     );
                     final actions = Wrap(
+                      key: const Key('managed-project-actions'),
                       spacing: 8,
                       runSpacing: 8,
                       children: [
@@ -897,7 +951,41 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                               ? null
                               : () => _openVoiceWizard(context),
                           icon: const Icon(Icons.record_voice_over_outlined),
-                          label: const Text('Add Voice take'),
+                          label: const Text('Voice take'),
+                        ),
+                        PopupMenuButton<String>(
+                          key: const Key('managed-voice-tools'),
+                          enabled: !project.requiresReopen && gameRoot != null,
+                          tooltip: 'Voice target and bundle tools',
+                          icon: const Icon(Icons.graphic_eq_outlined),
+                          onSelected: (value) {
+                            switch (value) {
+                              case 'target':
+                                unawaited(_openVoiceTargetResolver(context));
+                              case 'build':
+                                unawaited(_openVoiceBuild(context));
+                            }
+                          },
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(
+                              key: Key('managed-resolve-voice-target'),
+                              value: 'target',
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.link_outlined),
+                                title: Text('Resolve Voice target'),
+                              ),
+                            ),
+                            PopupMenuItem(
+                              key: Key('managed-build-voice-bundle'),
+                              value: 'build',
+                              child: ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                leading: Icon(Icons.inventory_2_outlined),
+                                title: Text('Build Voice bundle'),
+                              ),
+                            ),
+                          ],
                         ),
                         FilledButton.icon(
                           key: const Key('managed-create-npc-draft'),
@@ -905,7 +993,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                               ? null
                               : () => _openNpcWizard(context),
                           icon: const Icon(Icons.person_add_alt_1_outlined),
-                          label: const Text('Create NPC draft'),
+                          label: const Text('New NPC'),
                         ),
                         FilledButton.icon(
                           key: const Key('managed-create-quest-draft'),
@@ -913,7 +1001,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                               ? null
                               : () => _openQuestWizard(context),
                           icon: const Icon(Icons.assignment_add),
-                          label: const Text('Create Quest draft'),
+                          label: const Text('New Quest'),
                         ),
                       ],
                     );
@@ -943,7 +1031,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 if (gameRoot == null && !project.requiresReopen) ...[
                   const SizedBox(height: 8),
                   const Text(
-                    'Configure the Gothic 1 Remake installation in Settings to add Voice takes or create NPC and Quest drafts.',
+                    'Configure the Gothic 1 Remake installation in Settings to author, resolve, or build Voice content and to create NPC and Quest drafts.',
                     key: Key('managed-quest-game-required'),
                   ),
                 ],
@@ -1125,6 +1213,53 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _openVoiceTargetResolver(BuildContext context) async {
+    if (gameRoot == null || project.requiresReopen) return;
+    final publication = await showDialog<Revision3VoiceTargetPublication>(
+      context: context,
+      builder: (context) => Revision3VoiceTargetDialog(
+        service: Revision3VoiceTargetAuthoringService(
+          loadContentIndex: loadContentIndex,
+          publishTechnicalPlan: publishVoiceTarget,
+        ),
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    final outcome = switch (publication.resolution) {
+      AuthoringRevision3VoiceTargetResolutionState.unresolved =>
+        'No installed archive member matched',
+      AuthoringRevision3VoiceTargetResolutionState.resolved =>
+        'One installed archive member was sealed',
+      AuthoringRevision3VoiceTargetResolutionState.ambiguous =>
+        '${publication.matchCount} installed archive members matched; nothing was chosen implicitly',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '$outcome. Voice target evidence saved in project revision ${publication.projectRevision}.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openVoiceBuild(BuildContext context) async {
+    if (gameRoot == null || project.requiresReopen) return;
+    final result = await showDialog<AuthoringRevision3VoiceBuildResult>(
+      context: context,
+      builder: (context) => Revision3VoiceBuildDialog(
+        build: buildVoiceBundle,
+        pickExistingParentDirectory: pickVoiceBuildParent,
+      ),
+    );
+    if (!context.mounted || result == null) return;
+    final message = result.isBuilt
+        ? 'Sealed Voice bundle built at ${result.output}. Deployment was not performed.'
+        : 'Voice build blocked by ${result.report!.blockers.length} exact requirement(s). No bundle was created or deployed.';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _openQuestWizard(BuildContext context) async {

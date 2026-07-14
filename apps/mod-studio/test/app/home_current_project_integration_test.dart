@@ -26,6 +26,7 @@ import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
+import '../support/revision3_voice_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
@@ -58,7 +59,9 @@ void main() {
       expect(find.text('Build / Deploy'), findsOneWidget);
 
       tester
-          .widget<PopupMenuButton<String>>(find.byType(PopupMenuButton<String>))
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
           .onSelected!('openManagedRevision3');
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 10));
@@ -104,7 +107,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
 
-      final menuFinder = find.byType(PopupMenuButton<String>);
+      final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
       final saveAs = menu
           .itemBuilder(tester.element(menuFinder))
@@ -412,6 +415,166 @@ void main() {
     },
   );
 
+  testWidgets(
+    'managed Voice target and offline build use the exact current checkpoint',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_target_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      final buildParent = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_build_parent_',
+      );
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+        if (buildParent.existsSync()) buildParent.deleteSync(recursive: true);
+      });
+
+      String? targetGameRoot;
+      Revision3VoiceTargetTechnicalPlan? targetPlan;
+      String? buildGameRoot;
+      String? buildOutput;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-target-build'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoiceTargetPublish: (lease, requestedGameRoot, plan) {
+          targetGameRoot = requestedGameRoot;
+          targetPlan = plan;
+          expect(lease.projectRevision, 7);
+          expect(lease.head.canonicalJson, _head(7).canonicalJson);
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTargetPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            lineId: plan.lineId,
+            slotId: plan.slotId,
+            locale: plan.locale,
+            locId: plan.locId,
+            resolution: AuthoringRevision3VoiceTargetResolutionState.resolved,
+            matchCount: 1,
+          );
+        },
+        onVoiceBuild: (lease, requestedGameRoot, output) {
+          buildGameRoot = requestedGameRoot;
+          buildOutput = output;
+          expect(lease.projectRevision, 8);
+          expect(lease.head.canonicalJson, _head(8).canonicalJson);
+          return _builtVoiceResult(lease: lease, output: output);
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (label) async {
+          expect(label, 'Choose Voice bundle parent');
+          return buildParent.path;
+        },
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final voiceTools = find.byKey(const Key('managed-voice-tools'));
+      final voiceToolsButton = tester.widget<PopupMenuButton<String>>(
+        voiceTools,
+      );
+      expect(voiceToolsButton.enabled, isTrue);
+      final voiceToolItems = voiceToolsButton
+          .itemBuilder(tester.element(voiceTools))
+          .whereType<PopupMenuItem<String>>()
+          .toList(growable: false);
+      expect(
+        voiceToolItems
+            .singleWhere(
+              (item) => item.key == const Key('managed-resolve-voice-target'),
+            )
+            .enabled,
+        isTrue,
+      );
+      expect(
+        voiceToolItems
+            .singleWhere(
+              (item) => item.key == const Key('managed-build-voice-bundle'),
+            )
+            .enabled,
+        isTrue,
+      );
+
+      await tester.tap(voiceTools);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-resolve-voice-target')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-target-dialog')),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-voice-target-line-search')),
+        'GRD_263_ASGHAN',
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.textContaining('GRD_263_ASGHAN_OPEN_INFO_06_02').last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceTargetPublishCalls, 1);
+      expect(targetGameRoot, gameRoot.path);
+      expect(targetPlan?.lineId, revision3VoiceContentLineId);
+      expect(targetPlan?.slotId, revision3VoiceContentSlotId);
+      expect(targetPlan?.locale, 'de');
+      expect(targetPlan?.locId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+      var state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+
+      await tester.tap(voiceTools);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('managed-build-voice-bundle')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-voice-build-dialog')),
+        findsOneWidget,
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-voice-build-folder-name')),
+        'asghan-home-bundle',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-voice-build-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      final expectedOutput = p.join(buildParent.path, 'asghan-home-bundle');
+      expect(find.text(expectedOutput), findsOneWidget);
+      await tester.tap(find.byKey(const Key('revision3-voice-build-submit')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceBuildCalls, 1);
+      expect(buildGameRoot, gameRoot.path);
+      expect(buildOutput, expectedOutput);
+      expect(
+        find.byKey(const Key('revision3-voice-build-built')),
+        findsOneWidget,
+      );
+      state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
   testWidgets('managed Voice action is disabled without the safety game root', (
     tester,
   ) async {
@@ -439,12 +602,22 @@ void main() {
     final voiceButton = find.byKey(const Key('managed-add-voice-take'));
     expect(tester.widget<FilledButton>(voiceButton).onPressed, isNull);
     expect(
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('managed-voice-tools')),
+          )
+          .enabled,
+      isFalse,
+    );
+    expect(
       find.text(
-        'Configure the Gothic 1 Remake installation in Settings to add Voice takes or create NPC and Quest drafts.',
+        'Configure the Gothic 1 Remake installation in Settings to author, resolve, or build Voice content and to create NPC and Quest drafts.',
       ),
       findsOneWidget,
     );
     expect(managed.voicePublishCalls, 0);
+    expect(managed.voiceTargetPublishCalls, 0);
+    expect(managed.voiceBuildCalls, 0);
   });
 
   testWidgets(
@@ -721,7 +894,7 @@ void main() {
     final before = coordinator.state;
     await _pumpApp(tester, container);
     tester
-        .widget<PopupMenuButton<String>>(find.byType(PopupMenuButton<String>))
+        .widget<PopupMenuButton<String>>(find.byKey(const Key('project-menu')))
         .onSelected!('openManagedRevision3');
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
@@ -775,7 +948,9 @@ void main() {
       await tester.pump();
 
       tester
-          .widget<PopupMenuButton<String>>(find.byType(PopupMenuButton<String>))
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
           .onSelected!('openManagedRevision3');
       await tester.pump();
 
@@ -854,7 +1029,7 @@ void main() {
         isNull,
       );
 
-      final menuFinder = find.byType(PopupMenuButton<String>);
+      final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
       final verifyItem = menu
           .itemBuilder(tester.element(menuFinder))
@@ -903,7 +1078,9 @@ void main() {
 
       await _pumpApp(tester, container);
       tester
-          .widget<PopupMenuButton<String>>(find.byType(PopupMenuButton<String>))
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
           .onSelected!('openManagedRevision3');
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 10));
@@ -1064,6 +1241,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onVoicePublish,
+    this.onVoiceTargetPublish,
+    this.onVoiceBuild,
     this.onDataAssetList,
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
@@ -1098,6 +1277,18 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3VoiceTakeTechnicalPlan plan,
   )?
   onVoicePublish;
+  final Revision3VoiceTargetPublication Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    Revision3VoiceTargetTechnicalPlan plan,
+  )?
+  onVoiceTargetPublish;
+  final AuthoringRevision3VoiceBuildResult Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    String output,
+  )?
+  onVoiceBuild;
   final List<AuthoringRevision3DataAssetStage> Function(
     _FakeManagedLease lease,
   )?
@@ -1125,6 +1316,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int voicePublishCalls = 0;
+  int voiceTargetPublishCalls = 0;
+  int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
@@ -1181,6 +1374,32 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Voice publisher');
     }
     return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
+    required String gameRoot,
+    required Revision3VoiceTargetTechnicalPlan plan,
+  }) async {
+    voiceTargetPublishCalls++;
+    final publish = onVoiceTargetPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice target publisher');
+    }
+    return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String gameRoot,
+    required String output,
+  }) async {
+    voiceBuildCalls++;
+    final build = onVoiceBuild;
+    if (build == null) {
+      throw StateError('fake managed lease has no Voice builder');
+    }
+    return build(this, gameRoot, output);
   }
 
   @override
@@ -1291,4 +1510,31 @@ Revision3NpcCatalog _npcCatalog() => Revision3NpcCatalog(
       displayName: 'Asghan guard',
     ),
   ],
+);
+
+AuthoringRevision3VoiceBuildResult _builtVoiceResult({
+  required _FakeManagedLease lease,
+  required String output,
+}) => AuthoringRevision3VoiceBuildResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'built',
+    'basis_head_json': lease.head.canonicalJson,
+    'project_id': lease.projectId,
+    'project_revision': lease.projectRevision,
+    'output': output,
+    'edit_count': 1,
+    'file_count': 3,
+    'bundle_bytes': 4096,
+    'bundle_sha256':
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'build_authority': 'generation_sealed_existing_member_bundle_v1',
+    'deployment_status': 'not_performed',
+  },
+  expectedHead: lease.head,
+  expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: lease.projectId,
+    projectRevision: lease.projectRevision,
+  ),
+  expectedOutput: output,
 );

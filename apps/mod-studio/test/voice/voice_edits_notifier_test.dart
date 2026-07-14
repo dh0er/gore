@@ -72,6 +72,15 @@ void main() {
     expect(notifier.state.entries.single.locId, 'FIRST');
   });
 
+  test('LocID basename matching is ASCII-only like native inspection', () {
+    expect(
+      () => validateVoiceArchiveEdit(
+        replacement('k', 'de', archivePath: 'NPC/K.ogg'),
+      ),
+      throwsFormatException,
+    );
+  });
+
   test('published state cannot be mutated outside the notifier', () {
     final notifier = VoiceEditsNotifier()
       ..setEdit(replacement('IMMUTABLE', 'de'));

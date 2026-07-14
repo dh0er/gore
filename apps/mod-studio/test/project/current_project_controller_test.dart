@@ -15,6 +15,7 @@ import 'package:gore_mod/project/revision3_voice_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
+import '../support/revision3_voice_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
@@ -556,7 +557,7 @@ void main() {
       };
       await expectLater(
         coordinator.readCurrentRevision3ContentIndex(),
-        throwsA(isA<StateError>()),
+        throwsA(isA<Revision3ContentRequiresReopenException>()),
       );
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
@@ -565,7 +566,7 @@ void main() {
       );
       await expectLater(
         coordinator.readCurrentRevision3ContentIndex(),
-        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+        throwsA(isA<Revision3ContentRequiresReopenException>()),
       );
       expect(managed.contentReadCalls, 2);
     },
@@ -1017,6 +1018,99 @@ void main() {
   });
 
   test(
+    'Voice target publication advances exactly once and Voice build preserves the checkpoint',
+    () async {
+      final plan = _voiceTargetPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-target-build'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceTargetPublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          expect(received, same(plan));
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTargetPublication(
+            projectId: revision3VoiceContentProjectId,
+            projectRevision: 8,
+            lineId: received.lineId,
+            slotId: received.slotId,
+            locale: received.locale,
+            locId: received.locId,
+            resolution: AuthoringRevision3VoiceTargetResolutionState.resolved,
+            matchCount: 1,
+          );
+        },
+        onVoiceBuild: (lease, gameRoot, output) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          return _voiceBuildResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            output: output,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.resolveCurrentRevision3VoiceTarget(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 6,
+          expectedHead: _head(6),
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTargetStaleCheckpointException>()),
+      );
+      expect(managed.voiceTargetPublishCalls, 0);
+
+      final publication = await coordinator.resolveCurrentRevision3VoiceTarget(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        gameRoot: r'C:\Games\Gothic Remake',
+        plan: plan,
+      );
+      expect(
+        publication.resolution,
+        AuthoringRevision3VoiceTargetResolutionState.resolved,
+      );
+      expect(managed.voiceTargetPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+
+      const output = r'C:\Builds\managed-voice';
+      final build = await coordinator.buildCurrentRevision3Voice(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 8,
+        expectedHead: _head(8),
+        gameRoot: r'C:\Games\Gothic Remake',
+        output: output,
+      );
+      expect(build.isBuilt, isTrue);
+      expect(build.output, output);
+      expect(managed.voiceBuildCalls, 1);
+      expect(managed.projectRevision, 8);
+      expect(managed.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test(
     'DataAsset list is exact-checkpoint bound before lease access',
     () async {
       final stage = _dataAssetStage();
@@ -1075,6 +1169,53 @@ void main() {
       );
       expect(listed, [same(stage)]);
       expect(managed.dataAssetListCalls, 1);
+    },
+  );
+
+  test(
+    'Voice build returns a basis receipt while publishing reopen state',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-snapshot-build'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceBuild: (lease, _, output) {
+          final result = _voiceBuildResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            output: output,
+          );
+          lease.requiresReopenValue = true;
+          return result;
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      const output = r'C:\Builds\snapshot-voice';
+      final result = await coordinator.buildCurrentRevision3Voice(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        gameRoot: r'C:\Games\Gothic Remake',
+        output: output,
+      );
+
+      expect(result.output, output);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
     },
   );
 
@@ -1415,6 +1556,18 @@ typedef _VoicePublishHook =
       String gameRoot,
       Revision3VoiceTakeTechnicalPlan plan,
     );
+typedef _VoiceTargetPublishHook =
+    FutureOr<Revision3VoiceTargetPublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      Revision3VoiceTargetTechnicalPlan plan,
+    );
+typedef _VoiceBuildHook =
+    FutureOr<AuthoringRevision3VoiceBuildResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      String output,
+    );
 typedef _DataAssetPublishHook =
     FutureOr<Revision3DataAssetStagePublication> Function(
       _FakeManagedLease lease,
@@ -1442,6 +1595,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onVoicePublish,
+    this.onVoiceTargetPublish,
+    this.onVoiceBuild,
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
@@ -1462,6 +1617,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
   final _VoicePublishHook? onVoicePublish;
+  final _VoiceTargetPublishHook? onVoiceTargetPublish;
+  final _VoiceBuildHook? onVoiceBuild;
   final _DataAssetPublishHook? onDataAssetPublish;
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
@@ -1475,6 +1632,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int voicePublishCalls = 0;
+  int voiceTargetPublishCalls = 0;
+  int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
@@ -1545,6 +1704,32 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
+    required String gameRoot,
+    required Revision3VoiceTargetTechnicalPlan plan,
+  }) async {
+    voiceTargetPublishCalls++;
+    final publish = onVoiceTargetPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice target publisher');
+    }
+    return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
+    required String gameRoot,
+    required String output,
+  }) async {
+    voiceBuildCalls++;
+    final build = onVoiceBuild;
+    if (build == null) {
+      throw StateError('fake managed lease has no Voice builder');
+    }
+    return build(this, gameRoot, output);
+  }
+
+  @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
     dataAssetListCalls++;
     return dataAssetStages;
@@ -1612,6 +1797,45 @@ Revision3VoiceTakeTechnicalPlan _voicePlan() {
     ),
   );
 }
+
+Revision3VoiceTargetTechnicalPlan _voiceTargetPlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(),
+  );
+  return Revision3VoiceTargetTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    lineId: revision3VoiceContentLineId,
+    locale: 'de',
+  );
+}
+
+AuthoringRevision3VoiceBuildResult _voiceBuildResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+}) => AuthoringRevision3VoiceBuildResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'built',
+    'basis_head_json': head.canonicalJson,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'output': output,
+    'edit_count': 1,
+    'file_count': 3,
+    'bundle_bytes': 1234,
+    'bundle_sha256': 'd' * 64,
+    'build_authority': 'generation_sealed_existing_member_bundle_v1',
+    'deployment_status': 'not_performed',
+  },
+  expectedHead: head,
+  expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: projectId,
+    projectRevision: projectRevision,
+  ),
+  expectedOutput: output,
+);
 
 AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
   jsonEncode(<String, Object?>{

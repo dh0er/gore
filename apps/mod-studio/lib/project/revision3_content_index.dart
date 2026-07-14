@@ -9,6 +9,12 @@ const _signedWireMax = 0x7fffffffffffffff;
 final _idPattern = RegExp(r'^[0-9a-f]{32}$');
 final _shaPattern = RegExp(r'^[0-9a-f]{64}$');
 
+/// The managed content projection lost exact-current authority and must be
+/// reopened before another catalog read or publication attempt.
+final class Revision3ContentRequiresReopenException implements Exception {
+  const Revision3ContentRequiresReopenException();
+}
+
 enum Revision3ContentEntityKind {
   localizationEntry('localization_entry', 'Localization'),
   dialogLine('dialog_line', 'Dialog line'),

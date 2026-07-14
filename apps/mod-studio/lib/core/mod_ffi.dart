@@ -13,7 +13,9 @@ export '../dataasset/domain/dataasset_semantic_edit.dart';
 
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
+part '../project/revision3_voice_target.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
@@ -799,6 +801,88 @@ class ModFfi {
         response,
         currentProjectJson: currentProjectJson,
         request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Inspect the installed locale archive and prepare an unpublished exact Voice target binding.
+  ///
+  /// The caller supplies only line/slot/locale/LocID intent. Native code alone derives zero, one,
+  /// or multiple sealed existing-member matches from the configured installation.
+  Future<AuthoringRevision3VoiceTargetPreparation>
+  authoringStorePrepareRevision3VoiceTargetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTargetRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_target_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'root': root,
+      'voice_target_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTargetPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Build the exact current managed revision-3 Voice selection into a brand-new, sealed bundle.
+  ///
+  /// Native code reads Ogg bytes only through the managed Store, refuses unresolved/ambiguous or
+  /// unapproved slots as a structured blocked result, never overwrites [output], and performs no
+  /// deployment or game write.
+  Future<AuthoringRevision3VoiceBuildResult>
+  authoringStoreBuildRevision3VoiceV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    const command = 'authoring_store_build_revision3_voice_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3Path(output, 'output');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRequireCanonicalRevision3ProjectJson(currentProjectJson);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': expectedHead.canonicalJson,
+      'game_root': gameRoot,
+      'output': output,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3VoiceBuildResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedProjectJson: currentProjectJson,
+        expectedOutput: output,
       );
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);

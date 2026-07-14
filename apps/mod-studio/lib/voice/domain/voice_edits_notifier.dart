@@ -260,7 +260,7 @@ void validateVoiceArchiveEdit(VoiceArchiveEdit edit) {
   }
   final expectedBasename = '${edit.locId}.ogg';
   final memberBasename = edit.archivePath.split('/').last;
-  if (memberBasename.toLowerCase() != expectedBasename.toLowerCase()) {
+  if (!_asciiEqualsIgnoreCase(memberBasename, expectedBasename)) {
     throw const FormatException(
       'voice archive_path basename must equal loc_id plus .ogg',
     );
@@ -268,6 +268,23 @@ void validateVoiceArchiveEdit(VoiceArchiveEdit edit) {
 }
 
 bool _isAscii(String value) => value.codeUnits.every((unit) => unit <= 0x7f);
+
+bool _asciiEqualsIgnoreCase(String left, String right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    final leftUnit = left.codeUnitAt(index);
+    final rightUnit = right.codeUnitAt(index);
+    if (leftUnit > 0x7f || rightUnit > 0x7f) return false;
+    final foldedLeft = leftUnit >= 0x41 && leftUnit <= 0x5a
+        ? leftUnit + 0x20
+        : leftUnit;
+    final foldedRight = rightUnit >= 0x41 && rightUnit <= 0x5a
+        ? rightUnit + 0x20
+        : rightUnit;
+    if (foldedLeft != foldedRight) return false;
+  }
+  return true;
+}
 
 bool _isControlRune(int rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f);
 
