@@ -559,8 +559,89 @@ class AppLocalizationsPl extends AppLocalizations {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => 'Ten mod';
+
+  @override
+  String get managedWorkspaceHomeLabel => 'Strona główna';
+
+  @override
+  String get managedWorkspaceStoryLabel => 'Fabuła';
+
+  @override
+  String get managedWorkspaceWorldLabel => 'Świat';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => 'Lokalizacja i głosy';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => 'Walidacja i testy';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => 'Kompilacja i wydanie';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel =>
+      'Ustawienia i tryb ekspercki';
+
+  @override
+  String get managedSectionStoryDescription => 'NPC, zadania i dialogi.';
+
+  @override
+  String get managedSectionWorldDescription =>
+      'Rozmieszczanie w świecie i powiązane procesy są planowane.';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      'Narzędzia do produkcji głosów są dostępne; edycja lokalizacji w zarządzanym projekcie jest planowana.';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      'Sprawdza dokładną integralność projektu i punkty kontrolne; nie potwierdza testu w czasie działania.';
+
+  @override
+  String get managedSectionBuildReleaseDescription =>
+      'Pakiety głosowe są dostępne; pełne grywalne kompilacje i wdrażanie nie są dostępne.';
+
+  @override
+  String get managedSectionSettingsExpertDescription =>
+      'Ustawienia są dostępne; narzędzia eksperckie nie są jeszcze zintegrowane.';
+
+  @override
+  String get managedSectionStatusHeading => 'Stan';
+
+  @override
+  String get managedSectionActionsHeading => 'Działania';
+
+  @override
+  String get managedCapabilityAvailable => 'Dostępne';
+
+  @override
+  String get managedCapabilityPartial => 'Częściowe';
+
+  @override
+  String get managedCapabilityPlanned => 'Planowane';
+
+  @override
+  String get managedCapabilityUnavailable => 'Niedostępne';
+
+  @override
   String get managedProjectSubtitle =>
       'Obszar tworzenia offline zgodny dokładnie z bieżącą wersją';
+
+  @override
+  String get managedProjectLandingTitle =>
+      'Obszar roboczy zarządzanego projektu';
+
+  @override
+  String get managedProjectLandingDescription =>
+      'Korzystaj z nowych sekcji: Strona główna, Zawartość, Fabuła, Głos, Walidacja i Wydanie — wszystko w jednym zarządzanym projekcie.';
+
+  @override
+  String get legacyCompatibilityToolsTitle => 'Starsze narzędzia zgodności';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      'Karty poniżej zawierają starsze narzędzia do bezpośredniego zastępowania. Pozostaną dostępne podczas rozbudowy obszaru zarządzanego projektu.';
 
   @override
   String get managedProjectTechnicalDetails => 'Szczegóły techniczne projektu';
@@ -714,6 +795,10 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get managedActionDataAssetsDescription =>
       'Sprawdź zainstalowane pakiety i przygotuj w projekcie zweryfikowane zmiany wartości o stałej szerokości.';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      'Przeglądaj dokładną zawartość projektu oraz powiązane z nią rozpoznane i nierozpoznane odwołania.';
 
   @override
   String get managedActionSettingsTitle => 'Ustawienia';

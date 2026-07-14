@@ -126,28 +126,41 @@ Persistent workspace
   Bottom drawer: Changes | Diagnostics | Build log | Test log
 ```
 
-Managed Studio Shell v1 is the first implemented content-first subset of this
-contract. A managed R3 project opens on a localized responsive **Overview** with
-persistent **Overview**, **Content**, and **DataAssets** navigation. Overview
-loads the exact current `Revision3ContentIndex`, shows friendly project metadata
-and Draft status, counts NPCs, Quests, Dialog, Voice, assets, and unresolved
-references, and groups the already bounded NPC/Quest/Voice actions under Create
-and Project tools. It also links to DataAsset work and explains how to configure
-a missing game. Root, project ID, revision, and head are collapsed as technical
-details, while the `requiresReopen` recovery gate remains outside the workspace.
-All new shell copy exists in the 12 shipped locales. This does not yet implement
-the complete navigation above, a unified global/dependency browser, or game,
-save, deployment, project-wide build, or runtime authority. General managed
-build remains unavailable; only the sealed existing-member Voice bundle has a
-bounded offline build path.
+Normal Legacy startup now shows a localized managed-project entry banner with
+direct Create/Open actions, labels the unchanged tabs as Legacy compatibility
+tools, and reuses the existing guarded transition/adoption flows; the canonical
+eight-destination shell appears after managed adoption. Managed Studio Shell v1
+now implements this canonical eight-destination shell
+for managed R3 projects: **Home**, **Content**, **Story**, **World**,
+**Localization & Voice**, **Validate & Test**, **Build & Release**, and
+**Settings & Expert** remain visible at every support level. **DataAssets** is a
+secondary view inside Content rather than a top-level format destination. The
+workspace lazily mounts pages, preserves the selected primary destination,
+per-section secondary route, and mounted page state across revisions of the
+same project, and resets to Home when project identity changes.
 
-The Content Library has explicit `My Mod`, `Base Game`, and `Dependencies`
-scopes. A global **Create** action opens concept templates. DataAssets, archive
-members, scripts, textures, and generated artifacts may be searchable content
-types or Advanced details, but they do not become an ever-growing row of
-top-level format tabs. Editors use resizable panes, document history,
-breadcrumbs, pinned entities, recent entities, and a command palette so a large
-project does not depend on repeatedly navigating one tree.
+Home still loads the exact current `Revision3ContentIndex`, shows friendly
+project metadata and Draft status, counts NPCs, Quests, Dialog, Voice, assets,
+and unresolved references, and groups the already bounded actions. Story
+exposes the working NPC Draft and Quest Draft flows; Localization & Voice
+exposes the bounded take, selection, and target actions; Validate & Test can
+verify the exact current head and inspect references; Build & Release exposes
+only the bounded Voice bundle; and Settings is available. World authoring,
+runtime testing, full managed build/deploy, and Expert tooling remain visibly
+unavailable instead of disappearing. Root, project ID, revision, and head stay
+collapsed as technical details, while the `requiresReopen` recovery gate remains
+outside the workspace. This shell grants no new game/save writes, deployment,
+project-wide build, or runtime authority.
+
+The next Content Library slice adds explicit `This mod`, `Base game`, and
+`Installed` scopes. It must not render a fake `Dependencies` scope before the
+managed dependency model exists. A global **Create** action opens concept
+templates. DataAssets, archive members, scripts, textures, and generated
+artifacts may be searchable content types or Advanced details, but they do not
+become an ever-growing row of top-level format tabs. Editors use resizable
+panes, document history, breadcrumbs, pinned entities, recent entities, and a
+command palette so a large project does not depend on repeatedly navigating one
+tree.
 
 Default UI copy uses player- and author-facing concepts. The following are
 Advanced terms and must not be required to complete a normal workflow:
@@ -192,9 +205,9 @@ proof. It does not widen that evidence to adjacent use cases.
 
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
-| Managed R3 workspace shell | **First localized content-first slice implemented; complete canonical shell missing** | Managed R3 opens on a responsive Overview with persistent Overview/Content/DataAssets navigation. The Overview reads the exact current `Revision3ContentIndex`; shows friendly project name/version/author, Draft badge, NPC/Quest/Dialog/Voice/asset and unresolved-reference counts; groups the existing bounded NPC/Quest/Voice actions as Create and Project tools; links to DataAsset work; and gives a missing-game fix path. Technical root/ID/revision/head are collapsed, and `requiresReopen` remains an outer recovery gate. The new copy covers all 12 shipped locales. This grants no game/save writes, deployment, general managed build, or runtime qualification; only the separately sealed existing-member Voice bundle is offline-buildable. Stable Story/World/Voice/Validate/Build destinations, a unified global/dependency browser, shared workspace chrome, and general editors remain missing. |
+| Managed R3 workspace shell | **Canonical eight-destination shell implemented; domain depth remains partial** | Managed R3 exposes Home, Content, Story, World, Localization & Voice, Validate & Test, Build & Release, and Settings & Expert through one responsive shell. DataAssets is a Content secondary view. Lazy-mounted pages preserve primary selection, per-section secondary routes, and page state across same-project revisions; a different project resets to Home. Story exposes bounded NPC/Quest Draft actions; Localization & Voice exposes take/selection/target actions; Validate can verify the exact head and inspect references; Build exposes only the sealed Voice bundle; and Settings is available. World authoring, runtime test, full managed build/deploy, and Expert tools remain visible but unavailable. The shell grants no game/save writes, deployment, general managed build, or runtime qualification. |
 | Project save/load | **Partial Studio paths; managed revision-3 create/open authoring shell proven** | The compatibility session still saves `.goremod` format 1, and the separate Story flow still owns a schema-revision-2 directory. The Project menu can now create a new managed R3 project from friendly name/version/author/locales plus an existing empty real directory. Creation authenticates one exact registered V1 or current Steam-build-`24169431` executable/Shipping/Binds triple, generates a secure nonzero project ID, builds canonical empty revision-3 JSON, publishes by absent-head CAS, fully reopens it, and adopts it only after exact identity/project-byte checks. Unknown or cross-paired generations fail closed. A valid head produced before a late create failure is reopened and recovered; a mismatched candidate is closed, while every nonempty or game-overlapping destination—including a prior lock-only scaffold—is rejected before generation hashing or native creation. A live current-install test created, read, closed, and reopened the empty project while proving the executable and both caches unchanged by length and SHA-256. The same coordinator opens existing R3 directories, drives Home and `Ctrl+S`, verifies exact-current heads, preserves dirty Legacy work on failed transitions, and surfaces `requiresReopen` and cleanup failures. While R3 is authoritative, legacy editors and Build/Deploy are hidden. Home exposes the strict semantic index and bounded Quest/NPC/Voice/DataAsset mutations through the same lease, but these remain offline/build-blocked except for the separately labelled Voice-only offline bundle. General semantic editors, migration/import/clone/Save As, full history/recovery UI, global/dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
-| Unified content browser | **First R3 navigation slice integrated; unified browser still missing** | Overview, the searchable exact-project Content view, and DataAssets now share persistent responsive R3 navigation, and Overview derives its counts and unresolved-reference status from the same exact current index. Items, dialog/localization, FMOD audio, textures, scripts, base-game/dependency catalogs, and several Legacy tools remain separate surfaces. Bidirectional exact-project reference navigation, a generation-bound NPC archetype picker, and bounded NPC/Quest/Voice/DataAsset actions exist, but there is still no global/dependency search, complete semantic NPC/quest browser, source-aware clone workflow, canonical all-domain navigation, or one cross-domain editing workspace. |
+| Unified content browser | **Canonical Content destination integrated; unified scopes and browser still missing** | Content and its secondary This-mod/DataAssets views now live inside the canonical responsive shell, and Home derives its counts and unresolved-reference status from the same exact current index. The immediate browser slice is `This mod` / `Base game` / `Installed`; it must not invent a `Dependencies` scope before dependency data exists. Items, dialog/localization, FMOD audio, textures, scripts, installed catalogs, and several Legacy tools remain separate surfaces. Bidirectional exact-project reference navigation, a generation-bound NPC archetype picker, and bounded NPC/Quest/Voice/DataAsset actions exist, but there is still no unified cross-source search, complete semantic NPC/quest browser, source-aware clone workflow, or one cross-domain editing workspace. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
 | Existing NPC edits | **Partial backend and source-sealed picker; semantic editor missing** | The visible schema-revision-2 Story flow now has a searchable, generation-bound NPC archetype catalog and picker. It selects a source-sealed catalog record and drives new-Draft creation, but it does not semantically edit an existing NPC entity or provide an end-to-end existing-NPC inspector. Generic CDO overrides remain a separate existing-class subset. |
 | New NPC identity | **Managed revision-3 Draft publication and first Guided wizard proven; build/spawn/runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. The revision-3 core atomically inserts the closed NPC/module pair against an exact head/project/revision/target while consuming fresh Story+NPC catalog selection and a base-game-plus-current-project collision inventory for modules, paths, symbols, and pinned-catalog runtime IDs. It regenerates the complete existing NPC/Quest/module closure, preserves valid Quests, and fails on residual/drift/collisions. Strict Dart DTOs validate the exact native candidate; the managed R3 session publishes by guarded fixed-head byte CAS and full reopen. Home now exposes a Guided wizard that asks only for display name and a searchable qualified archetype, refreshes catalog evidence immediately before publication, derives and hides technical identities, rejects stale/reopen-required publication, and refreshes the visible checkpoint/content view. The separate schema-revision-2 Story Draft flow remains available. This is only a logical-clone shell: visuals, faction, stats, inventory, routine, dialog, quests, and placement are not authored. Every result remains build-blocked/runtime-unqualified/not spawned, with no production lowerer or runtime workflow. Class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not proven. Runtime-ID coverage is limited to the pinned catalog projection. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
@@ -214,7 +227,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Build/deploy/undeploy | **Proven for represented Legacy domains; one managed-R3 Voice-only offline lowerer proven; managed deployment and project-wide build missing** | Studio drives the same bundle engine as the CLI and can restore its deployment for represented compatibility-project domains. The bounded existing-member spoken-line replacement participates in that portable Save/Reopen and Build/Deploy path. When an R3 project is current, the shell hides Legacy editors and Legacy Build/Deploy instead of reading stale provider state. R3 NPC/Quest Drafts and verified DataAsset stages remain build-blocked. Managed Voice alone has an explicitly labelled all-or-nothing offline builder that reads verified selected Vorbis CAS bytes, requires sealed existing-member targets for every slot, and writes a deterministic format-3 voice-only bundle into a new folder. It neither deploys nor grants general pack/gameplay authority. Project-wide semantic roots, dependency/risk review, managed deploy/undeploy, rollback, and isolated runtime qualification remain missing. |
 | Validation | **Partial** | Scalar field validation, script freshness gates, bounded codecs, native Ogg preflight, offset-free DataAsset inspection, selector proofs, backend build checks, and the closed bounded Quest-V4 lifecycle validator exist. There is no project-wide incremental graph validator, general quest/dialog reachability simulator, or one-click diagnostic system. |
 | Undo/redo/history | **Missing as a system** | Individual edits can often be cleared or removed, but there is no shared command log, multi-domain atomic undo/redo, crash journal, or named checkpoints. |
-| Templates/clone/batch/CSV | **Missing** | No dependency-aware templates, clone modes, transactional bulk editor, or CSV round trip exists. |
+| Templates/clone/batch/CSV | **Missing; immediate bounded starter slice defined** | After the unified Content scopes, project creation should offer **Empty**, **NPC Draft**, and **Quest Draft**. Empty can reuse the existing absent-head atomic creation path. A single NPC/Quest seed may be prepared before adoption against the fresh empty head, but failure can leave a valid recoverable empty project on disk; the UI must not claim one all-domain atomic transaction. Multi-domain templates require a native compound prepare/publication transaction. Dependency-aware templates, clone modes, transactional bulk editing, and CSV round trip remain missing. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
 
 ## 4. Complete authoring surfaces
@@ -245,12 +258,15 @@ workflow; it does not silently rebuild against a different version.
 
 ### 4.2 Unified content browser
 
-Each result has a kind, display name, source badge (`Base Game`, `My Mod`, or a
-named dependency), readiness/diagnostic badge, and change state. The technical
-identity and exact origin are shown in Advanced details. Saved filters,
-collections, tags, and modules let authors organize a large mod by chapter,
-location, quest line, owner, or production status. Search is global and
-accent/case tolerant, and large result sets are virtualized and indexed.
+The first unified scope row is `This mod`, `Base game`, and `Installed`.
+`Installed` may identify named installed sources in result badges, but the
+Studio does not label them `Dependencies` until a real dependency model owns
+that relationship. Each result has a kind, display name, source badge,
+readiness/diagnostic badge, and change state. The technical identity and exact
+origin are shown in Advanced details. Saved filters, collections, tags, and
+modules let authors organize a large mod by chapter, location, quest line,
+owner, or production status. Search is global and accent/case tolerant, and
+large result sets are virtualized and indexed.
 Reference queries include:
 
 - uses this NPC/item/line/voice/asset;

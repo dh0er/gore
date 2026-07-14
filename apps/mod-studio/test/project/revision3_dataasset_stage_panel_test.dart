@@ -49,6 +49,34 @@ void main() {
     expect(find.text('Test in game'), findsNothing);
   });
 
+  testWidgets('empty state remains usable with little vertical space', (
+    tester,
+  ) async {
+    await _pumpPanel(
+      tester,
+      Revision3DataAssetStagePanel(
+        projectRoot: _projectRoot,
+        projectId: stage.projectId,
+        projectRevision: 5,
+        projectHead: fixture.stagedHead,
+        load: () async => const [],
+        publish: _unexpectedPublish,
+        remove: _unexpectedRemove,
+      ),
+      surfaceSize: const Size(900, 420),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const Key('revision3-dataasset-stage-empty-scroll')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-dataasset-stage-empty')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets(
     'stale semantic wizard closes and stays latched until an exact reload',
     (tester) async {
@@ -574,8 +602,9 @@ Future<void> _pumpPanel(
   WidgetTester tester,
   Revision3DataAssetStagePanel panel, {
   bool settle = true,
+  Size surfaceSize = const Size(1200, 900),
 }) async {
-  await tester.binding.setSurfaceSize(const Size(1200, 900));
+  await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
   await tester.pumpWidget(
     MaterialApp(

@@ -557,8 +557,87 @@ class AppLocalizationsEn extends AppLocalizations {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => 'This mod';
+
+  @override
+  String get managedWorkspaceHomeLabel => 'Home';
+
+  @override
+  String get managedWorkspaceStoryLabel => 'Story';
+
+  @override
+  String get managedWorkspaceWorldLabel => 'World';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => 'Localization & Voice';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => 'Validate & Test';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => 'Build & Release';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel => 'Settings & Expert';
+
+  @override
+  String get managedSectionStoryDescription => 'NPCs, quests, and dialogue.';
+
+  @override
+  String get managedSectionWorldDescription =>
+      'World placement and workflows are planned.';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      'Voice production tools are available; managed localization editing is planned.';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      'Verify exact project integrity and checkpoints; no runtime test is claimed.';
+
+  @override
+  String get managedSectionBuildReleaseDescription =>
+      'Voice bundles are available; full playable builds and deployment are unavailable.';
+
+  @override
+  String get managedSectionSettingsExpertDescription =>
+      'Settings are available; expert tools are not yet integrated.';
+
+  @override
+  String get managedSectionStatusHeading => 'Status';
+
+  @override
+  String get managedSectionActionsHeading => 'Actions';
+
+  @override
+  String get managedCapabilityAvailable => 'Available';
+
+  @override
+  String get managedCapabilityPartial => 'Partial';
+
+  @override
+  String get managedCapabilityPlanned => 'Planned';
+
+  @override
+  String get managedCapabilityUnavailable => 'Unavailable';
+
+  @override
   String get managedProjectSubtitle =>
       'Exact-current offline authoring workspace';
+
+  @override
+  String get managedProjectLandingTitle => 'Managed project workspace';
+
+  @override
+  String get managedProjectLandingDescription =>
+      'Use the new Home, Content, Story, Voice, validation, and release workflow in one managed project.';
+
+  @override
+  String get legacyCompatibilityToolsTitle => 'Legacy compatibility tools';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      'The tabs below are older direct-replacement tools. They remain available while the managed project workspace grows.';
 
   @override
   String get managedProjectTechnicalDetails => 'Technical project details';
@@ -711,6 +790,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get managedActionDataAssetsDescription =>
       'Inspect installed packages and stage verified fixed-width value edits in the project.';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      'Browse exact project content and its resolved or unresolved references.';
 
   @override
   String get managedActionSettingsTitle => 'Settings';

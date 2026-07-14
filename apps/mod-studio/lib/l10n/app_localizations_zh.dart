@@ -550,7 +550,83 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => '此模组';
+
+  @override
+  String get managedWorkspaceHomeLabel => '首页';
+
+  @override
+  String get managedWorkspaceStoryLabel => '剧情';
+
+  @override
+  String get managedWorkspaceWorldLabel => '世界';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => '本地化与配音';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => '验证与测试';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => '构建与发布';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel => '设置与专家工具';
+
+  @override
+  String get managedSectionStoryDescription => 'NPC、任务与对话。';
+
+  @override
+  String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      '语音制作工具现已可用；托管项目中的本地化编辑仍在规划中。';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      '验证项目及检查点的精确完整性；不代表已完成运行时测试。';
+
+  @override
+  String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
+
+  @override
+  String get managedSectionSettingsExpertDescription => '设置现已可用；专家工具尚未集成。';
+
+  @override
+  String get managedSectionStatusHeading => '状态';
+
+  @override
+  String get managedSectionActionsHeading => '操作';
+
+  @override
+  String get managedCapabilityAvailable => '可用';
+
+  @override
+  String get managedCapabilityPartial => '部分可用';
+
+  @override
+  String get managedCapabilityPlanned => '已规划';
+
+  @override
+  String get managedCapabilityUnavailable => '不可用';
+
+  @override
   String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
+
+  @override
+  String get managedProjectLandingTitle => '托管项目工作区';
+
+  @override
+  String get managedProjectLandingDescription =>
+      '在一个托管项目中使用新的主页、内容、剧情、语音、验证和发布工作流程。';
+
+  @override
+  String get legacyCompatibilityToolsTitle => '旧版兼容工具';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      '下方标签页是旧版直接替换工具。在托管项目工作区逐步完善期间，这些工具仍可使用。';
 
   @override
   String get managedProjectTechnicalDetails => '项目技术详情';
@@ -696,6 +772,10 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get managedActionDataAssetsDescription =>
       '检查已安装的包，并在项目中暂存经过验证的固定宽度值编辑。';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      '浏览项目的精确内容及其已解析或未解析的引用。';
 
   @override
   String get managedActionSettingsTitle => '设置';
@@ -1161,7 +1241,83 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => '此模组';
+
+  @override
+  String get managedWorkspaceHomeLabel => '首页';
+
+  @override
+  String get managedWorkspaceStoryLabel => '剧情';
+
+  @override
+  String get managedWorkspaceWorldLabel => '世界';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => '本地化与配音';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => '验证与测试';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => '构建与发布';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel => '设置与专家工具';
+
+  @override
+  String get managedSectionStoryDescription => 'NPC、任务与对话。';
+
+  @override
+  String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      '语音制作工具现已可用；托管项目中的本地化编辑仍在规划中。';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      '验证项目及检查点的精确完整性；不代表已完成运行时测试。';
+
+  @override
+  String get managedSectionBuildReleaseDescription => '语音包现已可用；完整可玩构建和部署尚不可用。';
+
+  @override
+  String get managedSectionSettingsExpertDescription => '设置现已可用；专家工具尚未集成。';
+
+  @override
+  String get managedSectionStatusHeading => '状态';
+
+  @override
+  String get managedSectionActionsHeading => '操作';
+
+  @override
+  String get managedCapabilityAvailable => '可用';
+
+  @override
+  String get managedCapabilityPartial => '部分可用';
+
+  @override
+  String get managedCapabilityPlanned => '已规划';
+
+  @override
+  String get managedCapabilityUnavailable => '不可用';
+
+  @override
   String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
+
+  @override
+  String get managedProjectLandingTitle => '托管项目工作区';
+
+  @override
+  String get managedProjectLandingDescription =>
+      '在一个托管项目中使用新的主页、内容、剧情、语音、验证和发布工作流程。';
+
+  @override
+  String get legacyCompatibilityToolsTitle => '旧版兼容工具';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      '下方标签页是旧版直接替换工具。在托管项目工作区逐步完善期间，这些工具仍可使用。';
 
   @override
   String get managedProjectTechnicalDetails => '项目技术详情';
@@ -1307,6 +1463,10 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get managedActionDataAssetsDescription =>
       '检查已安装的包，并在项目中暂存经过验证的固定宽度值编辑。';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      '浏览项目的精确内容及其已解析或未解析的引用。';
 
   @override
   String get managedActionSettingsTitle => '设置';

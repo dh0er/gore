@@ -714,24 +714,38 @@ class _DataAssetEmptyState extends StatelessWidget {
   const _DataAssetEmptyState();
 
   @override
-  Widget build(BuildContext context) => const Center(
-    child: Padding(
-      padding: EdgeInsets.all(24),
-      child: Column(
-        key: Key('revision3-dataasset-stage-empty'),
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.data_object_outlined, size: 42),
-          SizedBox(height: 12),
-          Text('No verified DataAsset edits in this project.'),
-          SizedBox(height: 6),
-          Text(
-            'Use Create value edit for the guided inspect, preview, and exact ExtractReceipt-v2 workflow. Import verified proof is the expert alternative for an existing guarded PatchReceipt-v2.',
-            textAlign: TextAlign.center,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      const padding = 24.0;
+      final minimumContentHeight = constraints.maxHeight.isFinite
+          ? (constraints.maxHeight > padding * 2
+                ? constraints.maxHeight - padding * 2
+                : 0.0)
+          : 0.0;
+      return SingleChildScrollView(
+        key: const Key('revision3-dataasset-stage-empty-scroll'),
+        padding: const EdgeInsets.all(padding),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minimumContentHeight),
+          child: const Center(
+            child: Column(
+              key: Key('revision3-dataasset-stage-empty'),
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.data_object_outlined, size: 42),
+                SizedBox(height: 12),
+                Text('No verified DataAsset edits in this project.'),
+                SizedBox(height: 6),
+                Text(
+                  'Use Create value edit for the guided inspect, preview, and exact ExtractReceipt-v2 workflow. Import verified proof is the expert alternative for an existing guarded PatchReceipt-v2.',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
           ),
-        ],
-      ),
-    ),
+        ),
+      );
+    },
   );
 }
 

@@ -1076,11 +1076,155 @@ abstract class AppLocalizations {
   /// **'DataAssets'**
   String get managedWorkspaceDataAssetsLabel;
 
+  /// No description provided for @managedContentWorkspaceLibraryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'This mod'**
+  String get managedContentWorkspaceLibraryLabel;
+
+  /// No description provided for @managedWorkspaceHomeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Home'**
+  String get managedWorkspaceHomeLabel;
+
+  /// No description provided for @managedWorkspaceStoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Story'**
+  String get managedWorkspaceStoryLabel;
+
+  /// No description provided for @managedWorkspaceWorldLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'World'**
+  String get managedWorkspaceWorldLabel;
+
+  /// No description provided for @managedWorkspaceLocalizationVoiceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Localization & Voice'**
+  String get managedWorkspaceLocalizationVoiceLabel;
+
+  /// No description provided for @managedWorkspaceValidateTestLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Validate & Test'**
+  String get managedWorkspaceValidateTestLabel;
+
+  /// No description provided for @managedWorkspaceBuildReleaseLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Build & Release'**
+  String get managedWorkspaceBuildReleaseLabel;
+
+  /// No description provided for @managedWorkspaceSettingsExpertLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings & Expert'**
+  String get managedWorkspaceSettingsExpertLabel;
+
+  /// No description provided for @managedSectionStoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'NPCs, quests, and dialogue.'**
+  String get managedSectionStoryDescription;
+
+  /// No description provided for @managedSectionWorldDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'World placement and workflows are planned.'**
+  String get managedSectionWorldDescription;
+
+  /// No description provided for @managedSectionLocalizationVoiceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice production tools are available; managed localization editing is planned.'**
+  String get managedSectionLocalizationVoiceDescription;
+
+  /// No description provided for @managedSectionValidateTestDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Verify exact project integrity and checkpoints; no runtime test is claimed.'**
+  String get managedSectionValidateTestDescription;
+
+  /// No description provided for @managedSectionBuildReleaseDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice bundles are available; full playable builds and deployment are unavailable.'**
+  String get managedSectionBuildReleaseDescription;
+
+  /// No description provided for @managedSectionSettingsExpertDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings are available; expert tools are not yet integrated.'**
+  String get managedSectionSettingsExpertDescription;
+
+  /// No description provided for @managedSectionStatusHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Status'**
+  String get managedSectionStatusHeading;
+
+  /// No description provided for @managedSectionActionsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Actions'**
+  String get managedSectionActionsHeading;
+
+  /// No description provided for @managedCapabilityAvailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Available'**
+  String get managedCapabilityAvailable;
+
+  /// No description provided for @managedCapabilityPartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get managedCapabilityPartial;
+
+  /// No description provided for @managedCapabilityPlanned.
+  ///
+  /// In en, this message translates to:
+  /// **'Planned'**
+  String get managedCapabilityPlanned;
+
+  /// No description provided for @managedCapabilityUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Unavailable'**
+  String get managedCapabilityUnavailable;
+
   /// No description provided for @managedProjectSubtitle.
   ///
   /// In en, this message translates to:
   /// **'Exact-current offline authoring workspace'**
   String get managedProjectSubtitle;
+
+  /// No description provided for @managedProjectLandingTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed project workspace'**
+  String get managedProjectLandingTitle;
+
+  /// No description provided for @managedProjectLandingDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Use the new Home, Content, Story, Voice, validation, and release workflow in one managed project.'**
+  String get managedProjectLandingDescription;
+
+  /// No description provided for @legacyCompatibilityToolsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Legacy compatibility tools'**
+  String get legacyCompatibilityToolsTitle;
+
+  /// No description provided for @legacyCompatibilityToolsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The tabs below are older direct-replacement tools. They remain available while the managed project workspace grows.'**
+  String get legacyCompatibilityToolsDescription;
 
   /// No description provided for @managedProjectTechnicalDetails.
   ///
@@ -1351,6 +1495,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Inspect installed packages and stage verified fixed-width value edits in the project.'**
   String get managedActionDataAssetsDescription;
+
+  /// No description provided for @managedActionBrowseProjectContentDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse exact project content and its resolved or unresolved references.'**
+  String get managedActionBrowseProjectContentDescription;
 
   /// No description provided for @managedActionSettingsTitle.
   ///

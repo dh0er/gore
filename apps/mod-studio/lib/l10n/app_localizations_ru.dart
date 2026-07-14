@@ -561,8 +561,90 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => 'Этот мод';
+
+  @override
+  String get managedWorkspaceHomeLabel => 'Главная';
+
+  @override
+  String get managedWorkspaceStoryLabel => 'Сюжет';
+
+  @override
+  String get managedWorkspaceWorldLabel => 'Мир';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => 'Локализация и озвучка';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => 'Проверка и тестирование';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => 'Сборка и выпуск';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel =>
+      'Настройки и экспертный режим';
+
+  @override
+  String get managedSectionStoryDescription => 'NPC, задания и диалоги.';
+
+  @override
+  String get managedSectionWorldDescription =>
+      'Размещение в мире и связанные рабочие процессы запланированы.';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      'Инструменты производства озвучки доступны; редактирование локализации в управляемом проекте запланировано.';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      'Проверяет точную целостность проекта и контрольные точки; тестирование в игре не подтверждается.';
+
+  @override
+  String get managedSectionBuildReleaseDescription =>
+      'Пакеты озвучки доступны; полноценные игровые сборки и развёртывание недоступны.';
+
+  @override
+  String get managedSectionSettingsExpertDescription =>
+      'Настройки доступны; экспертные инструменты ещё не интегрированы.';
+
+  @override
+  String get managedSectionStatusHeading => 'Состояние';
+
+  @override
+  String get managedSectionActionsHeading => 'Действия';
+
+  @override
+  String get managedCapabilityAvailable => 'Доступно';
+
+  @override
+  String get managedCapabilityPartial => 'Частично';
+
+  @override
+  String get managedCapabilityPlanned => 'Запланировано';
+
+  @override
+  String get managedCapabilityUnavailable => 'Недоступно';
+
+  @override
   String get managedProjectSubtitle =>
       'Рабочая область для автономного редактирования, точно соответствующая текущей версии';
+
+  @override
+  String get managedProjectLandingTitle =>
+      'Рабочая область управляемого проекта';
+
+  @override
+  String get managedProjectLandingDescription =>
+      'Используйте новый процесс работы с разделами «Главная», «Контент», «Сюжет», «Озвучка», «Проверка» и «Выпуск» в одном управляемом проекте.';
+
+  @override
+  String get legacyCompatibilityToolsTitle =>
+      'Инструменты совместимости старого формата';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      'Вкладки ниже содержат прежние инструменты прямой замены. Они останутся доступными, пока рабочая область управляемого проекта развивается.';
 
   @override
   String get managedProjectTechnicalDetails => 'Технические сведения о проекте';
@@ -716,6 +798,10 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedActionDataAssetsDescription =>
       'Проверить установленные пакеты и подготовить в проекте проверенные изменения значений фиксированной ширины.';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      'Просматривайте точное содержимое проекта и связанные с ним разрешённые или неразрешённые ссылки.';
 
   @override
   String get managedActionSettingsTitle => 'Настройки';

@@ -551,7 +551,85 @@ class AppLocalizationsJa extends AppLocalizations {
   String get managedWorkspaceDataAssetsLabel => 'DataAssets';
 
   @override
+  String get managedContentWorkspaceLibraryLabel => 'このMOD';
+
+  @override
+  String get managedWorkspaceHomeLabel => 'ホーム';
+
+  @override
+  String get managedWorkspaceStoryLabel => 'ストーリー';
+
+  @override
+  String get managedWorkspaceWorldLabel => 'ワールド';
+
+  @override
+  String get managedWorkspaceLocalizationVoiceLabel => 'ローカライズと音声';
+
+  @override
+  String get managedWorkspaceValidateTestLabel => '検証とテスト';
+
+  @override
+  String get managedWorkspaceBuildReleaseLabel => 'ビルドとリリース';
+
+  @override
+  String get managedWorkspaceSettingsExpertLabel => '設定とエキスパート';
+
+  @override
+  String get managedSectionStoryDescription => 'NPC、クエスト、会話。';
+
+  @override
+  String get managedSectionWorldDescription => 'ワールドへの配置と関連ワークフローは今後対応予定です。';
+
+  @override
+  String get managedSectionLocalizationVoiceDescription =>
+      '音声制作ツールは利用できます。管理プロジェクトでのローカライズ編集は今後対応予定です。';
+
+  @override
+  String get managedSectionValidateTestDescription =>
+      'プロジェクトの完全性とチェックポイントを厳密に検証します。実行時テストを保証するものではありません。';
+
+  @override
+  String get managedSectionBuildReleaseDescription =>
+      '音声バンドルは利用できますが、完全にプレイ可能なビルドとデプロイは利用できません。';
+
+  @override
+  String get managedSectionSettingsExpertDescription =>
+      '設定は利用できますが、エキスパートツールはまだ統合されていません。';
+
+  @override
+  String get managedSectionStatusHeading => '状態';
+
+  @override
+  String get managedSectionActionsHeading => '操作';
+
+  @override
+  String get managedCapabilityAvailable => '利用可能';
+
+  @override
+  String get managedCapabilityPartial => '一部利用可能';
+
+  @override
+  String get managedCapabilityPlanned => '対応予定';
+
+  @override
+  String get managedCapabilityUnavailable => '利用不可';
+
+  @override
   String get managedProjectSubtitle => '現在の正確なバージョンに対応するオフライン制作ワークスペース';
+
+  @override
+  String get managedProjectLandingTitle => '管理プロジェクトのワークスペース';
+
+  @override
+  String get managedProjectLandingDescription =>
+      'ホーム、コンテンツ、ストーリー、音声、検証、リリースの新しい制作フローを、1つの管理プロジェクトで利用できます。';
+
+  @override
+  String get legacyCompatibilityToolsTitle => '従来版の互換ツール';
+
+  @override
+  String get legacyCompatibilityToolsDescription =>
+      '下のタブは、以前からある直接置換用のツールです。管理プロジェクトのワークスペースを拡充している間も引き続き利用できます。';
 
   @override
   String get managedProjectTechnicalDetails => 'プロジェクトの技術的な詳細';
@@ -701,6 +779,10 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get managedActionDataAssetsDescription =>
       'インストール済みパッケージを調べ、検証済みの固定幅の値編集をプロジェクトに準備します。';
+
+  @override
+  String get managedActionBrowseProjectContentDescription =>
+      'プロジェクトの正確な内容と、解決済みまたは未解決の参照を確認します。';
 
   @override
   String get managedActionSettingsTitle => '設定';

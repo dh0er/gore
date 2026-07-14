@@ -7,7 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/app/domain/shared_config.dart';
-import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
+import 'package:gore_mod/app/domain/ui_settings.dart'
+    show localeProvider, sharedConfigProvider;
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/core/providers.dart';
@@ -38,101 +39,161 @@ import '../support/revision3_quest_outline_fixture.dart';
 import '../dataasset/dataasset_test_fixtures.dart';
 
 void main() {
+  testWidgets('visible Legacy entry creates and adopts a managed R3 project', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final gameRoot = Directory.systemTemp.createTempSync('gore_r3_create_game');
+    Directory(p.join(gameRoot.path, 'G1R')).createSync();
+    final destination = Directory.systemTemp.createTempSync(
+      'gore_r3_create_project',
+    );
+    addTearDown(() {
+      if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      if (destination.existsSync()) destination.deleteSync(recursive: true);
+    });
+    final legacy = _FakeLegacyLease(path: 'before-create.goremod');
+    final managed = _FakeManagedLease(
+      root: destination,
+      projectId: 'edededededededededededededededed',
+      projectRevision: 0,
+      head: _head(0),
+    );
+    ManagedRevision3ProjectCreateRequest? received;
+    var pickerCalls = 0;
+    String? pickerLabel;
+    final coordinator = CurrentProjectCoordinator(
+      initialLegacy: legacy,
+      createManagedRevision3: (request) async {
+        received = request;
+        return managed;
+      },
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    final container = _container(
+      coordinator: coordinator,
+      gamePath: gameRoot.path,
+      pickManaged: (label) async {
+        pickerCalls++;
+        pickerLabel = label;
+        return destination.path;
+      },
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    expect(
+      find.byKey(const Key('legacy-compatibility-banner')),
+      findsOneWidget,
+    );
+    final compatibilityCopy = tester.widget<Text>(
+      find.byKey(const Key('legacy-compatibility-tools-description')),
+    );
+    expect(
+      compatibilityCopy.textSpan?.toPlainText(),
+      contains('Legacy compatibility tools'),
+    );
+    expect(
+      compatibilityCopy.textSpan?.toPlainText(),
+      contains('older direct-replacement tools'),
+    );
+    expect(
+      find.byKey(const Key('managed-project-entry-create')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('managed-project-entry-create')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(
+      find.byKey(const Key('revision3-project-create-dialog')),
+      findsOneWidget,
+    );
+    expect(pickerCalls, 0);
+    await tester.enterText(
+      find.byKey(const Key('revision3-project-create-name')),
+      'Asghan Expanded',
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-project-create-author')),
+      'Gore Team',
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-project-create-locales')),
+      'de, en-US',
+    );
+    await tester.tap(find.byKey(const Key('revision3-project-create-submit')));
+    for (var index = 0; index < 10; index++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    expect(pickerCalls, 1);
+    expect(pickerLabel, 'Create managed mod project here');
+    expect(received?.root.path, destination.path);
+    expect(received?.gameRoot, gameRoot.path);
+    expect(received?.name, 'Asghan Expanded');
+    expect(received?.version, '0.1.0');
+    expect(received?.author, 'Gore Team');
+    expect(received?.authoringLocales, const <String>['de', 'en-US']);
+    expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+    expect(legacy.closeCalls, 1);
+    expect(
+      find.byKey(const Key('managed-revision3-project-view')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Created managed mod project'), findsOneWidget);
+  });
+
   testWidgets(
-    'new managed project menu collects metadata and adopts created R3 project',
+    'compact Legacy shell keeps managed entries and all tabs reachable',
     (tester) async {
-      await _setDesktopTestSurface(tester);
-      final gameRoot = Directory.systemTemp.createTempSync(
-        'gore_r3_create_game',
-      );
-      Directory(p.join(gameRoot.path, 'G1R')).createSync();
-      final destination = Directory.systemTemp.createTempSync(
-        'gore_r3_create_project',
-      );
-      addTearDown(() {
-        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
-        if (destination.existsSync()) destination.deleteSync(recursive: true);
-      });
-      final legacy = _FakeLegacyLease(path: 'before-create.goremod');
-      final managed = _FakeManagedLease(
-        root: destination,
-        projectId: 'edededededededededededededededed',
-        projectRevision: 0,
-        head: _head(0),
-      );
-      ManagedRevision3ProjectCreateRequest? received;
-      var pickerCalls = 0;
-      String? pickerLabel;
+      await _setNarrowShortTestSurface(tester);
+      final legacy = _FakeLegacyLease(path: 'compact-legacy.goremod');
       final coordinator = CurrentProjectCoordinator(
         initialLegacy: legacy,
-        createManagedRevision3: (request) async {
-          received = request;
-          return managed;
-        },
         openManagedRevision3: (_) async => throw UnimplementedError(),
       );
       final container = _container(
         coordinator: coordinator,
-        gamePath: gameRoot.path,
-        pickManaged: (label) async {
-          pickerCalls++;
-          pickerLabel = label;
-          return destination.path;
-        },
+        pickManaged: (_) async => null,
       );
+      container.read(localeProvider.notifier).setLocale('de');
       addTearDown(container.dispose);
 
       await _pumpApp(tester, container);
-      tester
-          .widget<PopupMenuButton<String>>(
-            find.byKey(const Key('project-menu')),
-          )
-          .onSelected!('newManagedRevision3');
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 100));
 
+      expect(tester.takeException(), isNull);
       expect(
-        find.byKey(const Key('revision3-project-create-dialog')),
+        find.byKey(const Key('legacy-build-deploy-compact')),
         findsOneWidget,
       );
-      expect(pickerCalls, 0);
-      await tester.enterText(
-        find.byKey(const Key('revision3-project-create-name')),
-        'Asghan Expanded',
+      expect(
+        find.byKey(const Key('legacy-compatibility-banner-scroll')),
+        findsOneWidget,
       );
-      await tester.enterText(
-        find.byKey(const Key('revision3-project-create-author')),
-        'Gore Team',
+      expect(
+        find.byKey(const Key('legacy-compatibility-banner')),
+        findsOneWidget,
       );
-      await tester.enterText(
-        find.byKey(const Key('revision3-project-create-locales')),
-        'de, en-US',
-      );
-      await tester.tap(
-        find.byKey(const Key('revision3-project-create-submit')),
-      );
-      for (var index = 0; index < 10; index++) {
-        await tester.pump(const Duration(milliseconds: 50));
+      final tabBar = tester.widget<TabBar>(find.byType(TabBar));
+      expect(tabBar.tabs, hasLength(8));
+      expect(find.byType(TabBarView), findsOneWidget);
+
+      for (final key in const [
+        Key('managed-project-entry-create'),
+        Key('managed-project-entry-open'),
+      ]) {
+        final entry = find.byKey(key);
+        expect(entry, findsOneWidget);
+        await tester.ensureVisible(entry);
+        await tester.pump();
+        expect(entry.hitTestable(), findsOneWidget);
+        expect(tester.takeException(), isNull);
       }
 
-      expect(pickerCalls, 1);
-      expect(pickerLabel, 'Create managed mod project here');
-      expect(received?.root.path, destination.path);
-      expect(received?.gameRoot, gameRoot.path);
-      expect(received?.name, 'Asghan Expanded');
-      expect(received?.version, '0.1.0');
-      expect(received?.author, 'Gore Team');
-      expect(received?.authoringLocales, const <String>['de', 'en-US']);
-      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
-      expect(legacy.closeCalls, 1);
-      expect(
-        find.byKey(const Key('managed-revision3-project-view')),
-        findsOneWidget,
-      );
-      expect(
-        find.textContaining('Created managed mod project'),
-        findsOneWidget,
-      );
+      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byType(TabBarView), findsOneWidget);
     },
   );
 
@@ -159,9 +220,27 @@ void main() {
     addTearDown(container.dispose);
 
     await _pumpApp(tester, container);
-    tester
-        .widget<PopupMenuButton<String>>(find.byKey(const Key('project-menu')))
-        .onSelected!('newManagedRevision3');
+    expect(find.byKey(const Key('managed-project-landing')), findsOneWidget);
+    expect(find.byKey(const Key('legacy-compatibility-banner')), findsNothing);
+    expect(
+      find.byKey(const Key('managed-project-entry-settings')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('managed-project-entry-create')),
+      findsOneWidget,
+    );
+    tester.view.physicalSize = const Size(640, 420);
+    await tester.pumpAndSettle();
+    expect(
+      tester.takeException(),
+      isNull,
+      reason: 'the managed-project landing remains usable when narrow/short',
+    );
+    final createEntry = find.byKey(const Key('managed-project-entry-create'));
+    await tester.ensureVisible(createEntry);
+    await tester.pumpAndSettle();
+    await tester.tap(createEntry);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -175,6 +254,25 @@ void main() {
       find.textContaining('Set the Gothic 1 Remake game path'),
       findsOneWidget,
     );
+    tester.view.physicalSize = const Size(1600, 900);
+    await tester.pumpAndSettle();
+
+    final settingsEntry = find.byKey(
+      const Key('managed-project-entry-settings'),
+    );
+    await tester.ensureVisible(settingsEntry);
+    await tester.pumpAndSettle();
+    await tester.tap(settingsEntry);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('managed-settings-dialog')), findsOneWidget);
+    expect(pickerCalls, 0);
+    expect(creatorCalls, 0);
+
+    await tester.tap(find.byKey(const Key('managed-settings-close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('managed-settings-dialog')), findsNothing);
+    expect(pickerCalls, 0);
+    expect(creatorCalls, 0);
   });
 
   testWidgets(
@@ -204,12 +302,15 @@ void main() {
 
       await _pumpApp(tester, container);
       expect(find.text('Build / Deploy'), findsOneWidget);
-
-      tester
-          .widget<PopupMenuButton<String>>(
-            find.byKey(const Key('project-menu')),
-          )
-          .onSelected!('openManagedRevision3');
+      expect(
+        find.byKey(const Key('legacy-compatibility-banner')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('managed-project-entry-open')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('managed-project-entry-open')));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 10));
       }
@@ -219,6 +320,10 @@ void main() {
         find.byKey(const Key('managed-revision3-project-view')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('legacy-compatibility-banner')),
+        findsNothing,
+      );
       await _expandManagedTechnicalDetails(tester);
       expect(find.text(managed.root.path), findsOneWidget);
       expect(find.text(managed.projectId), findsOneWidget);
@@ -226,18 +331,9 @@ void main() {
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
       expect(find.text('Build / Deploy'), findsNothing);
       expect(find.byType(NavigationRail), findsOneWidget);
-      expect(
-        find.byKey(const Key('managed-revision3-overview-tab')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('managed-revision3-library-tab')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
-        findsOneWidget,
-      );
+      for (final key in _managedPrimaryNavigationKeys) {
+        expect(find.byKey(key), findsOneWidget);
+      }
       await _navigateManagedDataAssets(tester);
       expect(
         find.byKey(const Key('revision3-dataasset-stage-panel')),
@@ -274,6 +370,210 @@ void main() {
       expect(managed.verifyCalls, 1);
       final verified = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(verified.head.canonicalJson, managed.head.canonicalJson);
+    },
+  );
+
+  testWidgets(
+    'canonical managed workspace hosts real tools with honest availability',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\canonical-workspace'),
+        projectId: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      for (final key in _managedPrimaryNavigationKeys) {
+        expect(find.byKey(key), findsOneWidget);
+      }
+      expect(
+        find.byKey(const Key('revision3-project-dashboard')),
+        findsOneWidget,
+      );
+
+      await _navigateManagedDataAssets(tester);
+      expect(managed.dataAssetListCalls, 1);
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      expect(
+        find.byKey(const Key('revision3-project-section-story-page')),
+        findsOneWidget,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'story',
+        actionId: 'create-npc-draft',
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'story',
+        actionId: 'create-quest-draft',
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'story',
+        actionId: 'browse-story-content',
+        enabled: true,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-content'),
+      );
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-data-assets')),
+        findsOneWidget,
+        reason: 'Content remembers its last secondary route',
+      );
+      expect(managed.dataAssetListCalls, 1);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      await _tapManagedSectionAction(
+        tester,
+        sectionId: 'story',
+        actionId: 'browse-story-content',
+      );
+      expect(
+        find.byKey(const Key('revision3-content-workspace-page-library')),
+        findsOneWidget,
+        reason: 'the Story action opens the real Content library',
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-world'),
+      );
+      expect(
+        find.byKey(const Key('revision3-project-section-world-page')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-project-section-world-status-world-authoring'),
+        ),
+        findsOneWidget,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-localization-voice'),
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-project-section-localization-voice-page'),
+        ),
+        findsOneWidget,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'manage-voice-takes',
+        enabled: true,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'resolve-voice-target',
+        enabled: false,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+      expect(
+        find.byKey(const Key('revision3-project-section-validate-test-page')),
+        findsOneWidget,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'validate-test',
+        actionId: 'verify-current-head',
+        enabled: true,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'validate-test',
+        actionId: 'inspect-references',
+        enabled: true,
+      );
+      await _tapManagedSectionAction(
+        tester,
+        sectionId: 'validate-test',
+        actionId: 'verify-current-head',
+      );
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(managed.verifyCalls, 1);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-build-release'),
+      );
+      expect(
+        find.byKey(const Key('revision3-project-section-build-release-page')),
+        findsOneWidget,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'build-release',
+        actionId: 'build-voice-bundle',
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'build-release',
+        actionId: 'build-playable-mod',
+        enabled: false,
+      );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-settings-expert'),
+      );
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page-settings')),
+        findsOneWidget,
+      );
+
+      await _navigateManagedHome(tester);
+      expect(
+        find.byKey(const Key('revision3-project-dashboard')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -1167,7 +1467,7 @@ void main() {
       await tester.pump();
       expect(tester.widget<ListTile>(libraryLine).selected, isTrue);
 
-      await _navigateManagedOverview(tester);
+      await _navigateManagedHome(tester);
       await _tapManagedDashboardAction(
         tester,
         const Key('managed-manage-voice-takes'),
@@ -1887,16 +2187,11 @@ void main() {
         find.byKey(const Key('revision3-project-workspace')),
         findsNothing,
       );
+      for (final key in _managedPrimaryNavigationKeys) {
+        expect(find.byKey(key), findsNothing);
+      }
       expect(
-        find.byKey(const Key('managed-revision3-overview-tab')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const Key('managed-revision3-library-tab')),
-        findsNothing,
-      );
-      expect(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
+        find.byKey(const Key('revision3-content-workspace-navigation')),
         findsNothing,
       );
       expect(find.byKey(const Key('managed-create-quest-draft')), findsNothing);
@@ -2047,8 +2342,14 @@ SharedConfig _testSharedConfig(String? gamePath) {
   return config;
 }
 
-Future<void> _setDesktopTestSurface(WidgetTester tester) async {
-  tester.view.physicalSize = const Size(1600, 900);
+Future<void> _setDesktopTestSurface(WidgetTester tester) =>
+    _setTestSurface(tester, const Size(1600, 900));
+
+Future<void> _setNarrowShortTestSurface(WidgetTester tester) =>
+    _setTestSurface(tester, const Size(640, 420));
+
+Future<void> _setTestSurface(WidgetTester tester, Size size) async {
+  tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
@@ -2072,29 +2373,97 @@ Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
-Future<void> _navigateManagedOverview(WidgetTester tester) =>
+const _managedPrimaryNavigationKeys = <Key>[
+  Key('revision3-project-workspace-nav-home'),
+  Key('revision3-project-workspace-nav-content'),
+  Key('revision3-project-workspace-nav-story'),
+  Key('revision3-project-workspace-nav-world'),
+  Key('revision3-project-workspace-nav-localization-voice'),
+  Key('revision3-project-workspace-nav-validate-test'),
+  Key('revision3-project-workspace-nav-build-release'),
+  Key('revision3-project-workspace-nav-settings-expert'),
+];
+
+Future<void> _navigateManagedHome(WidgetTester tester) =>
     _navigateManagedWorkspace(
       tester,
-      const Key('managed-revision3-overview-tab'),
+      const Key('revision3-project-workspace-nav-home'),
     );
 
-Future<void> _navigateManagedContent(WidgetTester tester) =>
-    _navigateManagedWorkspace(
-      tester,
-      const Key('managed-revision3-library-tab'),
-    );
+Future<void> _navigateManagedContent(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-nav-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-library'),
+  );
+  expect(
+    find.byKey(const Key('revision3-content-workspace-page-library')),
+    findsOneWidget,
+  );
+}
 
-Future<void> _navigateManagedDataAssets(WidgetTester tester) =>
-    _navigateManagedWorkspace(
-      tester,
-      const Key('managed-revision3-dataasset-tab'),
-    );
+Future<void> _navigateManagedDataAssets(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-nav-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-data-assets'),
+  );
+  expect(
+    find.byKey(const Key('revision3-content-workspace-page-data-assets')),
+    findsOneWidget,
+  );
+}
 
 Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
   final destination = find.byKey(key);
   expect(destination, findsOneWidget);
   await tester.tap(destination);
   await tester.pumpAndSettle();
+}
+
+Finder _managedSectionAction({
+  required String sectionId,
+  required String actionId,
+}) => find.byKey(Key('revision3-project-section-$sectionId-action-$actionId'));
+
+void _expectManagedSectionAction(
+  WidgetTester tester, {
+  required String sectionId,
+  required String actionId,
+  required bool enabled,
+}) {
+  final action = _managedSectionAction(
+    sectionId: sectionId,
+    actionId: actionId,
+  );
+  expect(action, findsOneWidget);
+  final inkWell = find.descendant(of: action, matching: find.byType(InkWell));
+  expect(inkWell, findsOneWidget);
+  expect(tester.widget<InkWell>(inkWell).onTap, enabled ? isNotNull : isNull);
+}
+
+Future<void> _tapManagedSectionAction(
+  WidgetTester tester, {
+  required String sectionId,
+  required String actionId,
+}) async {
+  final action = _managedSectionAction(
+    sectionId: sectionId,
+    actionId: actionId,
+  );
+  expect(action, findsOneWidget);
+  await tester.ensureVisible(action);
+  await tester.pumpAndSettle();
+  final inkWell = find.descendant(of: action, matching: find.byType(InkWell));
+  expect(tester.widget<InkWell>(inkWell).onTap, isNotNull);
+  await tester.tap(inkWell);
+  await tester.pump();
 }
 
 Future<void> _tapManagedDashboardAction(WidgetTester tester, Key key) async {
