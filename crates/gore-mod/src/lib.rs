@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
@@ -39,6 +39,7 @@ const MAX_PRISTINE_PATCH_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_UE4SS_TREE_ENTRIES: u64 = 250_000;
 const MAX_UE4SS_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_UE4SS_TREE_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_GAME_EXECUTABLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 #[derive(Debug, thiserror::Error)]
@@ -121,6 +122,24 @@ pub struct VoiceArchiveEdit {
     pub observation: Option<VoiceArchiveObservation>,
 }
 
+/// One path-free, byte-backed replacement for an existing member of a pristine voice archive.
+///
+/// This is the hardened input contract for managed authoring stores: the operation is always
+/// `replace`, the Ogg payload is already owned by the caller, and an exact archive/member
+/// observation is mandatory. [`build_sealed_voice_bundle`] rejects an `Absent` member proof, so
+/// this type cannot be used to smuggle an additive archive edit into a managed voice bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedVoiceArchiveReplace {
+    /// ZIP filename under `G1R/Story/VoiceOver`, for example `german_new.zip`.
+    pub archive: String,
+    /// Complete existing member path inside the ZIP. Forward slashes are required.
+    pub archive_path: String,
+    /// Complete replacement Ogg payload.
+    pub ogg: Vec<u8>,
+    /// Exact authoring-time identity of the pristine archive and existing member.
+    pub observation: VoiceArchiveObservation,
+}
+
 /// Authoring-time identity of one pristine voice archive and the member an edit targets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +170,77 @@ pub enum VoicePatchOp {
     Replace,
 }
 
+/// Exact identity of one replacement Ogg payload embedded in a sealed Voice bundle.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VoicePayloadSeal {
+    pub byte_len: u64,
+    /// Lowercase, 64-character hexadecimal SHA-256 of the complete Ogg payload.
+    pub sha256: String,
+}
+
+/// Exact content identity of the game executable a managed Voice bundle was authored against.
+///
+/// Format-3 Voice manifests carry this seal once at manifest level. Deployment reopens the fixed
+/// installed executable with no-follow semantics and checks the complete bounded content both
+/// while preparing the Voice rewrite and immediately before the first game mutation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceExecutableGenerationSeal {
+    pub byte_len: u64,
+    /// Lowercase, 64-character hexadecimal SHA-256 of the complete game executable.
+    pub sha256: String,
+}
+
+/// Canonical content identity of every regular file in one exact managed Voice bundle tree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct VoiceBundleTreeSeal {
+    pub byte_len: u64,
+    /// Lowercase, 64-character hexadecimal SHA-256 using the
+    /// `gore-mod.voice-bundle-tree.v1` canonical tree algorithm.
+    pub sha256: String,
+}
+
+/// Read-only selection of the authenticated pristine archive deployment itself would rebuild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceArchiveInspectionSource {
+    pub path: PathBuf,
+    /// `true` when the installed live archive drifted from the active deployment and is therefore
+    /// the new post-hotfix pristine source rather than the older authenticated backup.
+    pub drifted: bool,
+}
+
+/// Retained, component-by-component no-follow binding of the fixed
+/// install/G1R/Story/VoiceOver directory.
+///
+/// The initial traversal retains no-delete anchors until every component is proven. The returned
+/// guard then keeps a no-follow identity handle with rename-compatible sharing so legitimate
+/// atomic backup/deploy writes below VoiceOver remain possible. Consumers rebind and compare that
+/// identity at authority boundaries.
+#[derive(Debug, Clone)]
+pub struct VoiceOverPathGuard {
+    install_root: PathBuf,
+    directory: std::sync::Arc<mgr::model::RenameDirectoryGuard>,
+}
+
+impl VoiceOverPathGuard {
+    pub fn path(&self) -> &Path {
+        self.directory.path()
+    }
+
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.directory.identity() == other.directory.identity()
+            && self.install_root == other.install_root
+    }
+
+    /// Resolve one archive using the same authenticated pristine-source rules as deployment while
+    /// retaining the no-follow VoiceOver directory binding for the caller's subsequent inspection.
+    pub fn resolve_pristine_archive(&self, archive: &str) -> Result<VoiceArchiveInspectionSource> {
+        resolve_pristine_voice_archive_with_guard(self, archive)
+    }
+}
+
 /// One entry in a bundle's versioned `voice/manifest.json`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoicePatchEntry {
@@ -161,12 +251,16 @@ pub struct VoicePatchEntry {
     pub ogg: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation: Option<VoiceArchiveObservation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_seal: Option<VoicePayloadSeal>,
 }
 
 /// Stable on-disk contract for a voice archive patch component.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VoicePatchManifest {
     pub format: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable_generation: Option<VoiceExecutableGenerationSeal>,
     pub edits: Vec<VoicePatchEntry>,
 }
 
@@ -240,6 +334,171 @@ pub struct ModManifest {
 pub struct Bundle {
     pub files: Files,
     pub manifest: ModManifest,
+}
+
+enum VoiceBuildPayload {
+    File(String),
+    Bytes(Vec<u8>),
+}
+
+struct VoiceBuildInput {
+    archive: String,
+    op: VoicePatchOp,
+    archive_path: String,
+    payload: VoiceBuildPayload,
+    observation: Option<VoiceArchiveObservation>,
+}
+
+fn voice_payload_byte_limit(retained: u64, per_ogg_limit: u64) -> Result<u64> {
+    MAX_PENDING_VOICE_OGG_BYTES
+        .checked_sub(retained)
+        .map(|remaining| remaining.min(per_ogg_limit))
+        .ok_or_else(|| ModError::Other("voice Ogg memory budget underflow".into()))
+}
+
+/// Lower voice inputs into the one stable bundle component shared by the compatibility
+/// [`BuildSpec`] path and the hardened byte-backed path. Payload bytes are moved directly into the
+/// bundle, keeping the aggregate resident-byte accounting identical for file and in-memory input.
+fn lower_voice_component(
+    files: &mut Files,
+    components: &mut Vec<Component>,
+    inputs: Vec<VoiceBuildInput>,
+    executable_generation: Option<VoiceExecutableGenerationSeal>,
+) -> Result<()> {
+    if inputs.is_empty() {
+        return Err(ModError::Other(
+            "voice bundle requires at least one replacement".into(),
+        ));
+    }
+    let observed = inputs[0].observation.is_some();
+    if inputs
+        .iter()
+        .any(|edit| edit.observation.is_some() != observed)
+    {
+        return Err(ModError::Other(
+            "voice build mixes sealed and legacy edits; every edit must either include an observation or omit it".into(),
+        ));
+    }
+    if executable_generation.is_some() && !observed {
+        return Err(ModError::Other(
+            "managed voice build requires an archive observation on every edit".into(),
+        ));
+    }
+    let format = if executable_generation.is_some() {
+        3
+    } else if observed {
+        2
+    } else {
+        1
+    };
+
+    let voice_limits = gore_vo::Limits::default();
+    let mut edits = Vec::with_capacity(inputs.len());
+    let mut retained_ogg_bytes = 0u64;
+    for (i, edit) in inputs.into_iter().enumerate() {
+        validate_voice_target(&edit.archive, &edit.archive_path)?;
+        validate_voice_edit_observation(edit.op, edit.observation.as_ref())?;
+        let max_bytes =
+            voice_payload_byte_limit(retained_ogg_bytes, voice_limits.max_ogg_bytes as u64)?;
+        let (ogg, source_label) = match edit.payload {
+            VoiceBuildPayload::File(path) => {
+                let ogg = read_regular_file_limited(Path::new(&path), "voice Ogg", max_bytes)?;
+                (ogg, path)
+            }
+            VoiceBuildPayload::Bytes(ogg) => {
+                if ogg.len() as u64 > max_bytes {
+                    return Err(ModError::Other(format!(
+                        "voice Ogg bytes for {:?} member {:?} exceed the {max_bytes}-byte limit: {} bytes",
+                        edit.archive,
+                        edit.archive_path,
+                        ogg.len()
+                    )));
+                }
+                let label = format!("{}:{}", edit.archive, edit.archive_path);
+                (ogg, label)
+            }
+        };
+        retained_ogg_bytes = retained_ogg_bytes
+            .checked_add(ogg.len() as u64)
+            .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
+        gore_vo::validate_ogg(&ogg, &voice_limits)
+            .map_err(|e| ModError::Voice(format!("{source_label}: {e}")))?;
+        // Formats 1 and 2 are committed compatibility contracts. In particular format 2 carries
+        // archive observations exactly as before; payload seals belong exclusively to format 3.
+        let payload_seal = (format == 3).then(|| voice_payload_seal(&ogg));
+        let payload = format!("voice/payload/{i}.ogg");
+        files.insert(payload.clone(), ogg);
+        edits.push(VoicePatchEntry {
+            archive: edit.archive,
+            op: edit.op,
+            archive_path: edit.archive_path,
+            ogg: payload,
+            observation: edit.observation,
+            payload_seal,
+        });
+    }
+    let manifest = VoicePatchManifest {
+        format,
+        executable_generation,
+        edits,
+    };
+    validate_voice_manifest(&manifest)?;
+    files.insert(
+        "voice/manifest.json".into(),
+        serde_json::to_vec_pretty(&manifest)?,
+    );
+    components.push(Component::VoiceArchivePatch {
+        path: "voice".into(),
+    });
+    Ok(())
+}
+
+/// Build a voice-only, format-3 bundle from owned Ogg bytes without accepting caller-controlled
+/// source file paths.
+///
+/// Every edit is structurally a sealed replacement. Archive/member safety, exact `Present`
+/// observations, per-Ogg limits, the aggregate voice memory budget, and Ogg validity are checked
+/// before a [`Bundle`] is returned. This function only assembles an in-memory bundle; it performs
+/// no deployment or game writes.
+pub fn build_sealed_voice_bundle(
+    meta: ModMeta,
+    executable_generation: VoiceExecutableGenerationSeal,
+    edits: Vec<SealedVoiceArchiveReplace>,
+) -> Result<Bundle> {
+    if !is_safe_mod_name(&meta.name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {:?}: must be a single path component with no separators, '..', or control characters",
+            meta.name
+        )));
+    }
+    let inputs = edits
+        .into_iter()
+        .map(|edit| VoiceBuildInput {
+            archive: edit.archive,
+            op: VoicePatchOp::Replace,
+            archive_path: edit.archive_path,
+            payload: VoiceBuildPayload::Bytes(edit.ogg),
+            observation: Some(edit.observation),
+        })
+        .collect();
+    let mut files = Files::new();
+    let mut components = Vec::new();
+    lower_voice_component(
+        &mut files,
+        &mut components,
+        inputs,
+        Some(executable_generation),
+    )?;
+    let manifest = ModManifest {
+        format: 1,
+        mod_meta: meta,
+        components,
+    };
+    files.insert(
+        "gore-mod.json".into(),
+        serde_json::to_vec_pretty(&manifest)?,
+    );
+    Ok(Bundle { files, manifest })
 }
 
 // ── Build ──────────────────────────────────────────────────────────────────────
@@ -352,57 +611,18 @@ pub fn build_bundle(spec: &BuildSpec) -> Result<Bundle> {
     // order; deploy/manager composition applies case-insensitive later-wins before asking gore-vo
     // for one verified rewrite per target archive.
     if !spec.voice.is_empty() {
-        let sealed = spec.voice[0].observation.is_some();
-        if spec
+        let inputs = spec
             .voice
             .iter()
-            .any(|edit| edit.observation.is_some() != sealed)
-        {
-            return Err(ModError::Other(
-                "voice build mixes sealed and legacy edits; every edit must either include an observation or omit it".into(),
-            ));
-        }
-        let mut edits = Vec::with_capacity(spec.voice.len());
-        let mut retained_ogg_bytes = 0u64;
-        for (i, edit) in spec.voice.iter().enumerate() {
-            validate_voice_target(&edit.archive, &edit.archive_path)?;
-            validate_voice_edit_observation(edit.op, edit.observation.as_ref())?;
-            let voice_limits = gore_vo::Limits::default();
-            let remaining = MAX_PENDING_VOICE_OGG_BYTES
-                .checked_sub(retained_ogg_bytes)
-                .ok_or_else(|| ModError::Other("voice Ogg memory budget underflow".into()))?;
-            let ogg = read_regular_file_limited(
-                Path::new(&edit.ogg_path),
-                "voice Ogg",
-                (voice_limits.max_ogg_bytes as u64).min(remaining),
-            )?;
-            retained_ogg_bytes = retained_ogg_bytes
-                .checked_add(ogg.len() as u64)
-                .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
-            gore_vo::validate_ogg(&ogg, &voice_limits)
-                .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg_path)))?;
-            let payload = format!("voice/payload/{i}.ogg");
-            files.insert(payload.clone(), ogg);
-            edits.push(VoicePatchEntry {
+            .map(|edit| VoiceBuildInput {
                 archive: edit.archive.clone(),
                 op: edit.op,
                 archive_path: edit.archive_path.clone(),
-                ogg: payload,
+                payload: VoiceBuildPayload::File(edit.ogg_path.clone()),
                 observation: edit.observation.clone(),
-            });
-        }
-        let manifest = VoicePatchManifest {
-            format: if sealed { 2 } else { 1 },
-            edits,
-        };
-        validate_voice_manifest(&manifest)?;
-        files.insert(
-            "voice/manifest.json".into(),
-            serde_json::to_vec_pretty(&manifest)?,
-        );
-        components.push(Component::VoiceArchivePatch {
-            path: "voice".into(),
-        });
+            })
+            .collect();
+        lower_voice_component(&mut files, &mut components, inputs, None)?;
     }
 
     if !spec.texture.is_empty() {
@@ -484,6 +704,1202 @@ pub fn write_bundle(dir: &Path, bundle: &Bundle) -> Result<()> {
         std::fs::write(&path, bytes).map_err(io(&format!("writing {}", path.display())))?;
     }
     Ok(())
+}
+
+fn validate_sealed_voice_contract(
+    manifest: &ModManifest,
+    voice_manifest: &VoicePatchManifest,
+) -> Result<BTreeSet<String>> {
+    if manifest.format != 1 {
+        return Err(ModError::Other(format!(
+            "unsupported gore-mod manifest format {} (want 1)",
+            manifest.format
+        )));
+    }
+    if !is_safe_mod_name(&manifest.mod_meta.name) {
+        return Err(ModError::Other(format!(
+            "invalid mod name {:?} in sealed voice bundle",
+            manifest.mod_meta.name
+        )));
+    }
+    if !matches!(
+        manifest.components.as_slice(),
+        [Component::VoiceArchivePatch { path }] if path == "voice"
+    ) {
+        return Err(ModError::Other(
+            "sealed voice bundle must contain exactly one voice component at path \"voice\"".into(),
+        ));
+    }
+    validate_voice_manifest(voice_manifest)?;
+    if voice_manifest.format != 3 {
+        return Err(ModError::Other(
+            "sealed voice bundle requires voice manifest format 3".into(),
+        ));
+    }
+
+    let mut expected_files = BTreeSet::from([
+        "gore-mod.json".to_string(),
+        "voice/manifest.json".to_string(),
+    ]);
+    for (index, edit) in voice_manifest.edits.iter().enumerate() {
+        if edit.op != VoicePatchOp::Replace
+            || !matches!(
+                edit.observation.as_ref().map(|value| &value.member_proof),
+                Some(VoiceMemberProof::Present { .. })
+            )
+        {
+            return Err(ModError::Other(format!(
+                "sealed voice bundle edit {index} must replace an observed existing member"
+            )));
+        }
+        let expected_payload = format!("voice/payload/{index}.ogg");
+        if edit.ogg != expected_payload {
+            return Err(ModError::Other(format!(
+                "sealed voice bundle edit {index} has non-canonical payload path {:?} (want {expected_payload:?})",
+                edit.ogg
+            )));
+        }
+        if edit.payload_seal.is_none() {
+            return Err(ModError::Other(format!(
+                "sealed voice bundle edit {index} lacks a replacement payload seal"
+            )));
+        }
+        expected_files.insert(expected_payload);
+    }
+    Ok(expected_files)
+}
+
+fn validate_sealed_voice_bundle_memory(bundle: &Bundle) -> Result<()> {
+    let manifest_bytes = bundle
+        .files
+        .get("gore-mod.json")
+        .ok_or_else(|| ModError::Other("sealed voice bundle is missing gore-mod.json".into()))?;
+    if manifest_bytes != &serde_json::to_vec_pretty(&bundle.manifest)? {
+        return Err(ModError::Other(
+            "sealed voice bundle's gore-mod.json disagrees with its typed manifest".into(),
+        ));
+    }
+    let voice_manifest_bytes = bundle.files.get("voice/manifest.json").ok_or_else(|| {
+        ModError::Other("sealed voice bundle is missing voice/manifest.json".into())
+    })?;
+    let voice_manifest: VoicePatchManifest = serde_json::from_slice(voice_manifest_bytes)?;
+    if voice_manifest_bytes != &serde_json::to_vec_pretty(&voice_manifest)? {
+        return Err(ModError::Other(
+            "sealed voice bundle has a non-canonical voice manifest encoding".into(),
+        ));
+    }
+    let expected_files = validate_sealed_voice_contract(&bundle.manifest, &voice_manifest)?;
+    let actual_files: BTreeSet<_> = bundle.files.keys().cloned().collect();
+    if actual_files != expected_files {
+        let missing: Vec<_> = expected_files.difference(&actual_files).cloned().collect();
+        let extra: Vec<_> = actual_files.difference(&expected_files).cloned().collect();
+        return Err(ModError::Other(format!(
+            "sealed voice bundle file layout mismatch (missing: {missing:?}, extra: {extra:?})"
+        )));
+    }
+
+    let voice_limits = gore_vo::Limits::default();
+    let mut retained_ogg_bytes = 0u64;
+    for (index, edit) in voice_manifest.edits.iter().enumerate() {
+        let payload = format!("voice/payload/{index}.ogg");
+        let ogg = bundle
+            .files
+            .get(&payload)
+            .expect("expected file set was checked");
+        let max_bytes =
+            voice_payload_byte_limit(retained_ogg_bytes, voice_limits.max_ogg_bytes as u64)?;
+        if ogg.len() as u64 > max_bytes {
+            return Err(ModError::Other(format!(
+                "voice Ogg payload {payload:?} exceeds the {max_bytes}-byte limit: {} bytes",
+                ogg.len()
+            )));
+        }
+        retained_ogg_bytes = retained_ogg_bytes
+            .checked_add(ogg.len() as u64)
+            .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
+        gore_vo::validate_ogg(ogg, &voice_limits)
+            .map_err(|e| ModError::Voice(format!("{payload}: {e}")))?;
+        require_voice_payload_seal(edit, ogg)?;
+    }
+    Ok(())
+}
+
+fn open_voice_bundle_parent(parent: &Path) -> Result<(PathBuf, mgr::model::SecureDirectory)> {
+    if parent
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(ModError::Other(format!(
+            "voice bundle parent must not contain '..': {}",
+            parent.display()
+        )));
+    }
+    let absolute = if parent.is_absolute() {
+        parent.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(io("reading current directory for voice bundle output"))?
+            .join(parent)
+    };
+    let anchor =
+        mgr::model::open_directory_chain_nofollow(&absolute, "voice bundle output parent")?;
+    let canonical = anchor.path().to_path_buf();
+    Ok((canonical, anchor))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum VoiceBundleOwnedFileParent {
+    Target,
+    Voice,
+    Payload,
+}
+
+#[derive(Debug)]
+struct VoiceBundleOwnedFile {
+    parent: VoiceBundleOwnedFileParent,
+    name: std::ffi::OsString,
+    identity: mgr::model::FileIdentity,
+}
+
+#[derive(Debug)]
+struct VoiceBundleTreeOwnership {
+    parent: Option<mgr::model::SecureDirectory>,
+    target_name: std::ffi::OsString,
+    target_dir: PathBuf,
+    target: Option<mgr::model::SecureDirectory>,
+    voice: Option<mgr::model::SecureDirectory>,
+    payload: Option<mgr::model::SecureDirectory>,
+    files: Vec<VoiceBundleOwnedFile>,
+    armed: bool,
+}
+
+#[derive(Debug)]
+struct VoiceBundleCleanupOutcome {
+    confirmed: bool,
+    errors: Vec<String>,
+}
+
+impl VoiceBundleTreeOwnership {
+    fn parent(&self) -> &mgr::model::SecureDirectory {
+        self.parent
+            .as_ref()
+            .expect("owned Voice bundle retains its parent anchor")
+    }
+
+    fn target_identity(&self) -> mgr::model::FileIdentity {
+        self.target
+            .as_ref()
+            .expect("owned Voice bundle retains its target anchor")
+            .identity()
+    }
+
+    fn voice_identity(&self) -> mgr::model::FileIdentity {
+        self.voice
+            .as_ref()
+            .expect("owned Voice bundle retains its voice anchor")
+            .identity()
+    }
+
+    fn payload_identity(&self) -> mgr::model::FileIdentity {
+        self.payload
+            .as_ref()
+            .expect("owned Voice bundle retains its payload anchor")
+            .identity()
+    }
+
+    fn directory(
+        &self,
+        parent: VoiceBundleOwnedFileParent,
+    ) -> Option<&mgr::model::SecureDirectory> {
+        match parent {
+            VoiceBundleOwnedFileParent::Target => self.target.as_ref(),
+            VoiceBundleOwnedFileParent::Voice => self.voice.as_ref(),
+            VoiceBundleOwnedFileParent::Payload => self.payload.as_ref(),
+        }
+    }
+
+    fn verify_complete_binding(&self) -> Result<()> {
+        let target_identity = self.target_identity();
+        let voice_identity = self.voice_identity();
+        let payload_identity = self.payload_identity();
+        let target = expect_secure_directory(
+            self.parent()
+                .open_child(&self.target_name, "owned Voice bundle root")?,
+            "owned Voice bundle root",
+        )?;
+        let voice = expect_secure_directory(
+            target.open_child(
+                std::ffi::OsStr::new("voice"),
+                "owned Voice component directory",
+            )?,
+            "owned Voice component directory",
+        )?;
+        let payload = expect_secure_directory(
+            voice.open_child(
+                std::ffi::OsStr::new("payload"),
+                "owned Voice payload directory",
+            )?,
+            "owned Voice payload directory",
+        )?;
+        if target.identity() != target_identity
+            || voice.identity() != voice_identity
+            || payload.identity() != payload_identity
+        {
+            return Err(ModError::Other(
+                "owned Voice bundle directory identity changed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn cleanup_owned(&mut self) -> VoiceBundleCleanupOutcome {
+        if !self.armed {
+            return VoiceBundleCleanupOutcome {
+                confirmed: true,
+                errors: Vec::new(),
+            };
+        }
+        if self.parent.is_none() {
+            self.armed = false;
+            self.files.clear();
+            self.payload.take();
+            self.voice.take();
+            self.target.take();
+            return VoiceBundleCleanupOutcome {
+                confirmed: false,
+                errors: vec![
+                    "owned Voice bundle parent could not be rebound; cleanup refused".into(),
+                ],
+            };
+        }
+        let target_identity = self.target.as_ref().map(|value| value.identity());
+        let voice_identity = self.voice.as_ref().map(|value| value.identity());
+        let payload_identity = self.payload.as_ref().map(|value| value.identity());
+        let mut errors = Vec::new();
+        let rebound = self
+            .parent()
+            .open_child(&self.target_name, "owned Voice bundle root")
+            .and_then(|node| expect_secure_directory(node, "owned Voice bundle root"));
+        if !matches!(
+            (&rebound, target_identity),
+            (Ok(directory), Some(expected)) if directory.identity() == expected
+        ) {
+            errors.push(match rebound {
+                Ok(_) => "owned Voice bundle root was replaced; cleanup refused".into(),
+                Err(error) => format!(
+                    "owned Voice bundle root could not be rebound; cleanup refused: {error}"
+                ),
+            });
+            self.armed = false;
+            self.files.clear();
+            self.payload.take();
+            self.voice.take();
+            self.target.take();
+            return VoiceBundleCleanupOutcome {
+                confirmed: false,
+                errors,
+            };
+        }
+        drop(rebound);
+
+        for file in self.files.iter().rev() {
+            let Some(directory) = self.directory(file.parent) else {
+                errors.push(format!(
+                    "owned parent anchor unavailable for staged file {:?}",
+                    file.name
+                ));
+                continue;
+            };
+            if let Err(error) = directory.remove_child_file_if_identity(
+                &file.name,
+                file.identity,
+                "owned Voice bundle file",
+            ) {
+                errors.push(format!("{:?}: {error}", file.name));
+            }
+        }
+        self.files.clear();
+        self.payload.take();
+        if let (Some(voice), Some(expected)) = (&self.voice, payload_identity) {
+            if let Err(error) = voice.remove_child_directory_if_identity(
+                std::ffi::OsStr::new("payload"),
+                expected,
+                "owned Voice payload directory",
+            ) {
+                errors.push(format!("payload: {error}"));
+            }
+        }
+        self.voice.take();
+        if let (Some(target), Some(expected)) = (&self.target, voice_identity) {
+            if let Err(error) = target.remove_child_directory_if_identity(
+                std::ffi::OsStr::new("voice"),
+                expected,
+                "owned Voice component directory",
+            ) {
+                errors.push(format!("voice: {error}"));
+            }
+        }
+        self.target.take();
+        if let Some(expected) = target_identity {
+            if let Err(error) = self.parent().remove_child_directory_if_identity(
+                &self.target_name,
+                expected,
+                "owned Voice bundle root",
+            ) {
+                errors.push(format!("{}: {error}", self.target_dir.display()));
+            }
+        }
+        let absent = match self
+            .parent()
+            .contains_child(&self.target_name, "owned Voice bundle parent")
+        {
+            Ok(present) => !present,
+            Err(error) => {
+                errors.push(format!("confirming owned Voice cleanup: {error}"));
+                false
+            }
+        };
+        self.armed = false;
+        VoiceBundleCleanupOutcome {
+            confirmed: absent && errors.is_empty(),
+            errors,
+        }
+    }
+
+    fn close_for_promotion(&mut self) -> Result<mgr::model::RenameDirectoryGuard> {
+        let rename_guard = self
+            .parent()
+            .clone()
+            .into_rename_guard("Voice bundle staging parent")?;
+        self.payload.take();
+        self.voice.take();
+        self.target.take();
+        self.parent.take();
+        Ok(rename_guard)
+    }
+
+    fn reanchor_after_failed_promotion(
+        &mut self,
+        parent_guard: &mgr::model::RenameDirectoryGuard,
+        target_identity: mgr::model::FileIdentity,
+        voice_identity: mgr::model::FileIdentity,
+        payload_identity: mgr::model::FileIdentity,
+    ) -> Result<()> {
+        let parent = mgr::model::open_directory_chain_nofollow(
+            parent_guard.path(),
+            "failed Voice staging parent",
+        )?;
+        if parent.identity() != parent_guard.identity() {
+            return Err(ModError::Other(
+                "failed Voice staging parent changed filesystem identity".into(),
+            ));
+        }
+        self.parent = Some(parent);
+        let target = expect_secure_directory(
+            self.parent()
+                .open_child(&self.target_name, "failed Voice staging root")?,
+            "failed Voice staging root",
+        )?;
+        if target.identity() != target_identity {
+            return Err(ModError::Other(
+                "failed Voice staging root no longer has its owned identity".into(),
+            ));
+        }
+        let voice = expect_secure_directory(
+            target.open_child(
+                std::ffi::OsStr::new("voice"),
+                "failed Voice staging component",
+            )?,
+            "failed Voice staging component",
+        )?;
+        if voice.identity() != voice_identity {
+            return Err(ModError::Other(
+                "failed Voice staging component no longer has its owned identity".into(),
+            ));
+        }
+        let payload = expect_secure_directory(
+            voice.open_child(
+                std::ffi::OsStr::new("payload"),
+                "failed Voice staging payload",
+            )?,
+            "failed Voice staging payload",
+        )?;
+        if payload.identity() != payload_identity {
+            return Err(ModError::Other(
+                "failed Voice staging payload no longer has its owned identity".into(),
+            ));
+        }
+        self.target = Some(target);
+        self.voice = Some(voice);
+        self.payload = Some(payload);
+        Ok(())
+    }
+
+    fn release(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for VoiceBundleTreeOwnership {
+    fn drop(&mut self) {
+        let _ = self.cleanup_owned();
+    }
+}
+
+#[derive(Debug)]
+enum RetainedVoiceBundleWriteError {
+    Collision,
+    Failed(ModError),
+}
+
+impl From<ModError> for RetainedVoiceBundleWriteError {
+    fn from(value: ModError) -> Self {
+        Self::Failed(value)
+    }
+}
+
+impl RetainedVoiceBundleWriteError {
+    fn into_mod_error(self, target: &Path) -> ModError {
+        match self {
+            Self::Collision => ModError::Other(format!(
+                "voice bundle target already exists: {}",
+                target.display()
+            )),
+            Self::Failed(error) => error,
+        }
+    }
+}
+
+/// Write a hardened voice-only bundle into a brand-new target directory and verify the exact
+/// result before returning.
+///
+/// The direct parent must already be a real, non-link directory. The target itself must not exist;
+/// this function creates it atomically, uses create-new semantics for every file, and never calls
+/// the compatibility writer that clears an existing tree. If a later write or verification fails,
+/// only the target root successfully created by this call is removed on a best-effort basis.
+fn write_voice_bundle_new_retained(
+    dir: &Path,
+    bundle: &Bundle,
+) -> std::result::Result<VoiceBundleTreeOwnership, RetainedVoiceBundleWriteError> {
+    validate_sealed_voice_bundle_memory(bundle)?;
+    let target_name = dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "voice bundle target must end in one portable directory name: {}",
+                dir.display()
+            ))
+        })?;
+    if !is_safe_filename(target_name) {
+        return Err(ModError::Other(format!(
+            "unsafe voice bundle target directory name {target_name:?}"
+        ))
+        .into());
+    }
+    let parent = dir
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let (canonical_parent, parent_anchor) = open_voice_bundle_parent(parent)?;
+    let target_dir = canonical_parent.join(target_name);
+    match std::fs::symlink_metadata(&target_dir) {
+        Ok(_) => {
+            return Err(RetainedVoiceBundleWriteError::Collision);
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(io("checking voice bundle target")(error).into()),
+    }
+    let target_name_os = std::ffi::OsString::from(target_name);
+    let mut voice_anchor = None;
+    let mut payload_anchor = None;
+    let mut created_files: Vec<(
+        mgr::model::SecureDirectory,
+        std::ffi::OsString,
+        mgr::model::FileIdentity,
+    )> = Vec::new();
+    let Some(initial_target) =
+        parent_anchor.try_create_child_directory_new(&target_name_os, "new Voice bundle root")?
+    else {
+        return Err(RetainedVoiceBundleWriteError::Collision);
+    };
+    let mut target_anchor = Some(initial_target.clone());
+    let result = (|| -> Result<()> {
+        let target = initial_target;
+        let voice = target.create_child_directory_new(
+            std::ffi::OsStr::new("voice"),
+            "Voice bundle component directory",
+        )?;
+        voice_anchor = Some(voice.clone());
+        let payload = voice.create_child_directory_new(
+            std::ffi::OsStr::new("payload"),
+            "Voice bundle payload directory",
+        )?;
+        payload_anchor = Some(payload.clone());
+
+        for (relative, bytes) in &bundle.files {
+            let (directory, name) = match relative.as_str() {
+                "gore-mod.json" => (&target, std::ffi::OsStr::new("gore-mod.json")),
+                "voice/manifest.json" => (&voice, std::ffi::OsStr::new("manifest.json")),
+                value if value.starts_with("voice/payload/") => {
+                    let name = value
+                        .strip_prefix("voice/payload/")
+                        .expect("prefix was checked");
+                    if name.is_empty() || name.contains('/') || name.contains('\\') {
+                        return Err(ModError::Other(format!(
+                            "sealed Voice bundle contains a non-flat payload path: {relative:?}"
+                        )));
+                    }
+                    (&payload, std::ffi::OsStr::new(name))
+                }
+                _ => {
+                    return Err(ModError::Other(format!(
+                        "sealed Voice bundle contains an unexpected output path: {relative:?}"
+                    )))
+                }
+            };
+            let name = name.to_os_string();
+            let (mut file, identity) =
+                directory.create_child_file_new(&name, "Voice bundle file")?;
+            created_files.push((directory.clone(), name, identity));
+            file.write_all(bytes)
+                .map_err(io(&format!("writing Voice bundle file {relative}")))?;
+            file.sync_all()
+                .map_err(io(&format!("syncing Voice bundle file {relative}")))?;
+            directory.sync_after_mutation("Voice bundle file parent")?;
+            #[cfg(test)]
+            if take_injected_voice_bundle_write_failure(&target_dir) {
+                return Err(ModError::Other(
+                    "injected new voice bundle write failure".into(),
+                ));
+            }
+        }
+
+        let rebound_target = expect_secure_directory(
+            parent_anchor.open_child(&target_name_os, "completed Voice bundle root")?,
+            "completed Voice bundle root",
+        )?;
+        let rebound_voice = expect_secure_directory(
+            target.open_child(
+                std::ffi::OsStr::new("voice"),
+                "completed Voice component directory",
+            )?,
+            "completed Voice component directory",
+        )?;
+        let rebound_payload = expect_secure_directory(
+            voice.open_child(
+                std::ffi::OsStr::new("payload"),
+                "completed Voice payload directory",
+            )?,
+            "completed Voice payload directory",
+        )?;
+        if rebound_target.identity() != target.identity()
+            || rebound_voice.identity() != voice.identity()
+            || rebound_payload.identity() != payload.identity()
+        {
+            return Err(ModError::Other(
+                "Voice bundle directory identity changed while being written".into(),
+            ));
+        }
+        verify_sealed_voice_bundle(target.path())?;
+        let final_target = expect_secure_directory(
+            parent_anchor.open_child(&target_name_os, "verified Voice bundle root")?,
+            "verified Voice bundle root",
+        )?;
+        if final_target.identity() != target.identity() {
+            return Err(ModError::Other(
+                "Voice bundle root changed identity during final verification".into(),
+            ));
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let mut cleanup_errors = Vec::new();
+        for (directory, name, identity) in created_files.iter().rev() {
+            if let Err(cleanup) =
+                directory.remove_child_file_if_identity(name, *identity, "failed Voice bundle file")
+            {
+                cleanup_errors.push(format!("{name:?}: {cleanup}"));
+            }
+        }
+        // Windows deliberately opens anchors without DELETE sharing. Close each child anchor
+        // after cleaning its contents and before asking its still-retained parent to remove that
+        // one direct name. Removal is non-recursive, so even a hostile late replacement cannot
+        // make cleanup traverse or delete anything beneath an external link target.
+        created_files.clear();
+        let payload_identity = payload_anchor.as_ref().map(|anchor| anchor.identity());
+        payload_anchor.take();
+        if let (Some(voice), Some(identity)) = (&voice_anchor, payload_identity) {
+            if let Err(cleanup) = voice.remove_child_directory_if_identity(
+                std::ffi::OsStr::new("payload"),
+                identity,
+                "failed Voice payload directory",
+            ) {
+                cleanup_errors.push(format!("payload: {cleanup}"));
+            }
+        }
+        let voice_identity = voice_anchor.as_ref().map(|anchor| anchor.identity());
+        voice_anchor.take();
+        if let (Some(target), Some(identity)) = (&target_anchor, voice_identity) {
+            if let Err(cleanup) = target.remove_child_directory_if_identity(
+                std::ffi::OsStr::new("voice"),
+                identity,
+                "failed Voice component directory",
+            ) {
+                cleanup_errors.push(format!("voice: {cleanup}"));
+            }
+        }
+        let target_identity = target_anchor.as_ref().map(|anchor| anchor.identity());
+        target_anchor.take();
+        if let Some(identity) = target_identity {
+            if let Err(cleanup) = parent_anchor.remove_child_directory_if_identity(
+                &target_name_os,
+                identity,
+                "failed Voice bundle root",
+            ) {
+                cleanup_errors.push(format!("{}: {cleanup}", target_dir.display()));
+            }
+        }
+        if cleanup_errors.is_empty() {
+            return Err(error.into());
+        }
+        return Err(ModError::Other(format!(
+            "{error}; additionally failed to clean parts of newly-created voice bundle: {}",
+            cleanup_errors.join("; ")
+        ))
+        .into());
+    }
+    let target = target_anchor.expect("successful Voice write retained its target anchor");
+    let voice = voice_anchor.expect("successful Voice write retained its voice anchor");
+    let payload = payload_anchor.expect("successful Voice write retained its payload anchor");
+    let target_identity = target.identity();
+    let voice_identity = voice.identity();
+    let payload_identity = payload.identity();
+    let files = created_files
+        .into_iter()
+        .map(|(directory, name, identity)| {
+            let parent = if directory.identity() == target_identity {
+                VoiceBundleOwnedFileParent::Target
+            } else if directory.identity() == voice_identity {
+                VoiceBundleOwnedFileParent::Voice
+            } else if directory.identity() == payload_identity {
+                VoiceBundleOwnedFileParent::Payload
+            } else {
+                unreachable!("every created Voice file belongs to one retained bundle directory")
+            };
+            VoiceBundleOwnedFile {
+                parent,
+                name,
+                identity,
+            }
+        })
+        .collect();
+    Ok(VoiceBundleTreeOwnership {
+        parent: Some(parent_anchor),
+        target_name: target_name_os,
+        target_dir,
+        target: Some(target),
+        voice: Some(voice),
+        payload: Some(payload),
+        files,
+        armed: true,
+    })
+}
+
+/// Write a hardened voice-only bundle into a brand-new final target.
+pub fn write_voice_bundle_new(dir: &Path, bundle: &Bundle) -> Result<()> {
+    write_voice_bundle_new_retained(dir, bundle)
+        .map_err(|error| error.into_mod_error(dir))?
+        .release();
+    Ok(())
+}
+
+/// Machine-readable outcome class for a staged Voice bundle operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VoiceBundleStagingErrorKind {
+    /// The requested operation failed and owned staging absence was confirmed.
+    OperationFailed,
+    /// Owned staging absence could not be confirmed, so callers must preserve/report the path.
+    CleanupFailed,
+    /// The atomic promotion succeeded, but its final durability/identity check failed.
+    PublishedButUnconfirmed,
+}
+
+/// Structured failure from staged promotion or explicit abort.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct VoiceBundleStagingError {
+    kind: VoiceBundleStagingErrorKind,
+    cleanup_confirmed: bool,
+    message: String,
+}
+
+impl VoiceBundleStagingError {
+    pub fn kind(&self) -> VoiceBundleStagingErrorKind {
+        self.kind
+    }
+
+    /// True only after the retained parent observed the owned staging name absent following
+    /// identity-checked, direct-child cleanup.
+    pub fn cleanup_confirmed(&self) -> bool {
+        self.cleanup_confirmed
+    }
+}
+
+/// A verified Voice bundle materialized in a unique sibling directory with retained filesystem
+/// ownership. Dropping it attempts the same identity-checked cleanup as [`Self::abort`], without
+/// deleting recursively or following a link/reparse replacement.
+#[derive(Debug)]
+pub struct StagedVoiceBundle {
+    ownership: Option<VoiceBundleTreeOwnership>,
+    final_name: std::ffi::OsString,
+    final_path: PathBuf,
+    expected_seal: VoiceBundleTreeSeal,
+}
+
+impl StagedVoiceBundle {
+    pub fn path(&self) -> &Path {
+        &self
+            .ownership
+            .as_ref()
+            .expect("live staged Voice bundle retains ownership")
+            .target_dir
+    }
+
+    /// Atomically publish the owned sibling without replacing an existing final target.
+    pub fn promote_new(mut self) -> std::result::Result<(), VoiceBundleStagingError> {
+        let mut owned = self
+            .ownership
+            .take()
+            .expect("live staged Voice bundle retains ownership");
+        let preflight = (|| -> Result<()> {
+            owned.verify_complete_binding()?;
+            let seal = seal_voice_bundle_disk_tree(&owned.target_dir)?;
+            if seal != self.expected_seal {
+                return Err(ModError::Other(
+                    "owned staged Voice bundle differs from the requested bundle".into(),
+                ));
+            }
+            owned.verify_complete_binding()
+        })();
+        if let Err(error) = preflight {
+            return Err(staged_voice_operation_failure(error, &mut owned));
+        }
+
+        let target_identity = owned.target_identity();
+        let voice_identity = owned.voice_identity();
+        let payload_identity = owned.payload_identity();
+        let parent_guard = match owned.close_for_promotion() {
+            Ok(guard) => guard,
+            Err(error) => return Err(staged_voice_operation_failure(error, &mut owned)),
+        };
+        if let Err(error) = promote_directory_noclobber(&owned.target_dir, &self.final_path) {
+            let primary = ModError::Other(format!(
+                "atomically promoting staged Voice bundle without replacement: {error}"
+            ));
+            if let Err(reanchor) = owned.reanchor_after_failed_promotion(
+                &parent_guard,
+                target_identity,
+                voice_identity,
+                payload_identity,
+            ) {
+                return Err(staged_voice_operation_failure(
+                    ModError::Other(format!(
+                        "{primary}; owned staging rebind also failed: {reanchor}"
+                    )),
+                    &mut owned,
+                ));
+            }
+            return Err(staged_voice_operation_failure(primary, &mut owned));
+        }
+
+        // The owned identity is now intentionally live at the final name. Never run staging
+        // cleanup after this boundary, including when a durability query itself fails.
+        owned.armed = false;
+        let publication_check = (|| -> Result<()> {
+            let published_parent = mgr::model::open_directory_chain_nofollow(
+                parent_guard.path(),
+                "published Voice bundle parent",
+            )?;
+            if published_parent.identity() != parent_guard.identity() {
+                return Err(ModError::Other(
+                    "published Voice bundle parent changed filesystem identity".into(),
+                ));
+            }
+            published_parent.sync_after_mutation("published Voice bundle parent")?;
+            let final_root = expect_secure_directory(
+                published_parent.open_child(&self.final_name, "published Voice bundle root")?,
+                "published Voice bundle root",
+            )?;
+            if final_root.identity() != target_identity {
+                return Err(ModError::Other(
+                    "published Voice bundle has an unexpected filesystem identity".into(),
+                ));
+            }
+            Ok(())
+        })();
+        publication_check.map_err(|error| VoiceBundleStagingError {
+            kind: VoiceBundleStagingErrorKind::PublishedButUnconfirmed,
+            cleanup_confirmed: false,
+            message: error.to_string(),
+        })
+    }
+
+    /// Remove this exact owned staging tree and report any inability to confirm absence.
+    pub fn abort(mut self) -> std::result::Result<(), VoiceBundleStagingError> {
+        let mut owned = self
+            .ownership
+            .take()
+            .expect("live staged Voice bundle retains ownership");
+        let cleanup = owned.cleanup_owned();
+        if cleanup.confirmed {
+            Ok(())
+        } else {
+            Err(VoiceBundleStagingError {
+                kind: VoiceBundleStagingErrorKind::CleanupFailed,
+                cleanup_confirmed: false,
+                message: voice_cleanup_message(&cleanup.errors),
+            })
+        }
+    }
+}
+
+fn voice_cleanup_message(errors: &[String]) -> String {
+    if errors.is_empty() {
+        "owned Voice staging cleanup could not be confirmed".into()
+    } else {
+        format!(
+            "owned Voice staging cleanup could not be confirmed: {}",
+            errors.join("; ")
+        )
+    }
+}
+
+fn staged_voice_operation_failure(
+    primary: ModError,
+    owned: &mut VoiceBundleTreeOwnership,
+) -> VoiceBundleStagingError {
+    let cleanup = owned.cleanup_owned();
+    if cleanup.confirmed {
+        VoiceBundleStagingError {
+            kind: VoiceBundleStagingErrorKind::OperationFailed,
+            cleanup_confirmed: true,
+            message: primary.to_string(),
+        }
+    } else {
+        VoiceBundleStagingError {
+            kind: VoiceBundleStagingErrorKind::CleanupFailed,
+            cleanup_confirmed: false,
+            message: format!("{primary}; {}", voice_cleanup_message(&cleanup.errors)),
+        }
+    }
+}
+
+/// Write a verified Voice bundle into a unique create-new sibling of `final_target` and retain its
+/// exact identities until the caller promotes, aborts, or drops the returned handle.
+pub fn write_voice_bundle_staged_new(
+    final_target: &Path,
+    bundle: &Bundle,
+) -> Result<StagedVoiceBundle> {
+    static NEXT_STAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    validate_sealed_voice_bundle_memory(bundle)?;
+    let final_name = final_target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            ModError::Other(format!(
+                "final Voice bundle target must end in one portable directory name: {}",
+                final_target.display()
+            ))
+        })?;
+    if !is_safe_filename(final_name) {
+        return Err(ModError::Other(format!(
+            "unsafe final Voice bundle directory name {final_name:?}"
+        )));
+    }
+    let parent = final_target
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let (canonical_parent, _) = open_voice_bundle_parent(parent)?;
+    let final_path = canonical_parent.join(final_name);
+    let expected_seal = canonical_voice_bundle_tree_seal(
+        bundle
+            .files
+            .iter()
+            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
+    )?;
+
+    for _ in 0..128 {
+        let serial = NEXT_STAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let stage_name = format!("gore-voice-stage-{}-{serial}", std::process::id());
+        let stage_path = canonical_parent.join(stage_name);
+        match std::fs::symlink_metadata(&stage_path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io("checking unique Voice staging sibling")(error)),
+        }
+        match write_voice_bundle_new_retained(&stage_path, bundle) {
+            Ok(ownership) => {
+                return Ok(StagedVoiceBundle {
+                    ownership: Some(ownership),
+                    final_name: std::ffi::OsString::from(final_name),
+                    final_path,
+                    expected_seal,
+                })
+            }
+            Err(RetainedVoiceBundleWriteError::Collision) => continue,
+            Err(RetainedVoiceBundleWriteError::Failed(error)) => return Err(error),
+        }
+    }
+    Err(ModError::Other(
+        "could not claim a unique Voice staging sibling after 128 attempts".into(),
+    ))
+}
+
+fn expect_secure_directory(
+    node: mgr::model::SecureNode,
+    label: &str,
+) -> Result<mgr::model::SecureDirectory> {
+    match node {
+        mgr::model::SecureNode::Directory(directory) => Ok(directory),
+        mgr::model::SecureNode::File(file) => Err(ModError::Other(format!(
+            "{label} became a regular file: {}",
+            file.path().display()
+        ))),
+    }
+}
+
+/// Reopen and validate an exact voice-only bundle produced by [`build_sealed_voice_bundle`].
+///
+/// The verifier is deliberately narrower than deployment: it accepts one format-1 gore-mod
+/// manifest containing exactly one `voice` component, one format-3 voice manifest containing only
+/// sealed existing-member replacements, and the canonical indexed Ogg payload layout emitted by
+/// the builder. Every file is reopened through the bundle path/link defenses and all payloads are
+/// checked against the per-Ogg and aggregate byte limits. Missing files, extra files/directories,
+/// extra components, non-canonical payload paths, and invalid observations/Ogg data are rejected.
+/// No game path is resolved and no file is written.
+pub fn verify_sealed_voice_bundle(dir: &Path) -> Result<()> {
+    resolve_safe_bundle_root(dir)?;
+    let manifest_bytes = read_safe_bundle_file(
+        dir,
+        Path::new("gore-mod.json"),
+        "gore-mod.json",
+        MAX_BUNDLE_MANIFEST_BYTES,
+    )?;
+    let manifest: ModManifest = serde_json::from_slice(&manifest_bytes)?;
+    if manifest_bytes != serde_json::to_vec_pretty(&manifest)? {
+        return Err(ModError::Other(
+            "sealed voice bundle has a non-canonical gore-mod manifest encoding".into(),
+        ));
+    }
+    let voice_manifest_bytes = read_safe_bundle_file(
+        dir,
+        Path::new("voice/manifest.json"),
+        "voice manifest",
+        MAX_VOICE_MANIFEST_BYTES,
+    )?;
+    let voice_manifest: VoicePatchManifest = serde_json::from_slice(&voice_manifest_bytes)?;
+    if voice_manifest_bytes != serde_json::to_vec_pretty(&voice_manifest)? {
+        return Err(ModError::Other(
+            "sealed voice bundle has a non-canonical voice manifest encoding".into(),
+        ));
+    }
+    let expected_files = validate_sealed_voice_contract(&manifest, &voice_manifest)?;
+    let expected_dirs = BTreeSet::from(["voice".to_string(), "voice/payload".to_string()]);
+    let voice_limits = gore_vo::Limits::default();
+    let mut retained_ogg_bytes = 0u64;
+    for (index, edit) in voice_manifest.edits.iter().enumerate() {
+        let expected_payload = format!("voice/payload/{index}.ogg");
+        let max_bytes =
+            voice_payload_byte_limit(retained_ogg_bytes, voice_limits.max_ogg_bytes as u64)?;
+        let ogg = read_safe_bundle_file(
+            dir,
+            Path::new(&expected_payload),
+            "voice Ogg payload",
+            max_bytes,
+        )?;
+        retained_ogg_bytes = retained_ogg_bytes
+            .checked_add(ogg.len() as u64)
+            .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
+        gore_vo::validate_ogg(&ogg, &voice_limits)
+            .map_err(|e| ModError::Voice(format!("{expected_payload}: {e}")))?;
+        require_voice_payload_seal(edit, &ogg)?;
+    }
+
+    let (actual_files, actual_dirs) = collect_exact_bundle_layout(dir)?;
+    if actual_files != expected_files {
+        let missing: Vec<_> = expected_files.difference(&actual_files).cloned().collect();
+        let extra: Vec<_> = actual_files.difference(&expected_files).cloned().collect();
+        return Err(ModError::Other(format!(
+            "sealed voice bundle file layout mismatch (missing: {missing:?}, extra: {extra:?})"
+        )));
+    }
+    if actual_dirs != expected_dirs {
+        let missing: Vec<_> = expected_dirs.difference(&actual_dirs).cloned().collect();
+        let extra: Vec<_> = actual_dirs.difference(&expected_dirs).cloned().collect();
+        return Err(ModError::Other(format!(
+            "sealed voice bundle directory layout mismatch (missing: {missing:?}, extra: {extra:?})"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_voice_bundle_tree_seal<P, B>(
+    files: impl IntoIterator<Item = (P, B)>,
+) -> Result<VoiceBundleTreeSeal>
+where
+    P: AsRef<str>,
+    B: AsRef<[u8]>,
+{
+    let mut byte_len = 0u64;
+    let mut digest = Sha256::new();
+    digest.update(b"gore-mod.voice-bundle-tree.v1\0");
+    for (path, bytes) in files {
+        let path = path.as_ref();
+        let bytes = bytes.as_ref();
+        let path_len = u64::try_from(path.len())
+            .map_err(|_| ModError::Other("voice bundle path length overflow".into()))?;
+        let file_len = u64::try_from(bytes.len())
+            .map_err(|_| ModError::Other("voice bundle file length overflow".into()))?;
+        byte_len = byte_len
+            .checked_add(file_len)
+            .ok_or_else(|| ModError::Other("voice bundle tree byte total overflow".into()))?;
+        digest.update(path_len.to_be_bytes());
+        digest.update(path.as_bytes());
+        digest.update(file_len.to_be_bytes());
+        digest.update(bytes);
+    }
+    Ok(VoiceBundleTreeSeal {
+        byte_len,
+        sha256: format!("{:x}", digest.finalize()),
+    })
+}
+
+fn read_voice_bundle_tree_for_seal(dir: &Path) -> Result<VoiceBundleTreeSeal> {
+    let (files, _) = collect_exact_bundle_layout(dir)?;
+    let voice_limits = gore_vo::Limits::default();
+    let mut payload_total = 0u64;
+    let mut loaded = Vec::with_capacity(files.len());
+    for relative in files {
+        let max_bytes = match relative.as_str() {
+            "gore-mod.json" => MAX_BUNDLE_MANIFEST_BYTES,
+            "voice/manifest.json" => MAX_VOICE_MANIFEST_BYTES,
+            _ if relative.starts_with("voice/payload/") => {
+                let remaining = MAX_PENDING_VOICE_OGG_BYTES
+                    .checked_sub(payload_total)
+                    .ok_or_else(|| ModError::Other("voice Ogg memory budget underflow".into()))?;
+                remaining.min(voice_limits.max_ogg_bytes as u64)
+            }
+            _ => {
+                return Err(ModError::Other(format!(
+                    "unexpected file in exact Voice bundle tree: {relative:?}"
+                )));
+            }
+        };
+        let bytes = read_safe_bundle_file(
+            dir,
+            Path::new(&relative),
+            "sealed Voice bundle tree file",
+            max_bytes,
+        )?;
+        if relative.starts_with("voice/payload/") {
+            payload_total = payload_total
+                .checked_add(bytes.len() as u64)
+                .ok_or_else(|| ModError::Other("voice Ogg memory budget overflow".into()))?;
+        }
+        loaded.push((relative, bytes));
+    }
+    canonical_voice_bundle_tree_seal(loaded)
+}
+
+/// Reopen an exact verified managed Voice bundle and return its canonical disk-tree content seal.
+///
+/// The tree is verified before and after each bounded no-follow sealing pass. Two independently
+/// reopened passes must agree, so a valid Ogg substitution, manifest swap, added path, or
+/// concurrent tree-generation change cannot be reported as the originally verified output.
+pub fn seal_voice_bundle_disk_tree(dir: &Path) -> Result<VoiceBundleTreeSeal> {
+    verify_sealed_voice_bundle(dir)?;
+    let first = read_voice_bundle_tree_for_seal(dir)?;
+    verify_sealed_voice_bundle(dir)?;
+    let second = read_voice_bundle_tree_for_seal(dir)?;
+    if first != second {
+        return Err(ModError::Other(
+            "sealed Voice bundle tree changed while its disk seal was being computed".into(),
+        ));
+    }
+    verify_sealed_voice_bundle(dir)?;
+    Ok(second)
+}
+
+fn collect_exact_bundle_layout(bundle_root: &Path) -> Result<(BTreeSet<String>, BTreeSet<String>)> {
+    let root = resolve_safe_bundle_root(bundle_root)?;
+    let mut pending = vec![root.clone()];
+    let mut files = BTreeSet::new();
+    let mut dirs = BTreeSet::new();
+    let mut entry_count = 0u64;
+    while let Some(dir) = pending.pop() {
+        for entry in std::fs::read_dir(&dir).map_err(io(&format!(
+            "reading sealed voice bundle directory {}",
+            dir.display()
+        )))? {
+            let entry = entry.map_err(io("reading sealed voice bundle directory entry"))?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path).map_err(io(&format!(
+                "reading sealed voice bundle metadata {}",
+                path.display()
+            )))?;
+            if metadata_is_link(&metadata) {
+                return Err(ModError::Other(format!(
+                    "sealed voice bundle contains a symbolic link or reparse point: {}",
+                    path.display()
+                )));
+            }
+            let relative = path.strip_prefix(&root).map_err(|_| {
+                ModError::Other(format!(
+                    "sealed voice bundle path escaped its root: {}",
+                    path.display()
+                ))
+            })?;
+            let portable = relative
+                .to_str()
+                .ok_or_else(|| {
+                    ModError::Other(format!(
+                        "sealed voice bundle path is not UTF-8: {}",
+                        path.display()
+                    ))
+                })?
+                .replace('\\', "/");
+            if !is_safe_rel_path(&portable) {
+                return Err(ModError::Other(format!(
+                    "sealed voice bundle contains a non-portable path: {}",
+                    path.display()
+                )));
+            }
+            entry_count = entry_count.checked_add(1).ok_or_else(|| {
+                ModError::Other("sealed voice bundle entry count overflow".into())
+            })?;
+            if entry_count > MAX_UE4SS_TREE_ENTRIES {
+                return Err(ModError::Other(format!(
+                    "sealed voice bundle exceeds the {MAX_UE4SS_TREE_ENTRIES}-entry limit"
+                )));
+            }
+            if metadata.is_dir() {
+                dirs.insert(portable);
+                pending.push(path);
+            } else if metadata.is_file() {
+                files.insert(portable);
+            } else {
+                return Err(ModError::Other(format!(
+                    "sealed voice bundle contains a non-file payload: {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok((files, dirs))
 }
 
 fn sanitize(s: &str) -> String {
@@ -568,6 +1984,127 @@ fn parse_voice_archive_sha256(value: &str) -> Result<[u8; 32]> {
     Ok(decoded)
 }
 
+fn voice_payload_seal(bytes: &[u8]) -> VoicePayloadSeal {
+    VoicePayloadSeal {
+        byte_len: bytes.len() as u64,
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+    }
+}
+
+fn require_voice_payload_seal(edit: &VoicePatchEntry, bytes: &[u8]) -> Result<()> {
+    let Some(expected) = &edit.payload_seal else {
+        return Err(ModError::Other(format!(
+            "sealed voice payload {:?} has no content seal",
+            edit.ogg
+        )));
+    };
+    let actual = voice_payload_seal(bytes);
+    if &actual != expected {
+        return Err(ModError::Other(format!(
+            "sealed voice payload {:?} disagrees with its content seal",
+            edit.ogg
+        )));
+    }
+    Ok(())
+}
+
+fn digest_regular_file_nofollow(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> Result<VoiceExecutableGenerationSeal> {
+    let mut source = mgr::model::open_file_nofollow(path, label)?;
+    let advertised = source.len();
+    if advertised == 0 {
+        return Err(ModError::Other(format!(
+            "{label} must be non-empty: {}",
+            source.path().display()
+        )));
+    }
+    if advertised > max_bytes {
+        return Err(ModError::Other(format!(
+            "{label} exceeds the {max_bytes}-byte limit: {advertised} bytes at {}",
+            source.path().display()
+        )));
+    }
+    let mut digest = Sha256::new();
+    let mut length = 0u64;
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let count = source
+            .file
+            .read(&mut buffer)
+            .map_err(io(&format!("reading {label} {}", source.path().display())))?;
+        if count == 0 {
+            break;
+        }
+        length = length
+            .checked_add(count as u64)
+            .ok_or_else(|| ModError::Other(format!("{label} length overflow")))?;
+        if length > max_bytes {
+            return Err(ModError::Other(format!(
+                "{label} grew beyond the {max_bytes}-byte limit while being read: {}",
+                source.path().display()
+            )));
+        }
+        digest.update(&buffer[..count]);
+    }
+    if length != advertised {
+        return Err(ModError::Other(format!(
+            "{label} changed length while being read: {}",
+            source.path().display()
+        )));
+    }
+    source.verify_len(advertised, label)?;
+    Ok(VoiceExecutableGenerationSeal {
+        byte_len: length,
+        sha256: format!("{:x}", digest.finalize()),
+    })
+}
+
+fn live_voice_executable_generation(gp: &GamePaths) -> Result<VoiceExecutableGenerationSeal> {
+    let first = digest_regular_file_nofollow(
+        &gp.executable,
+        "game executable generation",
+        MAX_GAME_EXECUTABLE_BYTES,
+    )?;
+    // A second no-follow reopen binds the digest back to the current fixed path after the first
+    // streaming pass. This catches Unix rename/substitution races that an opened handle alone
+    // cannot prevent (Windows keeps the first identity non-deletable while open).
+    let second = digest_regular_file_nofollow(
+        &gp.executable,
+        "game executable generation",
+        MAX_GAME_EXECUTABLE_BYTES,
+    )?;
+    if first != second {
+        return Err(ModError::Other(format!(
+            "game executable generation changed while being authenticated: {}",
+            gp.executable.display()
+        )));
+    }
+    Ok(second)
+}
+
+fn require_live_voice_executable_generation(
+    gp: &GamePaths,
+    expected: &VoiceExecutableGenerationSeal,
+) -> Result<()> {
+    if expected.byte_len == 0 {
+        return Err(ModError::Other(
+            "voice executable generation length must be non-zero".into(),
+        ));
+    }
+    parse_voice_archive_sha256(&expected.sha256)?;
+    let actual = live_voice_executable_generation(gp)?;
+    if &actual != expected {
+        return Err(ModError::Other(format!(
+            "installed game executable does not match the format-3 Voice bundle generation: {}",
+            gp.executable.display()
+        )));
+    }
+    Ok(())
+}
+
 fn validate_voice_edit_observation(
     op: VoicePatchOp,
     observation: Option<&VoiceArchiveObservation>,
@@ -610,25 +2147,56 @@ pub(crate) fn validate_voice_manifest(manifest: &VoicePatchManifest) -> Result<(
         ));
     }
     match manifest.format {
-        1 if manifest.edits.iter().any(|edit| edit.observation.is_some()) => {
+        1 if manifest.executable_generation.is_some()
+            || manifest
+                .edits
+                .iter()
+                .any(|edit| edit.observation.is_some() || edit.payload_seal.is_some()) =>
+        {
             return Err(ModError::Other(
-                "voice patch manifest format 1 must not contain archive observations".into(),
-            ));
-        }
-        2 if manifest.edits.iter().any(|edit| edit.observation.is_none()) => {
-            return Err(ModError::Other(
-                "voice patch manifest format 2 requires an archive observation on every edit"
+                "voice patch manifest format 1 must not contain a generation seal, archive observations, or payload seals"
                     .into(),
             ));
         }
-        1 | 2 => {}
+        2 if manifest.executable_generation.is_some()
+            || manifest
+                .edits
+                .iter()
+                .any(|edit| edit.observation.is_none() || edit.payload_seal.is_some()) =>
+        {
+            return Err(ModError::Other(
+                "voice patch manifest format 2 requires archive observations and must not contain generation or payload seals"
+                    .into(),
+            ));
+        }
+        3 if manifest.executable_generation.is_none()
+            || manifest
+                .edits
+                .iter()
+                .any(|edit| edit.observation.is_none() || edit.payload_seal.is_none()) =>
+        {
+            return Err(ModError::Other(
+                "voice patch manifest format 3 requires an executable generation, archive observation, and payload seal on every edit"
+                    .into(),
+            ));
+        }
+        1..=3 => {}
         format => {
             return Err(ModError::Other(format!(
-                "unsupported voice patch manifest format {format} (want 1 or 2)"
+                "unsupported voice patch manifest format {format} (want 1, 2, or 3)"
             )));
         }
     }
+    if let Some(generation) = &manifest.executable_generation {
+        if generation.byte_len == 0 {
+            return Err(ModError::Other(
+                "voice executable generation length must be non-zero".into(),
+            ));
+        }
+        parse_voice_archive_sha256(&generation.sha256)?;
+    }
     let mut archive_seals: BTreeMap<String, (u64, [u8; 32])> = BTreeMap::new();
+    let mut sealed_targets = BTreeSet::new();
     for edit in &manifest.edits {
         validate_voice_target(&edit.archive, &edit.archive_path)?;
         validate_voice_edit_observation(edit.op, edit.observation.as_ref())?;
@@ -649,6 +2217,33 @@ pub(crate) fn validate_voice_manifest(manifest: &VoicePatchManifest) -> Result<(
                 }
                 std::collections::btree_map::Entry::Occupied(_) => {}
             }
+        }
+        if let Some(payload_seal) = &edit.payload_seal {
+            if payload_seal.byte_len == 0 {
+                return Err(ModError::Other(
+                    "sealed voice payload length must be non-zero".into(),
+                ));
+            }
+            parse_voice_archive_sha256(&payload_seal.sha256)?;
+        }
+        if manifest.format == 3
+            && !sealed_targets.insert((voice_key(&edit.archive), voice_key(&edit.archive_path)))
+        {
+            return Err(ModError::Other(format!(
+                "sealed voice manifest contains duplicate deployment target {:?}:{:?}",
+                edit.archive, edit.archive_path
+            )));
+        }
+        if manifest.format == 3
+            && (edit.op != VoicePatchOp::Replace
+                || !matches!(
+                    edit.observation.as_ref().map(|value| &value.member_proof),
+                    Some(VoiceMemberProof::Present { .. })
+                ))
+        {
+            return Err(ModError::Other(
+                "voice patch manifest format 3 may only replace observed existing members".into(),
+            ));
         }
         if edit.ogg.contains('\\')
             || !is_safe_rel_path(&edit.ogg)
@@ -677,6 +2272,7 @@ pub(crate) struct PendingVoiceEdit {
 pub(crate) struct PendingVoiceEdits {
     edits: BTreeMap<(String, String), PendingVoiceEdit>,
     retained_ogg_bytes: u64,
+    executable_generation: Option<VoiceExecutableGenerationSeal>,
 }
 
 impl PendingVoiceEdits {
@@ -715,6 +2311,26 @@ impl PendingVoiceEdits {
         self.retained_ogg_bytes = retained_ogg_bytes;
         Ok(())
     }
+
+    fn merge_executable_generation(
+        &mut self,
+        generation: Option<&VoiceExecutableGenerationSeal>,
+    ) -> Result<()> {
+        let Some(generation) = generation else {
+            return Ok(());
+        };
+        match &self.executable_generation {
+            None => self.executable_generation = Some(generation.clone()),
+            Some(existing) if existing == generation => {}
+            Some(_) => {
+                return Err(ModError::Other(
+                    "format-3 voice components in one loadout target conflicting executable generations"
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn voice_key(value: &str) -> String {
@@ -744,6 +2360,8 @@ pub(crate) fn merge_voice_component(
     )?;
     let manifest: VoicePatchManifest = serde_json::from_slice(&manifest_bytes)?;
     validate_voice_manifest(&manifest)?;
+    pending.merge_executable_generation(manifest.executable_generation.as_ref())?;
+    let payload_sealed = manifest.format == 3;
     let voice_limits = gore_vo::Limits::default();
     for edit in manifest.edits {
         let key = (voice_key(&edit.archive), voice_key(&edit.archive_path));
@@ -759,6 +2377,9 @@ pub(crate) fn merge_voice_component(
         )?;
         gore_vo::validate_ogg(&ogg, &voice_limits)
             .map_err(|e| ModError::Voice(format!("{}: {e}", edit.ogg)))?;
+        if payload_sealed {
+            require_voice_payload_seal(&edit, &ogg)?;
+        }
         pending.insert(
             key,
             PendingVoiceEdit {
@@ -1056,6 +2677,7 @@ fn metadata_is_link(metadata: &std::fs::Metadata) -> bool {
 // ── Game paths ──────────────────────────────────────────────────────────────────
 /// Resolved game-install locations. `root` is the game folder that contains `G1R/`.
 pub struct GamePaths {
+    pub executable: PathBuf,
     pub ue4ss_mods: PathBuf,
     pub fmod_desktop: PathBuf,
     pub voice_over: PathBuf,
@@ -1063,8 +2685,64 @@ pub struct GamePaths {
     pub script_cache: PathBuf,
 }
 
+/// Normalize either an install directory or its direct `G1R` child to the semantic install root.
+///
+/// Windows path identity is case-insensitive, so `G1R`, `g1r`, and mixed-case spellings must all
+/// mean the same direct child. This helper is lexical and intentionally does not dereference a
+/// caller-configured install-root alias.
+pub fn semantic_install_root(root: &Path) -> PathBuf {
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("G1R"))
+    {
+        root.parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| root.to_path_buf())
+    } else {
+        root.to_path_buf()
+    }
+}
+
+/// Bind the fixed VoiceOver directory without following a symlink/reparse component. A missing
+/// suffix is represented as None so target discovery can keep its established unresolved result;
+/// an existing non-directory or link/reparse component is always an error.
+pub fn bind_voice_over_root(game_root: &Path) -> Result<Option<VoiceOverPathGuard>> {
+    let semantic = semantic_install_root(game_root);
+    let absolute = if semantic.is_absolute() {
+        semantic
+    } else {
+        std::env::current_dir()
+            .map_err(io("reading current directory for VoiceOver binding"))?
+            .join(semantic)
+    };
+    let install =
+        mgr::model::open_directory_chain_nofollow(&absolute, "configured game installation")?;
+    let mut directory = install.clone();
+    for component in ["G1R", "Story", "VoiceOver"] {
+        let Some(child) = directory.open_optional_child_directory(
+            std::ffi::OsStr::new(component),
+            "installed VoiceOver directory",
+        )?
+        else {
+            return Ok(None);
+        };
+        directory = child;
+    }
+    let install_root = install.path().to_path_buf();
+    let directory = directory.into_rename_guard("installed VoiceOver directory")?;
+    Ok(Some(VoiceOverPathGuard {
+        install_root,
+        directory: std::sync::Arc::new(directory),
+    }))
+}
+
 pub fn resolve_game_paths(root: &Path) -> GamePaths {
-    let g1r = if root.file_name().is_some_and(|n| n == "G1R") {
+    let g1r = if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("G1R"))
+    {
         root.to_path_buf()
     } else {
         root.join("G1R")
@@ -1091,6 +2769,10 @@ pub fn resolve_game_paths(root: &Path) -> GamePaths {
         })
     };
     GamePaths {
+        executable: g1r
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe"),
         ue4ss_mods: g1r
             .join("Binaries")
             .join("Win64")
@@ -1745,13 +3427,7 @@ fn abs_root(root: &Path) -> PathBuf {
 /// deploy via `.../G1R` and an undeploy via the Steam-detected parent would use different record
 /// paths, leaving the mod silently un-undeployable.
 fn record_root(root: &Path) -> PathBuf {
-    if root.file_name().is_some_and(|n| n == "G1R") {
-        root.parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| root.to_path_buf())
-    } else {
-        root.to_path_buf()
-    }
+    semantic_install_root(root)
 }
 
 fn record_path(root: &Path) -> PathBuf {
@@ -1783,6 +3459,11 @@ pub(crate) struct DeployPlan {
     /// against the prior record. Filled by `commit_plan`, never by bundle parsing.
     additive_identities: BTreeMap<PathBuf, PlannedIdentity>,
     ue4ss_identities: BTreeMap<PathBuf, PlannedIdentity>,
+    /// Format-3 Voice generation retained across prepare for the final pre-mutation check.
+    voice_executable_generation: Option<VoiceExecutableGenerationSeal>,
+    /// Retained component-wise no-follow binding of the fixed VoiceOver directory. This survives
+    /// prepare so commit can reject an identity replacement before any game mutation.
+    voice_over_guard: Option<VoiceOverPathGuard>,
 }
 
 #[derive(Debug, Clone)]
@@ -1830,6 +3511,62 @@ fn pristine_voice_source(live: &Path, prev: Option<&DeployRecord>) -> Result<(Pa
     ensure_pristine_sources_bounded(live, gore_vo::Limits::default().max_archive_bytes)?;
     let source = select_pristine_source(live, prev)?;
     Ok((source.path, source.drifted))
+}
+
+/// Resolve one Voice archive to the same authenticated pristine source used by deployment.
+///
+/// This is deliberately read-only: it never creates a backup or changes the active record. An
+/// interrupted deployment, unsafe archive spelling, untrusted/differing legacy backup, missing
+/// authenticated active backup, link/reparse object, or oversized source fails closed. The
+/// returned path is suitable for immediate inspection; consumers should retain their own
+/// no-follow/path-identity guard while opening it.
+pub fn resolve_pristine_voice_archive_for_inspection(
+    game_root: &Path,
+    archive: &str,
+) -> Result<VoiceArchiveInspectionSource> {
+    let guard = bind_voice_over_root(game_root)?.ok_or_else(|| {
+        ModError::Other(format!(
+            "installed VoiceOver directory is missing below {}",
+            semantic_install_root(game_root).display()
+        ))
+    })?;
+    guard.resolve_pristine_archive(archive)
+}
+
+fn resolve_pristine_voice_archive_with_guard(
+    guard: &VoiceOverPathGuard,
+    archive: &str,
+) -> Result<VoiceArchiveInspectionSource> {
+    if !is_safe_voice_archive(archive) {
+        return Err(ModError::Other(format!(
+            "unsafe voice archive name {archive:?}: expected one .zip filename"
+        )));
+    }
+    let stored = read_record(&guard.install_root)?;
+    let prior = stored.as_ref().map(|value| &value.record);
+    if prior.is_some_and(|record| record.phase == DeployPhase::RecoveryRequired) {
+        return Err(recovery_required_error());
+    }
+    let live = guard.path().join(archive);
+    let (path, drifted) = pristine_voice_source(&live, prior)?;
+    let metadata = std::fs::symlink_metadata(&path).map_err(io(&format!(
+        "reading selected pristine Voice archive metadata {}",
+        path.display()
+    )))?;
+    if metadata_is_link(&metadata) || !metadata.is_file() {
+        return Err(ModError::Other(format!(
+            "selected pristine Voice archive is not a regular non-link file: {}",
+            path.display()
+        )));
+    }
+    let rebound = bind_voice_over_root(&guard.install_root)?
+        .ok_or_else(|| ModError::Other("installed VoiceOver directory disappeared".into()))?;
+    if !guard.same_identity(&rebound) {
+        return Err(ModError::Other(
+            "installed VoiceOver directory changed identity during pristine selection".into(),
+        ));
+    }
+    Ok(VoiceArchiveInspectionSource { path, drifted })
 }
 
 fn sealed_voice_archive_identity(
@@ -1948,6 +3685,40 @@ pub(crate) fn prepare_voice_archive_writes(
     prev: Option<&DeployRecord>,
     plan: &mut DeployPlan,
 ) -> Result<()> {
+    if pending.edits.is_empty() {
+        return Ok(());
+    }
+    let install_root =
+        gp.voice_over.ancestors().nth(3).ok_or_else(|| {
+            ModError::Other("installed VoiceOver path has no install root".into())
+        })?;
+    let voice_over_guard = bind_voice_over_root(install_root)?.ok_or_else(|| {
+        ModError::Other(format!(
+            "installed VoiceOver directory is missing: {}",
+            gp.voice_over.display()
+        ))
+    })?;
+    match &plan.voice_over_guard {
+        None => plan.voice_over_guard = Some(voice_over_guard.clone()),
+        Some(existing) if existing.same_identity(&voice_over_guard) => {}
+        Some(_) => {
+            return Err(ModError::Other(
+                "deploy plan contains conflicting VoiceOver directory identities".into(),
+            ))
+        }
+    }
+    if let Some(generation) = &pending.executable_generation {
+        require_live_voice_executable_generation(gp, generation)?;
+        match &plan.voice_executable_generation {
+            None => plan.voice_executable_generation = Some(generation.clone()),
+            Some(existing) if existing == generation => {}
+            Some(_) => {
+                return Err(ModError::Other(
+                    "deploy plan contains conflicting format-3 Voice executable generations".into(),
+                ));
+            }
+        }
+    }
     let mut by_archive: BTreeMap<String, Vec<&PendingVoiceEdit>> = BTreeMap::new();
     for ((archive_key, _), edit) in &pending.edits {
         by_archive
@@ -1963,7 +3734,7 @@ pub(crate) fn prepare_voice_archive_writes(
             .max_by_key(|edit| edit.order)
             .expect("a grouped archive has at least one edit")
             .archive;
-        let live = gp.voice_over.join(archive_name);
+        let live = voice_over_guard.path().join(archive_name);
         let live_metadata = std::fs::symlink_metadata(&live).map_err(|_| {
             ModError::Other(format!(
                 "voice archive target is missing; refusing a partial voice patch: {}",
@@ -2272,7 +4043,7 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 /// write-ahead journal: an abrupt process/OS crash is recoverable to pristine via the record, but
 /// is not promised to recreate the exact previously-active loadout automatically.
 pub(crate) fn commit_plan(
-    _gp: &GamePaths,
+    gp: &GamePaths,
     abs_root: &Path,
     mut plan: DeployPlan,
     mut record: DeployRecord,
@@ -2328,6 +4099,18 @@ pub(crate) fn commit_plan(
 
     // (a) Stage: snapshot prior bytes + create every *.gore-bak, and note the intended UE4SS
     //     target — but do NOT write any live game file yet.
+    if let Some(expected) = &plan.voice_over_guard {
+        let actual = bind_voice_over_root(&expected.install_root)?
+            .ok_or_else(|| ModError::Other("installed VoiceOver directory disappeared".into()))?;
+        if !expected.same_identity(&actual) {
+            return Err(ModError::Other(
+                "installed VoiceOver directory changed identity before deployment".into(),
+            ));
+        }
+    }
+    if let Some(generation) = &plan.voice_executable_generation {
+        require_live_voice_executable_generation(gp, generation)?;
+    }
     if let Err(e) = stage(&plan, &mut record, &mut undo) {
         return Err(with_rollback_failures(e, undo.rollback()));
     }
@@ -5003,6 +6786,19 @@ pub(crate) fn select_pristine_source(
     let backup = bak_path(live);
     match std::fs::symlink_metadata(&backup) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            if prev.is_some_and(|record| {
+                record
+                    .backups
+                    .iter()
+                    .any(|(stored_live, stored_backup, _)| {
+                        same_path(live, stored_live) && same_path(&backup, stored_backup)
+                    })
+            }) {
+                return Err(ModError::Other(format!(
+                    "active deployment's authenticated pristine backup is missing: {}",
+                    backup.display()
+                )));
+            }
             return Ok(PristineSource {
                 path: live.to_path_buf(),
                 drifted: false,
@@ -6068,6 +7864,9 @@ thread_local! {
     static FAIL_UE4SS_PROMOTION: std::cell::RefCell<Option<PathBuf>> = const {
         std::cell::RefCell::new(None)
     };
+    static FAIL_VOICE_BUNDLE_WRITE: std::cell::RefCell<Option<PathBuf>> = const {
+        std::cell::RefCell::new(None)
+    };
     static REPLACE_ADDITIVE_BEFORE_APPLY: std::cell::RefCell<Option<(PathBuf, Vec<u8>)>> = const {
         std::cell::RefCell::new(None)
     };
@@ -6122,6 +7921,25 @@ fn fail_next_ue4ss_promotion(path: &Path) {
 #[cfg(test)]
 fn take_injected_ue4ss_promotion_failure(path: &Path) -> bool {
     FAIL_UE4SS_PROMOTION.with(|slot| {
+        let matches = slot
+            .borrow()
+            .as_ref()
+            .is_some_and(|expected| same_path(path, &expected.display().to_string()));
+        if matches {
+            slot.borrow_mut().take();
+        }
+        matches
+    })
+}
+
+#[cfg(test)]
+fn fail_next_voice_bundle_write(path: &Path) {
+    FAIL_VOICE_BUNDLE_WRITE.with(|slot| *slot.borrow_mut() = Some(path.to_path_buf()));
+}
+
+#[cfg(test)]
+fn take_injected_voice_bundle_write_failure(path: &Path) -> bool {
+    FAIL_VOICE_BUNDLE_WRITE.with(|slot| {
         let matches = slot
             .borrow()
             .as_ref()
@@ -6493,7 +8311,9 @@ mod tests {
     use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit};
     use aes::Aes256;
     use gore_modgen::gen::OverrideValue;
+    use std::cell::{Cell, RefCell};
     use std::io::{Read, Write};
+    use std::rc::Rc;
 
     const TEST_LCACHE_AES_KEY: &[u8; 32] = b"8f93ff6fa254d9c536ad88c1ff1d812b";
 
@@ -6614,6 +8434,45 @@ mod tests {
                 .map(|byte| format!("{byte:02x}"))
                 .collect(),
             member_proof,
+        }
+    }
+
+    fn test_sealed_voice_replace(
+        archive_path: &str,
+        ogg: Vec<u8>,
+        observation: VoiceArchiveObservation,
+    ) -> SealedVoiceArchiveReplace {
+        SealedVoiceArchiveReplace {
+            archive: "German.zip".into(),
+            archive_path: archive_path.into(),
+            ogg,
+            observation,
+        }
+    }
+
+    fn test_sealed_voice_meta() -> ModMeta {
+        ModMeta {
+            name: "ManagedVoice".into(),
+            version: "1".into(),
+            author: "tester".into(),
+        }
+    }
+
+    fn test_voice_generation() -> VoiceExecutableGenerationSeal {
+        let bytes = b"fixture-game-exe";
+        VoiceExecutableGenerationSeal {
+            byte_len: bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        }
+    }
+
+    fn write_test_game_executable(game: &Path, bytes: &[u8]) -> VoiceExecutableGenerationSeal {
+        let executable = resolve_game_paths(game).executable;
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, bytes).unwrap();
+        VoiceExecutableGenerationSeal {
+            byte_len: bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(bytes)),
         }
     }
 
@@ -7118,8 +8977,13 @@ mod tests {
         let manifest: VoicePatchManifest =
             serde_json::from_slice(&bundle.files["voice/manifest.json"]).unwrap();
         assert_eq!(manifest.format, 2);
+        assert_eq!(manifest.executable_generation, None);
         assert_eq!(manifest.edits[0].observation, Some(present.clone()));
         assert_eq!(manifest.edits[1].observation, Some(absent));
+        assert!(manifest
+            .edits
+            .iter()
+            .all(|edit| edit.payload_seal.is_none()));
 
         let mut mixed = spec.clone();
         mixed.voice[1].observation = None;
@@ -7186,12 +9050,29 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("format 2"));
+        let mut v2_with_payload_seal = manifest.clone();
+        v2_with_payload_seal.edits[0].payload_seal = Some(VoicePayloadSeal {
+            byte_len: 1,
+            sha256: "0".repeat(64),
+        });
+        assert!(validate_voice_manifest(&v2_with_payload_seal)
+            .unwrap_err()
+            .to_string()
+            .contains("format 2"));
+        // Committed v2 semantics remain case-insensitive later-wins, including duplicates within
+        // one component. Format 3 is the first canonical-unique contract.
+        let mut duplicate_v2 = manifest.clone();
+        let mut duplicate = duplicate_v2.edits[0].clone();
+        duplicate.archive = duplicate.archive.to_ascii_uppercase();
+        duplicate.archive_path = duplicate.archive_path.to_ascii_uppercase();
+        duplicate_v2.edits.push(duplicate);
+        validate_voice_manifest(&duplicate_v2).unwrap();
         let mut unsupported = manifest.clone();
-        unsupported.format = 3;
+        unsupported.format = 4;
         assert!(validate_voice_manifest(&unsupported)
             .unwrap_err()
             .to_string()
-            .contains("want 1 or 2"));
+            .contains("want 1, 2, or 3"));
         let mut disagreeing = manifest;
         disagreeing.edits[1]
             .observation
@@ -7202,6 +9083,845 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("disagree"));
+    }
+
+    #[test]
+    fn committed_v2_manifest_fixture_remains_byte_exact_and_duplicate_later_wins() {
+        let fixture = format!(
+            concat!(
+                "{{\n  \"format\": 2,\n  \"edits\": [\n    {{\n      \"archive\": \"German.zip\",\n      \"op\": \"replace\",\n      \"archive_path\": \"NPC/Hero/hello.ogg\",\n      \"ogg\": \"voice/first.ogg\",\n      \"observation\": {{\n        \"archive_size\": 123,\n        \"archive_sha256\": \"{}\",\n        \"member_proof\": {{\n          \"state\": \"present\",\n          \"uncompressed_size\": 7,\n          \"crc32\": 9\n        }}\n      }}\n    }},\n    {{\n      \"archive\": \"GERMAN.ZIP\",\n      \"op\": \"replace\",\n      \"archive_path\": \"NPC/HERO/HELLO.OGG\",\n      \"ogg\": \"voice/second.ogg\",\n      \"observation\": {{\n        \"archive_size\": 123,\n        \"archive_sha256\": \"{}\",\n        \"member_proof\": {{\n          \"state\": \"present\",\n          \"uncompressed_size\": 7,\n          \"crc32\": 9\n        }}\n      }}\n    }}\n  ]\n}}"
+            ),
+            "0".repeat(64),
+            "0".repeat(64),
+        );
+        let manifest: VoicePatchManifest = serde_json::from_str(&fixture).unwrap();
+        validate_voice_manifest(&manifest).unwrap();
+        assert_eq!(manifest.executable_generation, None);
+        assert!(manifest
+            .edits
+            .iter()
+            .all(|edit| edit.payload_seal.is_none()));
+        assert_eq!(serde_json::to_string_pretty(&manifest).unwrap(), fixture);
+
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("v2-bundle");
+        std::fs::create_dir_all(bundle.join("voice")).unwrap();
+        let first = test_ogg(32_000);
+        let second = test_ogg(44_100);
+        std::fs::write(bundle.join("voice/manifest.json"), fixture).unwrap();
+        std::fs::write(bundle.join("voice/first.ogg"), &first).unwrap();
+        std::fs::write(bundle.join("voice/second.ogg"), &second).unwrap();
+        let mut pending = PendingVoiceEdits::new();
+        let mut order = 0;
+        merge_voice_component(&bundle, "voice", &mut pending, &mut order).unwrap();
+        assert_eq!(pending.edits.len(), 1);
+        let winner = pending.edits.values().next().unwrap();
+        assert_eq!(winner.archive, "GERMAN.ZIP");
+        assert_eq!(winner.archive_path, "NPC/HERO/HELLO.OGG");
+        assert_eq!(winner.ogg, second);
+    }
+
+    #[test]
+    fn semantic_install_root_accepts_direct_g1r_case_insensitively() {
+        let install = PathBuf::from("install-root");
+        for spelling in ["G1R", "g1r", "G1r"] {
+            let child = install.join(spelling);
+            assert_eq!(semantic_install_root(&child), install);
+            assert_eq!(
+                resolve_game_paths(&child).executable,
+                child.join("Binaries/Win64/G1R-Win64-Shipping.exe")
+            );
+        }
+        assert_eq!(semantic_install_root(&install), install);
+    }
+
+    #[test]
+    fn byte_backed_sealed_voice_bundle_is_deterministic_and_exactly_verifiable() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let first_original = test_ogg(16_000);
+        let second_original = test_ogg(22_050);
+        write_test_voice_zip(
+            &archive,
+            &[
+                ("NPC/Hero/hello.ogg", &first_original),
+                ("NPC/Hero/bye.ogg", &second_original),
+            ],
+        );
+        let first_observation = observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg");
+        let second_observation = observe_test_voice_archive(&archive, "NPC/Hero/bye.ogg");
+        let replacements = vec![
+            test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                first_observation.clone(),
+            ),
+            test_sealed_voice_replace(
+                "NPC/Hero/bye.ogg",
+                test_ogg(44_100),
+                second_observation.clone(),
+            ),
+        ];
+
+        let first = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            replacements.clone(),
+        )
+        .unwrap();
+        let second = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            replacements,
+        )
+        .unwrap();
+        assert_eq!(first.files, second.files);
+        assert!(matches!(
+            first.manifest.components.as_slice(),
+            [Component::VoiceArchivePatch { path }] if path == "voice"
+        ));
+        let manifest: VoicePatchManifest =
+            serde_json::from_slice(&first.files["voice/manifest.json"]).unwrap();
+        assert_eq!(manifest.format, 3);
+        assert_eq!(
+            manifest.executable_generation,
+            Some(test_voice_generation())
+        );
+        assert!(manifest
+            .edits
+            .iter()
+            .all(|edit| edit.op == VoicePatchOp::Replace));
+        assert_eq!(manifest.edits[0].observation, Some(first_observation));
+        assert_eq!(manifest.edits[1].observation, Some(second_observation));
+        assert_eq!(manifest.edits[0].ogg, "voice/payload/0.ogg");
+        assert_eq!(manifest.edits[1].ogg, "voice/payload/1.ogg");
+        assert_eq!(
+            manifest.edits[0].payload_seal,
+            Some(voice_payload_seal(&first.files["voice/payload/0.ogg"]))
+        );
+
+        let output = dir.path().join("managed-voice-bundle");
+        write_voice_bundle_new(&output, &first).unwrap();
+        verify_sealed_voice_bundle(&output).unwrap();
+        assert_eq!(
+            std::fs::read(output.join("voice/payload/0.ogg")).unwrap(),
+            first.files["voice/payload/0.ogg"]
+        );
+    }
+
+    #[test]
+    fn byte_backed_sealed_voice_build_rejects_invalid_contracts_and_budgets() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive, &[("NPC/Hero/hello.ogg", &original)]);
+        let present = observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg");
+        let valid =
+            test_sealed_voice_replace("NPC/Hero/hello.ogg", test_ogg(32_000), present.clone());
+
+        assert!(build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![]
+        )
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("at least one"));
+
+        let mut unsafe_target = valid.clone();
+        unsafe_target.archive_path = "../escape.ogg".into();
+        assert!(build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![unsafe_target]
+        )
+        .is_err());
+
+        let mut duplicate = valid.clone();
+        duplicate.archive = duplicate.archive.to_ascii_uppercase();
+        duplicate.archive_path = duplicate.archive_path.to_ascii_uppercase();
+        let error = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![valid.clone(), duplicate],
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("duplicate deployment target"));
+
+        let mut absent = valid.clone();
+        absent.observation.member_proof = VoiceMemberProof::Absent;
+        let error = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![absent],
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("replace") && error.contains("present"));
+
+        let mut invalid_ogg = valid.clone();
+        invalid_ogg.ogg = b"not an Ogg stream".to_vec();
+        assert!(matches!(
+            build_sealed_voice_bundle(
+                test_sealed_voice_meta(),
+                test_voice_generation(),
+                vec![invalid_ogg]
+            ),
+            Err(ModError::Voice(_))
+        ));
+
+        let mut unsafe_meta = test_sealed_voice_meta();
+        unsafe_meta.name = "../ManagedVoice".into();
+        assert!(build_sealed_voice_bundle(
+            unsafe_meta,
+            test_voice_generation(),
+            vec![valid.clone()]
+        )
+        .is_err());
+
+        let mut disagreeing = valid.clone();
+        disagreeing.archive_path = "NPC/Hero/other.ogg".into();
+        disagreeing.observation.archive_size += 1;
+        let error = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![valid, disagreeing],
+        )
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(error.contains("disagree"), "unexpected error: {error}");
+
+        assert_eq!(voice_payload_byte_limit(0, 123).unwrap(), 123);
+        assert_eq!(
+            voice_payload_byte_limit(MAX_PENDING_VOICE_OGG_BYTES - 7, 123).unwrap(),
+            7
+        );
+        assert!(voice_payload_byte_limit(MAX_PENDING_VOICE_OGG_BYTES + 1, 123).is_err());
+    }
+
+    #[test]
+    fn sealed_voice_verifier_rejects_extra_missing_and_mutated_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive, &[("NPC/Hero/hello.ogg", &original)]);
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+
+        let extra_file = dir.path().join("extra-file");
+        write_bundle(&extra_file, &bundle).unwrap();
+        std::fs::write(extra_file.join("voice/unexpected.bin"), b"extra").unwrap();
+        let error = verify_sealed_voice_bundle(&extra_file)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("extra") && error.contains("unexpected.bin"));
+
+        let extra_dir = dir.path().join("extra-dir");
+        write_bundle(&extra_dir, &bundle).unwrap();
+        std::fs::create_dir(extra_dir.join("empty-extra")).unwrap();
+        let error = verify_sealed_voice_bundle(&extra_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("directory layout") && error.contains("empty-extra"));
+
+        let missing_payload = dir.path().join("missing-payload");
+        write_bundle(&missing_payload, &bundle).unwrap();
+        std::fs::remove_file(missing_payload.join("voice/payload/0.ogg")).unwrap();
+        assert!(verify_sealed_voice_bundle(&missing_payload).is_err());
+
+        let missing_manifest = dir.path().join("missing-manifest");
+        write_bundle(&missing_manifest, &bundle).unwrap();
+        std::fs::remove_file(missing_manifest.join("voice/manifest.json")).unwrap();
+        assert!(verify_sealed_voice_bundle(&missing_manifest).is_err());
+
+        let extra_component = dir.path().join("extra-component");
+        write_bundle(&extra_component, &bundle).unwrap();
+        let mut root_manifest: ModManifest =
+            serde_json::from_slice(&bundle.files["gore-mod.json"]).unwrap();
+        root_manifest.components.push(Component::LocPatch {
+            path: "loc/edits.json".into(),
+        });
+        std::fs::write(
+            extra_component.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&root_manifest).unwrap(),
+        )
+        .unwrap();
+        let error = verify_sealed_voice_bundle(&extra_component)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("exactly one voice component"));
+
+        let missing_component = dir.path().join("missing-component");
+        write_bundle(&missing_component, &bundle).unwrap();
+        root_manifest.components.clear();
+        std::fs::write(
+            missing_component.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&root_manifest).unwrap(),
+        )
+        .unwrap();
+        assert!(verify_sealed_voice_bundle(&missing_component).is_err());
+
+        let additive = dir.path().join("additive");
+        write_bundle(&additive, &bundle).unwrap();
+        let mut voice_manifest: VoicePatchManifest =
+            serde_json::from_slice(&bundle.files["voice/manifest.json"]).unwrap();
+        voice_manifest.edits[0].op = VoicePatchOp::Add;
+        voice_manifest.edits[0]
+            .observation
+            .as_mut()
+            .unwrap()
+            .member_proof = VoiceMemberProof::Absent;
+        std::fs::write(
+            additive.join("voice/manifest.json"),
+            serde_json::to_vec_pretty(&voice_manifest).unwrap(),
+        )
+        .unwrap();
+        let error = verify_sealed_voice_bundle(&additive)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("format 3") && error.contains("replace"),
+            "unexpected error: {error}"
+        );
+
+        let noncanonical = dir.path().join("noncanonical");
+        write_bundle(&noncanonical, &bundle).unwrap();
+        voice_manifest = serde_json::from_slice(&bundle.files["voice/manifest.json"]).unwrap();
+        voice_manifest.edits[0].ogg = "voice/payload/00.ogg".into();
+        std::fs::write(
+            noncanonical.join("voice/manifest.json"),
+            serde_json::to_vec_pretty(&voice_manifest).unwrap(),
+        )
+        .unwrap();
+        let error = verify_sealed_voice_bundle(&noncanonical)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("non-canonical payload path"));
+
+        let corrupt = dir.path().join("corrupt");
+        write_bundle(&corrupt, &bundle).unwrap();
+        std::fs::write(corrupt.join("voice/payload/0.ogg"), b"not ogg").unwrap();
+        assert!(matches!(
+            verify_sealed_voice_bundle(&corrupt),
+            Err(ModError::Voice(_))
+        ));
+
+        let valid_substitution = dir.path().join("valid-substitution");
+        write_bundle(&valid_substitution, &bundle).unwrap();
+        std::fs::write(
+            valid_substitution.join("voice/payload/0.ogg"),
+            test_ogg(48_000),
+        )
+        .unwrap();
+        let error = verify_sealed_voice_bundle(&valid_substitution)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("content seal"), "unexpected error: {error}");
+
+        let linked = dir.path().join("linked");
+        write_bundle(&linked, &bundle).unwrap();
+        let payload = linked.join("voice/payload/0.ogg");
+        let external = dir.path().join("external.ogg");
+        std::fs::write(&external, test_ogg(44_100)).unwrap();
+        std::fs::remove_file(&payload).unwrap();
+        if make_test_file_link(&external, &payload) {
+            let error = verify_sealed_voice_bundle(&linked).unwrap_err().to_string();
+            assert!(error.contains("symbolic link") || error.contains("reparse point"));
+        }
+    }
+
+    #[test]
+    fn new_voice_bundle_writer_never_clobbers_and_cleans_its_failed_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive, &[("NPC/Hero/hello.ogg", &original)]);
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+
+        let existing_dir = dir.path().join("existing-dir");
+        std::fs::create_dir(&existing_dir).unwrap();
+        std::fs::write(existing_dir.join("sentinel.txt"), b"keep me").unwrap();
+        let error = write_voice_bundle_new(&existing_dir, &bundle)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("already exists"));
+        assert_eq!(
+            std::fs::read(existing_dir.join("sentinel.txt")).unwrap(),
+            b"keep me"
+        );
+
+        let existing_file = dir.path().join("existing-file");
+        std::fs::write(&existing_file, b"keep this too").unwrap();
+        assert!(write_voice_bundle_new(&existing_file, &bundle).is_err());
+        assert_eq!(std::fs::read(&existing_file).unwrap(), b"keep this too");
+
+        let invalid_target = dir.path().join("invalid-bundle");
+        let mut invalid_bundle = Bundle {
+            files: bundle.files.clone(),
+            manifest: ModManifest {
+                format: bundle.manifest.format,
+                mod_meta: bundle.manifest.mod_meta.clone(),
+                components: vec![],
+            },
+        };
+        invalid_bundle.files.insert(
+            "gore-mod.json".into(),
+            serde_json::to_vec_pretty(&invalid_bundle.manifest).unwrap(),
+        );
+        assert!(write_voice_bundle_new(&invalid_target, &invalid_bundle).is_err());
+        assert!(!invalid_target.exists());
+
+        let failed_target = dir.path().join("failed-write");
+        fail_next_voice_bundle_write(&failed_target);
+        let error = write_voice_bundle_new(&failed_target, &bundle)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("injected"));
+        assert!(!failed_target.exists());
+
+        let real_parent = dir.path().join("real-parent");
+        let linked_parent = dir.path().join("linked-parent");
+        std::fs::create_dir(&real_parent).unwrap();
+        if make_test_dir_link(&real_parent, &linked_parent) {
+            let linked_target = linked_parent.join("must-not-exist");
+            let error = write_voice_bundle_new(&linked_target, &bundle)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("symbolic-link") || error.contains("reparse"),
+                "unexpected error: {error}"
+            );
+            assert!(!real_parent.join("must-not-exist").exists());
+        }
+
+        // Exercise the exact create-to-anchor window. Even when the directory just created by
+        // the writer is renamed and replaced by an in-parent link before its first open, no bundle
+        // file may reach the link target and cleanup must not traverse it.
+        let raced_target = dir.path().join("raced-write");
+        let parked_target = dir.path().join("raced-write-before-link");
+        let race_destination = dir.path().join("race-destination");
+        std::fs::create_dir(&race_destination).unwrap();
+        std::fs::write(
+            race_destination.join("sentinel.txt"),
+            b"outside stays intact",
+        )
+        .unwrap();
+        let link_installed = Rc::new(Cell::new(false));
+        let link_installed_in_hook = link_installed.clone();
+        let parked_target_in_hook = parked_target.clone();
+        let race_destination_in_hook = race_destination.clone();
+        mgr::model::inject_create_child_directory_race(move |created| {
+            // A retained Windows parent handle may make this replacement impossible. That is
+            // already the desired result, so only install the hostile link when the rename wins.
+            if std::fs::rename(created, &parked_target_in_hook).is_err() {
+                return;
+            }
+            if make_test_dir_link(&race_destination_in_hook, created) {
+                link_installed_in_hook.set(true);
+            } else {
+                std::fs::rename(&parked_target_in_hook, created).unwrap();
+            }
+        });
+        let raced_result = write_voice_bundle_new(&raced_target, &bundle);
+        if link_installed.get() {
+            let error = raced_result.unwrap_err().to_string();
+            assert!(
+                error.contains("symbolic link")
+                    || error.contains("symbolic-link")
+                    || error.contains("reparse point")
+                    || error.contains("reparse"),
+                "unexpected error: {error}"
+            );
+            assert!(!race_destination.join("gore-mod.json").exists());
+            assert!(!race_destination.join("voice").exists());
+            assert_eq!(
+                std::fs::read(race_destination.join("sentinel.txt")).unwrap(),
+                b"outside stays intact"
+            );
+            if std::fs::remove_file(&raced_target).is_err() {
+                std::fs::remove_dir(&raced_target).unwrap();
+            }
+            std::fs::remove_dir(&parked_target).unwrap();
+        } else {
+            raced_result.unwrap();
+        }
+
+        let sealed_target = dir.path().join("disk-sealed");
+        write_voice_bundle_new(&sealed_target, &bundle).unwrap();
+        let expected = canonical_voice_bundle_tree_seal(
+            bundle
+                .files
+                .iter()
+                .map(|(path, bytes)| (path.clone(), bytes.clone())),
+        )
+        .unwrap();
+        assert_eq!(
+            seal_voice_bundle_disk_tree(&sealed_target).unwrap(),
+            expected
+        );
+
+        // A byte-valid Ogg substitution must fail the disk-tree seal rather than returning the
+        // seal of an unverified replacement tree.
+        std::fs::write(sealed_target.join("voice/payload/0.ogg"), test_ogg(48_000)).unwrap();
+        let error = seal_voice_bundle_disk_tree(&sealed_target)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("content seal"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn staged_voice_bundle_retries_collisions_promotes_and_cleans_owned_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive, &[("NPC/Hero/hello.ogg", &original)]);
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            test_voice_generation(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+
+        let raced_collision = Rc::new(RefCell::new(None));
+        let raced_collision_in_hook = raced_collision.clone();
+        mgr::model::inject_create_child_directory_precreate_race(move |candidate| {
+            std::fs::create_dir(candidate).unwrap();
+            std::fs::write(candidate.join("sentinel.txt"), b"racing creator owns this").unwrap();
+            *raced_collision_in_hook.borrow_mut() = Some(candidate.to_path_buf());
+        });
+        let final_target = dir.path().join("published-voice");
+        let staged = write_voice_bundle_staged_new(&final_target, &bundle).unwrap();
+        let staging_path = staged.path().to_path_buf();
+        let collision_path = raced_collision.borrow().clone().unwrap();
+        assert_ne!(staging_path, collision_path);
+        assert_eq!(
+            std::fs::read(collision_path.join("sentinel.txt")).unwrap(),
+            b"racing creator owns this"
+        );
+        staged.promote_new().unwrap();
+        assert!(!staging_path.exists());
+        verify_sealed_voice_bundle(&final_target).unwrap();
+        assert_eq!(
+            std::fs::read(collision_path.join("sentinel.txt")).unwrap(),
+            b"racing creator owns this"
+        );
+
+        let occupied_final = dir.path().join("occupied-final");
+        std::fs::create_dir(&occupied_final).unwrap();
+        std::fs::write(occupied_final.join("sentinel.txt"), b"final owner wins").unwrap();
+        let collided_stage = write_voice_bundle_staged_new(&occupied_final, &bundle).unwrap();
+        let collided_stage_path = collided_stage.path().to_path_buf();
+        let error = collided_stage.promote_new().unwrap_err();
+        assert_eq!(error.kind(), VoiceBundleStagingErrorKind::OperationFailed);
+        assert!(error.cleanup_confirmed());
+        assert!(!collided_stage_path.exists());
+        assert_eq!(
+            std::fs::read(occupied_final.join("sentinel.txt")).unwrap(),
+            b"final owner wins"
+        );
+
+        let aborted =
+            write_voice_bundle_staged_new(&dir.path().join("aborted-final"), &bundle).unwrap();
+        let aborted_path = aborted.path().to_path_buf();
+        aborted.abort().unwrap();
+        assert!(!aborted_path.exists());
+    }
+
+    #[test]
+    fn format3_voice_deploy_requires_exact_executable_and_payload_generation() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let pristine = std::fs::read(&live).unwrap();
+        let generation = write_test_game_executable(&game, b"v3-game-generation");
+        let replacement = test_ogg(44_100);
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            generation.clone(),
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                replacement.clone(),
+                observe_test_voice_archive(&live, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(&bundle_dir, &bundle).unwrap();
+        deploy(&bundle_dir, &game).unwrap();
+        assert_eq!(
+            read_test_zip_entry(&live, "NPC/Hero/hello.ogg").unwrap(),
+            replacement
+        );
+        assert_eq!(std::fs::read(bak_path(&live)).unwrap(), pristine);
+
+        undeploy(&game).unwrap();
+        assert_eq!(
+            read_test_zip_entry(&live, "NPC/Hero/hello.ogg").unwrap(),
+            original
+        );
+
+        // A byte-valid substituted payload is rejected by generic deployment too, before any
+        // backup or record can be created.
+        let substituted = dir.path().join("substituted");
+        write_bundle(&substituted, &bundle).unwrap();
+        std::fs::write(substituted.join("voice/payload/0.ogg"), test_ogg(48_000)).unwrap();
+        let before = std::fs::read(&live).unwrap();
+        let error = deploy(&substituted, &game).unwrap_err().to_string();
+        assert!(error.contains("content seal"), "unexpected error: {error}");
+        assert_eq!(std::fs::read(&live).unwrap(), before);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+
+        // An executable hotfix before prepare invalidates the complete v3 generation.
+        std::fs::write(resolve_game_paths(&game).executable, b"post-build-hotfix").unwrap();
+        let error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            error.contains("does not match") && error.contains("executable"),
+            "unexpected error: {error}"
+        );
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn format3_executable_is_rechecked_at_the_last_pre_mutation_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let generation = write_test_game_executable(&game, b"prepare-generation");
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            generation,
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&live, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(&bundle_dir, &bundle).unwrap();
+        let gp = resolve_game_paths(&game);
+        let plan = prepare(&bundle_dir, &bundle.manifest, &gp, None).unwrap();
+
+        std::fs::write(&gp.executable, b"hotfix-after-prepare").unwrap();
+        let before = std::fs::read(&live).unwrap();
+        let error = commit_plan(
+            &gp,
+            &game,
+            plan,
+            DeployRecord {
+                mod_name: "ManagedVoice".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("does not match") && error.contains("executable"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&live).unwrap(), before);
+        assert!(!bak_path(&live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn inspection_resolver_uses_authenticated_active_pristine_and_tracks_hotfix_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let live = game.join("G1R/Story/VoiceOver/German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &original)]);
+        let generation = write_test_game_executable(&game, b"inspection-generation");
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            generation,
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&live, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+        let bundle_dir = dir.path().join("bundle");
+        write_bundle(&bundle_dir, &bundle).unwrap();
+        deploy(&bundle_dir, &game).unwrap();
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+
+        let pristine = resolve_pristine_voice_archive_for_inspection(&game, "German.zip").unwrap();
+        assert!(same_path(
+            &pristine.path,
+            &bak_path(&live).display().to_string()
+        ));
+        assert!(!pristine.drifted);
+        assert_eq!(
+            read_test_zip_entry(&pristine.path, "NPC/Hero/hello.ogg").unwrap(),
+            original
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+
+        let hotfix = test_ogg(22_050);
+        write_test_voice_zip(&live, &[("NPC/Hero/hello.ogg", &hotfix)]);
+        let refreshed = resolve_pristine_voice_archive_for_inspection(&game, "German.zip").unwrap();
+        assert!(same_path(&refreshed.path, &live.display().to_string()));
+        assert!(refreshed.drifted);
+        assert_eq!(
+            read_test_zip_entry(&refreshed.path, "NPC/Hero/hello.ogg").unwrap(),
+            hotfix
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+
+        std::fs::remove_file(bak_path(&live)).unwrap();
+        let error = resolve_pristine_voice_archive_for_inspection(&game, "German.zip")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("authenticated pristine backup is missing"),
+            "unexpected error: {error}"
+        );
+
+        let mut interrupted: DeployRecord = serde_json::from_slice(&record_before).unwrap();
+        interrupted.phase = DeployPhase::RecoveryRequired;
+        std::fs::write(
+            record_path(&game),
+            serde_json::to_vec_pretty(&interrupted).unwrap(),
+        )
+        .unwrap();
+        let error = resolve_pristine_voice_archive_for_inspection(&game, "German.zip")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("RECOVERY_REQUIRED"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn in_install_voice_over_link_is_rejected_for_inspection_and_deploy() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("game");
+        let story = game.join("G1R/Story");
+        let linked_voice_over = story.join("VoiceOver");
+        let redirected_voice_over = game.join("redirected-voice-over");
+        std::fs::create_dir_all(&story).unwrap();
+        std::fs::create_dir(&redirected_voice_over).unwrap();
+        let redirected_live = redirected_voice_over.join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&redirected_live, &[("NPC/Hero/hello.ogg", &original)]);
+        if !make_test_dir_link(&redirected_voice_over, &linked_voice_over) {
+            return;
+        }
+
+        let inspect_error = resolve_pristine_voice_archive_for_inspection(&game, "German.zip")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            inspect_error.contains("symbolic link")
+                || inspect_error.contains("reparse point")
+                || inspect_error.contains("reparse"),
+            "unexpected inspection error: {inspect_error}"
+        );
+
+        let generation = write_test_game_executable(&game, b"linked-voice-over-generation");
+        let bundle = build_sealed_voice_bundle(
+            test_sealed_voice_meta(),
+            generation,
+            vec![test_sealed_voice_replace(
+                "NPC/Hero/hello.ogg",
+                test_ogg(32_000),
+                observe_test_voice_archive(&redirected_live, "NPC/Hero/hello.ogg"),
+            )],
+        )
+        .unwrap();
+        let bundle_dir = dir.path().join("linked-voice-bundle");
+        write_bundle(&bundle_dir, &bundle).unwrap();
+        let archive_before = std::fs::read(&redirected_live).unwrap();
+        let deploy_error = deploy(&bundle_dir, &game).unwrap_err().to_string();
+        assert!(
+            deploy_error.contains("symbolic link")
+                || deploy_error.contains("reparse point")
+                || deploy_error.contains("reparse"),
+            "unexpected deployment error: {deploy_error}"
+        );
+        assert_eq!(std::fs::read(&redirected_live).unwrap(), archive_before);
+        assert!(!bak_path(&redirected_live).exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn format3_loadout_rejects_conflicting_executable_generations() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("German.zip");
+        let original = test_ogg(16_000);
+        write_test_voice_zip(&archive, &[("NPC/Hero/hello.ogg", &original)]);
+        let observation = observe_test_voice_archive(&archive, "NPC/Hero/hello.ogg");
+        let make_bundle = |name: &str, generation: VoiceExecutableGenerationSeal| {
+            build_sealed_voice_bundle(
+                ModMeta {
+                    name: name.into(),
+                    version: String::new(),
+                    author: String::new(),
+                },
+                generation,
+                vec![test_sealed_voice_replace(
+                    "NPC/Hero/hello.ogg",
+                    test_ogg(32_000),
+                    observation.clone(),
+                )],
+            )
+            .unwrap()
+        };
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        write_bundle(&first, &make_bundle("First", test_voice_generation())).unwrap();
+        let other_generation = VoiceExecutableGenerationSeal {
+            byte_len: 5,
+            sha256: format!("{:x}", Sha256::digest(b"other")),
+        };
+        write_bundle(&second, &make_bundle("Second", other_generation)).unwrap();
+
+        let mut pending = PendingVoiceEdits::new();
+        let mut order = 0;
+        merge_voice_component(&first, "voice", &mut pending, &mut order).unwrap();
+        let error = merge_voice_component(&second, "voice", &mut pending, &mut order)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("conflicting executable generations"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -7272,12 +9992,14 @@ mod tests {
             bundle.join("voice/manifest.json"),
             serde_json::to_vec(&VoicePatchManifest {
                 format: 1,
+                executable_generation: None,
                 edits: vec![VoicePatchEntry {
                     archive: "German.zip".into(),
                     op: VoicePatchOp::Add,
                     archive_path: "GORE/new.ogg".into(),
                     ogg: "voice/payload.ogg".into(),
                     observation: None,
+                    payload_seal: None,
                 }],
             })
             .unwrap(),

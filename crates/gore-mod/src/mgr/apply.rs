@@ -1574,12 +1574,14 @@ mod tests {
             let payload = "voice/payload/0.ogg";
             let manifest = crate::VoicePatchManifest {
                 format: 1,
+                executable_generation: None,
                 edits: vec![crate::VoicePatchEntry {
                     archive: archive.into(),
                     op,
                     archive_path: archive_path.into(),
                     ogg: payload.into(),
                     observation: None,
+                    payload_seal: None,
                 }],
             };
             self.add_mod(

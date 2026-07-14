@@ -60,6 +60,26 @@ pub(crate) struct SecureDirectory {
     parents: Vec<Arc<DirectoryAnchor>>,
 }
 
+/// Directory handle opened with rename-compatible sharing. It retains the parent's filesystem
+/// identity across a Windows rename while allowing that rename to proceed.
+#[derive(Debug)]
+pub(crate) struct RenameDirectoryGuard {
+    file: std::fs::File,
+    final_path: PathBuf,
+    identity: FileIdentity,
+}
+
+impl RenameDirectoryGuard {
+    pub(crate) fn path(&self) -> &Path {
+        let _retained_handle = &self.file;
+        &self.final_path
+    }
+
+    pub(crate) fn identity(&self) -> FileIdentity {
+        self.identity
+    }
+}
+
 /// A regular file whose no-follow handle, stable identity, final path, and length were captured in
 /// one operation. Reads/copies use this exact handle rather than reopening the checked pathname.
 #[derive(Debug)]
@@ -242,7 +262,21 @@ impl SecureDirectory {
         self.anchor.identity
     }
 
-    fn sync_after_mutation(&self, _label: &str) -> crate::Result<()> {
+    /// Consume the no-delete traversal anchor after opening the same directory with sharing that
+    /// permits an atomic child rename. The returned handle preserves identity while the original
+    /// Windows handle (and its no-delete share restriction) is closed.
+    pub(crate) fn into_rename_guard(self, label: &str) -> crate::Result<RenameDirectoryGuard> {
+        let guard = open_directory_rename_compatible(&self.anchor.final_path, label)?;
+        if guard.identity != self.anchor.identity {
+            return Err(crate::ModError::Other(format!(
+                "{label} changed identity while preparing atomic rename: {}",
+                self.anchor.final_path.display()
+            )));
+        }
+        Ok(guard)
+    }
+
+    pub(crate) fn sync_after_mutation(&self, _label: &str) -> crate::Result<()> {
         #[cfg(unix)]
         {
             self.anchor
@@ -268,7 +302,11 @@ impl SecureDirectory {
         )))
     }
 
-    fn contains_child(&self, name: &std::ffi::OsStr, label: &str) -> crate::Result<bool> {
+    pub(crate) fn contains_child(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<bool> {
         validate_plain_component(name, label)?;
         for entry in self.read_dir(label)? {
             let entry = entry.map_err(crate::io(&format!("reading {label} directory entry")))?;
@@ -317,6 +355,24 @@ impl SecureDirectory {
         }
     }
 
+    pub(crate) fn open_optional_child_directory(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<Option<SecureDirectory>> {
+        validate_plain_component(name, label)?;
+        if !self.contains_child(name, label)? {
+            return Ok(None);
+        }
+        match self.open_child(name, label)? {
+            SecureNode::Directory(directory) => Ok(Some(directory)),
+            SecureNode::File(file) => Err(crate::ModError::Other(format!(
+                "{label} must be a real directory: {}",
+                file.path().display()
+            ))),
+        }
+    }
+
     pub(crate) fn open_relative_file(&self, rel: &Path, label: &str) -> crate::Result<SecureFile> {
         let components: Vec<_> = rel.components().collect();
         if components.is_empty() {
@@ -351,6 +407,352 @@ impl SecureDirectory {
         }
         unreachable!("non-empty relative path returns its final file")
     }
+
+    /// Create one direct child directory beneath this retained, no-follow parent and immediately
+    /// bind the new child to its own handle. On Unix the creation itself is `mkdirat`; on Windows
+    /// the retained parent handle denies rename/delete while `CreateDirectory` and the no-follow
+    /// child open run. A hostile replacement can therefore at worst substitute another real child
+    /// inside this parent; a junction/reparse substitution is rejected before it can be used.
+    pub(crate) fn create_child_directory_new(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<SecureDirectory> {
+        self.try_create_child_directory_new(name, label)?
+            .ok_or_else(|| {
+                crate::ModError::Other(format!(
+                    "{label} already exists below retained parent {}",
+                    self.anchor.final_path.display()
+                ))
+            })
+    }
+
+    /// Structured create-new form used by unique-name retry loops. `None` means another creator
+    /// won the direct-child name; all other failures remain hard errors.
+    pub(crate) fn try_create_child_directory_new(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<Option<SecureDirectory>> {
+        validate_plain_component(name, label)?;
+        run_create_child_directory_precreate_race_hook(&self.anchor.final_path.join(name));
+        match create_child_directory_new(&self.anchor, name) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+            Err(error) => {
+                return Err(crate::io(&format!(
+                    "creating {label} relative to retained parent {}",
+                    self.anchor.final_path.display()
+                ))(error))
+            }
+        }
+        run_create_child_directory_race_hook(&self.anchor.final_path.join(name));
+        match self.open_child(name, label) {
+            Ok(SecureNode::Directory(directory)) => {
+                self.sync_after_mutation(label)?;
+                Ok(Some(directory))
+            }
+            Ok(SecureNode::File(file)) => Err(crate::ModError::Other(format!(
+                "new {label} was replaced by a regular file: {}",
+                file.path().display()
+            ))),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Create one direct regular child with exclusive create semantics relative to this retained
+    /// parent. The returned file handle is the object callers write and sync; no checked pathname is
+    /// reopened for the write.
+    pub(crate) fn create_child_file_new(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<(std::fs::File, FileIdentity)> {
+        validate_plain_component(name, label)?;
+        let file = create_child_file_new(&self.anchor, name, label)?;
+        let identity = identity_from_open_file(&file, label)?;
+        Ok((file, identity))
+    }
+
+    /// Remove one direct child relative to this retained parent. Cleanup deliberately never walks
+    /// a pathname assembled from mutable nested directories, so a junction swap cannot redirect a
+    /// failed-write cleanup outside the directory handles created by the writer.
+    pub(crate) fn remove_child_file(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<()> {
+        validate_plain_component(name, label)?;
+        remove_child(&self.anchor, name, false, label)?;
+        self.sync_after_mutation(label)
+    }
+
+    pub(crate) fn remove_child_directory(
+        &self,
+        name: &std::ffi::OsStr,
+        label: &str,
+    ) -> crate::Result<()> {
+        validate_plain_component(name, label)?;
+        remove_child(&self.anchor, name, true, label)?;
+        self.sync_after_mutation(label)
+    }
+
+    /// Remove one direct regular child only when its current no-follow identity is the exact
+    /// object created by the caller. This makes best-effort cleanup refuse a name that another
+    /// process replaced after creation.
+    pub(crate) fn remove_child_file_if_identity(
+        &self,
+        name: &std::ffi::OsStr,
+        expected: FileIdentity,
+        label: &str,
+    ) -> crate::Result<()> {
+        let actual = match self.open_child(name, label)? {
+            SecureNode::File(file) => file,
+            SecureNode::Directory(directory) => {
+                return Err(crate::ModError::Other(format!(
+                "refusing to remove replaced {label}: expected a regular file, found directory {}",
+                directory.path().display()
+            )))
+            }
+        };
+        if actual.identity != expected {
+            return Err(crate::ModError::Other(format!(
+                "refusing to remove replaced {label}: filesystem identity changed at {}",
+                actual.path().display()
+            )));
+        }
+        drop(actual);
+        self.remove_child_file(name, label)
+    }
+
+    /// Directory counterpart to [`Self::remove_child_file_if_identity`]. Removal remains
+    /// non-recursive and relative to this retained parent.
+    pub(crate) fn remove_child_directory_if_identity(
+        &self,
+        name: &std::ffi::OsStr,
+        expected: FileIdentity,
+        label: &str,
+    ) -> crate::Result<()> {
+        let actual = match self.open_child(name, label)? {
+            SecureNode::Directory(directory) => directory,
+            SecureNode::File(file) => {
+                return Err(crate::ModError::Other(format!(
+                    "refusing to remove replaced {label}: expected a directory, found file {}",
+                    file.path().display()
+                )))
+            }
+        };
+        if actual.identity() != expected {
+            return Err(crate::ModError::Other(format!(
+                "refusing to remove replaced {label}: filesystem identity changed at {}",
+                actual.path().display()
+            )));
+        }
+        drop(actual);
+        self.remove_child_directory(name, label)
+    }
+}
+
+/// Open an existing absolute directory component-by-component. Unlike `canonicalize` followed by
+/// one final no-follow open, this never permits an intermediate symlink/junction to choose a new
+/// subtree between validation and binding.
+pub(crate) fn open_directory_chain_nofollow(
+    path: &Path,
+    label: &str,
+) -> crate::Result<SecureDirectory> {
+    if !path.is_absolute() {
+        return Err(crate::ModError::Other(format!(
+            "{label} must be absolute for no-follow traversal: {}",
+            path.display()
+        )));
+    }
+
+    let mut root = PathBuf::new();
+    let mut children = Vec::new();
+    let mut saw_child = false;
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir if !saw_child => {
+                root.push(component.as_os_str());
+            }
+            std::path::Component::Normal(name) => {
+                saw_child = true;
+                children.push(name.to_os_string());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+            | std::path::Component::Prefix(_)
+            | std::path::Component::RootDir => {
+                return Err(crate::ModError::Other(format!(
+                    "{label} contains non-plain absolute traversal: {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    if root.as_os_str().is_empty() {
+        return Err(crate::ModError::Other(format!(
+            "{label} has no absolute filesystem root: {}",
+            path.display()
+        )));
+    }
+
+    let mut directory = open_directory_nofollow(&root, label)?;
+    for name in children {
+        directory = match directory.open_child(&name, label)? {
+            SecureNode::Directory(child) => child,
+            SecureNode::File(file) => {
+                return Err(crate::ModError::Other(format!(
+                    "{label} crosses a regular file: {}",
+                    file.path().display()
+                )))
+            }
+        };
+    }
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn create_child_directory_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    let child = parent.final_path.join(name);
+    std::fs::create_dir(&child)
+}
+
+#[cfg(unix)]
+fn create_child_directory_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::io::AsRawFd as _;
+
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let result = unsafe { libc::mkdirat(parent.file.as_raw_fd(), name.as_ptr(), 0o700) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn create_child_directory_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+) -> std::io::Result<()> {
+    std::fs::create_dir(parent.final_path.join(name))
+}
+
+#[cfg(windows)]
+fn create_child_file_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> crate::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(parent.final_path.join(name))
+        .map_err(crate::io(&format!(
+            "creating {label} relative to retained parent {}",
+            parent.final_path.display()
+        )))
+}
+
+#[cfg(unix)]
+fn create_child_file_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> crate::Result<std::fs::File> {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::io::{AsRawFd as _, FromRawFd as _};
+
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| crate::ModError::Other(format!("{label} child name contains NUL")))?;
+    let fd = unsafe {
+        libc::openat(
+            parent.file.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(crate::io(&format!(
+            "creating {label} relative to retained parent {}",
+            parent.final_path.display()
+        ))(std::io::Error::last_os_error()));
+    }
+    Ok(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(not(any(windows, unix)))]
+fn create_child_file_new(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    label: &str,
+) -> crate::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(parent.final_path.join(name))
+        .map_err(crate::io(&format!(
+            "creating {label} relative to retained parent {}",
+            parent.final_path.display()
+        )))
+}
+
+#[cfg(unix)]
+fn remove_child(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    directory: bool,
+    label: &str,
+) -> crate::Result<()> {
+    use std::os::unix::ffi::OsStrExt as _;
+    use std::os::unix::io::AsRawFd as _;
+
+    let name = std::ffi::CString::new(name.as_bytes())
+        .map_err(|_| crate::ModError::Other(format!("{label} child name contains NUL")))?;
+    let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
+    let result = unsafe { libc::unlinkat(parent.file.as_raw_fd(), name.as_ptr(), flags) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(crate::io(&format!(
+            "removing {label} relative to retained parent {}",
+            parent.final_path.display()
+        ))(std::io::Error::last_os_error()))
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_child(
+    parent: &DirectoryAnchor,
+    name: &std::ffi::OsStr,
+    directory: bool,
+    label: &str,
+) -> crate::Result<()> {
+    let child = parent.final_path.join(name);
+    let result = if directory {
+        std::fs::remove_dir(&child)
+    } else {
+        std::fs::remove_file(&child)
+    };
+    result.map_err(crate::io(&format!(
+        "removing {label} relative to retained parent {}",
+        parent.final_path.display()
+    )))
 }
 
 pub(crate) fn open_file_nofollow(path: &Path, label: &str) -> crate::Result<SecureFile> {
@@ -369,6 +771,63 @@ pub(crate) fn open_file_nofollow(path: &Path, label: &str) -> crate::Result<Secu
         identity: opened.identity,
         revision,
         _parents: Vec::new(),
+    })
+}
+
+#[cfg(windows)]
+fn open_directory_rename_compatible(
+    path: &Path,
+    label: &str,
+) -> crate::Result<RenameDirectoryGuard> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(crate::io(&format!(
+            "opening {label} with rename-compatible sharing {}",
+            path.display()
+        )))?;
+    let metadata = file
+        .metadata()
+        .map_err(crate::io(&format!("reading opened {label} metadata")))?;
+    if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(crate::ModError::Other(format!(
+            "{label} is not a real non-reparse directory: {}",
+            path.display()
+        )));
+    }
+    let identity = identity_from_open_file(&file, label)?;
+    Ok(RenameDirectoryGuard {
+        file,
+        final_path: path.to_path_buf(),
+        identity,
+    })
+}
+
+#[cfg(not(windows))]
+fn open_directory_rename_compatible(
+    path: &Path,
+    label: &str,
+) -> crate::Result<RenameDirectoryGuard> {
+    let directory = open_directory_nofollow(path, label)?;
+    let file = directory
+        .anchor
+        .file
+        .try_clone()
+        .map_err(crate::io(&format!(
+            "cloning opened {label} directory handle"
+        )))?;
+    Ok(RenameDirectoryGuard {
+        file,
+        final_path: directory.anchor.final_path.clone(),
+        identity: directory.anchor.identity,
     })
 }
 
@@ -419,6 +878,10 @@ type RaceHook = Option<Box<dyn FnOnce(&Path)>>;
 thread_local! {
     static OPEN_CHILD_RACE_HOOK: std::cell::RefCell<RaceHook> = std::cell::RefCell::new(None);
     static TREE_ENTRY_RACE_HOOK: std::cell::RefCell<RaceHook> = std::cell::RefCell::new(None);
+    static CREATE_CHILD_DIRECTORY_RACE_HOOK: std::cell::RefCell<RaceHook> =
+        std::cell::RefCell::new(None);
+    static CREATE_CHILD_DIRECTORY_PRECREATE_RACE_HOOK: std::cell::RefCell<RaceHook> =
+        std::cell::RefCell::new(None);
 }
 
 #[cfg(test)]
@@ -436,6 +899,41 @@ fn run_open_child_race_hook(_path: &Path) {}
 #[cfg(test)]
 pub(crate) fn inject_open_child_race(hook: impl FnOnce(&Path) + 'static) {
     OPEN_CHILD_RACE_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_create_child_directory_race_hook(path: &Path) {
+    CREATE_CHILD_DIRECTORY_RACE_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_create_child_directory_race_hook(_path: &Path) {}
+
+#[cfg(test)]
+pub(crate) fn inject_create_child_directory_race(hook: impl FnOnce(&Path) + 'static) {
+    CREATE_CHILD_DIRECTORY_RACE_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+}
+
+#[cfg(test)]
+fn run_create_child_directory_precreate_race_hook(path: &Path) {
+    CREATE_CHILD_DIRECTORY_PRECREATE_RACE_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook(path);
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn run_create_child_directory_precreate_race_hook(_path: &Path) {}
+
+#[cfg(test)]
+pub(crate) fn inject_create_child_directory_precreate_race(hook: impl FnOnce(&Path) + 'static) {
+    CREATE_CHILD_DIRECTORY_PRECREATE_RACE_HOOK
+        .with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
 
 #[cfg(test)]
