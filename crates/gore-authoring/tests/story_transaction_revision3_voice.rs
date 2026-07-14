@@ -139,6 +139,70 @@ fn basis() -> ProjectRevision3 {
     }
 }
 
+fn basis_with_selected_take(status: VoiceTakeStatus) -> ProjectRevision3 {
+    let mut project = basis();
+    let selected_take_id = id(6);
+    let selected_asset = digest(0x42);
+    project.authoring_locales.insert(locale());
+    project.asset_store.assets.insert(
+        selected_asset,
+        AssetMeta {
+            byte_len: 4096,
+            media_type: "audio/ogg".into(),
+        },
+    );
+    project.entities.insert(
+        selected_take_id,
+        Entity {
+            id: selected_take_id,
+            display_name: "Existing selected take".into(),
+            origin: imported_origin(6),
+            revision: 1,
+            payload: EntityPayload::VoiceTake(VoiceTake {
+                locale: locale(),
+                asset: AssetRef {
+                    sha256: selected_asset,
+                    byte_len: 4096,
+                    logical_name: "old.ogg".into(),
+                },
+                ogg: gore_authoring::Revision2OggMetadata {
+                    codec: gore_authoring::Revision2OggCodec::Vorbis,
+                    channels: 1,
+                    sample_rate: 48_000,
+                    pages: 2,
+                    logical_streams: 1,
+                },
+                status,
+            }),
+        },
+    );
+    let selected_ref = TypedRef::new(project_id(), selected_take_id, EntityKind::VoiceTake);
+    project.entities.insert(
+        id(4),
+        Entity {
+            id: id(4),
+            display_name: "Voice de".into(),
+            origin: imported_origin(4),
+            revision: 9,
+            payload: EntityPayload::VoiceSlot(VoiceSlot {
+                locale: locale(),
+                target_resolution: VoiceTargetResolution::Unresolved,
+                candidates: vec![selected_ref.clone()],
+                selected: Some(selected_ref),
+            }),
+        },
+    );
+    let EntityPayload::DialogLine(line) = &mut project.entities.get_mut(&id(3)).unwrap().payload
+    else {
+        unreachable!()
+    };
+    line.voice_slots.insert(
+        locale(),
+        TypedRef::new(project_id(), id(4), EntityKind::VoiceSlot),
+    );
+    project
+}
+
 fn request(status: VoiceTakeStatus, select_take: bool) -> Revision3VoiceTakeStageRequestV1 {
     Revision3VoiceTakeStageRequestV1 {
         expected_head: head(0x31),
@@ -317,6 +381,36 @@ fn pure_preflight_rejects_semantic_drift_without_an_ogg_receipt() {
 }
 
 #[test]
+fn non_voice_dialog_loc_id_stays_valid_but_cannot_gain_an_unsafe_voice_slot() {
+    let mut project = basis();
+    let EntityPayload::LocalizationEntry(localization) =
+        &mut project.entities.get_mut(&id(2)).unwrap().payload
+    else {
+        unreachable!()
+    };
+    localization.loc_id = "CON".to_owned();
+
+    // General dialog/localization authoring is not narrowed merely because this LocID cannot be
+    // represented as one portable `<LocID>.ogg` archive basename.
+    project.validate_closed_model().unwrap();
+
+    let request = request(VoiceTakeStatus::Recorded, false);
+    assert!(matches!(
+        preflight_revision3_voice_take_transaction_v1(
+            &head(0x31),
+            &project.to_canonical_json().unwrap(),
+            &request.to_canonical_json().unwrap(),
+        )
+        .unwrap(),
+        Revision3VoiceTakePreflightEvaluationV1::Rejected(rejection)
+            if rejection.conflict
+                == Revision3VoiceTakeStageConflictV1::InvalidLocalizationReference {
+                    line: id(3)
+                }
+    ));
+}
+
+#[test]
 fn appends_and_selects_only_an_approved_take_on_the_exact_existing_slot() {
     let mut project = basis();
     let old_take_id = id(6);
@@ -403,6 +497,27 @@ fn appends_and_selects_only_an_approved_take_on_the_exact_existing_slot() {
     assert_eq!(outcome.project.entities[&id(4)].revision, 10);
     assert_eq!(outcome.project.entities[&id(3)].revision, 2);
     assert_eq!(outcome.project.entities[&id(2)].revision, 4);
+}
+
+#[test]
+fn appends_to_existing_slot_with_selected_reviewed_take_without_selecting_new_take() {
+    let project = basis_with_selected_take(VoiceTakeStatus::Reviewed);
+    project.validate_closed_model().unwrap();
+
+    let request = request(VoiceTakeStatus::Recorded, false);
+    let Revision3VoiceTakeStageEvaluationV1::Applied(outcome) =
+        apply(&project, &request, imported(0x43, &request.logical_name))
+    else {
+        panic!("selected non-approved history must not prevent adding another unselected take")
+    };
+    assert!(!outcome.slot_created);
+    assert!(!outcome.selected);
+    let EntityPayload::VoiceSlot(slot) = &outcome.project.entities[&id(4)].payload else {
+        panic!("expected VoiceSlot")
+    };
+    assert_eq!(slot.candidates.len(), 2);
+    assert_eq!(slot.selected.as_ref().map(|value| value.id), Some(id(6)));
+    outcome.project.validate_closed_model().unwrap();
 }
 
 #[test]
@@ -495,11 +610,9 @@ fn strict_request_and_semantic_boundary_reject_drift_and_authority_escalation() 
 }
 
 #[test]
-fn existing_resolved_target_is_not_reused_without_fresh_sealed_catalog_evidence() {
-    let mut project = basis();
-    let locale = locale();
-    let target = VoiceTarget {
-        archive: "german.pak".into(),
+fn adding_future_takes_preserves_valid_resolved_and_ambiguous_targets() {
+    let first = VoiceTarget {
+        archive: "german.zip".into(),
         member: "NPC/Asghan/line.ogg".into(),
         operation: gore_authoring::Revision2VoiceOperation::Replace,
         archive_seal: gore_authoring::ArchiveSeal {
@@ -511,42 +624,57 @@ fn existing_resolved_target_is_not_reused_without_fresh_sealed_catalog_evidence(
             crc32: 123,
         },
     };
-    project.entities.insert(
-        id(4),
-        Entity {
-            id: id(4),
-            display_name: "Resolved voice".into(),
-            origin: imported_origin(4),
-            revision: 0,
-            payload: EntityPayload::VoiceSlot(VoiceSlot {
-                locale: locale.clone(),
-                target_resolution: VoiceTargetResolution::Resolved { target },
-                candidates: Vec::new(),
-                selected: None,
-            }),
+    let mut second = first.clone();
+    second.archive = "german_new.zip".into();
+    second.archive_seal.sha256 = digest(0x62);
+
+    for resolution in [
+        VoiceTargetResolution::Resolved {
+            target: first.clone(),
         },
-    );
-    let EntityPayload::DialogLine(line) = &mut project.entities.get_mut(&id(3)).unwrap().payload
-    else {
-        unreachable!()
-    };
-    line.voice_slots.insert(
-        locale,
-        TypedRef::new(project_id(), id(4), EntityKind::VoiceSlot),
-    );
-    let request = request(VoiceTakeStatus::Recorded, false);
-    assert!(matches!(
-        apply(
-            &project,
-            &request,
-            imported(0x62, &request.logical_name)
-        ),
-        Revision3VoiceTakeStageEvaluationV1::Rejected(rejection)
-            if matches!(
-                rejection.conflict,
-                Revision3VoiceTakeStageConflictV1::InvalidVoiceSlot { .. }
-            )
-    ));
+        VoiceTargetResolution::Ambiguous {
+            candidates: vec![first.clone(), second.clone()],
+        },
+    ] {
+        let mut project = basis();
+        let locale = locale();
+        project.authoring_locales.insert(locale.clone());
+        project.entities.insert(
+            id(4),
+            Entity {
+                id: id(4),
+                display_name: "Targeted voice".into(),
+                origin: imported_origin(4),
+                revision: 0,
+                payload: EntityPayload::VoiceSlot(VoiceSlot {
+                    locale: locale.clone(),
+                    target_resolution: resolution.clone(),
+                    candidates: Vec::new(),
+                    selected: None,
+                }),
+            },
+        );
+        let EntityPayload::DialogLine(line) =
+            &mut project.entities.get_mut(&id(3)).unwrap().payload
+        else {
+            unreachable!()
+        };
+        line.voice_slots.insert(
+            locale,
+            TypedRef::new(project_id(), id(4), EntityKind::VoiceSlot),
+        );
+        let request = request(VoiceTakeStatus::Recorded, false);
+        let Revision3VoiceTakeStageEvaluationV1::Applied(outcome) =
+            apply(&project, &request, imported(0x63, &request.logical_name))
+        else {
+            panic!("expected target-preserving VoiceTake transaction")
+        };
+        let EntityPayload::VoiceSlot(slot) = &outcome.project.entities[&id(4)].payload else {
+            panic!("expected VoiceSlot")
+        };
+        assert_eq!(slot.target_resolution, resolution);
+        assert_eq!(slot.candidates.len(), 1);
+    }
 }
 
 #[test]

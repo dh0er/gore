@@ -397,6 +397,10 @@ fn valid_ogg_import_deduplicates_and_survives_source_deletion() {
     store
         .verify_asset(&first.asset, AssetVerification::Full)
         .unwrap();
+    assert_eq!(
+        store.read_verified_ogg_asset(&first.asset).unwrap(),
+        vorbis_ogg(48_000)
+    );
     let asset_path = digest_path(root.path(), "assets", first.asset.sha256, "");
     assert_eq!(fs::read(asset_path).unwrap(), vorbis_ogg(48_000));
     assert_eq!(count_files(&root.path().join(".gore").join("staging")), 0);

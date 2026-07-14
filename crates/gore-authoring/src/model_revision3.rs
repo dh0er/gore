@@ -55,6 +55,13 @@ pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
 pub const REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION: u32 = 3;
 const MAX_CATALOG_LAYER_BYTES: usize = 128;
 
+pub(crate) fn revision3_voice_target_key_v1(target: &VoiceTarget) -> (String, String) {
+    (
+        target.archive.replace('\\', "/").to_lowercase(),
+        target.member.replace('\\', "/").to_lowercase(),
+    )
+}
+
 pub(crate) fn quest_collision_artifact_media_for_layer(layer: &str) -> Option<&'static str> {
     match layer {
         QUEST_COLLISION_CATALOG_LAYER => Some(QUEST_COLLISION_ARTIFACT_MEDIA_TYPE),
@@ -378,6 +385,19 @@ pub enum ProjectRevision3ValidationError {
     MissingNpcScriptModule { npc: EntityId },
     #[error("revision-3 NPC-generated ScriptModule {module} has no exact owning NPC closure")]
     OrphanNpcScriptModule { module: EntityId },
+    #[error("revision-3 Voice graph at entity {entity} is invalid: {reason}")]
+    InvalidVoiceGraph { entity: EntityId, reason: String },
+    #[error("revision-3 VoiceTake {take} is invalid: {reason}")]
+    InvalidVoiceTake { take: EntityId, reason: String },
+    #[error("revision-3 VoiceSlot {slot} target evidence is invalid: {reason}")]
+    InvalidVoiceTarget { slot: EntityId, reason: String },
+    #[error(
+        "revision-3 VoiceSlot {slot} duplicates the resolved archive/member target of slot {existing_slot}"
+    )]
+    DuplicateVoiceTarget {
+        slot: EntityId,
+        existing_slot: EntityId,
+    },
     #[error("revision-3 canonical serializer emitted non-UTF-8 bytes")]
     NonUtf8Serialization,
 }

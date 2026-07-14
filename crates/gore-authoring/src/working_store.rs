@@ -1935,6 +1935,35 @@ impl WorkingProjectStore {
         self.verify_seal_at(&self.asset_path(asset.sha256), &seal, verification, false)
     }
 
+    /// Read one content-addressed Ogg asset only after a complete bounded seal verification.
+    ///
+    /// This is the byte-owning counterpart to [`Self::verify_asset`]. It deliberately does not
+    /// expose the Store's private object path: build integrations receive an immutable byte view
+    /// whose length and SHA-256 were checked through the same no-follow Store boundary. The
+    /// logical name and configured Ogg limit are enforced before allocating the result.
+    pub fn read_verified_ogg_asset(&self, asset: &AssetRef) -> Result<Vec<u8>, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.validate_logical_name(&asset.logical_name)?;
+        if asset.byte_len > self.limits.max_ogg_bytes as u64 {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind: "Ogg bytes",
+                actual: asset.byte_len,
+                limit: self.limits.max_ogg_bytes as u64,
+            });
+        }
+        let seal = ContentSeal {
+            byte_len: asset.byte_len,
+            sha256: asset.sha256,
+        };
+        self.read_sealed_object(
+            &self.asset_path(asset.sha256),
+            &seal,
+            self.limits.max_ogg_bytes,
+            "Ogg asset",
+            AssetVerification::Full,
+        )
+    }
+
     fn head_path(&self) -> PathBuf {
         self.root.join(HEAD_FILE_NAME)
     }

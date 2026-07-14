@@ -1,8 +1,9 @@
 //! Atomic, filesystem-free staging of one revision-3 dialog VoiceTake.
 //!
 //! The transaction binds an existing DialogLine and its LocalizationEntry to one canonical
-//! locale, creates or updates that line's single unresolved VoiceSlot, and appends one imported
-//! Ogg-backed VoiceTake. The native Store boundary supplies a verified [`ImportedOgg`] preview;
+//! locale, creates or updates that line's single VoiceSlot, and appends one imported Ogg-backed
+//! VoiceTake. Existing sealed target resolution is preserved unchanged. The native Store boundary
+//! supplies a verified [`ImportedOgg`] preview;
 //! this module performs the complete semantic and capacity evaluation without filesystem access.
 //! The adapter may install the exact accepted bytes only after this evaluation succeeds. No
 //! archive member, build, runtime, deployment, or publication authority is created here.
@@ -153,7 +154,7 @@ pub enum Revision3VoiceTakeStageConflictV1 {
         expected: EntityId,
         actual: EntityId,
     },
-    #[error("VoiceSlot {slot} has an invalid, shared, or non-unresolved graph: {reason}")]
+    #[error("VoiceSlot {slot} has an invalid or shared graph: {reason}")]
     InvalidVoiceSlot { slot: EntityId, reason: String },
     #[error("an unapproved VoiceTake cannot become the selected take")]
     UnapprovedTakeSelection,
@@ -463,8 +464,9 @@ fn prepare_revision3_voice_take_v1(
 /// preview whose deduplication bit is not final; its exact identity and derived metadata are
 /// checked and the complete candidate capacity is evaluated here. The native Store adapter must
 /// subsequently install those exact accepted bytes and replace the preview receipt with the
-/// actual installation receipt. A successful candidate remains unresolved and build/runtime
-/// blocked; fixed-head publication is a separate caller-owned operation.
+/// actual installation receipt. A newly created slot remains unresolved; an existing valid target
+/// resolution is preserved. Build/runtime qualification and fixed-head publication are separate
+/// caller-owned operations.
 pub fn apply_revision3_voice_take_transaction_v1(
     exact_basis_head: &WorkingHead,
     canonical_project_json: &str,
@@ -669,7 +671,7 @@ fn exact_localization(
     let EntityPayload::LocalizationEntry(LocalizationEntry { loc_id, .. }) = &entity.payload else {
         return None;
     };
-    if loc_id.is_empty() || loc_id.len() > 1024 || loc_id.chars().any(char::is_control) {
+    if crate::validate_revision3_voice_loc_id_basename_stem_v1(loc_id).is_err() {
         return None;
     }
     if line_id == reference.id {
@@ -697,9 +699,6 @@ fn validate_existing_slot_graph(
     };
     if &slot.locale != locale {
         return Err("VoiceSlot locale differs from line locale".to_owned());
-    }
-    if !matches!(slot.target_resolution, VoiceTargetResolution::Unresolved) {
-        return Err("VoiceSlot target was not rebuilt from sealed native evidence".to_owned());
     }
     if slot.candidates.len() >= MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1 {
         return Err("VoiceSlot candidate limit is exhausted".to_owned());
@@ -733,12 +732,9 @@ fn validate_existing_slot_graph(
         let Some(selected_entity) = project.entities.get(&selected.id) else {
             return Err("selected VoiceTake is missing".to_owned());
         };
-        let EntityPayload::VoiceTake(take) = &selected_entity.payload else {
+        let EntityPayload::VoiceTake(_) = &selected_entity.payload else {
             return Err("selected VoiceTake has the wrong entity kind".to_owned());
         };
-        if take.status != VoiceTakeStatus::Approved {
-            return Err("selected VoiceTake is not approved".to_owned());
-        }
     }
 
     for (owner_id, owner) in &project.entities {

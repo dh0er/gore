@@ -816,12 +816,12 @@ mod tests {
                     target_resolution: VoiceTargetResolution::Unresolved,
                     candidates: vec![TypedRef::new(
                         project.project_id,
-                        entity_id(99),
+                        take_id,
                         EntityKind::VoiceTake,
                     )],
                     selected: Some(TypedRef::new(
                         project.project_id,
-                        localization_id,
+                        take_id,
                         EntityKind::VoiceTake,
                     )),
                 }),
@@ -848,7 +848,7 @@ mod tests {
                         pages: 2,
                         logical_streams: 1,
                     },
-                    status: VoiceTakeStatus::Reviewed,
+                    status: VoiceTakeStatus::Approved,
                 }),
             },
         );
@@ -911,18 +911,18 @@ mod tests {
             .unwrap();
         assert_eq!(
             slot.references[0].resolution,
-            Revision3ContentReferenceResolutionV1::MissingEntity
+            Revision3ContentReferenceResolutionV1::Resolved
         );
         assert_eq!(
             slot.references[1].resolution,
-            Revision3ContentReferenceResolutionV1::KindMismatch
+            Revision3ContentReferenceResolutionV1::Resolved
         );
 
         let json = index.to_canonical_json().unwrap();
         assert_eq!(json, index.to_canonical_json().unwrap());
         assert!(!json.contains("class UCharacterDefinition_Human_GORE_GATE_GUARD"));
         assert!(json.contains("GORE_GATE_GUARD"));
-        assert!(json.contains("missing_entity"));
+        assert!(json.contains("voice_selected"));
     }
 
     #[test]

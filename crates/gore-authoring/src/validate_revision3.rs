@@ -1,18 +1,27 @@
 //! Filesystem-free closed-model validation for schema revision 3.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use sha2::{Digest as _, Sha256};
 
 use crate::model_revision3::{
-    quest_collision_artifact_media_for_layer, EntityKind, EntityPayload, OriginRef,
-    ProjectRevision3, ProjectRevision3ValidationError, ScriptModuleStatus,
-    MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES,
-    MAX_REVISION3_ENTITY_JSON_BYTES, MAX_REVISION3_REFERENCED_ASSET_BYTES,
-    MAX_REVISION3_SNAPSHOT_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
-    REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    quest_collision_artifact_media_for_layer, revision3_voice_target_key_v1, EntityKind,
+    EntityPayload, OriginRef, ProjectRevision3, ProjectRevision3ValidationError,
+    ScriptModuleStatus, VoiceTargetResolution, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
+    MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
+    REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
+    REVISION3_QUEST_GENERATOR_VERSION,
+};
+use crate::story_transaction_revision3_voice::{
+    MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
+};
+use crate::story_transaction_revision3_voice_target::{
+    validate_revision3_voice_loc_id_basename_stem_v1, validate_revision3_voice_target_resolution_v1,
 };
 use crate::{
-    validate_draft_quest_objective_titles, Revision3TypedRef, LOGICAL_NPC_CLONE_GENERATOR_ID,
-    LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+    validate_draft_quest_objective_titles, EntityId, LocaleCode, Revision3TypedRef,
+    LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
 };
 
 impl ProjectRevision3 {
@@ -84,6 +93,7 @@ impl ProjectRevision3 {
         }
         // Finish the complete cheap per-entity size preflight before following any cross-entity
         // Story/module or asset reference.
+        self.validate_voice_entities()?;
         for (key, entity) in &self.entities {
             match &entity.payload {
                 EntityPayload::NpcDraft(npc) => self.validate_npc(*key, entity, npc)?,
@@ -112,6 +122,241 @@ impl ProjectRevision3 {
             return Err(ProjectRevision3ValidationError::OrphanNpcScriptModule {
                 module: *module_id,
             });
+        }
+        Ok(())
+    }
+
+    fn validate_voice_entities(&self) -> Result<(), ProjectRevision3ValidationError> {
+        let invalid_graph = |entity: EntityId, reason: String| {
+            ProjectRevision3ValidationError::InvalidVoiceGraph { entity, reason }
+        };
+        let mut slot_owners = BTreeMap::<EntityId, (EntityId, LocaleCode)>::new();
+
+        // Close every forward DialogLine edge first. This also constructs the one-and-only owner
+        // table used by the VoiceSlot pass below.
+        for (line_id, entity) in &self.entities {
+            let EntityPayload::DialogLine(line) = &entity.payload else {
+                continue;
+            };
+            if line.localization.project_id != self.project_id
+                || line.localization.expected_kind != EntityKind::LocalizationEntry
+                || line.localization.id == *line_id
+            {
+                return Err(invalid_graph(
+                    *line_id,
+                    "LocalizationEntry reference is not exact-project and kind-bound".to_owned(),
+                ));
+            }
+            let Some(localization_entity) = self.entities.get(&line.localization.id) else {
+                return Err(invalid_graph(
+                    *line_id,
+                    "referenced LocalizationEntry is missing".to_owned(),
+                ));
+            };
+            let EntityPayload::LocalizationEntry(localization) = &localization_entity.payload
+            else {
+                return Err(invalid_graph(
+                    *line_id,
+                    "referenced entity is not a LocalizationEntry".to_owned(),
+                ));
+            };
+            // A LocalizationEntry is a general story identity until this line actually owns
+            // Voice content. Keep non-Voice dialog projects compatible; the Voice-take and
+            // target transactions apply the same portable stem predicate before creating or
+            // resolving the first slot.
+            if !line.voice_slots.is_empty()
+                && validate_revision3_voice_loc_id_basename_stem_v1(&localization.loc_id).is_err()
+            {
+                return Err(invalid_graph(
+                    line.localization.id,
+                    "LocID is not one canonical portable ASCII Voice basename stem".to_owned(),
+                ));
+            }
+
+            for (locale, reference) in &line.voice_slots {
+                if !self.authoring_locales.contains(locale) {
+                    return Err(invalid_graph(
+                        *line_id,
+                        format!("voice locale {locale} is absent from authoring_locales"),
+                    ));
+                }
+                if reference.project_id != self.project_id
+                    || reference.expected_kind != EntityKind::VoiceSlot
+                {
+                    return Err(invalid_graph(
+                        *line_id,
+                        format!("voice locale {locale} is not an exact-project VoiceSlot ref"),
+                    ));
+                }
+                let Some(slot_entity) = self.entities.get(&reference.id) else {
+                    return Err(invalid_graph(
+                        *line_id,
+                        format!("voice locale {locale} references a missing VoiceSlot"),
+                    ));
+                };
+                let EntityPayload::VoiceSlot(slot) = &slot_entity.payload else {
+                    return Err(invalid_graph(
+                        *line_id,
+                        format!("voice locale {locale} reference has the wrong entity kind"),
+                    ));
+                };
+                if &slot.locale != locale {
+                    return Err(invalid_graph(
+                        *line_id,
+                        format!(
+                            "line locale {locale} references a VoiceSlot for {}",
+                            slot.locale
+                        ),
+                    ));
+                }
+                if let Some((first_line, first_locale)) =
+                    slot_owners.insert(reference.id, (*line_id, locale.clone()))
+                {
+                    return Err(invalid_graph(
+                        reference.id,
+                        format!(
+                            "VoiceSlot is shared by {first_line}/{first_locale} and {line_id}/{locale}"
+                        ),
+                    ));
+                }
+            }
+        }
+
+        let mut resolved_targets = BTreeMap::<(String, String), EntityId>::new();
+        for (entity_id, entity) in &self.entities {
+            match &entity.payload {
+                EntityPayload::VoiceSlot(slot) => {
+                    if !self.authoring_locales.contains(&slot.locale) {
+                        return Err(invalid_graph(
+                            *entity_id,
+                            format!(
+                                "VoiceSlot locale {} is absent from authoring_locales",
+                                slot.locale
+                            ),
+                        ));
+                    }
+                    if !slot_owners.contains_key(entity_id) {
+                        return Err(invalid_graph(
+                            *entity_id,
+                            "VoiceSlot has no unique DialogLine/locale owner".to_owned(),
+                        ));
+                    }
+                    if slot.candidates.len() > MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1 {
+                        return Err(invalid_graph(
+                            *entity_id,
+                            format!(
+                                "VoiceSlot has {} take candidates; maximum is {}",
+                                slot.candidates.len(),
+                                MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1
+                            ),
+                        ));
+                    }
+                    let mut candidates = BTreeSet::new();
+                    for candidate in &slot.candidates {
+                        if candidate.project_id != self.project_id
+                            || candidate.expected_kind != EntityKind::VoiceTake
+                            || !candidates.insert(candidate.id)
+                        {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                "VoiceTake candidates are not unique exact-project refs".to_owned(),
+                            ));
+                        }
+                        let Some(candidate_entity) = self.entities.get(&candidate.id) else {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                format!("VoiceTake candidate {} is missing", candidate.id),
+                            ));
+                        };
+                        let EntityPayload::VoiceTake(take) = &candidate_entity.payload else {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                format!("candidate {} is not a VoiceTake", candidate.id),
+                            ));
+                        };
+                        if take.locale != slot.locale {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                format!(
+                                    "candidate {} locale {} differs from slot locale {}",
+                                    candidate.id, take.locale, slot.locale
+                                ),
+                            ));
+                        }
+                    }
+                    if let Some(selected) = &slot.selected {
+                        if selected.project_id != self.project_id
+                            || selected.expected_kind != EntityKind::VoiceTake
+                            || !candidates.contains(&selected.id)
+                        {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                "selected VoiceTake is not an exact candidate".to_owned(),
+                            ));
+                        }
+                        let Some(selected_entity) = self.entities.get(&selected.id) else {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                "selected VoiceTake is missing".to_owned(),
+                            ));
+                        };
+                        if !matches!(&selected_entity.payload, EntityPayload::VoiceTake(_)) {
+                            return Err(invalid_graph(
+                                *entity_id,
+                                "selected entity is not a VoiceTake".to_owned(),
+                            ));
+                        }
+                    }
+                    validate_revision3_voice_target_resolution_v1(&slot.target_resolution)
+                        .map_err(
+                            |reason| ProjectRevision3ValidationError::InvalidVoiceTarget {
+                                slot: *entity_id,
+                                reason,
+                            },
+                        )?;
+                    if let VoiceTargetResolution::Resolved { target } = &slot.target_resolution {
+                        let key = revision3_voice_target_key_v1(target);
+                        if let Some(existing_slot) = resolved_targets.insert(key, *entity_id) {
+                            return Err(ProjectRevision3ValidationError::DuplicateVoiceTarget {
+                                slot: *entity_id,
+                                existing_slot,
+                            });
+                        }
+                    }
+                }
+                EntityPayload::VoiceTake(take) => {
+                    let invalid_take =
+                        |reason: &str| ProjectRevision3ValidationError::InvalidVoiceTake {
+                            take: *entity_id,
+                            reason: reason.to_owned(),
+                        };
+                    if !self.authoring_locales.contains(&take.locale) {
+                        return Err(invalid_take("locale is absent from authoring_locales"));
+                    }
+                    if take.asset.byte_len == 0
+                        || take.asset.sha256.as_bytes().iter().all(|byte| *byte == 0)
+                        || !valid_voice_logical_name(&take.asset.logical_name)
+                    {
+                        return Err(invalid_take("asset reference is not closed and bounded"));
+                    }
+                    let Some(meta) = self.asset_store.assets.get(&take.asset.sha256) else {
+                        return Err(invalid_take("asset is absent from asset_store"));
+                    };
+                    if meta.byte_len != take.asset.byte_len || meta.media_type != "audio/ogg" {
+                        return Err(invalid_take(
+                            "asset_store metadata is not the exact audio/ogg reference",
+                        ));
+                    }
+                    if take.ogg.channels == 0
+                        || take.ogg.sample_rate == 0
+                        || take.ogg.pages == 0
+                        || take.ogg.logical_streams == 0
+                    {
+                        return Err(invalid_take("Ogg metadata contains a zero dimension"));
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(())
     }
@@ -355,4 +600,35 @@ impl ProjectRevision3 {
         }
         Ok(())
     }
+}
+
+fn valid_voice_logical_name(value: &str) -> bool {
+    let folded = value.to_ascii_lowercase();
+    if value.trim() != value
+        || value.len() <= 4
+        || value.len() > MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1
+        || !folded.ends_with(".ogg")
+        || value.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+                )
+        })
+    {
+        return false;
+    }
+    let stem = &value[..value.len() - 4];
+    if stem.is_empty() || stem == "." || stem == ".." {
+        return false;
+    }
+    let device_stem = stem
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    !matches!(device_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        && !(device_stem.len() == 4
+            && (device_stem.starts_with("COM") || device_stem.starts_with("LPT"))
+            && matches!(device_stem.as_bytes()[3], b'1'..=b'9'))
 }

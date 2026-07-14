@@ -18,11 +18,13 @@ mod quest;
 mod revision3_content_index;
 mod revision3_quest;
 mod revision3_quest_source_v2;
+mod revision3_voice_build;
 mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_voice;
+mod story_transaction_revision3_voice_target;
 mod strict_json;
 mod validate;
 mod validate_revision2;
@@ -134,6 +136,13 @@ pub use revision3_quest_source_v2::{
     MAX_REVISION3_COLLISION_IDENTITIES_V2, MAX_REVISION3_COLLISION_IDENTITY_BYTES_V2,
     MAX_REVISION3_COLLISION_IDENTITY_VALUE_BYTES_V2, MAX_REVISION3_PRIOR_QUESTS_V2,
 };
+pub use revision3_voice_build::{
+    plan_revision3_voice_build_v1, Revision3VoiceBuildBlockReasonV1, Revision3VoiceBuildBlockedV1,
+    Revision3VoiceBuildBlockerV1, Revision3VoiceBuildEditV1, Revision3VoiceBuildPlanErrorV1,
+    Revision3VoiceBuildPlanEvaluationV1, Revision3VoiceBuildPlanV1,
+    MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1,
+    MAX_REVISION3_VOICE_BUILD_SELECTED_PAYLOAD_BYTES_V1, MAX_REVISION3_VOICE_BUILD_SLOTS_V1,
+};
 pub use story_collision::{
     collect_project_story_collision_identities, ProjectStoryCollisionIdentities,
     StoryCollisionCollectionError,
@@ -180,6 +189,20 @@ pub use story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_REQUEST_JSON_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
     MAX_REVISION3_VOICE_TEXT_BYTES_V1, REVISION3_VOICE_SLOT_GENERATOR_ID_V1,
     REVISION3_VOICE_SLOT_GENERATOR_VERSION_V1, REVISION3_VOICE_TAKE_IMPORTER_ID_V1,
+};
+pub use story_transaction_revision3_voice_target::{
+    apply_revision3_voice_target_resolution_transaction_v1,
+    validate_revision3_voice_loc_id_basename_stem_v1, Revision3VoiceLocIdBasenameStemErrorV1,
+    Revision3VoiceTargetResolutionConflictV1, Revision3VoiceTargetResolutionErrorV1,
+    Revision3VoiceTargetResolutionEvaluationV1, Revision3VoiceTargetResolutionOutcomeV1,
+    Revision3VoiceTargetResolutionRejectionV1, Revision3VoiceTargetResolutionRequestJsonErrorV1,
+    Revision3VoiceTargetResolutionRequestV1, Revision3VoiceTargetResolutionStateV1,
+    MAX_REVISION3_VOICE_TARGET_ARCHIVE_BYTES_V1,
+    MAX_REVISION3_VOICE_TARGET_ARCHIVE_CONTENT_BYTES_V1,
+    MAX_REVISION3_VOICE_TARGET_LOC_ID_BYTES_V1, MAX_REVISION3_VOICE_TARGET_MATCHES_V1,
+    MAX_REVISION3_VOICE_TARGET_MEMBER_BYTES_V1,
+    MAX_REVISION3_VOICE_TARGET_MEMBER_UNCOMPRESSED_BYTES_V1,
+    MAX_REVISION3_VOICE_TARGET_REQUEST_JSON_BYTES_V1,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{
