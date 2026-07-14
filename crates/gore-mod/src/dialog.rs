@@ -465,18 +465,31 @@ mod tests {
     #[test]
     fn generated_runtime_contains_only_the_proven_mutation_and_hook_order() {
         let runtime = loader(topic("fixture"));
+        assert!(runtime.contains("local VERSION = \"3\""));
         assert_eq!(runtime.matches(":AddTopic(").count(), 1);
         for forbidden in [
             "FindAllOf",
             "ExecuteWithDelay",
+            "ExecuteInGameThread",
+            "NotifyOnNewObject",
             "RegisterConsoleCommand",
             "RegisterKeyBind",
+            "K2_GiveAbility",
+            "GiveAbility",
+            "TryActivateAbility",
+            "ActivateAbility",
             "ServerRequestConversationWith",
             "RequestConversation",
+            "StartConversation",
+            "EndConversation",
             "Remember",
             "Knowledge",
+            "ActedTopics",
             "Quest",
             "SaveGame",
+            "SaveGameToSlot",
+            "AsyncSaveGameToSlot",
+            "SetPropertyValue",
             ":ForEach(",
             ":Empty(",
             "RemoveTopic",
@@ -497,6 +510,26 @@ mod tests {
             .find("register_native_pre_hook(SHOW_CONVERSATION_PATH")
             .unwrap();
         assert!(render < choice && choice < mutation);
+
+        let participant_preflight = runtime.find("local active_registrations = {}").unwrap();
+        let class_preflight = runtime
+            .find("local class_preflight_failed = false")
+            .unwrap();
+        let context_preflight = runtime
+            .find("local context_preflight_failed = false")
+            .unwrap();
+        let topic_preflight = runtime
+            .find("local topic_preflight_failed = false")
+            .unwrap();
+        let mutation_loop = runtime.find("local entries = {}").unwrap();
+        let add_call = runtime
+            .find("local topic, add_result = add_or_reuse_topic(")
+            .unwrap();
+        assert!(participant_preflight < class_preflight);
+        assert!(class_preflight < context_preflight);
+        assert!(context_preflight < topic_preflight);
+        assert!(topic_preflight < mutation_loop);
+        assert!(mutation_loop < add_call);
     }
 
     #[test]
