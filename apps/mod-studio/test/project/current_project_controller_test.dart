@@ -8,6 +8,7 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_quest_authoring.dart';
 
 void main() {
   test(
@@ -563,6 +564,139 @@ void main() {
     },
   );
 
+  test(
+    'Quest publication is exact-basis bound and refreshes R3 state',
+    () async {
+      final projectId = '15151515151515151515151515151515';
+      late Revision3QuestDraftAuthoringInput receivedInput;
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest'),
+        projectIdValue: projectId,
+        projectRevision: 15,
+        head: _head(15),
+        onQuestPublish: (lease, gameRoot, input) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          receivedInput = input;
+          lease.projectRevision = 16;
+          lease.head = _head(16);
+          return Revision3QuestDraftPublication(
+            projectId: projectId,
+            projectRevision: 16,
+            questId: '25252525252525252525252525252525',
+            scriptModuleId: '35353535353535353535353535353535',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final published = await coordinator.createCurrentRevision3QuestDraft(
+        expectedProjectId: projectId,
+        expectedProjectRevision: 15,
+        gameRoot: r'C:\Games\Gothic Remake',
+        input: _questInput(),
+      );
+
+      expect(published.projectRevision, 16);
+      expect(receivedInput.title, 'Find Homer');
+      expect(managed.questPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 16);
+      expect(state.head.canonicalJson, _head(16).canonicalJson);
+    },
+  );
+
+  test(
+    'Quest publication rejects a stale wizard before touching the lease',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-stale-quest'),
+        projectIdValue: '16161616161616161616161616161616',
+        projectRevision: 16,
+        head: _head(16),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.createCurrentRevision3QuestDraft(
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 15,
+          gameRoot: r'C:\Games\Gothic Remake',
+          input: _questInput(),
+        ),
+        throwsA(isA<Revision3QuestDraftStaleCheckpointException>()),
+      );
+      expect(managed.questPublishCalls, 0);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        16,
+      );
+    },
+  );
+
+  test(
+    'poisoned Quest failure locks retries and refreshes requiresReopen',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-poisoned-quest'),
+        projectIdValue: '17171717171717171717171717171717',
+        projectRevision: 17,
+        head: _head(17),
+        onQuestPublish: (lease, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected publication verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.createCurrentRevision3QuestDraft(
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 17,
+          gameRoot: r'C:\Games\Gothic Remake',
+          input: _questInput(),
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3QuestDraftRequiresReopenException>()),
+      );
+      expect(managed.questPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3QuestDraftRequiresReopenException>()),
+      );
+      expect(managed.questPublishCalls, 1);
+    },
+  );
+
   test('content read rejects absent and legacy current projects', () async {
     final empty = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => throw UnimplementedError(),
@@ -649,6 +783,12 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
 
 typedef _VerifyHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _ContentReadHook = FutureOr<void> Function(_FakeManagedLease lease);
+typedef _QuestPublishHook =
+    FutureOr<Revision3QuestDraftPublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      Revision3QuestDraftAuthoringInput input,
+    );
 
 final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   _FakeManagedLease({
@@ -658,6 +798,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.head,
     this.projectIdError,
     this.onVerify,
+    this.onQuestPublish,
     this.contentIndex,
     this.closeFailuresRemaining = 0,
   });
@@ -667,16 +808,18 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final String projectIdValue;
   final Object? projectIdError;
   @override
-  final int projectRevision;
+  int projectRevision;
   @override
-  final AuthoringWorkingHead head;
+  AuthoringWorkingHead head;
   final _VerifyHook? onVerify;
+  final _QuestPublishHook? onQuestPublish;
   final Revision3ContentIndex? contentIndex;
   _ContentReadHook? onContentRead;
   int closeFailuresRemaining;
   bool requiresReopenValue = false;
   int verifyCalls = 0;
   int contentReadCalls = 0;
+  int questPublishCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -701,6 +844,19 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     await onContentRead?.call(this);
     return contentIndex ??
         (throw StateError('fake managed lease has no content index'));
+  }
+
+  @override
+  Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
+    required String gameRoot,
+    required Revision3QuestDraftAuthoringInput input,
+  }) async {
+    questPublishCalls++;
+    final publish = onQuestPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest publisher');
+    }
+    return publish(this, gameRoot, input);
   }
 
   @override
@@ -744,3 +900,12 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+Revision3QuestDraftAuthoringInput _questInput() =>
+    Revision3QuestDraftAuthoringInput(
+      parentCatalogId: 'chapter-one',
+      giverCatalogId: 'asghan',
+      title: 'Find Homer',
+      description: 'Homer vanished near the old gate.',
+      objectiveTitle: 'Ask Asghan about Homer',
+    );

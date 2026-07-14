@@ -29,6 +29,8 @@ import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
 import 'project/revision3_content_library.dart';
+import 'project/revision3_quest_authoring.dart';
+import 'project/revision3_quest_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
 import 'scripts/ui/script_tab.dart';
 import 'settings/ui/settings_tab.dart';
@@ -392,8 +394,8 @@ class _HomePageState extends ConsumerState<HomePage>
     final dirty = legacyCurrent && projectIsDirty(ref);
     // Keep Build/Deploy reachable when a game is configured even with no staged edits, so the
     // dialog's Undeploy (restore *.gore-bak) stays available to GUI users.
-    final gameConfigured =
-        gameRootFromExe(ref.watch(gameExePathProvider)) != null;
+    final gameRoot = gameRootFromExe(ref.watch(gameExePathProvider));
+    final gameConfigured = gameRoot != null;
     final themeModeNotifier = ref.read(themeModeProvider.notifier);
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -527,9 +529,19 @@ class _HomePageState extends ConsumerState<HomePage>
       body: switch (currentProject) {
         ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
           project: currentProject,
+          gameRoot: gameRoot,
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          loadQuestCatalog: ref.read(revision3QuestCatalogLoaderProvider),
+          publishQuestDraft: ({required gameRoot, required input}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .createCurrentRevision3QuestDraft(
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                gameRoot: gameRoot,
+                input: input,
+              ),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -653,11 +665,17 @@ class _HomePageState extends ConsumerState<HomePage>
 class _ManagedRevision3ProjectView extends StatelessWidget {
   const _ManagedRevision3ProjectView({
     required this.project,
+    required this.gameRoot,
     required this.loadContentIndex,
+    required this.loadQuestCatalog,
+    required this.publishQuestDraft,
   });
 
   final ManagedRevision3CurrentProjectState project;
+  final String? gameRoot;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3QuestCatalogLoader loadQuestCatalog;
+  final Revision3QuestDraftPublisher publishQuestDraft;
 
   @override
   Widget build(BuildContext context) {
@@ -672,14 +690,73 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  l10n.projectManagedRevision3Title,
-                  style: Theme.of(context).textTheme.headlineSmall,
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final identity = Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          l10n.projectManagedRevision3Title,
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          project.requiresReopen
+                              ? 'Last owned managed checkpoint. Reopen the project to verify its current content.'
+                              : 'Exact-current managed identity and semantic project content.',
+                        ),
+                      ],
+                    );
+                    final actions = Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const Key('managed-open-settings'),
+                          onPressed: () => _openSettings(context),
+                          icon: const Icon(Icons.settings_outlined),
+                          label: const Text('Settings'),
+                        ),
+                        FilledButton.icon(
+                          key: const Key('managed-create-quest-draft'),
+                          onPressed: project.requiresReopen || gameRoot == null
+                              ? null
+                              : () => _openQuestWizard(context),
+                          icon: const Icon(Icons.assignment_add),
+                          label: const Text('Create Quest draft'),
+                        ),
+                      ],
+                    );
+                    if (constraints.maxWidth < 720) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          identity,
+                          const SizedBox(height: 12),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: actions,
+                          ),
+                        ],
+                      );
+                    }
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: identity),
+                        const SizedBox(width: 16),
+                        actions,
+                      ],
+                    );
+                  },
                 ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Exact-current managed identity and semantic project content.',
-                ),
+                if (gameRoot == null && !project.requiresReopen) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Configure the Gothic 1 Remake installation in Settings to create a Quest draft.',
+                    key: Key('managed-quest-game-required'),
+                  ),
+                ],
                 if (project.requiresReopen) ...[
                   const SizedBox(height: 12),
                   Container(
@@ -789,6 +866,64 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       ],
     );
   }
+
+  Future<void> _openQuestWizard(BuildContext context) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null || project.requiresReopen) return;
+    final publication = await showDialog<Revision3QuestDraftPublication>(
+      context: context,
+      builder: (context) => Revision3QuestWizardDialog(
+        gameRoot: configuredGameRoot,
+        loadCatalog: loadQuestCatalog,
+        publish: publishQuestDraft,
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Quest draft saved in project revision ${publication.projectRevision}. It remains build-blocked and runtime-unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openSettings(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (dialogContext) => Dialog(
+      key: const Key('managed-settings-dialog'),
+      child: SizedBox(
+        width: 800,
+        height: 700,
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 16, 12, 8),
+              child: Row(
+                children: [
+                  const Icon(Icons.settings_outlined),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Settings',
+                    style: Theme.of(dialogContext).textTheme.titleLarge,
+                  ),
+                  const Spacer(),
+                  IconButton(
+                    key: const Key('managed-settings-close'),
+                    onPressed: () => Navigator.of(dialogContext).pop(),
+                    tooltip: 'Close Settings',
+                    icon: const Icon(Icons.close),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            const Expanded(child: SettingsTab()),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _ProjectFact extends StatelessWidget {

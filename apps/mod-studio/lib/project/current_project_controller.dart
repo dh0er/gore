@@ -9,6 +9,7 @@ import '../core/providers.dart';
 import 'managed_project_session.dart';
 import 'project_controller.dart';
 import 'revision3_content_index.dart';
+import 'revision3_quest_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
 
@@ -129,6 +130,10 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   bool get requiresReopen;
 
   Future<Revision3ContentIndex> readContentIndex();
+  Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
+    required String gameRoot,
+    required Revision3QuestDraftAuthoringInput input,
+  });
   Future<void> verifyCurrentHead();
   Future<void> close();
 }
@@ -226,6 +231,31 @@ final class _ManagedRevision3SessionLease
   @override
   Future<Revision3ContentIndex> readContentIndex() =>
       _session.readContentIndex();
+
+  @override
+  Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
+    required String gameRoot,
+    required Revision3QuestDraftAuthoringInput input,
+  }) async {
+    final plan = Revision3QuestDraftTechnicalPlan.forCheckpoint(
+      projectId: _session.projectId,
+      projectRevision: _session.projectRevision,
+      input: input,
+    );
+    final checkpoint = await _session.prepareAndPublishQuestDraftV3(
+      gameRoot: gameRoot,
+      questId: plan.questId,
+      scriptModuleId: plan.scriptModuleId,
+      displayName: plan.displayName,
+      intent: plan.intent,
+    );
+    return Revision3QuestDraftPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      questId: checkpoint.questId,
+      scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
 
   @override
   Future<void> close() => _session.close();
@@ -475,6 +505,66 @@ final class CurrentProjectCoordinator
     }
     try {
       return await current.lease.readContentIndex();
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one offline-only Quest Draft into an exact current managed R3
+  /// checkpoint.
+  ///
+  /// The expected identity is captured by the visible wizard before its fresh
+  /// catalog scan. A project switch or intervening revision therefore fails
+  /// closed instead of applying the form to another checkpoint.
+  Future<Revision3QuestDraftPublication> createCurrentRevision3QuestDraft({
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String gameRoot,
+    required Revision3QuestDraftAuthoringInput input,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest Draft creation is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestDraftRequiresReopenException();
+    }
+    if (lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision) {
+      throw const Revision3QuestDraftStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for Quest Draft creation',
+      );
+    }
+
+    try {
+      final publication = await lease.prepareAndPublishQuestDraftV3(
+        gameRoot: gameRoot,
+        input: input,
+      );
+      if (publication.projectId != lease.projectId ||
+          publication.projectId != expectedProjectId ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.projectRevision != expectedProjectRevision + 1) {
+        throw const CurrentProjectCoordinatorException(
+          'published Quest Draft disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
     } finally {
       _refreshCurrentIfUnchanged(current);
     }
