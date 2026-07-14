@@ -15,6 +15,7 @@ pub mod model_revision2;
 pub mod model_revision3;
 mod npc;
 mod quest;
+mod revision3_content_index;
 mod revision3_quest;
 mod revision3_quest_source_v2;
 mod story_collision;
@@ -104,6 +105,17 @@ pub use quest::{
     DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, MAX_DRAFT_QUEST_CATALOG_LAYER_BYTES,
     MAX_DRAFT_QUEST_DESCRIPTION_BYTES, MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES,
     MAX_DRAFT_QUEST_TITLE_BYTES,
+};
+pub use revision3_content_index::{
+    build_revision3_content_index_v1, Revision3ContentAssetClassV1,
+    Revision3ContentAssetReferenceResolutionV1, Revision3ContentAssetReferenceRoleV1,
+    Revision3ContentAssetReferenceV1, Revision3ContentAssetV1, Revision3ContentEntitySummaryV1,
+    Revision3ContentEntityV1, Revision3ContentIndexErrorV1, Revision3ContentIndexJsonErrorV1,
+    Revision3ContentIndexV1, Revision3ContentOriginV1, Revision3ContentReferenceResolutionV1,
+    Revision3ContentReferenceRoleV1, Revision3ContentReferenceTargetV1,
+    Revision3ContentReferenceV1, Revision3VoiceTargetResolutionV1,
+    MAX_REVISION3_CONTENT_INDEX_JSON_BYTES_V1, MAX_REVISION3_CONTENT_REFERENCES_V1,
+    REVISION3_CONTENT_INDEX_SCHEMA_V1,
 };
 pub use revision3_quest::{
     project_revision3_quest_free_basis_to_revision2, regenerate_revision3_quest_module_v2,

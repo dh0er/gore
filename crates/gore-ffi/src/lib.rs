@@ -58,6 +58,16 @@
 //!   collision authority, consumes the repeated-Quest transaction, imports its structural
 //!   artifact, and fully reopens a prepared revision-3 checkpoint. It returns only structural,
 //!   build-blocked/runtime-unqualified facts and never publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_dataasset_stage_v1`,
+//!   `authoring_store_list_revision3_dataasset_stages_v1`, and
+//!   `authoring_store_prepare_remove_revision3_dataasset_stage_v1` expose the closed revision-3
+//!   fixed-leaf DataAsset stage registry. Preparation verifies the full native PatchReceipt-v2
+//!   and live-generation chain; mutation routes return only fully reopened unpublished candidate
+//!   heads. They grant no build, pack, runtime, artifact, deployment, or head-publication
+//!   authority, and stored stage manifests contain no local paths, receipt bytes, or raw offsets.
+//! - `authoring_store_read_revision3_content_index_v1` fully reopens one exact current revision-3
+//!   project and returns a bounded semantic entity/reference/asset projection without generated
+//!   source or blob bytes. It is read-only and grants no build, runtime, or publication authority.
 //! - `authoring_store_import_ogg` and `authoring_store_verify_asset` import or verify bounded
 //!   content-addressed Ogg assets. `expected_head_json` is a strict CAS token: null means the fixed
 //!   head must be absent; a canonical string means it must match exactly.
@@ -82,6 +92,8 @@
 //!   seals and offset-free selectors without paths, patching, deployment, or runtime claims.
 
 mod authoring;
+mod authoring_content_revision3;
+mod authoring_dataasset_revision3;
 mod authoring_drafts;
 mod authoring_npc_catalog;
 mod authoring_store;
@@ -125,6 +137,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_project_story_draft_insert_v1",
     "authoring_project_story_quest_draft_insert_v1",
     "authoring_store_import_ogg",
+    "authoring_store_list_revision3_dataasset_stages_v1",
     "authoring_store_open",
     "authoring_store_open_document",
     "authoring_store_open_head_bytes",
@@ -133,8 +146,11 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_open_revision3_head_bytes",
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
+    "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_checkpoint",
+    "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
+    "authoring_store_read_revision3_content_index_v1",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -185,16 +201,206 @@ fn err(code: &str, msg: impl Into<String>) -> Value {
     json!({"ok": false, "error": {"code": code, "message": msg.into()}})
 }
 
-fn dispatch(input: &str) -> Value {
-    let req: Value = match serde_json::from_str(input) {
-        Ok(v) => v,
-        Err(e) => return err("BAD_REQUEST", format!("invalid request json: {e}")),
-    };
-    let command = req.get("command").and_then(Value::as_str).unwrap_or("");
-    // These security-sensitive additive Store routes must see the original wire. Drop the
-    // dispatch probe and return before cloning its payload, so a maximum-size canonical project
-    // is never retained in two decoded representations while the raw parser runs.
-    let revision3_store_raw_route: Option<fn(&str) -> Value> = match command {
+const MAX_DISPATCH_COMMAND_BYTES: usize = 256;
+const MAX_JSON_ENCODED_COMMAND_BYTES: usize = MAX_DISPATCH_COMMAND_BYTES * 6;
+const MAX_DISPATCH_SCAN_DEPTH: usize = 128;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DispatchProbeError {
+    InvalidJson,
+    CommandTooLong,
+}
+
+/// Finds the top-level command without allocating attacker-sized JSON keys or payload values.
+///
+/// Raw Store routes must see their original wire under their command-local cap before a generic
+/// `Value` tree exists. A command spelling is the only allocation here, and even its maximally
+/// escaped wire form is capped before decoding. Unknown values are skipped with a fixed-depth
+/// byte scanner. Once a raw command is found, its closed duplicate-safe parser owns all remaining
+/// syntax and schema validation.
+fn probe_dispatch_command(input: &str) -> Result<Option<String>, DispatchProbeError> {
+    let bytes = input.as_bytes();
+    let mut cursor = skip_json_whitespace(bytes, 0);
+    if bytes.get(cursor) != Some(&b'{') {
+        return Err(DispatchProbeError::InvalidJson);
+    }
+    cursor += 1;
+    let mut last_command = None;
+
+    loop {
+        cursor = skip_json_whitespace(bytes, cursor);
+        if bytes.get(cursor) == Some(&b'}') {
+            cursor = skip_json_whitespace(bytes, cursor + 1);
+            return if cursor == bytes.len() {
+                Ok(last_command)
+            } else {
+                Err(DispatchProbeError::InvalidJson)
+            };
+        }
+
+        let key_start = cursor;
+        let key_end = scan_json_string(bytes, key_start)?;
+        let is_command = json_string_is_command(input, key_start, key_end)?;
+        cursor = skip_json_whitespace(bytes, key_end);
+        if bytes.get(cursor) != Some(&b':') {
+            return Err(DispatchProbeError::InvalidJson);
+        }
+        cursor = skip_json_whitespace(bytes, cursor + 1);
+
+        if is_command {
+            let command_end = scan_json_string(bytes, cursor)?;
+            let encoded_len = command_end.saturating_sub(cursor + 2);
+            if encoded_len > MAX_JSON_ENCODED_COMMAND_BYTES {
+                return Err(DispatchProbeError::CommandTooLong);
+            }
+            let command: String = serde_json::from_str(&input[cursor..command_end])
+                .map_err(|_| DispatchProbeError::InvalidJson)?;
+            if command.len() > MAX_DISPATCH_COMMAND_BYTES {
+                return Err(DispatchProbeError::CommandTooLong);
+            }
+            if revision3_store_raw_route(&command).is_some() {
+                return Ok(Some(command));
+            }
+            last_command = Some(command);
+            cursor = command_end;
+        } else {
+            cursor = skip_json_value(bytes, cursor)?;
+        }
+
+        cursor = skip_json_whitespace(bytes, cursor);
+        match bytes.get(cursor) {
+            Some(b',') => cursor += 1,
+            Some(b'}') => {
+                cursor = skip_json_whitespace(bytes, cursor + 1);
+                return if cursor == bytes.len() {
+                    Ok(last_command)
+                } else {
+                    Err(DispatchProbeError::InvalidJson)
+                };
+            }
+            _ => return Err(DispatchProbeError::InvalidJson),
+        }
+    }
+}
+
+fn skip_json_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while matches!(bytes.get(cursor), Some(b' ' | b'\n' | b'\r' | b'\t')) {
+        cursor += 1;
+    }
+    cursor
+}
+
+fn scan_json_string(bytes: &[u8], start: usize) -> Result<usize, DispatchProbeError> {
+    if bytes.get(start) != Some(&b'\"') {
+        return Err(DispatchProbeError::InvalidJson);
+    }
+    let mut cursor = start + 1;
+    while let Some(&byte) = bytes.get(cursor) {
+        match byte {
+            b'\"' => return Ok(cursor + 1),
+            b'\\' => {
+                cursor += 1;
+                match bytes.get(cursor) {
+                    Some(b'\"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => {
+                        cursor += 1;
+                    }
+                    Some(b'u') => {
+                        let digits = bytes
+                            .get(cursor + 1..cursor + 5)
+                            .ok_or(DispatchProbeError::InvalidJson)?;
+                        if !digits.iter().all(u8::is_ascii_hexdigit) {
+                            return Err(DispatchProbeError::InvalidJson);
+                        }
+                        cursor += 5;
+                    }
+                    _ => return Err(DispatchProbeError::InvalidJson),
+                }
+            }
+            0x00..=0x1f => return Err(DispatchProbeError::InvalidJson),
+            _ => cursor += 1,
+        }
+    }
+    Err(DispatchProbeError::InvalidJson)
+}
+
+fn json_string_is_command(
+    input: &str,
+    start: usize,
+    end: usize,
+) -> Result<bool, DispatchProbeError> {
+    const MAX_ENCODED_KEY_BYTES: usize = "command".len() * 6;
+    if end.saturating_sub(start + 2) > MAX_ENCODED_KEY_BYTES {
+        return Ok(false);
+    }
+    if &input[start..end] == "\"command\"" {
+        return Ok(true);
+    }
+    let key: String =
+        serde_json::from_str(&input[start..end]).map_err(|_| DispatchProbeError::InvalidJson)?;
+    Ok(key == "command")
+}
+
+fn skip_json_value(bytes: &[u8], start: usize) -> Result<usize, DispatchProbeError> {
+    match bytes.get(start) {
+        Some(b'\"') => scan_json_string(bytes, start),
+        Some(b'{' | b'[') => skip_json_container(bytes, start),
+        Some(_) => {
+            let mut cursor = start;
+            while let Some(byte) = bytes.get(cursor) {
+                if matches!(byte, b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t') {
+                    break;
+                }
+                cursor += 1;
+            }
+            if cursor == start {
+                Err(DispatchProbeError::InvalidJson)
+            } else {
+                Ok(cursor)
+            }
+        }
+        None => Err(DispatchProbeError::InvalidJson),
+    }
+}
+
+fn skip_json_container(bytes: &[u8], start: usize) -> Result<usize, DispatchProbeError> {
+    let mut stack = [0_u8; MAX_DISPATCH_SCAN_DEPTH];
+    let mut depth = 1_usize;
+    stack[0] = bytes[start];
+    let mut cursor = start + 1;
+
+    while let Some(&byte) = bytes.get(cursor) {
+        match byte {
+            b'\"' => cursor = scan_json_string(bytes, cursor)?,
+            b'{' | b'[' => {
+                if depth == MAX_DISPATCH_SCAN_DEPTH {
+                    return Err(DispatchProbeError::InvalidJson);
+                }
+                stack[depth] = byte;
+                depth += 1;
+                cursor += 1;
+            }
+            b'}' | b']' => {
+                let expected_open = if byte == b'}' { b'{' } else { b'[' };
+                if stack[depth - 1] != expected_open {
+                    return Err(DispatchProbeError::InvalidJson);
+                }
+                depth -= 1;
+                cursor += 1;
+                if depth == 0 {
+                    return Ok(cursor);
+                }
+            }
+            _ => cursor += 1,
+        }
+    }
+    Err(DispatchProbeError::InvalidJson)
+}
+
+fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
+    match command {
+        "authoring_store_list_revision3_dataasset_stages_v1" => {
+            Some(authoring_dataasset_revision3::list_raw)
+        }
         "authoring_store_open_revision3" => Some(authoring_store::open_revision3_raw),
         "authoring_store_open_revision3_head_bytes" => {
             Some(authoring_store::open_revision3_head_bytes_raw)
@@ -202,15 +408,44 @@ fn dispatch(input: &str) -> Value {
         "authoring_store_prepare_revision3_checkpoint" => {
             Some(authoring_store::prepare_revision3_checkpoint_raw)
         }
-        "authoring_store_prepare_revision3_quest_draft_v3" => Some(
-            authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw,
-        ),
+        "authoring_store_prepare_remove_revision3_dataasset_stage_v1" => {
+            Some(authoring_dataasset_revision3::prepare_remove_raw)
+        }
+        "authoring_store_prepare_revision3_dataasset_stage_v1" => {
+            Some(authoring_dataasset_revision3::prepare_raw)
+        }
+        "authoring_store_prepare_revision3_quest_draft_v3" => {
+            Some(authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw)
+        }
+        "authoring_store_read_revision3_content_index_v1" => {
+            Some(authoring_content_revision3::read_revision3_content_index_v1_raw)
+        }
         _ => None,
+    }
+}
+
+fn dispatch(input: &str) -> Value {
+    let command = match probe_dispatch_command(input) {
+        Ok(Some(command)) => command,
+        Ok(None) => String::new(),
+        Err(DispatchProbeError::CommandTooLong) => {
+            return err("BAD_REQUEST", "request command exceeds its bounded length");
+        }
+        Err(DispatchProbeError::InvalidJson) => {
+            return err("BAD_REQUEST", "invalid request json");
+        }
     };
-    if let Some(route) = revision3_store_raw_route {
-        drop(req);
+    // These security-sensitive additive Store routes see the original wire before any generic
+    // payload `Value` exists. Route-local parsers enforce their smaller envelope caps before
+    // decoding nested strings.
+    if let Some(route) = revision3_store_raw_route(&command) {
         return route(input);
     }
+    let req: Value = match serde_json::from_str(input) {
+        Ok(value) => value,
+        Err(e) => return err("BAD_REQUEST", format!("invalid request json: {e}")),
+    };
+    let command = req.get("command").and_then(Value::as_str).unwrap_or("");
     let payload = req.get("payload").cloned().unwrap_or(Value::Null);
     match command {
         "core_info" => core_info(),
@@ -1093,6 +1328,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn raw_store_route_caps_input_before_building_a_generic_payload_tree() {
+        let request = format!(
+            "{{\"command\":\"authoring_store_read_revision3_content_index_v1\",\"payload\":{{\"padding\":\"{}\"}}}}",
+            "x".repeat(2 * 1024 * 1024)
+        );
+        let response: Value = serde_json::from_str(&execute_json(&request)).unwrap();
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_CONTENT_INPUT_LIMIT"
+        );
+    }
+
+    #[test]
+    fn raw_store_route_is_found_after_an_attacker_sized_top_level_key() {
+        let request = format!(
+            "{{\"{}\":null,\"command\":\"authoring_store_read_revision3_content_index_v1\",\"payload\":{{}}}}",
+            "attacker-key".repeat(192 * 1024)
+        );
+        let response: Value = serde_json::from_str(&execute_json(&request)).unwrap();
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_CONTENT_INPUT_LIMIT"
+        );
+    }
+
+    #[test]
+    fn raw_store_route_is_found_after_an_attacker_sized_payload() {
+        let request = format!(
+            "{{\"payload\":{{\"padding\":\"{}\"}},\"command\":\"authoring_store_read_revision3_content_index_v1\"}}",
+            "x".repeat(2 * 1024 * 1024)
+        );
+        let response: Value = serde_json::from_str(&execute_json(&request)).unwrap();
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_CONTENT_INPUT_LIMIT"
+        );
+    }
+
+    #[test]
+    fn dispatch_rejects_an_attacker_sized_command_before_decoding_it() {
+        let request = format!(
+            "{{\"command\":\"{}\",\"payload\":{{}}}}",
+            "x".repeat(2 * 1024 * 1024)
+        );
+        let response: Value = serde_json::from_str(&execute_json(&request)).unwrap();
+        assert_eq!(response["error"]["code"], "BAD_REQUEST");
+        assert_eq!(
+            response["error"]["message"],
+            "request command exceeds its bounded length"
+        );
+    }
+
+    #[test]
+    fn dispatch_recognizes_a_bounded_escaped_raw_command_key_and_value() {
+        let request = r#"{"\u0063ommand":"authoring_store_read_revision3_content_index_\u00761","payload":{"padding":"x"}}"#;
+        let response: Value = serde_json::from_str(&execute_json(request)).unwrap();
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_CONTENT_REQUEST_INVALID"
+        );
+    }
+
+    #[test]
     fn generate_mod_returns_files_with_cdo_pattern() {
         let req = r#"{"command":"generate_mod","payload":{
             "meta":{"name":"M","delay_ms":0},
@@ -1137,6 +1435,7 @@ mod tests {
                     "authoring_project_story_draft_insert_v1",
                     "authoring_project_story_quest_draft_insert_v1",
                     "authoring_store_import_ogg",
+                    "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_open",
                     "authoring_store_open_document",
                     "authoring_store_open_head_bytes",
@@ -1145,8 +1444,11 @@ mod tests {
                     "authoring_store_open_revision3_head_bytes",
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
+                    "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_checkpoint",
+                    "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
+                    "authoring_store_read_revision3_content_index_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
@@ -1224,7 +1526,19 @@ mod tests {
             .any(|command| command == "authoring_store_prepare_document_checkpoint"));
         assert!(commands
             .iter()
+            .any(|command| command == "authoring_store_list_revision3_dataasset_stages_v1"));
+        assert!(commands.iter().any(
+            |command| command == "authoring_store_prepare_remove_revision3_dataasset_stage_v1"
+        ));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_dataasset_stage_v1"));
+        assert!(commands
+            .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_draft_v3"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_read_revision3_content_index_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));
