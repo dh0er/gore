@@ -150,6 +150,18 @@ fn callback_shape_matches(bytes: &[u8]) -> bool {
 
 pub const MAX_CAPTURE_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_FORMATTED_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum number of structured messages retained from one bounded helper capture.
+///
+/// The raw capture limit alone is insufficient: one section path is repeated into every
+/// [`CompilerDiagnostic`] and could otherwise amplify a compact capture into an unbounded heap
+/// allocation.
+pub const MAX_STRUCTURED_DIAGNOSTICS: usize = 65_536;
+/// Maximum source-path bytes copied into one structured diagnostic.
+pub const MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES: usize = 32 * 1024;
+/// Maximum message bytes copied into one structured diagnostic.
+pub const MAX_STRUCTURED_DIAGNOSTIC_MESSAGE_BYTES: usize = 64 * 1024;
+/// Aggregate copied file/message bytes retained by one structured report.
+pub const MAX_STRUCTURED_DIAGNOSTIC_TEXT_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_INJECT_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
 pub(crate) const CAPTURE_TRUNCATED_TOKEN: &str = "[GORE] diagnostics capture truncated at 8 MiB";
 const MAX_STATUS_BYTES: u64 = 4096;
@@ -202,6 +214,82 @@ pub struct CompilerDiagnostic {
     pub column: u32,
     pub severity: DiagnosticSeverity,
     pub message: String,
+}
+
+/// How enhanced compiler diagnostics were (or were not) obtained for one generator attempt.
+///
+/// This is deliberately independent from compilation success. In particular, an unavailable hook
+/// runs the unchanged normal generator once and reports [`Self::UnavailableFallback`]; it is not a
+/// compiler error and callers must not infer captured messages from an empty list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagnosticsCaptureDisposition {
+    /// The helper reached its ready state and its complete bounded capture was accepted.
+    Captured,
+    /// A helper capture was unreadable, truncated, or could not be represented within the closed
+    /// structured-message envelope. Any otherwise usable generated cache is rejected.
+    CaptureInvalid,
+    /// Enhanced capture was unavailable and the unchanged normal generator was run exactly once.
+    UnavailableFallback,
+    /// The original generator exited before capture became available. Its completed result was
+    /// used without launching a second process.
+    UnavailableWithoutFallback,
+    /// Process exit could not be confirmed, so the attempt failed closed without fallback and
+    /// its recovery artifacts were preserved. Captured messages are intentionally not exposed:
+    /// the possibly live process may still be writing them.
+    ProcessExitUnconfirmed,
+    /// The caller explicitly disabled enhanced capture and used the normal generator.
+    Disabled,
+}
+
+/// Bounded structured diagnostics retained beside a compile result.
+///
+/// Fields stay private so a value returned by the compiler cannot be widened past the parser's
+/// count, per-field, or aggregate allocation limits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompilerDiagnosticsReport {
+    disposition: DiagnosticsCaptureDisposition,
+    diagnostics: Vec<CompilerDiagnostic>,
+}
+
+impl CompilerDiagnosticsReport {
+    pub const fn disposition(&self) -> DiagnosticsCaptureDisposition {
+        self.disposition
+    }
+
+    pub fn diagnostics(&self) -> &[CompilerDiagnostic] {
+        &self.diagnostics
+    }
+
+    pub(crate) fn empty(disposition: DiagnosticsCaptureDisposition) -> Self {
+        Self {
+            disposition,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    pub(crate) fn from_bounded_capture(
+        disposition: DiagnosticsCaptureDisposition,
+        capture: &str,
+    ) -> Result<Self, StructuredDiagnosticsError> {
+        Ok(Self {
+            disposition,
+            diagnostics: parse_capture_bounded(capture)?,
+        })
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum StructuredDiagnosticsError {
+    #[error("structured compiler diagnostic count exceeds {limit}")]
+    TooManyDiagnostics { limit: usize },
+    #[error("structured compiler diagnostic file has {actual} bytes; maximum is {limit}")]
+    FileTooLarge { actual: usize, limit: usize },
+    #[error("structured compiler diagnostic message has {actual} bytes; maximum is {limit}")]
+    MessageTooLarge { actual: usize, limit: usize },
+    #[error("structured compiler diagnostic text byte count overflowed")]
+    TextBytesOverflow,
+    #[error("structured compiler diagnostic text exceeds {limit} bytes")]
+    TextBytesTooLarge { limit: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -746,7 +834,7 @@ fn aob_rvas_in_text_range(
 
 /// Parse the helper's bounded line protocol into normal compiler diagnostics.
 pub fn parse_capture(text: &str) -> Vec<CompilerDiagnostic> {
-    let mut file = String::from("<unknown>");
+    let mut file = "<unknown>";
     let mut out = Vec::new();
     for raw in text.lines() {
         let line = raw.trim_end_matches('\r');
@@ -754,17 +842,88 @@ pub fn parse_capture(text: &str) -> Vec<CompilerDiagnostic> {
             .strip_prefix("=== ")
             .and_then(|s| s.strip_suffix(" ==="))
         {
-            file = section.to_string();
+            file = section;
             continue;
         }
-        if let Some(diagnostic) = parse_capture_line(&file, line) {
-            out.push(diagnostic);
+        if let Some((line, column, severity, message)) = parse_capture_line_parts(line) {
+            out.push(CompilerDiagnostic {
+                file: file.to_owned(),
+                line,
+                column,
+                severity,
+                message: message.to_owned(),
+            });
         }
     }
     out
 }
 
-fn parse_capture_line(file: &str, line: &str) -> Option<CompilerDiagnostic> {
+/// Parse the helper protocol while bounding allocation amplification before cloning section paths
+/// or messages. Unknown protocol rows remain absent from the structured view and are still
+/// retained by [`format_capture`] for the legacy human-readable adapter.
+pub fn parse_capture_bounded(
+    text: &str,
+) -> Result<Vec<CompilerDiagnostic>, StructuredDiagnosticsError> {
+    let mut file = "<unknown>";
+    let mut out = Vec::new();
+    let mut retained_text_bytes = 0usize;
+    for raw in text.lines() {
+        let protocol_line = raw.trim_end_matches('\r');
+        if let Some(section) = protocol_line
+            .strip_prefix("=== ")
+            .and_then(|value| value.strip_suffix(" ==="))
+        {
+            if section.len() > MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES {
+                return Err(StructuredDiagnosticsError::FileTooLarge {
+                    actual: section.len(),
+                    limit: MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES,
+                });
+            }
+            file = section;
+            continue;
+        }
+        let Some((line, column, severity, message)) = parse_capture_line_parts(protocol_line)
+        else {
+            continue;
+        };
+        if out.len() == MAX_STRUCTURED_DIAGNOSTICS {
+            return Err(StructuredDiagnosticsError::TooManyDiagnostics {
+                limit: MAX_STRUCTURED_DIAGNOSTICS,
+            });
+        }
+        if file.len() > MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES {
+            return Err(StructuredDiagnosticsError::FileTooLarge {
+                actual: file.len(),
+                limit: MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES,
+            });
+        }
+        if message.len() > MAX_STRUCTURED_DIAGNOSTIC_MESSAGE_BYTES {
+            return Err(StructuredDiagnosticsError::MessageTooLarge {
+                actual: message.len(),
+                limit: MAX_STRUCTURED_DIAGNOSTIC_MESSAGE_BYTES,
+            });
+        }
+        retained_text_bytes = retained_text_bytes
+            .checked_add(file.len())
+            .and_then(|value| value.checked_add(message.len()))
+            .ok_or(StructuredDiagnosticsError::TextBytesOverflow)?;
+        if retained_text_bytes > MAX_STRUCTURED_DIAGNOSTIC_TEXT_BYTES {
+            return Err(StructuredDiagnosticsError::TextBytesTooLarge {
+                limit: MAX_STRUCTURED_DIAGNOSTIC_TEXT_BYTES,
+            });
+        }
+        out.push(CompilerDiagnostic {
+            file: file.to_owned(),
+            line,
+            column,
+            severity,
+            message: message.to_owned(),
+        });
+    }
+    Ok(out)
+}
+
+fn parse_capture_line_parts(line: &str) -> Option<(u32, u32, DiagnosticSeverity, &str)> {
     let (line_no, column, rest) = if let Some(rest) = line.strip_prefix('(') {
         let (position, rest) = rest.split_once(") ")?;
         let (line_s, col_s) = position.split_once(':')?;
@@ -784,12 +943,16 @@ fn parse_capture_line(file: &str, line: &str) -> Option<CompilerDiagnostic> {
         "I" => DiagnosticSeverity::Note,
         _ => return None,
     };
-    Some(CompilerDiagnostic {
-        file: file.to_string(),
-        line: line_no,
+    Some((line_no, column, severity, message))
+}
+
+fn parse_capture_line(file: &str, line: &str) -> Option<CompilerDiagnostic> {
+    parse_capture_line_parts(line).map(|(line, column, severity, message)| CompilerDiagnostic {
+        file: file.to_owned(),
+        line,
         column,
         severity,
-        message: message.to_string(),
+        message: message.to_owned(),
     })
 }
 
@@ -1656,6 +1819,49 @@ mod tests {
              D:/Game/G1R/Script/Test.as:13:2: warning: Deprecated call\n\
              D:/Game/G1R/Script/Test.as:13:2: note: Candidate: Foo(int)\n"
         );
+    }
+
+    #[test]
+    fn bounded_capture_parser_retains_exact_structured_messages() {
+        let input = "=== Story/Test.as ===\n\
+                     (12:7) [E] Broken call\n\
+                     (14:3) [W] Deprecated call\n";
+        let parsed = parse_capture_bounded(input).unwrap();
+        assert_eq!(parsed, parse_capture(input));
+        assert_eq!(parsed[0].file, "Story/Test.as");
+        assert_eq!(parsed[0].line, 12);
+        assert_eq!(parsed[0].column, 7);
+        assert_eq!(parsed[0].message, "Broken call");
+    }
+
+    #[test]
+    fn bounded_capture_parser_rejects_allocation_amplification_before_cloning() {
+        let oversized_file = "x".repeat(MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES + 1);
+        let error =
+            parse_capture_bounded(&format!("=== {oversized_file} ===\n[E] failure\n")).unwrap_err();
+        assert!(matches!(
+            error,
+            StructuredDiagnosticsError::FileTooLarge { .. }
+        ));
+
+        let mut too_many = String::new();
+        for _ in 0..=MAX_STRUCTURED_DIAGNOSTICS {
+            too_many.push_str("[E] x\n");
+        }
+        assert!(matches!(
+            parse_capture_bounded(&too_many),
+            Err(StructuredDiagnosticsError::TooManyDiagnostics { .. })
+        ));
+
+        let repeated_file = "y".repeat(MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES);
+        let mut aggregate = format!("=== {repeated_file} ===\n");
+        for _ in 0..=(MAX_STRUCTURED_DIAGNOSTIC_TEXT_BYTES / repeated_file.len()) {
+            aggregate.push_str("[I] x\n");
+        }
+        assert!(matches!(
+            parse_capture_bounded(&aggregate),
+            Err(StructuredDiagnosticsError::TextBytesTooLarge { .. })
+        ));
     }
 
     #[test]

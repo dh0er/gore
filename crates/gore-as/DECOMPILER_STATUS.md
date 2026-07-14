@@ -130,6 +130,20 @@ requires reconstructing its body manually or first extending the decompiler.
    executables pass the same offline structural check; runtime injection remains proven only on
    the installed 1.0.3 executable.
 
+   The compiler library now also exposes a bounded structured report instead of forcing callers
+   to recover diagnostics from formatted error strings. It retains file, line, column, severity,
+   and message together with one of `Captured`, `CaptureInvalid`, `UnavailableFallback`,
+   `UnavailableWithoutFallback`, `ProcessExitUnconfirmed`, or `Disabled`. True signature, hook, or
+   preflight unavailability runs the normal generator exactly once. If the first generator has
+   already exited before capture becomes available, `UnavailableWithoutFallback` keeps that first
+   result and never starts a second process. Invalid, truncated, oversized, or unrepresentable
+   capture becomes `CaptureInvalid` and rejects an otherwise usable cache; it is not treated as
+   clean hook unavailability. An unconfirmed compiler-process exit exposes no possibly
+   live-written diagnostics, preserves recovery artifacts, and never starts a fallback. Raw and
+   formatted capture are capped at 8 MiB; the structured envelope permits at most 65,536 records,
+   32 KiB per filename, 64 KiB per message, and 16 MiB retained diagnostic text. This is a native
+   API foundation; the managed Quest Studio route does not invoke it yet.
+
 The mixed-RVO switch in `MakeNewCrimeRegisterData` is recovered with a per-exit proof: each early
 bare-RET edge must contain exactly one resolved RVO store, and removing that store in the negative
 regression atomically restores the stub. `UCBT_CompleteSequence::Tick` is now recovered by a

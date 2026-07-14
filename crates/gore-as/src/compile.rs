@@ -43,6 +43,80 @@ pub struct CompileOutput {
     pub module_name: String,
 }
 
+/// Result of one compile-module attempt. A failure remains an ordinary [`CompileError`]; the
+/// surrounding report separately preserves whether enhanced diagnostics were captured, fell back,
+/// or were unavailable after the original process had already completed.
+#[derive(Debug)]
+pub enum CompileModuleReportOutcome {
+    Compiled(CompileOutput),
+    Failed(CompileError),
+}
+
+/// Structured companion to [`compile_module`].
+///
+/// `diagnostics` is `None` only when the operation failed before a game compiler process produced
+/// a report (for example during source/base preflight or install transaction setup). Once the
+/// compiler path starts, success and failure both retain a bounded report without parsing the
+/// human-readable [`CompileError`] string.
+#[derive(Debug)]
+pub struct CompileModuleReport {
+    pub outcome: CompileModuleReportOutcome,
+    diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+}
+
+impl CompileModuleReport {
+    pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
+        self.diagnostics.as_ref()
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        CompileModuleReportOutcome,
+        Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    ) {
+        (self.outcome, self.diagnostics)
+    }
+}
+
+/// Compile one module through the transactional game compiler while retaining bounded structured
+/// diagnostics and the exact capture/fallback disposition.
+///
+/// The existing [`compile_module`] API remains the injectable compatibility primitive. This
+/// higher-level production entry point uses the same default diagnostics options and never derives
+/// structured messages by reparsing an error string.
+pub fn compile_module_with_diagnostics_report(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> CompileModuleReport {
+    compile_module_report_with(opts, |game_dir, source_tree| {
+        game_run_regen_with_diagnostics_report(game_dir, source_tree, diagnostics)
+    })
+}
+
+fn compile_module_report_with<R>(opts: &CompileOpts, run_regen: R) -> CompileModuleReport
+where
+    R: Fn(&Path, &Path) -> Result<GameRunRegenReport, String>,
+{
+    let report = std::cell::RefCell::new(None);
+    let result = compile_module(opts, |game_dir, source_tree| {
+        let generated = run_regen(game_dir, source_tree)?;
+        let mut slot = report.borrow_mut();
+        if slot.is_some() {
+            return Err("compile-module diagnostics runner was invoked more than once".to_owned());
+        }
+        *slot = Some(generated.diagnostics);
+        generated.result
+    });
+    CompileModuleReport {
+        outcome: match result {
+            Ok(output) => CompileModuleReportOutcome::Compiled(output),
+            Err(error) => CompileModuleReportOutcome::Failed(error),
+        },
+        diagnostics: report.into_inner(),
+    }
+}
+
 /// Return the compiler-generated class methods that the source emitter deliberately omits.
 /// Replacing an existing module without carrying these records forward would silently erase CDO
 /// defaults (NPC/quest/dialog configuration among them), so `edit` must fail closed until the
@@ -1338,7 +1412,35 @@ impl Drop for CompileTransaction {
 /// their exact pre-call states, then undoes every staged source file. If generator termination
 /// cannot be confirmed, isolation and the lock intentionally remain in place for manual recovery.
 pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String> {
-    game_run_regen_with(game_dir, src_dir, real_generate)
+    game_run_regen_with_diagnostics(game_dir, src_dir, &Default::default())
+}
+
+/// Transactional generator result paired with the bounded diagnostics report produced after the
+/// compiler process started. Setup failures that occur before a process/report exists remain the
+/// outer `Err` of [`game_run_regen_with_diagnostics_report`].
+#[derive(Debug)]
+pub struct GameRunRegenReport {
+    result: Result<PathBuf, String>,
+    diagnostics: crate::diagnostics::CompilerDiagnosticsReport,
+}
+
+impl GameRunRegenReport {
+    pub fn result(&self) -> Result<&Path, &str> {
+        self.result.as_deref().map_err(String::as_str)
+    }
+
+    pub fn diagnostics(&self) -> &crate::diagnostics::CompilerDiagnosticsReport {
+        &self.diagnostics
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        Result<PathBuf, String>,
+        crate::diagnostics::CompilerDiagnosticsReport,
+    ) {
+        (self.result, self.diagnostics)
+    }
 }
 
 /// Same transactional compiler path as [`game_run_regen`], with explicit diagnostics discovery /
@@ -1349,9 +1451,41 @@ pub fn game_run_regen_with_diagnostics(
     src_dir: &Path,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> Result<PathBuf, String> {
-    game_run_regen_with(game_dir, src_dir, |exe, g1r, cache| {
-        real_generate_with_diagnostics(exe, g1r, cache, diagnostics)
-    })
+    match game_run_regen_with_diagnostics_report(game_dir, src_dir, diagnostics) {
+        Ok(report) => report.result,
+        Err(error) => Err(error),
+    }
+}
+
+/// Same transactional install-restoring compiler path as [`game_run_regen_with_diagnostics`], but
+/// preserve the structured capture disposition and messages without deriving them from stderr or
+/// a formatted error string.
+pub fn game_run_regen_with_diagnostics_report(
+    game_dir: &Path,
+    src_dir: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<GameRunRegenReport, String> {
+    let diagnostic_report = std::cell::RefCell::new(None);
+    let result = game_run_regen_with(game_dir, src_dir, |exe, g1r, cache| {
+        let generated = real_generate_with_timeout_and_diagnostics_report(
+            exe,
+            g1r,
+            cache,
+            Duration::from_secs(30 * 60),
+            diagnostics,
+        );
+        *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
+        generated.result
+    });
+    match diagnostic_report.into_inner() {
+        Some(diagnostics) => Ok(GameRunRegenReport {
+            result,
+            diagnostics,
+        }),
+        None => Err(result.err().unwrap_or_else(|| {
+            "game compiler completed without producing its diagnostics disposition".to_owned()
+        })),
+    }
 }
 
 /// Testable core of [`game_run_regen`]. `generate` receives the executable, G1R directory, and
@@ -1838,29 +1972,55 @@ fn finish_generator_child(
 
 #[derive(Debug)]
 enum DiagnosticAttempt<T> {
-    Completed(Result<T, String>),
+    Completed(GeneratorDiagnosticsResult<T>),
     Disabled,
     Unavailable(String),
-    Fatal(String),
+    Fatal(GeneratorDiagnosticsResult<T>),
+}
+
+#[derive(Debug)]
+struct GeneratorDiagnosticsResult<T> {
+    result: Result<T, String>,
+    diagnostics: crate::diagnostics::CompilerDiagnosticsReport,
 }
 
 /// Infrastructure failure is deliberately not a compiler failure: once the first process is
 /// confirmed absent, execute the unchanged normal generator and return its result byte-for-byte.
-fn resolve_diagnostic_attempt<T, N>(attempt: DiagnosticAttempt<T>, normal: N) -> Result<T, String>
+fn resolve_diagnostic_attempt_report<T, N>(
+    attempt: DiagnosticAttempt<T>,
+    normal: N,
+) -> GeneratorDiagnosticsResult<T>
 where
     N: FnOnce() -> Result<T, String>,
 {
     match attempt {
-        DiagnosticAttempt::Completed(result) => result,
-        DiagnosticAttempt::Disabled => normal(),
+        DiagnosticAttempt::Completed(report) | DiagnosticAttempt::Fatal(report) => report,
+        DiagnosticAttempt::Disabled => GeneratorDiagnosticsResult {
+            result: normal(),
+            diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+                crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
+            ),
+        },
         DiagnosticAttempt::Unavailable(reason) => {
             eprintln!(
                 "gore: AngelScript diagnostics unavailable ({reason}); falling back to the normal generator"
             );
-            normal()
+            GeneratorDiagnosticsResult {
+                result: normal(),
+                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback,
+                ),
+            }
         }
-        DiagnosticAttempt::Fatal(error) => Err(error),
     }
+}
+
+#[cfg(test)]
+fn resolve_diagnostic_attempt<T, N>(attempt: DiagnosticAttempt<T>, normal: N) -> Result<T, String>
+where
+    N: FnOnce() -> Result<T, String>,
+{
+    resolve_diagnostic_attempt_report(attempt, normal).result
 }
 
 struct DiagnosticArtifacts {
@@ -1923,8 +2083,9 @@ impl Drop for DiagnosticArtifacts {
 fn append_captured_diagnostics(
     result: Result<Vec<u8>, String>,
     artifacts: &DiagnosticArtifacts,
-) -> Result<Vec<u8>, String> {
-    let (capture, has_compiler_error, capture_failure) = match crate::diagnostics::read_bounded(
+    disposition: crate::diagnostics::DiagnosticsCaptureDisposition,
+) -> GeneratorDiagnosticsResult<Vec<u8>> {
+    let (capture, diagnostics, capture_failure) = match crate::diagnostics::read_bounded(
         &artifacts.capture,
         crate::diagnostics::MAX_CAPTURE_BYTES,
     ) {
@@ -1932,13 +2093,28 @@ fn append_captured_diagnostics(
             let protocol_truncated = capture.lines().any(|line| {
                 line.trim_end_matches('\r') == crate::diagnostics::CAPTURE_TRUNCATED_TOKEN
             });
-            let capture_failure = (truncated || protocol_truncated).then_some("was truncated");
-            let has_compiler_error =
-                crate::diagnostics::parse_capture(&capture)
-                    .iter()
-                    .any(|diagnostic| {
-                        diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error
-                    });
+            let mut capture_failure =
+                (truncated || protocol_truncated).then(|| "was truncated".to_owned());
+            let report_disposition = if capture_failure.is_some() {
+                crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid
+            } else {
+                disposition
+            };
+            let diagnostics =
+                match crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
+                    report_disposition,
+                    &capture,
+                ) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        capture_failure = Some(format!(
+                            "could not be represented as bounded structured diagnostics ({error})"
+                        ));
+                        crate::diagnostics::CompilerDiagnosticsReport::empty(
+                            crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid,
+                        )
+                    }
+                };
             let mut formatted = crate::diagnostics::format_capture(&capture);
             const CAPTURE_TRUNCATED: &str = "<diagnostics truncated after 8 MiB>\n";
             if truncated
@@ -1948,32 +2124,42 @@ fn append_captured_diagnostics(
             {
                 formatted.push_str(CAPTURE_TRUNCATED);
             }
-            (formatted, has_compiler_error, capture_failure)
+            (formatted, diagnostics, capture_failure)
         }
-        Err(_error) if !artifacts.capture.exists() => (String::new(), false, None),
+        Err(_error) if !artifacts.capture.exists() => (
+            String::new(),
+            crate::diagnostics::CompilerDiagnosticsReport::empty(disposition),
+            None,
+        ),
         Err(error) => (
             format!("<diagnostics capture unreadable: {error}>\n"),
-            false,
-            Some("could not be read"),
+            crate::diagnostics::CompilerDiagnosticsReport::empty(
+                crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid,
+            ),
+            Some("could not be read".to_owned()),
         ),
     };
-    if capture.trim().is_empty() {
-        return match result {
+    let has_compiler_error = diagnostics
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.severity == crate::diagnostics::DiagnosticSeverity::Error);
+    let result = if capture.trim().is_empty() {
+        match result {
             Ok(_) if capture_failure.is_some() => Err(format!(
                 "AngelScript diagnostics capture {}; refusing to accept an unverified cache",
-                capture_failure.unwrap()
+                capture_failure.as_deref().unwrap_or("was invalid")
             )),
             result => result,
-        };
-    }
-    match result {
+        }
+    } else {
+        match result {
         Ok(_) if has_compiler_error => Err(format!(
             "AngelScript compiler reported an error despite producing a structurally complete cache\n--- AngelScript compiler diagnostics ---\n{}",
             capture.trim_end()
         )),
         Ok(_) if capture_failure.is_some() => Err(format!(
             "AngelScript diagnostics capture {}; refusing to accept an unverified cache\n--- AngelScript compiler diagnostics ---\n{}",
-            capture_failure.unwrap(), capture.trim_end()
+            capture_failure.as_deref().unwrap_or("was invalid"), capture.trim_end()
         )),
         Ok(bytes) => {
             eprint!("{capture}");
@@ -1983,6 +2169,11 @@ fn append_captured_diagnostics(
             "{error}\n--- AngelScript compiler diagnostics ---\n{}",
             capture.trim_end()
         )),
+        }
+    };
+    GeneratorDiagnosticsResult {
+        result,
+        diagnostics,
     }
 }
 
@@ -1997,11 +2188,16 @@ fn preserve_unconfirmed_diagnostic_attempt(
         .as_deref()
         .map(|path| format!(", embedded helper directory {}", path.display()))
         .unwrap_or_default();
-    DiagnosticAttempt::Fatal(format!(
-        "{error}; process exit is unconfirmed, so diagnostics files were intentionally preserved at {}{}",
-        diagnostics_dir.display(),
-        helper_note
-    ))
+    DiagnosticAttempt::Fatal(GeneratorDiagnosticsResult {
+        result: Err(format!(
+            "{error}; process exit is unconfirmed, so diagnostics files were intentionally preserved at {}{}",
+            diagnostics_dir.display(),
+            helper_note
+        )),
+        diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+            crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed,
+        ),
+    })
 }
 
 fn classify_hooked_result(
@@ -2009,12 +2205,31 @@ fn classify_hooked_result(
     artifacts: DiagnosticArtifacts,
     prep: crate::diagnostics::HookPreparation,
 ) -> DiagnosticAttempt<Vec<u8>> {
-    let result = append_captured_diagnostics(result, &artifacts);
-    match result {
+    let result = match result {
         Err(error) if generator_exit_unconfirmed(&error) => {
-            preserve_unconfirmed_diagnostic_attempt(error, artifacts, prep)
+            // The child may still own and append to the capture. Preserve the whole directory for
+            // recovery, but never read or expose a snapshot as if it were a completed report.
+            return preserve_unconfirmed_diagnostic_attempt(error, artifacts, prep);
         }
-        result => DiagnosticAttempt::Completed(result),
+        result => result,
+    };
+    let report = append_captured_diagnostics(
+        result,
+        &artifacts,
+        crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+    );
+    DiagnosticAttempt::Completed(report)
+}
+
+fn classify_started_hook_termination(
+    termination: String,
+    artifacts: DiagnosticArtifacts,
+    prep: crate::diagnostics::HookPreparation,
+) -> DiagnosticAttempt<Vec<u8>> {
+    if generator_exit_unconfirmed(&termination) {
+        preserve_unconfirmed_diagnostic_attempt(termination, artifacts, prep)
+    } else {
+        DiagnosticAttempt::Unavailable(termination)
     }
 }
 
@@ -2025,25 +2240,37 @@ fn real_generate_with_timeout_and_diagnostics(
     timeout: Duration,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> Result<Vec<u8>, String> {
+    real_generate_with_timeout_and_diagnostics_report(exe, g1r, cache, timeout, diagnostics).result
+}
+
+fn real_generate_with_timeout_and_diagnostics_report(
+    exe: &Path,
+    g1r: &Path,
+    cache: &Path,
+    timeout: Duration,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> GeneratorDiagnosticsResult<Vec<u8>> {
     if diagnostics.disabled {
-        return resolve_diagnostic_attempt(DiagnosticAttempt::Disabled, || {
+        return resolve_diagnostic_attempt_report(DiagnosticAttempt::Disabled, || {
             run_clean_fallback_generator(exe, g1r, cache, timeout)
         });
     }
     let prep = match crate::diagnostics::prepare_hook(exe, diagnostics) {
         Ok(prep) => prep,
         Err(reason) => {
-            return resolve_diagnostic_attempt(DiagnosticAttempt::Unavailable(reason), || {
-                run_clean_fallback_generator(exe, g1r, cache, timeout)
-            });
+            return resolve_diagnostic_attempt_report(
+                DiagnosticAttempt::Unavailable(reason),
+                || run_clean_fallback_generator(exe, g1r, cache, timeout),
+            );
         }
     };
     let artifacts = match DiagnosticArtifacts::create() {
         Ok(artifacts) => artifacts,
         Err(reason) => {
-            return resolve_diagnostic_attempt(DiagnosticAttempt::Unavailable(reason), || {
-                run_clean_fallback_generator(exe, g1r, cache, timeout)
-            });
+            return resolve_diagnostic_attempt_report(
+                DiagnosticAttempt::Unavailable(reason),
+                || run_clean_fallback_generator(exe, g1r, cache, timeout),
+            );
         }
     };
     let attempt = match crate::diagnostics::spawn_hooked(
@@ -2061,7 +2288,11 @@ fn real_generate_with_timeout_and_diagnostics(
         }
         Ok(crate::diagnostics::HookSpawnOutcome::ExitedBeforeInjection(mut child)) => {
             let result = finish_generator_child(&mut child, cache, timeout);
-            DiagnosticAttempt::Completed(append_captured_diagnostics(result, &artifacts))
+            DiagnosticAttempt::Completed(append_captured_diagnostics(
+                result,
+                &artifacts,
+                crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback,
+            ))
         }
         Ok(crate::diagnostics::HookSpawnOutcome::ExitedAfterInjectionBeforeReady {
             child,
@@ -2090,16 +2321,12 @@ fn real_generate_with_timeout_and_diagnostics(
                         Duration::from_millis(20),
                         Duration::from_secs(5),
                     );
-                    if generator_exit_unconfirmed(&termination) {
-                        preserve_unconfirmed_diagnostic_attempt(termination, artifacts, prep)
-                    } else {
-                        DiagnosticAttempt::Unavailable(termination)
-                    }
+                    classify_started_hook_termination(termination, artifacts, prep)
                 }
             }
         }
     };
-    resolve_diagnostic_attempt(attempt, || {
+    resolve_diagnostic_attempt_report(attempt, || {
         run_clean_fallback_generator(exe, g1r, cache, timeout)
     })
 }
@@ -3895,17 +4122,104 @@ mod tests {
     }
 
     #[test]
+    fn compile_module_report_retains_structured_diagnostics_on_success_and_failure() {
+        let root = std::env::temp_dir().join(format!(
+            "gore-as-compile-report-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("overlay.as");
+        std::fs::write(&source, b"// generated module\n").unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "NewModule".to_owned(),
+            rel_path: "NewModule.as".to_owned(),
+            as_path: source,
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+        };
+        let generated =
+            cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        let success = compile_module_report_with(&opts, |_, _| {
+            let path = root.join("generated.cache");
+            std::fs::write(&path, &generated).unwrap();
+            Ok(GameRunRegenReport {
+                result: Ok(path),
+                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+                    "=== NewModule.as ===\n(1:1) [W] retained warning\n",
+                )
+                .unwrap(),
+            })
+        });
+        assert!(matches!(
+            &success.outcome,
+            CompileModuleReportOutcome::Compiled(_)
+        ));
+        let diagnostics = success.diagnostics().unwrap();
+        assert_eq!(
+            diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured
+        );
+        assert_eq!(diagnostics.diagnostics().len(), 1);
+        assert_eq!(diagnostics.diagnostics()[0].message, "retained warning");
+
+        let failed = compile_module_report_with(&opts, |_, _| {
+            Ok(GameRunRegenReport {
+                result: Err("compiler rejected the source".to_owned()),
+                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+                    "=== NewModule.as ===\n(3:4) [E] broken expression\n",
+                )
+                .unwrap(),
+            })
+        });
+        assert!(matches!(
+            &failed.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Regen(_))
+        ));
+        assert_eq!(
+            failed.diagnostics().unwrap().diagnostics()[0].message,
+            "broken expression"
+        );
+
+        let mut invalid_opts = opts;
+        invalid_opts.op = "invalid".to_owned();
+        let not_run = compile_module_report_with(&invalid_opts, |_, _| {
+            panic!("invalid preflight must not launch the compiler")
+        });
+        assert!(matches!(
+            &not_run.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Other(_))
+        ));
+        assert!(not_run.diagnostics().is_none());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn no_match_fallback_returns_the_normal_generator_result() {
         let called = std::cell::Cell::new(0);
-        let result = resolve_diagnostic_attempt(
+        let report = resolve_diagnostic_attempt_report(
             DiagnosticAttempt::Unavailable("signature matched 0 times".into()),
             || {
                 called.set(called.get() + 1);
                 Ok::<_, String>(b"real-cache".to_vec())
             },
-        )
-        .unwrap();
-        assert_eq!(result, b"real-cache");
+        );
+        assert_eq!(report.result.unwrap(), b"real-cache");
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback
+        );
+        assert!(report.diagnostics.diagnostics().is_empty());
         assert_eq!(called.get(), 1);
     }
 
@@ -3933,7 +4247,17 @@ mod tests {
         .unwrap();
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
-        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        let captured = append_captured_diagnostics(
+            Ok(complete),
+            &artifacts,
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+        );
+        assert_eq!(
+            captured.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured
+        );
+        assert_eq!(captured.diagnostics.diagnostics().len(), 1);
+        let error = captured.result.unwrap_err();
         assert!(error.contains("compiler reported an error"), "got: {error}");
         assert!(error.contains("Test.as:4:2: error"), "got: {error}");
     }
@@ -3965,7 +4289,21 @@ mod tests {
         .unwrap();
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
-        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        let captured = append_captured_diagnostics(
+            Ok(complete),
+            &artifacts,
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+        );
+        assert_eq!(
+            captured.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid
+        );
+        assert_eq!(captured.diagnostics.diagnostics().len(), 1);
+        assert_eq!(
+            captured.diagnostics.diagnostics()[0].message,
+            "warnings filled the capture"
+        );
+        let error = captured.result.unwrap_err();
         assert!(error.contains("capture was truncated"), "got: {error}");
         assert!(error.contains("refusing to accept"), "got: {error}");
     }
@@ -3989,7 +4327,16 @@ mod tests {
         };
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
-        let error = append_captured_diagnostics(Ok(complete), &artifacts).unwrap_err();
+        let captured = append_captured_diagnostics(
+            Ok(complete),
+            &artifacts,
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+        );
+        assert_eq!(
+            captured.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid
+        );
+        let error = captured.result.unwrap_err();
         assert!(error.contains("could not be read"), "got: {error}");
         assert!(error.contains("refusing to accept"), "got: {error}");
 
@@ -3998,7 +4345,50 @@ mod tests {
     }
 
     #[test]
-    fn unconfirmed_hooked_attempt_preserves_and_reports_all_owned_artifacts() {
+    fn structured_capture_limit_rejects_an_unverified_cache() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-structured-capture-limit-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&base).unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: base.join("capture.txt"),
+            status: base.join("status.txt"),
+            dir: base,
+            cleanup: true,
+        };
+        let oversized_file =
+            "x".repeat(crate::diagnostics::MAX_STRUCTURED_DIAGNOSTIC_FILE_BYTES + 1);
+        std::fs::write(
+            &artifacts.capture,
+            format!("=== {oversized_file} ===\n[E] failure\n"),
+        )
+        .unwrap();
+
+        let captured = append_captured_diagnostics(
+            Ok(valid_cache()),
+            &artifacts,
+            crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+        );
+        assert_eq!(
+            captured.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::CaptureInvalid
+        );
+        assert!(captured.diagnostics.diagnostics().is_empty());
+        let error = captured.result.unwrap_err();
+        assert!(
+            error.contains("bounded structured diagnostics"),
+            "got: {error}"
+        );
+        assert!(error.contains("refusing to accept"), "got: {error}");
+    }
+
+    #[test]
+    fn unconfirmed_hooked_timeout_preserves_recovery_without_exposing_live_capture() {
         let root = std::env::temp_dir().join(format!(
             "gore-as-unconfirmed-hooked-{}-{}",
             std::process::id(),
@@ -4030,9 +4420,18 @@ mod tests {
             artifacts,
             prep,
         );
-        let DiagnosticAttempt::Fatal(error) = attempt else {
-            panic!("unconfirmed hooked result must be fatal");
-        };
+        let fallback_calls = std::cell::Cell::new(0);
+        let report = resolve_diagnostic_attempt_report(attempt, || {
+            fallback_calls.set(fallback_calls.get() + 1);
+            Ok::<_, String>(b"unsafe fallback".to_vec())
+        });
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed
+        );
+        assert!(report.diagnostics.diagnostics().is_empty());
+        assert_eq!(fallback_calls.get(), 0);
+        let error = report.result.unwrap_err();
         assert!(
             error.contains(&diagnostics_dir.display().to_string()),
             "got: {error}"
@@ -4046,6 +4445,71 @@ mod tests {
             "diagnostics directory was dropped"
         );
         assert!(helper.is_file(), "mapped helper was dropped");
+        assert_eq!(
+            std::fs::read_to_string(diagnostics_dir.join("capture.txt")).unwrap(),
+            "[W] retained warning\n"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn started_hook_unconfirmed_preserves_recovery_without_exposing_live_capture() {
+        let root = std::env::temp_dir().join(format!(
+            "gore-as-unconfirmed-started-hook-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let diagnostics_dir = root.join("diagnostics");
+        let helper_dir = root.join("helper");
+        std::fs::create_dir_all(&diagnostics_dir).unwrap();
+        std::fs::create_dir_all(&helper_dir).unwrap();
+        let capture = diagnostics_dir.join("capture.txt");
+        std::fs::write(&capture, "[E] possibly partial live message\n").unwrap();
+        let artifacts = DiagnosticArtifacts {
+            capture: capture.clone(),
+            status: diagnostics_dir.join("status.txt"),
+            dir: diagnostics_dir.clone(),
+            cleanup: true,
+        };
+        let helper = helper_dir.join("gore-as-diagnostics-hook.dll");
+        std::fs::write(&helper, b"test helper").unwrap();
+        let prep =
+            crate::diagnostics::HookPreparation::owned_for_test(helper.clone(), helper_dir.clone());
+
+        let attempt = classify_started_hook_termination(
+            format!("{GENERATOR_EXIT_UNCONFIRMED} simulated failed termination"),
+            artifacts,
+            prep,
+        );
+        let fallback_calls = std::cell::Cell::new(0);
+        let report = resolve_diagnostic_attempt_report(attempt, || {
+            fallback_calls.set(fallback_calls.get() + 1);
+            Ok::<_, String>(b"unsafe fallback".to_vec())
+        });
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed
+        );
+        assert!(report.diagnostics.diagnostics().is_empty());
+        assert_eq!(fallback_calls.get(), 0);
+        let error = report.result.unwrap_err();
+        assert!(
+            error.contains(&diagnostics_dir.display().to_string()),
+            "got: {error}"
+        );
+        assert!(
+            error.contains(&helper_dir.display().to_string()),
+            "got: {error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&capture).unwrap(),
+            "[E] possibly partial live message\n"
+        );
+        assert!(helper.is_file(), "mapped helper was dropped");
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4053,39 +4517,54 @@ mod tests {
     #[test]
     fn explicit_diagnostics_opt_out_runs_normal_path_without_unavailable_state() {
         let called = std::cell::Cell::new(0);
-        let result = resolve_diagnostic_attempt(DiagnosticAttempt::Disabled, || {
+        let report = resolve_diagnostic_attempt_report(DiagnosticAttempt::Disabled, || {
             called.set(called.get() + 1);
             Ok::<_, String>("normal")
-        })
-        .unwrap();
-        assert_eq!(result, "normal");
+        });
+        assert_eq!(report.result.unwrap(), "normal");
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::Disabled
+        );
         assert_eq!(called.get(), 1);
     }
 
     #[test]
     fn injection_failure_fallback_preserves_the_normal_error() {
-        let result = resolve_diagnostic_attempt::<Vec<u8>, _>(
+        let report = resolve_diagnostic_attempt_report::<Vec<u8>, _>(
             DiagnosticAttempt::Unavailable("CreateRemoteThread failed".into()),
             || Err("normal generator failed exactly this way".into()),
         );
         assert_eq!(
-            result.unwrap_err(),
+            report.result.unwrap_err(),
             "normal generator failed exactly this way"
+        );
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback
         );
     }
 
     #[test]
     fn pre_injection_exit_keeps_the_first_generator_result() {
         let fallback_calls = std::cell::Cell::new(0);
-        let result = resolve_diagnostic_attempt(
-            DiagnosticAttempt::Completed(Ok::<_, String>(b"first-normal-result".to_vec())),
+        let report = resolve_diagnostic_attempt_report(
+            DiagnosticAttempt::Completed(GeneratorDiagnosticsResult {
+                result: Ok::<_, String>(b"first-normal-result".to_vec()),
+                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback,
+                ),
+            }),
             || {
                 fallback_calls.set(fallback_calls.get() + 1);
                 Ok(b"unexpected-relaunch".to_vec())
             },
-        )
-        .unwrap();
-        assert_eq!(result, b"first-normal-result");
+        );
+        assert_eq!(report.result.unwrap(), b"first-normal-result");
+        assert_eq!(
+            report.diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback
+        );
         assert_eq!(fallback_calls.get(), 0);
     }
 
