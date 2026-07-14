@@ -29,6 +29,10 @@ import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
 import 'project/revision3_content_library.dart';
+import 'project/revision3_dataasset_authoring.dart';
+import 'project/revision3_dataasset_stage_panel.dart';
+import 'project/revision3_npc_authoring.dart';
+import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
@@ -50,6 +54,16 @@ final managedRevision3DirectoryPickerProvider =
           (confirmButtonText) =>
               getDirectoryPath(confirmButtonText: confirmButtonText),
     );
+
+/// Optional picker seam for alternate shells and deterministic widget tests.
+/// Normal app use keeps the qualification-aware built-in NPC archetype picker.
+final managedRevision3NpcArchetypeChooserProvider =
+    Provider<Revision3NpcArchetypeChooser?>((ref) => null);
+
+/// Optional picker seam for alternate shells and deterministic widget tests.
+/// Normal app use delegates to the platform file picker owned by the panel.
+final managedRevision3DataAssetPatchReceiptPickerProvider =
+    Provider<Revision3DataAssetPatchReceiptPicker?>((ref) => null);
 
 /// Main tab indices, matching the [TabBar] tab order in [HomePage].
 const _texturesTabIndex = 3;
@@ -533,6 +547,49 @@ class _HomePageState extends ConsumerState<HomePage>
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          loadDataAssetStages: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .listCurrentRevision3DataAssetStages(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+              ),
+          publishDataAssetStage: ({required patchReceiptPath}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .addCurrentRevision3DataAssetStage(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                patchReceiptPath: patchReceiptPath,
+              ),
+          removeDataAssetStage: ({required targetPath}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .removeCurrentRevision3DataAssetStage(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                targetPath: targetPath,
+              ),
+          pickDataAssetPatchReceipt: ref.read(
+            managedRevision3DataAssetPatchReceiptPickerProvider,
+          ),
+          loadNpcCatalog: ref.read(revision3NpcCatalogLoaderProvider),
+          chooseNpcArchetype: ref.read(
+            managedRevision3NpcArchetypeChooserProvider,
+          ),
+          publishNpcDraft: ({required gameRoot, required input}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .createCurrentRevision3NpcDraft(
+                expectedRoot: currentProject.root.path,
+                expectedHead: currentProject.head,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                gameRoot: gameRoot,
+                input: input,
+              ),
           loadQuestCatalog: ref.read(revision3QuestCatalogLoaderProvider),
           publishQuestDraft: ({required gameRoot, required input}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
@@ -667,6 +724,13 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.project,
     required this.gameRoot,
     required this.loadContentIndex,
+    required this.loadDataAssetStages,
+    required this.publishDataAssetStage,
+    required this.removeDataAssetStage,
+    required this.pickDataAssetPatchReceipt,
+    required this.loadNpcCatalog,
+    required this.chooseNpcArchetype,
+    required this.publishNpcDraft,
     required this.loadQuestCatalog,
     required this.publishQuestDraft,
   });
@@ -674,6 +738,13 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3DataAssetStageLoader loadDataAssetStages;
+  final Revision3DataAssetStagePublisher publishDataAssetStage;
+  final Revision3DataAssetStageRemover removeDataAssetStage;
+  final Revision3DataAssetPatchReceiptPicker? pickDataAssetPatchReceipt;
+  final Revision3NpcCatalogLoader loadNpcCatalog;
+  final Revision3NpcArchetypeChooser? chooseNpcArchetype;
+  final Revision3NpcDraftPublisher publishNpcDraft;
   final Revision3QuestCatalogLoader loadQuestCatalog;
   final Revision3QuestDraftPublisher publishQuestDraft;
 
@@ -718,6 +789,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                           label: const Text('Settings'),
                         ),
                         FilledButton.icon(
+                          key: const Key('managed-create-npc-draft'),
+                          onPressed: project.requiresReopen || gameRoot == null
+                              ? null
+                              : () => _openNpcWizard(context),
+                          icon: const Icon(Icons.person_add_alt_1_outlined),
+                          label: const Text('Create NPC draft'),
+                        ),
+                        FilledButton.icon(
                           key: const Key('managed-create-quest-draft'),
                           onPressed: project.requiresReopen || gameRoot == null
                               ? null
@@ -753,7 +832,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 if (gameRoot == null && !project.requiresReopen) ...[
                   const SizedBox(height: 8),
                   const Text(
-                    'Configure the Gothic 1 Remake installation in Settings to create a Quest draft.',
+                    'Configure the Gothic 1 Remake installation in Settings to create NPC or Quest drafts.',
                     key: Key('managed-quest-game-required'),
                   ),
                 ],
@@ -857,10 +936,48 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                     ),
                   ),
                 )
-              : Revision3ContentLibrary(
-                  projectId: project.projectId,
-                  projectRevision: project.projectRevision,
-                  load: loadContentIndex,
+              : DefaultTabController(
+                  length: 2,
+                  child: Column(
+                    children: [
+                      const TabBar(
+                        key: Key('managed-revision3-workspace-tabs'),
+                        tabs: [
+                          Tab(
+                            key: Key('managed-revision3-library-tab'),
+                            icon: Icon(Icons.library_books_outlined),
+                            text: 'Library',
+                          ),
+                          Tab(
+                            key: Key('managed-revision3-dataasset-tab'),
+                            icon: Icon(Icons.data_object_outlined),
+                            text: 'DataAsset edits',
+                          ),
+                        ],
+                      ),
+                      Expanded(
+                        child: TabBarView(
+                          children: [
+                            Revision3ContentLibrary(
+                              projectId: project.projectId,
+                              projectRevision: project.projectRevision,
+                              load: loadContentIndex,
+                            ),
+                            Revision3DataAssetStagePanel(
+                              projectRoot: project.root.path,
+                              projectId: project.projectId,
+                              projectRevision: project.projectRevision,
+                              projectHead: project.head,
+                              load: loadDataAssetStages,
+                              publish: publishDataAssetStage,
+                              remove: removeDataAssetStage,
+                              pickPatchReceipt: pickDataAssetPatchReceipt,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
         ),
       ],
@@ -883,6 +1000,28 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       SnackBar(
         content: Text(
           'Quest draft saved in project revision ${publication.projectRevision}. It remains build-blocked and runtime-unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openNpcWizard(BuildContext context) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null || project.requiresReopen) return;
+    final publication = await showDialog<Revision3NpcDraftPublication>(
+      context: context,
+      builder: (context) => Revision3NpcWizardDialog(
+        gameRoot: configuredGameRoot,
+        loadCatalog: loadNpcCatalog,
+        publish: publishNpcDraft,
+        chooseArchetype: chooseNpcArchetype,
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'NPC draft saved in project revision ${publication.projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.',
         ),
       ),
     );

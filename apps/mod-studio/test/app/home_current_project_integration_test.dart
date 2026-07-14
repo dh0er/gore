@@ -15,8 +15,13 @@ import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_npc_authoring.dart';
+import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:path/path.dart' as p;
+
+import '../support/revision3_dataasset_fixture.dart';
 
 void main() {
   testWidgets(
@@ -65,7 +70,25 @@ void main() {
       expect(find.text('${managed.projectRevision}'), findsOneWidget);
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
       expect(find.text('Build / Deploy'), findsNothing);
-      expect(find.byType(TabBar), findsNothing);
+      expect(find.byType(TabBar), findsOneWidget);
+      expect(
+        find.byKey(const Key('managed-revision3-library-tab')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-panel')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('not yet included in builds'), findsOneWidget);
+      expect(managed.dataAssetListCalls, 1);
       expect(legacy.closeCalls, 1);
 
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
@@ -189,6 +212,208 @@ void main() {
         findsOneWidget,
       );
       expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'visible managed NPC wizard publishes and reloads the new revision',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync('gore_r3_npc_game');
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '19191919191919191919191919191919';
+      var catalogLoads = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\npc-authoring'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.displayName, 'North Gate Guard');
+          expect(input.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3NpcDraftPublication(
+            projectId: projectId,
+            projectRevision: 8,
+            npcId: '29292929292929292929292929292929',
+            scriptModuleId: '39393939393939393939393939393939',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async {
+          catalogLoads++;
+          return _npcCatalog();
+        },
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final createButton = find.byKey(const Key('managed-create-npc-draft'));
+      expect(createButton, findsOneWidget);
+      expect(tester.widget<FilledButton>(createButton).onPressed, isNotNull);
+      expect(managed.contentReadCalls, 1);
+
+      await tester.tap(createButton);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      expect(find.text('Asghan guard'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'North Gate Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+
+      expect(catalogLoads, 2);
+      expect(managed.npcPublishCalls, 1);
+      expect(managed.contentReadCalls, 2);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(find.text('8'), findsWidgets);
+      expect(
+        find.textContaining('NPC draft saved in project revision 8'),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+      expect(find.text('Build / Deploy'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'visible DataAsset registry adds and removes through exact managed checkpoints',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final fixture = revision3DataAssetNativeGoldenFixture();
+      final stage = AuthoringRevision3DataAssetStageListResult.fromJson(
+        fixture.listResponse(),
+        expectedHead: fixture.stagedHead,
+      ).stages.single;
+      var stages = <AuthoringRevision3DataAssetStage>[];
+      var pickerCalls = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dataasset-authoring'),
+        projectId: '07070707070707070707070707070707',
+        projectRevision: 4,
+        head: fixture.basisHead,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onDataAssetList: (_) => List.unmodifiable(stages),
+        onDataAssetPublish: (lease, patchReceiptPath) {
+          expect(patchReceiptPath, r'C:\verified\managed-fixture-receipt.json');
+          lease.projectRevision = 5;
+          lease.head = fixture.stagedHead;
+          stages = <AuthoringRevision3DataAssetStage>[stage];
+          return Revision3DataAssetStagePublication(
+            projectId: lease.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 0,
+          );
+        },
+        onDataAssetRemove: (lease, targetPath) {
+          expect(targetPath, stage.targetPath);
+          lease.projectRevision = 6;
+          lease.head = fixture.removedHead;
+          stages = <AuthoringRevision3DataAssetStage>[];
+          return Revision3DataAssetStageRemovalPublication(
+            projectId: lease.projectId,
+            projectRevision: 6,
+            removed: stage,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        pickDataAssetPatchReceipt: () async {
+          pickerCalls++;
+          return r'C:\verified\managed-fixture-receipt.json';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+      );
+      await tester.pumpAndSettle();
+      expect(managed.dataAssetListCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-empty')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const Key('revision3-dataasset-stage-add')));
+      await tester.pumpAndSettle();
+      expect(pickerCalls, 1);
+      expect(managed.dataAssetPublishCalls, 1);
+      expect(managed.dataAssetListCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        5,
+      );
+      expect(find.text('TestAsset'), findsOneWidget);
+      expect(find.text('Build / Deploy'), findsNothing);
+
+      await tester.tap(find.text('TestAsset'));
+      await tester.pumpAndSettle();
+      final removeButton = find.byKey(
+        ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
+      );
+      await tester.ensureVisible(removeButton);
+      await tester.pumpAndSettle();
+      await tester.tap(removeButton);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dataasset-remove-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-remove-confirm')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.dataAssetRemoveCalls, 1);
+      expect(managed.dataAssetListCalls, 3);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 6);
+      expect(state.head.canonicalJson, fixture.removedHead.canonicalJson);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-empty')),
+        findsOneWidget,
+      );
+      expect(find.text('Build / Deploy'), findsNothing);
     },
   );
 
@@ -421,6 +646,9 @@ ProviderContainer _container({
   required CurrentProjectCoordinator coordinator,
   required ManagedRevision3DirectoryPicker pickManaged,
   String? gamePath,
+  Revision3NpcCatalogLoader? loadNpcCatalog,
+  Revision3NpcArchetypeChooser? chooseNpcArchetype,
+  Revision3DataAssetPatchReceiptPicker? pickDataAssetPatchReceipt,
   Revision3QuestCatalogLoader? loadQuestCatalog,
 }) => ProviderContainer(
   overrides: [
@@ -435,6 +663,16 @@ ProviderContainer _container({
     ),
     currentProjectCoordinatorProvider.overrideWith((ref) => coordinator),
     managedRevision3DirectoryPickerProvider.overrideWithValue(pickManaged),
+    if (loadNpcCatalog != null)
+      revision3NpcCatalogLoaderProvider.overrideWithValue(loadNpcCatalog),
+    if (chooseNpcArchetype != null)
+      managedRevision3NpcArchetypeChooserProvider.overrideWithValue(
+        chooseNpcArchetype,
+      ),
+    if (pickDataAssetPatchReceipt != null)
+      managedRevision3DataAssetPatchReceiptPickerProvider.overrideWithValue(
+        pickDataAssetPatchReceipt,
+      ),
     if (loadQuestCatalog != null)
       revision3QuestCatalogLoaderProvider.overrideWithValue(loadQuestCatalog),
   ],
@@ -514,7 +752,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.projectRevision,
     required this.head,
     this.verificationError,
+    this.onNpcPublish,
     this.onQuestPublish,
+    this.onDataAssetList,
+    this.onDataAssetPublish,
+    this.onDataAssetRemove,
     this.contentIndexBuilder,
   });
 
@@ -527,18 +769,42 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   AuthoringWorkingHead head;
   final Object? verificationError;
+  final Revision3NpcDraftPublication Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    Revision3NpcDraftAuthoringInput input,
+  )?
+  onNpcPublish;
   final Revision3QuestDraftPublication Function(
     _FakeManagedLease lease,
     String gameRoot,
     Revision3QuestDraftAuthoringInput input,
   )?
   onQuestPublish;
+  final List<AuthoringRevision3DataAssetStage> Function(
+    _FakeManagedLease lease,
+  )?
+  onDataAssetList;
+  final Revision3DataAssetStagePublication Function(
+    _FakeManagedLease lease,
+    String patchReceiptPath,
+  )?
+  onDataAssetPublish;
+  final Revision3DataAssetStageRemovalPublication Function(
+    _FakeManagedLease lease,
+    String targetPath,
+  )?
+  onDataAssetRemove;
   final Revision3ContentIndex Function(_FakeManagedLease lease)?
   contentIndexBuilder;
   bool requiresReopenValue = false;
   int verifyCalls = 0;
   int contentReadCalls = 0;
+  int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int dataAssetListCalls = 0;
+  int dataAssetPublishCalls = 0;
+  int dataAssetRemoveCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -565,6 +831,48 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest publisher');
     }
     return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
+    required String gameRoot,
+    required Revision3NpcDraftAuthoringInput input,
+  }) async {
+    npcPublishCalls++;
+    final publish = onNpcPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no NPC publisher');
+    }
+    return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
+    dataAssetListCalls++;
+    return onDataAssetList?.call(this) ?? const [];
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
+    required String patchReceiptPath,
+  }) async {
+    dataAssetPublishCalls++;
+    final publish = onDataAssetPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no DataAsset publisher');
+    }
+    return publish(this, patchReceiptPath);
+  }
+
+  @override
+  Future<Revision3DataAssetStageRemovalPublication>
+  prepareAndPublishRemoveDataAssetStageV1({required String targetPath}) async {
+    dataAssetRemoveCalls++;
+    final remove = onDataAssetRemove;
+    if (remove == null) {
+      throw StateError('fake managed lease has no DataAsset remover');
+    }
+    return remove(this, targetPath);
   }
 
   @override
@@ -621,6 +929,15 @@ Revision3QuestCatalog _questCatalog() => Revision3QuestCatalog(
     Revision3QuestCatalogChoice(
       catalogId: 'giver-asghan',
       displayName: 'Asghan',
+    ),
+  ],
+);
+
+Revision3NpcCatalog _npcCatalog() => Revision3NpcCatalog(
+  choices: [
+    Revision3NpcCatalogChoice(
+      catalogId: 'g1r:npc:om_grd_asghan_263',
+      displayName: 'Asghan guard',
     ),
   ],
 );

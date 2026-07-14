@@ -8,7 +8,11 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+
+import '../support/revision3_dataasset_fixture.dart';
 
 void main() {
   test(
@@ -697,6 +701,419 @@ void main() {
     },
   );
 
+  test(
+    'NPC publication is exact-checkpoint bound and refreshes R3 state',
+    () async {
+      const projectId = '18181818181818181818181818181818';
+      late Revision3NpcDraftAuthoringInput receivedInput;
+      final managed = _FakeManagedLease(
+        root: Directory('managed-npc'),
+        projectIdValue: projectId,
+        projectRevision: 18,
+        head: _head(18),
+        onNpcPublish: (lease, gameRoot, input) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          receivedInput = input;
+          lease.projectRevision = 19;
+          lease.head = _head(19);
+          return Revision3NpcDraftPublication(
+            projectId: projectId,
+            projectRevision: 19,
+            npcId: '28282828282828282828282828282828',
+            scriptModuleId: '38383838383838383838383838383838',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final published = await coordinator.createCurrentRevision3NpcDraft(
+        expectedRoot: managed.root.path,
+        expectedHead: _head(18),
+        expectedProjectId: projectId,
+        expectedProjectRevision: 18,
+        gameRoot: r'C:\Games\Gothic Remake',
+        input: _npcInput(),
+      );
+
+      expect(published.projectRevision, 19);
+      expect(receivedInput.displayName, 'North Gate Guard');
+      expect(receivedInput.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+      expect(managed.npcPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 19);
+      expect(state.head.canonicalJson, _head(19).canonicalJson);
+    },
+  );
+
+  test(
+    'NPC publication rejects divergent root or head before lease access',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-npc-stale'),
+        projectIdValue: '19191919191919191919191919191919',
+        projectRevision: 19,
+        head: _head(19),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish({
+        required String root,
+        required AuthoringWorkingHead head,
+      }) async {
+        await coordinator.createCurrentRevision3NpcDraft(
+          expectedRoot: root,
+          expectedHead: head,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 19,
+          gameRoot: r'C:\Games\Gothic Remake',
+          input: _npcInput(),
+        );
+      }
+
+      await expectLater(
+        publish(
+          root: Directory('divergent-managed-clone').path,
+          head: _head(19),
+        ),
+        throwsA(isA<Revision3NpcDraftStaleCheckpointException>()),
+      );
+      await expectLater(
+        publish(root: managed.root.path, head: _head(1919)),
+        throwsA(isA<Revision3NpcDraftStaleCheckpointException>()),
+      );
+      expect(managed.npcPublishCalls, 0);
+    },
+  );
+
+  test(
+    'NPC publication rejects an empty game root before lease access',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-npc-no-game'),
+        projectIdValue: '20202020202020202020202020202020',
+        projectRevision: 20,
+        head: _head(20),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.createCurrentRevision3NpcDraft(
+          expectedRoot: managed.root.path,
+          expectedHead: _head(20),
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 20,
+          gameRoot: '',
+          input: _npcInput(),
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.npcPublishCalls, 0);
+    },
+  );
+
+  test(
+    'poisoned NPC failure locks retries and refreshes requiresReopen',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-poisoned-npc'),
+        projectIdValue: '21212121212121212121212121212121',
+        projectRevision: 21,
+        head: _head(21),
+        onNpcPublish: (lease, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected NPC publication verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.createCurrentRevision3NpcDraft(
+          expectedRoot: managed.root.path,
+          expectedHead: _head(21),
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 21,
+          gameRoot: r'C:\Games\Gothic Remake',
+          input: _npcInput(),
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3NpcDraftRequiresReopenException>()),
+      );
+      expect(managed.npcPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3NpcDraftRequiresReopenException>()),
+      );
+      expect(managed.npcPublishCalls, 1);
+    },
+  );
+
+  test(
+    'DataAsset list is exact-checkpoint bound before lease access',
+    () async {
+      final stage = _dataAssetStage();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-list'),
+        projectIdValue: stage.projectId,
+        projectRevision: 5,
+        head: _head(5),
+        dataAssetStages: [stage],
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.listCurrentRevision3DataAssetStages(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 4,
+          expectedHead: _head(4),
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      expect(managed.dataAssetListCalls, 0);
+
+      await expectLater(
+        coordinator.listCurrentRevision3DataAssetStages(
+          expectedRoot: Directory('divergent-managed-clone').path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 5,
+          expectedHead: _head(5),
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      await expectLater(
+        coordinator.listCurrentRevision3DataAssetStages(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 5,
+          expectedHead: _head(55),
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      expect(managed.dataAssetListCalls, 0);
+
+      final listed = await coordinator.listCurrentRevision3DataAssetStages(
+        expectedRoot: managed.root.path,
+        expectedProjectId: stage.projectId,
+        expectedProjectRevision: 5,
+        expectedHead: _head(5),
+      );
+      expect(listed, [same(stage)]);
+      expect(managed.dataAssetListCalls, 1);
+    },
+  );
+
+  test(
+    'DataAsset add and registry removal advance and refresh R3 state',
+    () async {
+      final stage = _dataAssetStage();
+      late _FakeManagedLease managed;
+      managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-write'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: _head(4),
+        onDataAssetPublish: (lease, receiptPath) {
+          expect(receiptPath, r'C:\proof\edit.gore-asset-patch.json');
+          lease.projectRevision = 5;
+          lease.head = _head(5);
+          return Revision3DataAssetStagePublication(
+            projectId: stage.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 1,
+          );
+        },
+        onDataAssetRemove: (lease, targetPath) {
+          expect(targetPath, stage.targetPath);
+          lease.projectRevision = 6;
+          lease.head = _head(6);
+          return Revision3DataAssetStageRemovalPublication(
+            projectId: stage.projectId,
+            projectRevision: 6,
+            removed: stage,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final added = await coordinator.addCurrentRevision3DataAssetStage(
+        expectedRoot: managed.root.path,
+        expectedProjectId: stage.projectId,
+        expectedProjectRevision: 4,
+        expectedHead: _head(4),
+        patchReceiptPath: r'C:\proof\edit.gore-asset-patch.json',
+      );
+      expect(added.stage, same(stage));
+      expect(managed.dataAssetPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        5,
+      );
+
+      final removed = await coordinator.removeCurrentRevision3DataAssetStage(
+        expectedRoot: managed.root.path,
+        expectedProjectId: stage.projectId,
+        expectedProjectRevision: 5,
+        expectedHead: _head(5),
+        targetPath: stage.targetPath,
+      );
+      expect(removed.removed, same(stage));
+      expect(managed.dataAssetRemoveCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        6,
+      );
+    },
+  );
+
+  test(
+    'DataAsset mutations reject divergent roots and heads before lease access',
+    () async {
+      final stage = _dataAssetStage();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-exact-mutation'),
+        projectIdValue: stage.projectId,
+        projectRevision: 5,
+        head: _head(5),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.addCurrentRevision3DataAssetStage(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 5,
+          expectedHead: _head(55),
+          patchReceiptPath: r'C:\proof\edit.gore-asset-patch.json',
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      await expectLater(
+        coordinator.removeCurrentRevision3DataAssetStage(
+          expectedRoot: Directory('divergent-managed-clone').path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 5,
+          expectedHead: _head(5),
+          targetPath: stage.targetPath,
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+
+      expect(managed.dataAssetPublishCalls, 0);
+      expect(managed.dataAssetRemoveCalls, 0);
+    },
+  );
+
+  test(
+    'poisoned DataAsset failure locks retries and refreshes state',
+    () async {
+      final stage = _dataAssetStage();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dataasset-poisoned'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: _head(4),
+        onDataAssetPublish: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected DataAsset verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> add() async {
+        await coordinator.addCurrentRevision3DataAssetStage(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 4,
+          expectedHead: _head(4),
+          patchReceiptPath: r'C:\proof\edit.gore-asset-patch.json',
+        );
+      }
+
+      await expectLater(
+        add(),
+        throwsA(isA<Revision3DataAssetRequiresReopenException>()),
+      );
+      expect(managed.dataAssetPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        add(),
+        throwsA(isA<Revision3DataAssetRequiresReopenException>()),
+      );
+      expect(managed.dataAssetPublishCalls, 1);
+    },
+  );
+
   test('content read rejects absent and legacy current projects', () async {
     final empty = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => throw UnimplementedError(),
@@ -789,6 +1206,22 @@ typedef _QuestPublishHook =
       String gameRoot,
       Revision3QuestDraftAuthoringInput input,
     );
+typedef _NpcPublishHook =
+    FutureOr<Revision3NpcDraftPublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      Revision3NpcDraftAuthoringInput input,
+    );
+typedef _DataAssetPublishHook =
+    FutureOr<Revision3DataAssetStagePublication> Function(
+      _FakeManagedLease lease,
+      String patchReceiptPath,
+    );
+typedef _DataAssetRemoveHook =
+    FutureOr<Revision3DataAssetStageRemovalPublication> Function(
+      _FakeManagedLease lease,
+      String targetPath,
+    );
 
 final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   _FakeManagedLease({
@@ -798,7 +1231,11 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.head,
     this.projectIdError,
     this.onVerify,
+    this.onNpcPublish,
     this.onQuestPublish,
+    this.onDataAssetPublish,
+    this.onDataAssetRemove,
+    this.dataAssetStages = const [],
     this.contentIndex,
     this.closeFailuresRemaining = 0,
   });
@@ -812,14 +1249,22 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   AuthoringWorkingHead head;
   final _VerifyHook? onVerify;
+  final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
+  final _DataAssetPublishHook? onDataAssetPublish;
+  final _DataAssetRemoveHook? onDataAssetRemove;
+  final List<AuthoringRevision3DataAssetStage> dataAssetStages;
   final Revision3ContentIndex? contentIndex;
   _ContentReadHook? onContentRead;
   int closeFailuresRemaining;
   bool requiresReopenValue = false;
   int verifyCalls = 0;
   int contentReadCalls = 0;
+  int npcPublishCalls = 0;
   int questPublishCalls = 0;
+  int dataAssetListCalls = 0;
+  int dataAssetPublishCalls = 0;
+  int dataAssetRemoveCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -857,6 +1302,48 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest publisher');
     }
     return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
+    required String gameRoot,
+    required Revision3NpcDraftAuthoringInput input,
+  }) async {
+    npcPublishCalls++;
+    final publish = onNpcPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no NPC publisher');
+    }
+    return publish(this, gameRoot, input);
+  }
+
+  @override
+  Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
+    dataAssetListCalls++;
+    return dataAssetStages;
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
+    required String patchReceiptPath,
+  }) async {
+    dataAssetPublishCalls++;
+    final publish = onDataAssetPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no DataAsset publisher');
+    }
+    return publish(this, patchReceiptPath);
+  }
+
+  @override
+  Future<Revision3DataAssetStageRemovalPublication>
+  prepareAndPublishRemoveDataAssetStageV1({required String targetPath}) async {
+    dataAssetRemoveCalls++;
+    final remove = onDataAssetRemove;
+    if (remove == null) {
+      throw StateError('fake managed lease has no DataAsset remover');
+    }
+    return remove(this, targetPath);
   }
 
   @override
@@ -901,6 +1388,14 @@ Revision3ContentIndex _contentIndex({
   'assets': <Object?>[],
 });
 
+AuthoringRevision3DataAssetStage _dataAssetStage() {
+  final fixture = revision3DataAssetNativeGoldenFixture();
+  return AuthoringRevision3DataAssetStageListResult.fromJson(
+    fixture.listResponse(),
+    expectedHead: fixture.stagedHead,
+  ).stages.single;
+}
+
 Revision3QuestDraftAuthoringInput _questInput() =>
     Revision3QuestDraftAuthoringInput(
       parentCatalogId: 'chapter-one',
@@ -909,3 +1404,8 @@ Revision3QuestDraftAuthoringInput _questInput() =>
       description: 'Homer vanished near the old gate.',
       objectiveTitle: 'Ask Asghan about Homer',
     );
+
+Revision3NpcDraftAuthoringInput _npcInput() => Revision3NpcDraftAuthoringInput(
+  parentCatalogId: 'g1r:npc:om_grd_asghan_263',
+  displayName: 'North Gate Guard',
+);

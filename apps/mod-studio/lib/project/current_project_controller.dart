@@ -9,6 +9,8 @@ import '../core/providers.dart';
 import 'managed_project_session.dart';
 import 'project_controller.dart';
 import 'revision3_content_index.dart';
+import 'revision3_dataasset_authoring.dart';
+import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
@@ -134,6 +136,16 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,
   });
+  Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
+    required String gameRoot,
+    required Revision3NpcDraftAuthoringInput input,
+  });
+  Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1();
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
+    required String patchReceiptPath,
+  });
+  Future<Revision3DataAssetStageRemovalPublication>
+  prepareAndPublishRemoveDataAssetStageV1({required String targetPath});
   Future<void> verifyCurrentHead();
   Future<void> close();
 }
@@ -254,6 +266,63 @@ final class _ManagedRevision3SessionLease
       projectRevision: checkpoint.projectRevision,
       questId: checkpoint.questId,
       scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
+
+  @override
+  Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
+    required String gameRoot,
+    required Revision3NpcDraftAuthoringInput input,
+  }) async {
+    final plan = Revision3NpcDraftTechnicalPlan.forCheckpoint(
+      projectId: _session.projectId,
+      projectRevision: _session.projectRevision,
+      input: input,
+    );
+    final checkpoint = await _session.prepareAndPublishNpcDraftV1(
+      gameRoot: gameRoot,
+      npcId: plan.npcId,
+      scriptModuleId: plan.scriptModuleId,
+      displayName: plan.displayName,
+      intent: plan.intent,
+    );
+    return Revision3NpcDraftPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      npcId: checkpoint.npcId,
+      scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
+
+  @override
+  Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() =>
+      _session.listDataAssetStagesV1();
+
+  @override
+  Future<Revision3DataAssetStagePublication> prepareAndPublishDataAssetStageV1({
+    required String patchReceiptPath,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishDataAssetStageV1(
+      patchReceiptPath: patchReceiptPath,
+    );
+    return Revision3DataAssetStagePublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      stage: checkpoint.stage,
+      deduplicatedBlobs: checkpoint.deduplicatedBlobs,
+    );
+  }
+
+  @override
+  Future<Revision3DataAssetStageRemovalPublication>
+  prepareAndPublishRemoveDataAssetStageV1({required String targetPath}) async {
+    final checkpoint = await _session.prepareAndPublishRemoveDataAssetStageV1(
+      targetPath: targetPath,
+    );
+    return Revision3DataAssetStageRemovalPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      removed: checkpoint.removed,
     );
   }
 
@@ -561,6 +630,239 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3QuestDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one offline logical NPC clone shell into one exact visible
+  /// managed revision-3 checkpoint. This never builds, deploys, spawns, or
+  /// writes into the game installation.
+  Future<Revision3NpcDraftPublication> createCurrentRevision3NpcDraft({
+    required String expectedRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required String gameRoot,
+    required Revision3NpcDraftAuthoringInput input,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'NPC Draft creation is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3NpcDraftRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3NpcDraftStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for NPC Draft creation',
+      );
+    }
+
+    try {
+      final publication = await lease.prepareAndPublishNpcDraftV1(
+        gameRoot: gameRoot,
+        input: input,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision) {
+        throw const CurrentProjectCoordinatorException(
+          'published NPC Draft disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3NpcDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read the receipt-verified DataAsset stage registry for one exact visible
+  /// managed revision-3 checkpoint.
+  Future<List<AuthoringRevision3DataAssetStage>>
+  listCurrentRevision3DataAssetStages({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'DataAsset edits are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    try {
+      final stages = await lease.listDataAssetStagesV1();
+      if (stages.any(
+        (stage) =>
+            stage.projectId != expectedProjectId ||
+            stage.stagedProjectRevision > expectedProjectRevision,
+      )) {
+        throw const CurrentProjectCoordinatorException(
+          'DataAsset stage list disagrees with the current managed checkpoint',
+        );
+      }
+      return List<AuthoringRevision3DataAssetStage>.unmodifiable(stages);
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Import one independently receipt-verified fixed-leaf edit into the exact
+  /// current project checkpoint. No build, deployment, or game write occurs.
+  Future<Revision3DataAssetStagePublication> addCurrentRevision3DataAssetStage({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String patchReceiptPath,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'DataAsset edits are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    if (patchReceiptPath.trim().isEmpty) {
+      throw ArgumentError.value(
+        patchReceiptPath,
+        'patchReceiptPath',
+        'must identify a verified DataAsset edit receipt',
+      );
+    }
+    try {
+      final publication = await lease.prepareAndPublishDataAssetStageV1(
+        patchReceiptPath: patchReceiptPath,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.stage.projectId != expectedProjectId ||
+          publication.stage.stagedProjectRevision !=
+              publication.projectRevision) {
+        throw const CurrentProjectCoordinatorException(
+          'published DataAsset edit disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Remove one exact listed DataAsset stage from the project registry. This
+  /// neither deletes source artifacts nor writes to the game installation.
+  Future<Revision3DataAssetStageRemovalPublication>
+  removeCurrentRevision3DataAssetStage({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'DataAsset edits are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    if (targetPath.isEmpty) {
+      throw ArgumentError.value(
+        targetPath,
+        'targetPath',
+        'must identify a listed DataAsset edit',
+      );
+    }
+    try {
+      final publication = await lease.prepareAndPublishRemoveDataAssetStageV1(
+        targetPath: targetPath,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.removed.projectId != expectedProjectId ||
+          publication.removed.targetPath.toLowerCase() !=
+              targetPath.toLowerCase()) {
+        throw const CurrentProjectCoordinatorException(
+          'removed DataAsset edit disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
           stackTrace,
         );
       }
