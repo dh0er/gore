@@ -10,15 +10,15 @@ use gore_authoring::{
     migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex, ContentSeal, EntityId, FormatV2,
     GameGenerationAnchor, ProjectDocument, ProjectDocumentError, ProjectId, ProjectMeta,
     ProjectRevision3, ProjectRevision3JsonError, ProjectRevision3ValidationError,
-    QuestCollisionArtifactRef, Revision2QuestGiverInput, Revision2QuestParentInput,
-    Revision2ToRevision3Error, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-    Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput, Revision3ScriptModule,
-    Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest,
+    QuestCollisionArtifactRef, QuestTransitionPlanV1, Revision2QuestGiverInput,
+    Revision2QuestParentInput, Revision2ToRevision3Error, Revision3Entity, Revision3EntityKind,
+    Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+    Revision3ScriptModule, Revision3TypedRef, SchemaRevisionV3, ScriptModuleStatus, Sha256Digest,
     DRAFT_QUEST_GENERATOR_ID, DRAFT_QUEST_GENERATOR_VERSION, LOGICAL_NPC_CLONE_GENERATOR_ID,
     MAX_PROJECT_JSON_BYTES, MAX_QUEST_COLLISION_ARTIFACT_BYTES, MAX_REVISION3_ENTITY_JSON_BYTES,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
     REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -108,6 +108,7 @@ fn quest_project() -> ProjectRevision3 {
             description: "Prove that the gate is secure.".into(),
             objective_title: "Report to Asghan".into(),
             additional_objective_titles: Vec::new(),
+            transition_plan: None,
             collision_catalog: QuestCollisionArtifactRef {
                 generation: target(),
                 catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),
@@ -181,6 +182,7 @@ fn revision3_is_exact_canonical_duplicate_safe_and_standalone() {
     assert!(!canonical.contains("\"relative_paths\""));
     assert!(!canonical.contains("\"symbols\""));
     assert!(!canonical.contains("\"additional_objective_titles\""));
+    assert!(!canonical.contains("\"transition_plan\""));
 
     let whitespace = format!(" {canonical}");
     assert!(matches!(
@@ -272,6 +274,58 @@ fn revision3_multi_objectives_round_trip_in_order_and_require_generator_v3() {
         unreachable!()
     };
     quest.generator_version = REVISION3_QUEST_GENERATOR_VERSION;
+    assert!(matches!(
+        project.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
+    ));
+}
+
+#[test]
+fn semantic_transition_plan_requires_generator_v4_and_v4_requires_the_plan() {
+    let mut project = quest_project();
+    let quest_id = entity_id(10);
+    let module_id = entity_id(11);
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&quest_id).unwrap().payload
+    else {
+        panic!("fixture Quest missing")
+    };
+    quest.input.transition_plan = Some(Box::new(QuestTransitionPlanV1::legacy_seed(1).unwrap()));
+    assert!(matches!(
+        project.validate_closed_model(),
+        Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })
+    ));
+
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&quest_id).unwrap().payload
+    else {
+        unreachable!()
+    };
+    quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+    let Revision3EntityPayload::ScriptModule(module) =
+        &mut project.entities.get_mut(&module_id).unwrap().payload
+    else {
+        panic!("fixture module missing")
+    };
+    module.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+    let Revision3OriginRef::Generated {
+        generator_version, ..
+    } = &mut project.entities.get_mut(&module_id).unwrap().origin
+    else {
+        panic!("fixture module origin missing")
+    };
+    *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+    project.validate_closed_model().unwrap();
+    let canonical = project.to_canonical_json().unwrap();
+    assert!(canonical.contains("\"transition_plan\":{"));
+    assert_eq!(ProjectRevision3::from_json(&canonical).unwrap(), project);
+
+    let Revision3EntityPayload::QuestDraft(quest) =
+        &mut project.entities.get_mut(&quest_id).unwrap().payload
+    else {
+        unreachable!()
+    };
+    quest.input.transition_plan = None;
     assert!(matches!(
         project.validate_closed_model(),
         Err(ProjectRevision3ValidationError::InvalidQuestArtifactRef { .. })

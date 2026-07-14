@@ -614,6 +614,10 @@ fn quest_diagnostic(error: DraftQuestSkeletonError) -> Value {
             "QUEST_DUPLICATE_OBJECTIVE_TITLE",
             "objective_titles".to_owned(),
         ),
+        DraftQuestSkeletonError::InvalidTransitionPlan { .. } => (
+            "QUEST_INVALID_TRANSITION_PLAN",
+            "transition_plan".to_owned(),
+        ),
     };
     diagnostic(code, field, error.to_string())
 }

@@ -979,6 +979,7 @@ mod tests {
                             "Inspect the thing".to_owned(),
                             "Report the thing".to_owned(),
                         ],
+                        transition_plan: None,
                         collision_catalog: QuestCollisionArtifactRef {
                             generation: target(),
                             catalog_layer: QUEST_COLLISION_CATALOG_LAYER_V2.to_owned(),

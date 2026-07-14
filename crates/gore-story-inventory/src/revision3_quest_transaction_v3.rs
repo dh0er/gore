@@ -451,6 +451,7 @@ pub fn apply_revision3_quest_draft_transaction_v3(
             description,
             objective_title,
             additional_objective_titles,
+            transition_plan: None,
             collision_catalog: artifact_reference,
         },
         script_module: module_ref,

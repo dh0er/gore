@@ -829,15 +829,16 @@ mod tests {
         migrate_revision2_to_revision3, AssetMeta, AssetStoreIndex, AssetVerification,
         ContentSeal as AuthoringContentSeal, EntityId as AuthoringEntityId, FormatV2,
         GameGenerationAnchor, ProjectId, ProjectMeta, QuestCollisionArtifactRef,
-        QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind, Revision3EntityPayload,
-        Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput, Revision3TypedRef,
-        Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore, WorkingStoreError,
-        WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-        MAX_PROJECT_JSON_BYTES, MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES,
-        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
-        QUEST_COLLISION_CATALOG_LAYER, QUEST_COLLISION_CATALOG_LAYER_V2,
-        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-        REVISION3_QUEST_GENERATOR_VERSION,
+        QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision3Entity, Revision3EntityKind,
+        Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
+        Revision3TypedRef, Sha256Digest as AuthoringSha256Digest, WorkingHead, WorkingProjectStore,
+        WorkingStoreError, WorkingStoreLimits, LOGICAL_NPC_CLONE_GENERATOR_ID,
+        LOGICAL_NPC_CLONE_GENERATOR_VERSION, MAX_PROJECT_JSON_BYTES,
+        MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE,
+        QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2, QUEST_COLLISION_CATALOG_LAYER,
+        QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
+        REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
     };
     use sha2::Sha256;
     use std::collections::BTreeSet;
@@ -1772,6 +1773,7 @@ mod tests {
                 description: "Prove that the gate is secure.".to_owned(),
                 objective_title: "Report to Asghan".to_owned(),
                 additional_objective_titles: Vec::new(),
+                transition_plan: None,
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: project.target.clone(),
                     catalog_layer: QUEST_COLLISION_CATALOG_LAYER.to_owned(),
@@ -2215,6 +2217,7 @@ mod tests {
                     .to_owned(),
                 objective_title: "Report to Asghan again".to_owned(),
                 additional_objective_titles: Vec::new(),
+                transition_plan: None,
                 collision_catalog: first.input.collision_catalog,
             },
             script_module: Revision3TypedRef::new(
@@ -4134,6 +4137,67 @@ mod tests {
                 before_quest.input.additional_objective_titles
             );
         }
+    }
+
+    #[test]
+    fn revision3_context_edit_preserves_semantic_v4_transition_plan() {
+        let mut fixture = s3_fixture("context-edit-semantic-v4");
+        let transition_plan = QuestTransitionPlanV1::legacy_seed(1).unwrap();
+        let module_id = {
+            let quest = s3_quest_mut(&mut fixture.project, fixture.quest_id);
+            quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+            quest.input.transition_plan = Some(Box::new(transition_plan.clone()));
+            quest.script_module.id
+        };
+        let Revision3OriginRef::Generated {
+            generator_version, ..
+        } = &mut fixture.project.entities.get_mut(&module_id).unwrap().origin
+        else {
+            panic!("expected generated semantic module origin")
+        };
+        *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+        regenerate_s3_pair_after_intent_change(&mut fixture.project, fixture.quest_id);
+
+        let head = publish_revision3_head(&fixture._root, &fixture.store, &fixture.project);
+        let before = fixture.project.clone();
+        let Revision3EntityPayload::QuestDraft(before_quest) =
+            &before.entities[&fixture.quest_id].payload
+        else {
+            panic!("expected semantic Quest")
+        };
+        let expected_parent = before_quest.input.parent_quest.clone();
+        let expected_giver = before_quest.input.giver.clone();
+        let mut request =
+            context_edit_request_v1(&before, &head, &fixture.catalog, fixture.quest_id);
+        request.description = "Edit context without changing lifecycle semantics.".to_owned();
+
+        let outcome = apply_revision3_quest_context_edit_transaction_v1(
+            prepare_context_edit_artifact_v1(&fixture.store, &head, &fixture.catalog, None),
+            &before.to_canonical_json().unwrap(),
+            &request.to_canonical_json().unwrap(),
+        )
+        .unwrap();
+        assert_context_edit_exact_delta(
+            &before,
+            &outcome,
+            fixture.quest_id,
+            &request.description,
+            &expected_parent,
+            &expected_giver,
+        );
+        let Revision3EntityPayload::QuestDraft(after_quest) =
+            &outcome.project().entities[&fixture.quest_id].payload
+        else {
+            panic!("expected edited semantic Quest")
+        };
+        assert_eq!(
+            after_quest.generator_version,
+            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
+        );
+        assert_eq!(
+            after_quest.input.transition_plan.as_deref(),
+            Some(&transition_plan)
+        );
     }
 
     #[test]

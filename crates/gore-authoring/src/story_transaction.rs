@@ -555,6 +555,7 @@ fn quest_error_field(error: &DraftQuestSkeletonError) -> String {
         DraftQuestSkeletonError::TooManyObjectives { .. }
         | DraftQuestSkeletonError::ObjectiveTitlesTooLarge { .. }
         | DraftQuestSkeletonError::DuplicateObjectiveTitle { .. } => "objective_titles".to_owned(),
+        DraftQuestSkeletonError::InvalidTransitionPlan { .. } => "transition_plan".to_owned(),
     }
 }
 

@@ -11,7 +11,7 @@ use crate::model_revision3::{
     MAX_REVISION3_ASSETS, MAX_REVISION3_ENTITIES, MAX_REVISION3_ENTITY_JSON_BYTES,
     MAX_REVISION3_REFERENCED_ASSET_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
     REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION, REVISION3_QUEST_GENERATOR_ID,
-    REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_QUEST_GENERATOR_VERSION, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use crate::story_transaction_revision3_voice::{
     MAX_REVISION3_VOICE_LOGICAL_NAME_BYTES_V1, MAX_REVISION3_VOICE_SLOT_CANDIDATES_V1,
@@ -20,8 +20,9 @@ use crate::story_transaction_revision3_voice_target::{
     validate_revision3_voice_loc_id_basename_stem_v1, validate_revision3_voice_target_resolution_v1,
 };
 use crate::{
-    validate_draft_quest_objective_titles, EntityId, LocaleCode, Revision3TypedRef,
-    LOGICAL_NPC_CLONE_GENERATOR_ID, LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+    validate_draft_quest_objective_titles, validate_draft_quest_transition_plan_v1, EntityId,
+    LocaleCode, Revision3TypedRef, LOGICAL_NPC_CLONE_GENERATOR_ID,
+    LOGICAL_NPC_CLONE_GENERATOR_VERSION,
 };
 
 impl ProjectRevision3 {
@@ -458,20 +459,30 @@ impl ProjectRevision3 {
         };
         let supported_version = matches!(
             quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+            REVISION3_QUEST_GENERATOR_VERSION
+                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
         );
         if quest.generator_id != REVISION3_QUEST_GENERATOR_ID || !supported_version {
             return Err(invalid(
-                "generator contract is not supported revision-3 Quest version 2 or 3",
+                "generator contract is not supported revision-3 Quest version 2, 3, or 4",
             ));
         }
-        if (quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION
-            && !quest.input.additional_objective_titles.is_empty())
-            || (quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-                && quest.input.additional_objective_titles.is_empty())
-        {
+        let shape_matches = match quest.generator_version {
+            REVISION3_QUEST_GENERATOR_VERSION => {
+                quest.input.additional_objective_titles.is_empty()
+                    && quest.input.transition_plan.is_none()
+            }
+            REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION => {
+                !quest.input.additional_objective_titles.is_empty()
+                    && quest.input.transition_plan.is_none()
+            }
+            REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION => quest.input.transition_plan.is_some(),
+            _ => false,
+        };
+        if !shape_matches {
             return Err(invalid(
-                "Quest objective list does not match its generator version",
+                "Quest objective list or transition plan does not match its generator version",
             ));
         }
         validate_draft_quest_objective_titles(
@@ -479,6 +490,13 @@ impl ProjectRevision3 {
             &quest.input.additional_objective_titles,
         )
         .map_err(|_| invalid("Quest objective list is not closed and bounded"))?;
+        if let Some(plan) = &quest.input.transition_plan {
+            validate_draft_quest_transition_plan_v1(
+                plan,
+                1 + quest.input.additional_objective_titles.len(),
+            )
+            .map_err(|_| invalid("Quest transition plan is not closed and bounded"))?;
+        }
         if quest.input.quest_id != quest_id {
             return Err(invalid("quest input id does not match its entity id"));
         }

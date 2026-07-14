@@ -97,6 +97,7 @@ fn quest(project: ProjectId) -> Revision3QuestDraft {
             description: "Prove that the gate is secure.".to_owned(),
             objective_title: "Report to Asghan".to_owned(),
             additional_objective_titles: Vec::new(),
+            transition_plan: None,
             collision_catalog: artifact_ref(),
         },
         script_module: Revision3TypedRef::new(

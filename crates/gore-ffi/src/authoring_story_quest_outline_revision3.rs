@@ -556,6 +556,9 @@ fn map_transaction_conflict(error: Revision3QuestOutlineEditConflictV1) -> Failu
         Revision3QuestOutlineEditConflictV1::ObjectiveCountChange { .. } => {
             "AUTHORING_REVISION3_QUEST_OUTLINE_SHAPE_CONFLICT"
         }
+        Revision3QuestOutlineEditConflictV1::SemanticQuestRequiresOutlineV2 => {
+            "AUTHORING_REVISION3_QUEST_OUTLINE_REQUIRES_V2"
+        }
         Revision3QuestOutlineEditConflictV1::NoChanges => {
             "AUTHORING_REVISION3_QUEST_OUTLINE_NO_CHANGES"
         }
@@ -778,6 +781,7 @@ mod tests {
                 description: "Description remains immutable in outline edit v1.".to_owned(),
                 objective_title: "Original objective".to_owned(),
                 additional_objective_titles: Vec::new(),
+                transition_plan: None,
                 collision_catalog: collision_ref,
             },
             script_module: Revision3TypedRef::new(

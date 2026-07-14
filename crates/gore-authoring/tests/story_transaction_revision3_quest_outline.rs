@@ -4,9 +4,9 @@ use gore_authoring::{
     apply_revision3_quest_outline_edit_transaction_v1, regenerate_revision3_quest_module_v2,
     AssetMeta, AssetStoreIndex, ContentSeal, DraftQuestField, DraftQuestSkeletonError, EntityId,
     FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta, ProjectRevision3,
-    QuestCollisionArtifactRef, QuestCollisionCatalogInput, Revision3Entity, Revision3EntityKind,
-    Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft, Revision3QuestDraftInput,
-    Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV1,
+    QuestCollisionArtifactRef, QuestCollisionCatalogInput, QuestTransitionPlanV1, Revision3Entity,
+    Revision3EntityKind, Revision3EntityPayload, Revision3OriginRef, Revision3QuestDraft,
+    Revision3QuestDraftInput, Revision3QuestGiverInput, Revision3QuestOutlineEditBuildStatusV1,
     Revision3QuestOutlineEditConflictV1, Revision3QuestOutlineEditErrorV1,
     Revision3QuestOutlineEditEvaluationV1, Revision3QuestOutlineEditRequestJsonErrorV1,
     Revision3QuestOutlineEditRequestV1, Revision3QuestOutlineEditRuntimeStatusV1,
@@ -17,6 +17,7 @@ use gore_authoring::{
     MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V1, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
     QUEST_COLLISION_CATALOG_LAYER_V2, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -110,6 +111,7 @@ fn project_with_quest(objective_titles: &[&str]) -> (ProjectRevision3, WorkingHe
                 .iter()
                 .map(|value| (*value).to_owned())
                 .collect(),
+            transition_plan: None,
             collision_catalog: artifact_ref,
         },
         script_module: Revision3TypedRef::new(
@@ -577,6 +579,41 @@ fn no_op_and_objective_shape_changes_are_rejected() {
             actual: 2,
         }
     );
+}
+
+#[test]
+fn semantic_quest_requires_stable_slot_aware_outline_v2() {
+    let (mut project, basis_head) = project_with_quest(&["Stage one", "Stage two", "Stage three"]);
+    let quest_id = id(0x21);
+    let module_id = id(0x22);
+    let mut quest = match &project.entities[&quest_id].payload {
+        Revision3EntityPayload::QuestDraft(quest) => quest.clone(),
+        _ => panic!("fixture Quest kind"),
+    };
+    quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+    quest.input.transition_plan = Some(Box::new(QuestTransitionPlanV1::legacy_seed(3).unwrap()));
+    let module = regenerate_revision3_quest_module_v2(&quest, collision_input(&quest)).unwrap();
+    project.entities.get_mut(&quest_id).unwrap().payload =
+        Revision3EntityPayload::QuestDraft(quest);
+    let module_entity = project.entities.get_mut(&module_id).unwrap();
+    module_entity.payload = Revision3EntityPayload::ScriptModule(module);
+    let Revision3OriginRef::Generated {
+        generator_version, ..
+    } = &mut module_entity.origin
+    else {
+        panic!("fixture module origin")
+    };
+    *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+    project.validate_closed_model().unwrap();
+
+    let candidate = request(&project, &basis_head);
+    assert_eq!(
+        rejected(&project, &basis_head, &candidate),
+        Revision3QuestOutlineEditConflictV1::SemanticQuestRequiresOutlineV2
+    );
+    assert_eq!(project.revision, 7);
+    assert_eq!(project.entities[&quest_id].revision, 3);
+    assert_eq!(project.entities[&module_id].revision, 5);
 }
 
 #[test]

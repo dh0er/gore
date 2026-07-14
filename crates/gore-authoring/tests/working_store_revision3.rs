@@ -168,6 +168,7 @@ fn quest_project(
             description: "Keep the collision inventory outside the entity shard.".into(),
             objective_title: "Reopen the basis snapshot".into(),
             additional_objective_titles: Vec::new(),
+            transition_plan: None,
             collision_catalog: gore_authoring::QuestCollisionArtifactRef {
                 generation: target(),
                 catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),

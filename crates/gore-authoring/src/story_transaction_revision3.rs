@@ -403,6 +403,7 @@ pub fn apply_revision3_quest_draft_transaction_v2(
             description: request.intent.description,
             objective_title: request.intent.objective_title,
             additional_objective_titles: Vec::new(),
+            transition_plan: None,
             collision_catalog: request.intent.collision_catalog,
         },
         script_module: module_ref,

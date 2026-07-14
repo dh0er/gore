@@ -29,6 +29,7 @@ use crate::{
     ProjectStoryCollisionIdentities, Sha256Digest, WorkingHead, WorkingStoreError,
     MAX_PROJECT_JSON_BYTES, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 
 pub const MAX_REVISION3_PRIOR_QUESTS_V2: usize = 14_285;
@@ -555,7 +556,9 @@ fn validate_quest_pair<'a>(
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
         || !matches!(
             quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+            REVISION3_QUEST_GENERATOR_VERSION
+                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
         )
     {
         return Err(Revision3QuestCollisionSourceErrorV2::ForeignGenerator {
@@ -956,7 +959,7 @@ mod tests {
         Entity as Revision3Entity, QuestCollisionArtifactRef, QuestDraftInput,
     };
     use crate::{
-        AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, SchemaRevisionV3,
+        AssetMeta, AssetStoreIndex, FormatV2, ProjectMeta, QuestTransitionPlanV1, SchemaRevisionV3,
         QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_CATALOG_LAYER,
     };
 
@@ -1015,6 +1018,7 @@ mod tests {
                 description: "Regenerated only from the exact current project".into(),
                 objective_title: "Reject every persisted drift".into(),
                 additional_objective_titles: Vec::new(),
+                transition_plan: None,
                 collision_catalog: QuestCollisionArtifactRef {
                     generation: target.clone(),
                     catalog_layer: QUEST_COLLISION_CATALOG_LAYER.into(),
@@ -1212,6 +1216,46 @@ mod tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn semantic_v4_quest_remains_an_exact_collision_source() {
+        let (mut project, head) = exact_project();
+        let quest = {
+            let EntityPayload::QuestDraft(quest) =
+                &mut project.entities.get_mut(&id(10)).unwrap().payload
+            else {
+                unreachable!()
+            };
+            quest.generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+            quest.input.transition_plan = Some(Box::new(
+                QuestTransitionPlanV1::legacy_seed(1).expect("one-objective seed"),
+            ));
+            quest.clone()
+        };
+        let collision = QuestCollisionCatalogInput {
+            generation: quest.input.collision_catalog.generation.clone(),
+            source_seal: quest.input.collision_catalog.source_seal.clone(),
+            catalog_layer: quest.input.collision_catalog.catalog_layer.clone(),
+            modules: BTreeSet::new(),
+            relative_paths: BTreeSet::new(),
+            symbols: BTreeSet::new(),
+        };
+        let module = crate::regenerate_revision3_quest_module_v2(&quest, collision).unwrap();
+        let module_entity = project.entities.get_mut(&id(11)).unwrap();
+        let OriginRef::Generated {
+            generator_version, ..
+        } = &mut module_entity.origin
+        else {
+            unreachable!()
+        };
+        *generator_version = REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION;
+        module_entity.payload = EntityPayload::ScriptModule(module);
+
+        let prepared = prepare_exact_revision3_quest_collision_source_v2(&project, head)
+            .expect("semantic Quest remains a reconstructable exact source");
+        assert_eq!(prepared.prior_quest_count(), 1);
+        assert_eq!(prepared.prior_quests()[&id(10)].module_id(), id(11));
     }
 
     #[test]

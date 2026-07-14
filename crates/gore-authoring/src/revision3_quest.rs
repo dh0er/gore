@@ -17,11 +17,13 @@ use crate::model_revision3::{
     EntityKind, EntityPayload, OriginRef, ProjectRevision3, QuestDraft, QuestDraftInput,
     ScriptModule, ScriptModuleStatus, TypedRef, REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION,
     REVISION3_QUEST_GENERATOR_ID, REVISION3_QUEST_GENERATOR_VERSION,
+    REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
 };
 use crate::{
     CatalogQualifiedParentQuest, CatalogQualifiedQuestGiver, DraftQuestCollisionCatalog,
     DraftQuestSkeletonError, DraftQuestSkeletonInput, DraftQuestSkeletonInputV2,
-    DraftQuestSkeletonV1, DraftQuestSkeletonV2, EntityId, FormatV2, Sha256Digest,
+    DraftQuestSkeletonInputV3, DraftQuestSkeletonV1, DraftQuestSkeletonV2, DraftQuestSkeletonV3,
+    EntityId, FormatV2, Sha256Digest,
 };
 
 // This domain shipped first with the S3 verifier. Its exact bytes are retained so moving the
@@ -32,7 +34,7 @@ const REVISION3_QUEST_INPUT_FINGERPRINT_V2_DOMAIN: &[u8] =
 #[derive(Debug, thiserror::Error)]
 pub enum Revision3QuestGenerationError {
     #[error(
-        "revision-3 Quest generator contract mismatch: expected {expected_id}@{expected_version}, got {actual_id}@{actual_version}"
+        "revision-3 Quest generator contract mismatch: expected {expected_id}@{expected_version}, @3, or @4, got {actual_id}@{actual_version}"
     )]
     GeneratorContract {
         expected_id: &'static str,
@@ -93,7 +95,9 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
     if quest.generator_id != REVISION3_QUEST_GENERATOR_ID
         || !matches!(
             quest.generator_version,
-            REVISION3_QUEST_GENERATOR_VERSION | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+            REVISION3_QUEST_GENERATOR_VERSION
+                | REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
+                | REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION
         )
     {
         return Err(Revision3QuestGenerationError::GeneratorContract {
@@ -155,11 +159,19 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
         collision.symbols.into_iter().collect(),
     )
     .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?;
-    if (quest.generator_version == REVISION3_QUEST_GENERATOR_VERSION
-        && !quest.input.additional_objective_titles.is_empty())
-        || (quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION
-            && quest.input.additional_objective_titles.is_empty())
-    {
+    let shape_matches = match quest.generator_version {
+        REVISION3_QUEST_GENERATOR_VERSION => {
+            quest.input.additional_objective_titles.is_empty()
+                && quest.input.transition_plan.is_none()
+        }
+        REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION => {
+            !quest.input.additional_objective_titles.is_empty()
+                && quest.input.transition_plan.is_none()
+        }
+        REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION => quest.input.transition_plan.is_some(),
+        _ => false,
+    };
+    if !shape_matches {
         return Err(Revision3QuestGenerationError::ObjectiveGeneratorContract {
             generator_version: quest.generator_version,
         });
@@ -196,7 +208,7 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
                     names.objective_getter,
                 ],
             )
-        } else {
+        } else if quest.generator_version == REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION {
             let generated = DraftQuestSkeletonV2::new(DraftQuestSkeletonInputV2 {
                 base: base_input,
                 additional_objective_titles: quest.input.additional_objective_titles.clone(),
@@ -212,6 +224,47 @@ pub(crate) fn regenerate_revision3_quest_module_v2_with_identity(
                 names.base.objective_getter,
             ];
             for objective in names.additional_objectives {
+                symbols.push(objective.objective_class);
+                symbols.push(objective.objective_getter);
+            }
+            (
+                names.base.module_namespace,
+                names.base.module_relative_path,
+                generated.source,
+                generated.source_sha256,
+                symbols,
+            )
+        } else {
+            let generated = DraftQuestSkeletonV3::new(DraftQuestSkeletonInputV3 {
+                base: base_input,
+                additional_objective_titles: quest.input.additional_objective_titles.clone(),
+                transition_plan: quest
+                    .input
+                    .transition_plan
+                    .as_deref()
+                    .cloned()
+                    .expect("generator-v4 shape checked above"),
+            })
+            .map_err(Revision3QuestGenerationError::InvalidQuestIntent)?
+            .generate();
+            let names = generated.technical_names;
+            let slot_one = names
+                .objectives
+                .iter()
+                .find(|objective| objective.slot == 1)
+                .expect("validated semantic plan retains frozen slot 1");
+            let mut symbols = vec![
+                names.base.root_class.clone(),
+                slot_one.objective_class.clone(),
+                names.base.text_helper.clone(),
+                names.base.root_getter.clone(),
+                slot_one.objective_getter.clone(),
+            ];
+            for objective in names
+                .objectives
+                .into_iter()
+                .filter(|objective| objective.slot != 1)
+            {
                 symbols.push(objective.objective_class);
                 symbols.push(objective.objective_getter);
             }

@@ -5,11 +5,17 @@
 //! read-only lookup helpers but no transition predicate or action, dialog, effect, reward,
 //! journal, failure, filesystem, compiler, game, or save operation.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+use crate::model_revision3::{
+    QuestTransitionConditionAtomV1, QuestTransitionEdgeV1, QuestTransitionEffectKindV1,
+    QuestTransitionNodeV1, QuestTransitionPlanV1, QuestTransitionPredicateV1,
+    QuestTransitionStateTestV1, QuestTransitionV1, MAX_QUEST_TRANSITION_EFFECTS_V1,
+    MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1, MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1,
+};
 use crate::{ContentSeal, EntityId, GameGenerationAnchor, Sha256Digest};
 
 /// Stable generator identity for the discovery-only quest skeleton.
@@ -18,6 +24,7 @@ pub const DRAFT_QUEST_GENERATOR_VERSION: u32 = 1;
 /// Generator version for the ordered multi-objective extension. Version 1 remains frozen so
 /// existing one-objective projects regenerate byte-for-byte.
 pub const DRAFT_QUEST_MULTI_OBJECTIVE_GENERATOR_VERSION: u32 = 2;
+pub const DRAFT_QUEST_SEMANTIC_GENERATOR_VERSION: u32 = 3;
 pub const MAX_DRAFT_QUEST_TITLE_BYTES: usize = 128;
 pub const MAX_DRAFT_QUEST_DESCRIPTION_BYTES: usize = 512;
 pub const MAX_DRAFT_QUEST_OBJECTIVE_TITLE_BYTES: usize = 128;
@@ -232,6 +239,8 @@ pub enum DraftQuestSkeletonError {
     ObjectiveTitlesTooLarge { actual: usize, max: usize },
     #[error("draft objective titles {first} and {second} are duplicates")]
     DuplicateObjectiveTitle { first: usize, second: usize },
+    #[error("invalid semantic Quest transition plan: {reason}")]
+    InvalidTransitionPlan { reason: String },
 }
 
 /// Exact giver identity from one sealed character catalog layer.
@@ -730,6 +739,475 @@ pub fn validate_draft_quest_objective_titles(
     Ok(())
 }
 
+impl QuestTransitionPlanV1 {
+    /// Upgrade the frozen v2/v3 objective shape without changing its emitted lifecycle behavior.
+    pub fn legacy_seed(objective_count: usize) -> Result<Self, DraftQuestSkeletonError> {
+        if objective_count == 0 {
+            return Err(invalid_transition_plan(
+                "a Quest transition plan must contain at least one objective",
+            ));
+        }
+        if objective_count > MAX_DRAFT_QUEST_OBJECTIVES {
+            return Err(DraftQuestSkeletonError::TooManyObjectives {
+                actual: objective_count,
+                max: MAX_DRAFT_QUEST_OBJECTIVES,
+            });
+        }
+        let objective_slots = (1..=objective_count)
+            .map(|ordinal| ordinal as u16)
+            .collect::<Vec<_>>();
+        let mut transitions = vec![
+            external_transition(
+                QuestTransitionNodeV1::Root,
+                QuestTransitionEdgeV1::Availability,
+                false,
+            ),
+            external_transition(
+                QuestTransitionNodeV1::Root,
+                QuestTransitionEdgeV1::Start,
+                false,
+            ),
+        ];
+        for (index, slot) in objective_slots.iter().copied().enumerate() {
+            let node = QuestTransitionNodeV1::Objective { slot };
+            transitions.push(external_transition(
+                node,
+                QuestTransitionEdgeV1::Availability,
+                false,
+            ));
+            transitions.push(external_transition(
+                node,
+                QuestTransitionEdgeV1::Start,
+                false,
+            ));
+            transitions.push(external_transition(
+                node,
+                QuestTransitionEdgeV1::Success,
+                index + 1 == objective_count,
+            ));
+        }
+        Ok(Self {
+            objective_order: objective_slots.clone(),
+            next_slot_ordinal: (objective_count + 1) as u16,
+            objective_slots,
+            transitions,
+        })
+    }
+}
+
+fn external_transition(
+    node: QuestTransitionNodeV1,
+    edge: QuestTransitionEdgeV1,
+    succeeds_parent: bool,
+) -> QuestTransitionV1 {
+    QuestTransitionV1 {
+        node,
+        edge,
+        external_allowed: true,
+        predicate: None,
+        effects: Vec::new(),
+        succeeds_parent,
+    }
+}
+
+/// Validate a semantic transition plan independently of source/collision inputs.
+///
+/// `objective_count` is the number of positional titles carried by the legacy input fields.
+pub fn validate_draft_quest_transition_plan_v1(
+    plan: &QuestTransitionPlanV1,
+    objective_count: usize,
+) -> Result<(), DraftQuestSkeletonError> {
+    if objective_count == 0 {
+        return Err(invalid_transition_plan(
+            "a Quest transition plan must contain at least one objective",
+        ));
+    }
+    if objective_count > MAX_DRAFT_QUEST_OBJECTIVES {
+        return Err(DraftQuestSkeletonError::TooManyObjectives {
+            actual: objective_count,
+            max: MAX_DRAFT_QUEST_OBJECTIVES,
+        });
+    }
+    if plan.objective_slots.len() != objective_count {
+        return Err(invalid_transition_plan(format!(
+            "objective_slots has {} entries but the Quest carries {objective_count} titles",
+            plan.objective_slots.len()
+        )));
+    }
+    if plan.objective_slots.contains(&0)
+        || plan
+            .objective_slots
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+    {
+        return Err(invalid_transition_plan(
+            "objective_slots must be unique non-zero ordinals in ascending order",
+        ));
+    }
+    let active_slots = plan
+        .objective_slots
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !active_slots.contains(&1) {
+        return Err(invalid_transition_plan(
+            "objective slot 1 is the frozen legacy identity and must remain active",
+        ));
+    }
+    let ordered_slots = plan
+        .objective_order
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if plan.objective_order.len() != plan.objective_slots.len()
+        || ordered_slots.len() != plan.objective_order.len()
+        || ordered_slots != active_slots
+    {
+        return Err(invalid_transition_plan(
+            "objective_order must be a full permutation of objective_slots",
+        ));
+    }
+    let max_slot = plan.objective_slots.last().copied().unwrap_or(0);
+    if plan.next_slot_ordinal == 0 || plan.next_slot_ordinal <= max_slot {
+        return Err(invalid_transition_plan(
+            "next_slot_ordinal must be strictly greater than every active objective slot",
+        ));
+    }
+
+    let valid_node = |node: QuestTransitionNodeV1| match node {
+        QuestTransitionNodeV1::Root => true,
+        QuestTransitionNodeV1::Objective { slot } => active_slots.contains(&slot),
+    };
+    let mut by_edge =
+        BTreeMap::<(QuestTransitionNodeV1, QuestTransitionEdgeV1), &QuestTransitionV1>::new();
+    let mut effect_graphs = BTreeMap::<
+        QuestTransitionEffectKindV1,
+        BTreeMap<QuestTransitionNodeV1, BTreeSet<QuestTransitionNodeV1>>,
+    >::new();
+
+    if plan
+        .transitions
+        .windows(2)
+        .any(|pair| (pair[0].node, pair[0].edge) >= (pair[1].node, pair[1].edge))
+    {
+        return Err(invalid_transition_plan(
+            "transitions must be unique and sorted by node then lifecycle edge",
+        ));
+    }
+
+    for transition in &plan.transitions {
+        if !valid_node(transition.node) {
+            return Err(invalid_transition_plan(
+                "a transition refers to an inactive objective slot",
+            ));
+        }
+        if by_edge
+            .insert((transition.node, transition.edge), transition)
+            .is_some()
+        {
+            return Err(invalid_transition_plan(
+                "each node may define at most one transition per lifecycle edge",
+            ));
+        }
+        if !transition.external_allowed && transition.predicate.is_none() {
+            return Err(invalid_transition_plan(
+                "every transition requires an external or predicate driver",
+            ));
+        }
+        if let Some(predicate) = &transition.predicate {
+            validate_transition_predicate(predicate, &valid_node)?;
+        }
+        if transition.effects.len() > MAX_QUEST_TRANSITION_EFFECTS_V1 {
+            return Err(invalid_transition_plan(format!(
+                "a transition has {} effects; maximum is {MAX_QUEST_TRANSITION_EFFECTS_V1}",
+                transition.effects.len()
+            )));
+        }
+        if transition.edge == QuestTransitionEdgeV1::Availability && !transition.effects.is_empty()
+        {
+            return Err(invalid_transition_plan(
+                "availability predicates have no lifecycle handler and cannot carry effects",
+            ));
+        }
+        if transition.succeeds_parent
+            && (!matches!(transition.node, QuestTransitionNodeV1::Objective { .. })
+                || transition.edge != QuestTransitionEdgeV1::Success)
+        {
+            return Err(invalid_transition_plan(
+                "succeeds_parent is valid only on an objective success edge",
+            ));
+        }
+
+        let mut exact_effects = BTreeSet::new();
+        let mut terminal_by_target = BTreeMap::new();
+        if transition.succeeds_parent {
+            // `bSucceedParent` is an implicit Succeed(root) action. Model it in the same
+            // conflict/cycle graph as explicit handler effects so source generation cannot emit
+            // order-dependent parent terminal behavior.
+            terminal_by_target.insert(
+                QuestTransitionNodeV1::Root,
+                QuestTransitionEffectKindV1::Succeed,
+            );
+            effect_graphs
+                .entry(QuestTransitionEffectKindV1::Succeed)
+                .or_default()
+                .entry(transition.node)
+                .or_default()
+                .insert(QuestTransitionNodeV1::Root);
+        }
+        if transition.effects.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(invalid_transition_plan(
+                "effects must be unique and sorted by target then effect kind",
+            ));
+        }
+        for effect in &transition.effects {
+            if !valid_node(effect.target) {
+                return Err(invalid_transition_plan(
+                    "an effect targets an inactive objective slot",
+                ));
+            }
+            if effect.target == transition.node {
+                return Err(invalid_transition_plan(
+                    "a transition cannot apply an effect to its own node",
+                ));
+            }
+            if !exact_effects.insert(effect.clone()) {
+                return Err(invalid_transition_plan(
+                    "a transition contains a duplicate effect",
+                ));
+            }
+            if matches!(
+                effect.effect,
+                QuestTransitionEffectKindV1::Succeed | QuestTransitionEffectKindV1::Fail
+            ) {
+                if let Some(previous) = terminal_by_target.insert(effect.target, effect.effect) {
+                    if previous == effect.effect {
+                        return Err(invalid_transition_plan(
+                            "an explicit effect duplicates implicit parent success",
+                        ));
+                    } else {
+                        return Err(invalid_transition_plan(
+                            "one handler cannot both succeed and fail the same target",
+                        ));
+                    }
+                }
+            }
+            effect_graphs
+                .entry(effect.effect)
+                .or_default()
+                .entry(transition.node)
+                .or_default()
+                .insert(effect.target);
+        }
+    }
+
+    let nodes = std::iter::once(QuestTransitionNodeV1::Root)
+        .chain(
+            plan.objective_slots
+                .iter()
+                .copied()
+                .map(|slot| QuestTransitionNodeV1::Objective { slot }),
+        )
+        .collect::<Vec<_>>();
+    for node in &nodes {
+        for edge in [
+            QuestTransitionEdgeV1::Availability,
+            QuestTransitionEdgeV1::Start,
+        ] {
+            if !by_edge.contains_key(&(*node, edge)) {
+                return Err(invalid_transition_plan(
+                    "every plan node requires availability and start transitions",
+                ));
+            }
+        }
+        if matches!(node, QuestTransitionNodeV1::Objective { .. })
+            && !by_edge.contains_key(&(*node, QuestTransitionEdgeV1::Success))
+            && !by_edge.contains_key(&(*node, QuestTransitionEdgeV1::Failure))
+        {
+            return Err(invalid_transition_plan(
+                "every objective requires a success or failure transition",
+            ));
+        }
+        let success = by_edge.get(&(*node, QuestTransitionEdgeV1::Success));
+        let failure = by_edge.get(&(*node, QuestTransitionEdgeV1::Failure));
+        if let (Some(success), Some(failure)) = (success, failure) {
+            if matches!(
+                (&success.predicate, &failure.predicate),
+                (Some(success), Some(failure)) if transition_predicates_may_overlap(success, failure)
+            ) {
+                return Err(invalid_transition_plan(
+                    "success and failure automatic predicates must be provably disjoint",
+                ));
+            }
+        }
+    }
+    for graph in effect_graphs.values() {
+        reject_effect_cycle(graph, &nodes)?;
+    }
+    Ok(())
+}
+
+fn transition_predicates_may_overlap(
+    left: &QuestTransitionPredicateV1,
+    right: &QuestTransitionPredicateV1,
+) -> bool {
+    left.any_of.iter().any(|left_group| {
+        right.any_of.iter().any(|right_group| {
+            let mut polarities = BTreeMap::new();
+            for atom in left_group.all_of.iter().chain(&right_group.all_of) {
+                let key = (atom.node, atom.test);
+                if polarities
+                    .insert(key, atom.negated)
+                    .is_some_and(|previous| previous != atom.negated)
+                {
+                    return false;
+                }
+            }
+            reject_lifecycle_state_contradictions(&polarities).is_ok()
+        })
+    })
+}
+
+fn validate_transition_predicate(
+    predicate: &QuestTransitionPredicateV1,
+    valid_node: &impl Fn(QuestTransitionNodeV1) -> bool,
+) -> Result<(), DraftQuestSkeletonError> {
+    if predicate.any_of.is_empty()
+        || predicate.any_of.len() > MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1
+    {
+        return Err(invalid_transition_plan(format!(
+            "predicate any_of must contain 1..={MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1} groups"
+        )));
+    }
+    let mut groups = BTreeSet::<BTreeSet<QuestTransitionConditionAtomV1>>::new();
+    if predicate.any_of.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err(invalid_transition_plan(
+            "predicate conjunctions must be unique and sorted lexicographically",
+        ));
+    }
+    for group in &predicate.any_of {
+        if group.all_of.is_empty() || group.all_of.len() > MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1 {
+            return Err(invalid_transition_plan(format!(
+                "predicate all_of must contain 1..={MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1} atoms"
+            )));
+        }
+        let mut atoms = BTreeSet::new();
+        let mut polarities = BTreeMap::new();
+        if group.all_of.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err(invalid_transition_plan(
+                "predicate atoms must be unique and sorted lexicographically",
+            ));
+        }
+        for atom in &group.all_of {
+            if !valid_node(atom.node) {
+                return Err(invalid_transition_plan(
+                    "a predicate atom refers to an inactive objective slot",
+                ));
+            }
+            if !atoms.insert(atom.clone()) {
+                return Err(invalid_transition_plan(
+                    "a predicate conjunction contains a duplicate atom",
+                ));
+            }
+            let key = (atom.node, atom.test);
+            if let Some(previous) = polarities.insert(key, atom.negated) {
+                if previous != atom.negated {
+                    return Err(invalid_transition_plan(
+                        "a predicate conjunction contains a direct contradiction",
+                    ));
+                }
+            }
+        }
+        reject_lifecycle_state_contradictions(&polarities)?;
+        if !groups.insert(atoms) {
+            return Err(invalid_transition_plan(
+                "a predicate contains a duplicate conjunction",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_lifecycle_state_contradictions(
+    polarities: &BTreeMap<(QuestTransitionNodeV1, QuestTransitionStateTestV1), bool>,
+) -> Result<(), DraftQuestSkeletonError> {
+    let nodes = polarities
+        .keys()
+        .map(|(node, _)| *node)
+        .collect::<BTreeSet<_>>();
+    for node in nodes {
+        let positive = |test| polarities.get(&(node, test)) == Some(&false);
+        let negative = |test| polarities.get(&(node, test)) == Some(&true);
+        let terminal = positive(QuestTransitionStateTestV1::Succeeded)
+            || positive(QuestTransitionStateTestV1::Failed)
+            || positive(QuestTransitionStateTestV1::Completed);
+        let contradictory = (positive(QuestTransitionStateTestV1::Succeeded)
+            && positive(QuestTransitionStateTestV1::Failed))
+            || (positive(QuestTransitionStateTestV1::Running) && terminal)
+            || (negative(QuestTransitionStateTestV1::Started)
+                && (positive(QuestTransitionStateTestV1::Running) || terminal))
+            || (negative(QuestTransitionStateTestV1::Completed)
+                && (positive(QuestTransitionStateTestV1::Succeeded)
+                    || positive(QuestTransitionStateTestV1::Failed)))
+            || (positive(QuestTransitionStateTestV1::Completed)
+                && negative(QuestTransitionStateTestV1::Succeeded)
+                && negative(QuestTransitionStateTestV1::Failed));
+        if contradictory {
+            return Err(invalid_transition_plan(
+                "a predicate conjunction contains incompatible lifecycle states",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reject_effect_cycle(
+    graph: &BTreeMap<QuestTransitionNodeV1, BTreeSet<QuestTransitionNodeV1>>,
+    nodes: &[QuestTransitionNodeV1],
+) -> Result<(), DraftQuestSkeletonError> {
+    fn visit(
+        node: QuestTransitionNodeV1,
+        graph: &BTreeMap<QuestTransitionNodeV1, BTreeSet<QuestTransitionNodeV1>>,
+        visiting: &mut BTreeSet<QuestTransitionNodeV1>,
+        visited: &mut BTreeSet<QuestTransitionNodeV1>,
+    ) -> bool {
+        if visited.contains(&node) {
+            return false;
+        }
+        if !visiting.insert(node) {
+            return true;
+        }
+        if graph.get(&node).is_some_and(|targets| {
+            targets
+                .iter()
+                .copied()
+                .any(|target| visit(target, graph, visiting, visited))
+        }) {
+            return true;
+        }
+        visiting.remove(&node);
+        visited.insert(node);
+        false
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    for node in nodes {
+        if visit(*node, graph, &mut visiting, &mut visited) {
+            return Err(invalid_transition_plan(
+                "same-kind transition effects must not form a cycle",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_transition_plan(reason: impl Into<String>) -> DraftQuestSkeletonError {
+    DraftQuestSkeletonError::InvalidTransitionPlan {
+        reason: reason.into(),
+    }
+}
+
 impl DraftQuestSkeletonV2 {
     pub fn new(input: DraftQuestSkeletonInputV2) -> Result<Self, DraftQuestSkeletonError> {
         let DraftQuestSkeletonInputV2 {
@@ -902,6 +1380,506 @@ impl DraftQuestSkeletonV2 {
             status: DraftQuestCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSemanticObjectiveTechnicalNames {
+    pub slot: u16,
+    pub objective_class: String,
+    pub objective_getter: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSemanticTechnicalNames {
+    pub base: DraftQuestTechnicalNames,
+    /// Stable technical identities in ascending slot order, independent of presentation order.
+    pub objectives: Vec<DraftQuestSemanticObjectiveTechnicalNames>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSkeletonInputV3 {
+    pub base: DraftQuestSkeletonInput,
+    pub additional_objective_titles: Vec<String>,
+    pub transition_plan: QuestTransitionPlanV1,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSkeletonV3 {
+    input: DraftQuestSkeletonInput,
+    additional_objective_titles: Vec<String>,
+    transition_plan: QuestTransitionPlanV1,
+    technical_names: DraftQuestSemanticTechnicalNames,
+    input_fingerprint: Sha256Digest,
+}
+
+impl DraftQuestSkeletonV3 {
+    pub fn new(input: DraftQuestSkeletonInputV3) -> Result<Self, DraftQuestSkeletonError> {
+        let DraftQuestSkeletonInputV3 {
+            base,
+            additional_objective_titles,
+            transition_plan,
+        } = input;
+        validate_draft_quest_objective_titles(&base.objective_title, &additional_objective_titles)?;
+        let objective_count = 1 + additional_objective_titles.len();
+        validate_draft_quest_transition_plan_v1(&transition_plan, objective_count)?;
+
+        // Close the frozen validation surface first. Slot 1 is retained by every V4 plan, so all
+        // V1 technical-name and catalog checks remain applicable without weakening compatibility.
+        let frozen = DraftQuestSkeletonV1::new(base)?;
+        let DraftQuestSkeletonV1 {
+            input,
+            technical_names: base_names,
+            ..
+        } = frozen;
+        let objectives = transition_plan
+            .objective_slots
+            .iter()
+            .copied()
+            .map(|slot| {
+                if slot == 1 {
+                    DraftQuestSemanticObjectiveTechnicalNames {
+                        slot,
+                        objective_class: base_names.objective_class.clone(),
+                        objective_getter: base_names.objective_getter.clone(),
+                    }
+                } else {
+                    DraftQuestSemanticObjectiveTechnicalNames {
+                        slot,
+                        objective_class: format!("UQuest_{}_OBJ_{slot}", input.technical_id),
+                        objective_getter: format!("{}{slot}", base_names.objective_getter),
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        validate_semantic_objective_names(&objectives)?;
+        check_semantic_symbol_collisions(&base_names, &objectives)?;
+        for objective in objectives.iter().filter(|objective| objective.slot != 1) {
+            if input
+                .parent_quest
+                .runtime_class
+                .eq_ignore_ascii_case(&objective.objective_class)
+            {
+                return Err(DraftQuestSkeletonError::ParentClassCollision {
+                    class_name: input.parent_quest.runtime_class.clone(),
+                });
+            }
+            for symbol in [&objective.objective_class, &objective.objective_getter] {
+                if input
+                    .collision_catalog
+                    .contains(DraftQuestCollisionKind::Symbol, symbol)
+                {
+                    return Err(DraftQuestSkeletonError::GeneratedNameCollision {
+                        kind: DraftQuestCollisionKind::Symbol,
+                        name: symbol.clone(),
+                    });
+                }
+            }
+        }
+        let technical_names = DraftQuestSemanticTechnicalNames {
+            base: base_names,
+            objectives,
+        };
+        let input_fingerprint = fingerprint_semantic_quest_input(
+            &input,
+            &additional_objective_titles,
+            &transition_plan,
+        );
+        Ok(Self {
+            input,
+            additional_objective_titles,
+            transition_plan,
+            technical_names,
+            input_fingerprint,
+        })
+    }
+
+    pub fn technical_names(&self) -> &DraftQuestSemanticTechnicalNames {
+        &self.technical_names
+    }
+
+    pub fn input_fingerprint(&self) -> Sha256Digest {
+        self.input_fingerprint
+    }
+
+    pub fn generate(&self) -> DraftQuestSemanticGeneratedSource {
+        let base_names = &self.technical_names.base;
+        let giver = self.input.giver.runtime_unique_name();
+        let mut source = format!(
+            "FText {text_helper}(const FName Text)\n{{\n    FString Value = Text.ToString();\n    return FText::FromString(Value);\n}}\n\nclass {root} : {base}\n{{\n    default ParentQuestClass = {parent}::StaticClass();\n    default QuestKind = {root_kind};\n    default InvolvedCharacters.Add(n\"{hero}\");\n    default InvolvedCharacters.Add(n\"{giver}\");\n    default QuestGiverCharacterUniqueName = n\"{giver}\";\n    default NameText = {text_helper}(n\"{title}\");\n    default DescriptionText = {text_helper}(\n        n\"{description}\"\n    );\n",
+            text_helper = base_names.text_helper,
+            root = base_names.root_class,
+            base = QUEST_BASE_CLASS,
+            parent = self.input.parent_quest.runtime_class(),
+            root_kind = ROOT_KIND,
+            hero = HERO_UNIQUE_NAME,
+            giver = giver,
+            title = self.input.title,
+            description = self.input.description,
+        );
+        self.render_node_class_tail(&mut source, QuestTransitionNodeV1::Root);
+        source.push_str("}\n\n");
+        render_quest_getter(&mut source, &base_names.root_class, &base_names.root_getter);
+        source.push('\n');
+
+        let titles = std::iter::once(self.input.objective_title.as_str())
+            .chain(self.additional_objective_titles.iter().map(String::as_str))
+            .collect::<Vec<_>>();
+        for (position, slot) in self
+            .transition_plan
+            .objective_order
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let objective = self.objective_names(slot);
+            source.push_str(&format!(
+                "class {objective} : {base}\n{{\n    default ParentQuestClass = {root}::StaticClass();\n    default QuestKind = {objective_kind};\n    default NameText = {text_helper}(n\"{objective_title}\");\n",
+                objective = objective.objective_class,
+                base = QUEST_BASE_CLASS,
+                root = base_names.root_class,
+                objective_kind = OBJECTIVE_KIND,
+                text_helper = base_names.text_helper,
+                objective_title = titles[position],
+            ));
+            self.render_node_class_tail(&mut source, QuestTransitionNodeV1::Objective { slot });
+            source.push_str("}\n\n");
+            render_quest_getter(
+                &mut source,
+                &objective.objective_class,
+                &objective.objective_getter,
+            );
+            if position + 1 != self.transition_plan.objective_order.len() {
+                source.push('\n');
+            }
+        }
+
+        let source_sha256 = Sha256Digest::from_bytes(Sha256::digest(source.as_bytes()).into());
+        DraftQuestSemanticGeneratedSource {
+            target: self.input.target.clone(),
+            quest_id: self.input.quest_id,
+            generator_id: DRAFT_QUEST_GENERATOR_ID,
+            generator_version: DRAFT_QUEST_SEMANTIC_GENERATOR_VERSION,
+            giver: self.input.giver.clone(),
+            parent_quest: self.input.parent_quest.clone(),
+            collision_catalog: self.input.collision_catalog.anchor(),
+            technical_names: self.technical_names.clone(),
+            source,
+            source_sha256,
+            input_fingerprint: self.input_fingerprint,
+            status: DraftQuestCapabilityStatus::OFFLINE_DRAFT_RUNTIME_UNQUALIFIED,
+        }
+    }
+
+    fn render_node_class_tail(&self, source: &mut String, node: QuestTransitionNodeV1) {
+        let transitions = [
+            QuestTransitionEdgeV1::Availability,
+            QuestTransitionEdgeV1::Start,
+            QuestTransitionEdgeV1::Success,
+            QuestTransitionEdgeV1::Failure,
+        ]
+        .into_iter()
+        .filter_map(|edge| self.transition(node, edge))
+        .collect::<Vec<_>>();
+        if transitions.iter().any(|transition| {
+            transition.edge == QuestTransitionEdgeV1::Availability && !transition.external_allowed
+        }) {
+            // UG1RQuest availability is externally driven by default. Emitting only the false
+            // override preserves byte-for-byte legacy-seed upgrades while making opt-out real.
+            source.push_str("    default bExternalAvailabilityTrigger = false;\n");
+        }
+        if transitions.iter().any(|transition| {
+            transition.edge == QuestTransitionEdgeV1::Start && transition.external_allowed
+        }) {
+            source.push_str("    default bExternalStartTrigger = true;\n");
+        }
+        if transitions.iter().any(|transition| {
+            transition.edge == QuestTransitionEdgeV1::Success && transition.external_allowed
+        }) {
+            source.push_str("    default bExternalSuccessTrigger = true;\n");
+        }
+        if transitions.iter().any(|transition| {
+            transition.edge == QuestTransitionEdgeV1::Failure && transition.external_allowed
+        }) {
+            source.push_str("    default bExternalFailTrigger = true;\n");
+        }
+        if transitions
+            .iter()
+            .any(|transition| transition.succeeds_parent)
+        {
+            source.push_str("    default bSucceedParent = true;\n");
+        }
+        for transition in &transitions {
+            if let Some(predicate) = &transition.predicate {
+                self.render_predicate_method(source, node, transition.edge, predicate);
+            }
+        }
+        for transition in transitions {
+            if !transition.effects.is_empty() {
+                self.render_effect_handler(source, transition);
+            }
+        }
+    }
+
+    fn render_predicate_method(
+        &self,
+        source: &mut String,
+        owner: QuestTransitionNodeV1,
+        edge: QuestTransitionEdgeV1,
+        predicate: &QuestTransitionPredicateV1,
+    ) {
+        let method = match edge {
+            QuestTransitionEdgeV1::Availability => "ShouldBeAvailable_Implementation",
+            QuestTransitionEdgeV1::Start => "ShouldStart_Implementation",
+            QuestTransitionEdgeV1::Success => "ShouldSucceed_Implementation",
+            QuestTransitionEdgeV1::Failure => "ShouldFail_Implementation",
+        };
+        source.push_str(&format!("\n    UFUNCTION()\n    bool {method}()\n    {{\n"));
+        let referenced = predicate
+            .any_of
+            .iter()
+            .flat_map(|group| group.all_of.iter().map(|atom| atom.node))
+            .filter(|node| *node != owner)
+            .collect::<BTreeSet<_>>();
+        for node in &referenced {
+            let names = self.names_for_node(*node);
+            source.push_str(&format!(
+                "        {class} {local} = {getter}();\n",
+                class = names.0,
+                local = transition_local_name(*node),
+                getter = names.1,
+            ));
+        }
+        if !referenced.is_empty() {
+            source.push('\n');
+        }
+        source.push_str("        return ");
+        source.push_str(&render_predicate_expression(predicate, owner));
+        source.push_str(";\n    }\n");
+    }
+
+    fn render_effect_handler(&self, source: &mut String, transition: &QuestTransitionV1) {
+        let method = match transition.edge {
+            QuestTransitionEdgeV1::Start => "HandleQuestStarted_Implementation",
+            QuestTransitionEdgeV1::Success => "HandleQuestSucceeded_Implementation",
+            QuestTransitionEdgeV1::Failure => "HandleQuestFailed_Implementation",
+            QuestTransitionEdgeV1::Availability => unreachable!("validated without effects"),
+        };
+        source.push_str(&format!("\n    UFUNCTION()\n    void {method}()\n    {{\n"));
+        let targets = transition
+            .effects
+            .iter()
+            .map(|effect| effect.target)
+            .collect::<BTreeSet<_>>();
+        for target in &targets {
+            let names = self.names_for_node(*target);
+            source.push_str(&format!(
+                "        {class} {local} = {getter}();\n",
+                class = names.0,
+                local = transition_local_name(*target),
+                getter = names.1,
+            ));
+        }
+        if !targets.is_empty() {
+            source.push('\n');
+        }
+        for effect in &transition.effects {
+            let local = transition_local_name(effect.target);
+            let (guard, call) = match effect.effect {
+                QuestTransitionEffectKindV1::Start => {
+                    (format!("!{local}.HasBeenStarted()"), "StartQuest")
+                }
+                QuestTransitionEffectKindV1::Succeed => {
+                    (format!("{local}.IsRunning()"), "SucceedQuest")
+                }
+                QuestTransitionEffectKindV1::Fail => (format!("{local}.IsRunning()"), "FailQuest"),
+            };
+            source.push_str(&format!(
+                "        if ({local} != nullptr && {guard})\n            {local}.{call}(nullptr);\n"
+            ));
+        }
+        source.push_str("    }\n");
+    }
+
+    fn transition(
+        &self,
+        node: QuestTransitionNodeV1,
+        edge: QuestTransitionEdgeV1,
+    ) -> Option<&QuestTransitionV1> {
+        self.transition_plan
+            .transitions
+            .iter()
+            .find(|transition| transition.node == node && transition.edge == edge)
+    }
+
+    fn objective_names(&self, slot: u16) -> &DraftQuestSemanticObjectiveTechnicalNames {
+        self.technical_names
+            .objectives
+            .iter()
+            .find(|objective| objective.slot == slot)
+            .expect("validated active objective slot")
+    }
+
+    fn names_for_node(&self, node: QuestTransitionNodeV1) -> (&str, &str) {
+        match node {
+            QuestTransitionNodeV1::Root => (
+                &self.technical_names.base.root_class,
+                &self.technical_names.base.root_getter,
+            ),
+            QuestTransitionNodeV1::Objective { slot } => {
+                let objective = self.objective_names(slot);
+                (&objective.objective_class, &objective.objective_getter)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftQuestSemanticGeneratedSource {
+    pub target: GameGenerationAnchor,
+    pub quest_id: EntityId,
+    pub generator_id: &'static str,
+    pub generator_version: u32,
+    pub giver: CatalogQualifiedQuestGiver,
+    pub parent_quest: CatalogQualifiedParentQuest,
+    pub collision_catalog: DraftQuestCatalogLayerAnchor,
+    pub technical_names: DraftQuestSemanticTechnicalNames,
+    pub source: String,
+    pub source_sha256: Sha256Digest,
+    pub input_fingerprint: Sha256Digest,
+    pub status: DraftQuestCapabilityStatus,
+}
+
+fn render_quest_getter(source: &mut String, class: &str, getter: &str) {
+    source.push_str(&format!(
+        "{class} {getter}()\n{{\n    UQuestSubsystem Subsystem = UQuestSubsystem::Get();\n    if (Subsystem == nullptr)\n        return nullptr;\n\n    TSubclassOf<UQuest> QuestClass =\n        TSubclassOf<UQuest>({class}::StaticClass());\n    UQuest Quest = Subsystem.GetQuestByClass(QuestClass);\n    if (Quest == nullptr)\n        return nullptr;\n\n    return Cast<{class}>(Quest);\n}}\n"
+    ));
+}
+
+fn transition_local_name(node: QuestTransitionNodeV1) -> String {
+    match node {
+        QuestTransitionNodeV1::Root => "RootQuest".to_owned(),
+        QuestTransitionNodeV1::Objective { slot } => format!("ObjectiveQuest{slot}"),
+    }
+}
+
+fn render_predicate_expression(
+    predicate: &QuestTransitionPredicateV1,
+    owner: QuestTransitionNodeV1,
+) -> String {
+    predicate
+        .any_of
+        .iter()
+        .map(|group| {
+            let atoms = group
+                .all_of
+                .iter()
+                .map(|atom| render_condition_atom(atom, owner))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            format!("({atoms})")
+        })
+        .collect::<Vec<_>>()
+        .join(" || ")
+}
+
+fn render_condition_atom(
+    atom: &QuestTransitionConditionAtomV1,
+    owner: QuestTransitionNodeV1,
+) -> String {
+    let receiver = if atom.node == owner {
+        "this".to_owned()
+    } else {
+        transition_local_name(atom.node)
+    };
+    let state = match atom.test {
+        QuestTransitionStateTestV1::Available => format!("{receiver}.IsAvailable()"),
+        QuestTransitionStateTestV1::Running => format!("{receiver}.IsRunning()"),
+        QuestTransitionStateTestV1::Started => format!("{receiver}.HasBeenStarted()"),
+        QuestTransitionStateTestV1::Succeeded => format!("{receiver}.HasSucceeded()"),
+        QuestTransitionStateTestV1::Failed => format!("{receiver}.HasFailed()"),
+        QuestTransitionStateTestV1::Completed => {
+            format!("({receiver}.HasSucceeded() || {receiver}.HasFailed())")
+        }
+    };
+    let state = if atom.negated {
+        format!("!({state})")
+    } else {
+        state
+    };
+    if atom.node == owner {
+        state
+    } else {
+        format!("{receiver} != nullptr && {state}")
+    }
+}
+
+fn validate_semantic_objective_names(
+    objectives: &[DraftQuestSemanticObjectiveTechnicalNames],
+) -> Result<(), DraftQuestSkeletonError> {
+    for objective in objectives {
+        for value in [&objective.objective_class, &objective.objective_getter] {
+            if value.len() > MAX_IDENTIFIER_BYTES {
+                return Err(DraftQuestSkeletonError::ValueTooLong {
+                    field: DraftQuestField::TechnicalId,
+                    actual: value.len(),
+                    max: MAX_IDENTIFIER_BYTES,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_semantic_symbol_collisions(
+    base: &DraftQuestTechnicalNames,
+    objectives: &[DraftQuestSemanticObjectiveTechnicalNames],
+) -> Result<(), DraftQuestSkeletonError> {
+    let mut seen = BTreeMap::<String, String>::new();
+    for symbol in [&base.root_class, &base.text_helper, &base.root_getter]
+        .into_iter()
+        .chain(
+            objectives
+                .iter()
+                .flat_map(|objective| [&objective.objective_class, &objective.objective_getter]),
+        )
+    {
+        let folded = symbol.to_ascii_lowercase();
+        if let Some(first) = seen.insert(folded, symbol.clone()) {
+            return Err(DraftQuestSkeletonError::GeneratedSymbolCollision {
+                first,
+                second: symbol.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn fingerprint_semantic_quest_input(
+    input: &DraftQuestSkeletonInput,
+    additional_titles: &[String],
+    plan: &QuestTransitionPlanV1,
+) -> Sha256Digest {
+    let mut hasher = Sha256::new();
+    fingerprint_bytes(
+        &mut hasher,
+        "schema",
+        b"gore-authoring.draft-quest-skeleton-v3.input-fingerprint",
+    );
+    fingerprint_bytes(
+        &mut hasher,
+        "frozen-v1.input-fingerprint",
+        fingerprint_input(input).as_bytes(),
+    );
+    for (index, title) in additional_titles.iter().enumerate() {
+        fingerprint_string(
+            &mut hasher,
+            &format!("objective.{}.title", index + 2),
+            title,
+        );
+    }
+    let plan_bytes = serde_json::to_vec(plan).expect("closed transition plan is serializable");
+    fingerprint_bytes(&mut hasher, "transition-plan-v1", &plan_bytes);
+    Sha256Digest::from_bytes(hasher.finalize().into())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

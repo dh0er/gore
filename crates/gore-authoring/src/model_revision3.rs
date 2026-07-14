@@ -53,7 +53,15 @@ pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
 pub const REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION: u32 = 3;
+pub const REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION: u32 = 4;
+pub const MAX_QUEST_TRANSITION_PREDICATE_GROUPS_V1: usize = 8;
+pub const MAX_QUEST_TRANSITION_PREDICATE_ATOMS_V1: usize = 8;
+pub const MAX_QUEST_TRANSITION_EFFECTS_V1: usize = 8;
 const MAX_CATALOG_LAYER_BYTES: usize = 128;
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
 
 pub(crate) fn revision3_voice_target_key_v1(target: &VoiceTarget) -> (String, String) {
     (
@@ -145,6 +153,104 @@ impl<'de> Deserialize<'de> for QuestCollisionArtifactRef {
     }
 }
 
+/// Stable identity of one node in a semantic Quest transition plan.
+///
+/// Objective slot ordinals are technical identities. They do not change when the author changes
+/// presentation order and are never reused after deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuestTransitionNodeV1 {
+    Root,
+    Objective { slot: u16 },
+}
+
+/// One of the four fixed lifecycle edges supported by the bounded semantic Quest model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestTransitionEdgeV1 {
+    Availability,
+    Start,
+    Success,
+    Failure,
+}
+
+/// Typed state observation used by a transition predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestTransitionStateTestV1 {
+    Available,
+    Running,
+    Started,
+    Succeeded,
+    Failed,
+    Completed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionConditionAtomV1 {
+    pub node: QuestTransitionNodeV1,
+    pub test: QuestTransitionStateTestV1,
+    pub negated: bool,
+}
+
+/// One conjunction in the bounded disjunctive-normal-form predicate.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionConditionGroupV1 {
+    pub all_of: Vec<QuestTransitionConditionAtomV1>,
+}
+
+/// Bounded DNF predicate: at least one `any_of` group must have every `all_of` atom true.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionPredicateV1 {
+    pub any_of: Vec<QuestTransitionConditionGroupV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QuestTransitionEffectKindV1 {
+    Start,
+    Succeed,
+    Fail,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionEffectV1 {
+    pub target: QuestTransitionNodeV1,
+    pub effect: QuestTransitionEffectKindV1,
+}
+
+/// Driver and side effects for one fixed lifecycle edge of one plan node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionV1 {
+    pub node: QuestTransitionNodeV1,
+    pub edge: QuestTransitionEdgeV1,
+    pub external_allowed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<QuestTransitionPredicateV1>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<QuestTransitionEffectV1>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub succeeds_parent: bool,
+}
+
+/// Closed, bounded semantic transition plan carried only by generator version 4.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuestTransitionPlanV1 {
+    /// Active stable objective identities, in ascending ordinal order.
+    pub objective_slots: Vec<u16>,
+    /// Full permutation of `objective_slots` defining presentation order.
+    pub objective_order: Vec<u16>,
+    /// First never-used objective ordinal; strictly greater than every active slot.
+    pub next_slot_ordinal: u16,
+    pub transitions: Vec<QuestTransitionV1>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuestDraftInput {
@@ -162,6 +268,9 @@ pub struct QuestDraftInput {
     /// generator-v2 project bytes remain canonical and byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_objective_titles: Vec<String>,
+    /// Optional only for exact generator-v2/v3 compatibility. Generator v4 requires a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition_plan: Option<Box<QuestTransitionPlanV1>>,
     pub collision_catalog: QuestCollisionArtifactRef,
 }
 

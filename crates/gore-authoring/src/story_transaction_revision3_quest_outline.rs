@@ -13,7 +13,9 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 
 use crate::model_revision2::QuestCollisionCatalogInput;
-use crate::model_revision3::{EntityKind, EntityPayload};
+use crate::model_revision3::{
+    EntityKind, EntityPayload, REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION,
+};
 use crate::revision3_quest::regenerate_revision3_quest_module_v2;
 use crate::strict_json::reject_duplicate_object_keys;
 use crate::{
@@ -121,6 +123,8 @@ pub enum Revision3QuestOutlineEditConflictV1 {
     InvalidObjectiveCount { actual: usize, max: usize },
     #[error("Quest objective count cannot change: expected {expected}, got {actual}")]
     ObjectiveCountChange { expected: usize, actual: usize },
+    #[error("semantic Quest outlines require the stable-slot-aware outline editor v2")]
+    SemanticQuestRequiresOutlineV2,
     #[error("Quest outline edit does not change display name, title, or objective titles")]
     NoChanges,
     #[error("Quest objective titles are invalid: {error}")]
@@ -270,6 +274,9 @@ pub fn apply_revision3_quest_outline_edit_transaction_v1(
             quest: request.quest_id,
         });
     };
+    if quest.generator_version == REVISION3_SEMANTIC_QUEST_GENERATOR_VERSION {
+        reject!(Revision3QuestOutlineEditConflictV1::SemanticQuestRequiresOutlineV2);
+    }
     if request.expected_quest_revision != quest_entity.revision {
         reject!(Revision3QuestOutlineEditConflictV1::QuestRevisionConflict {
             expected: request.expected_quest_revision,
