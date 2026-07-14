@@ -205,10 +205,17 @@ caller must eventually use the managed session's guarded fixed-head publication
 lane. Races may leave only verified immutable CAS orphans.
 
 Every staged manifest remains explicitly `blocked`, `runtime_unqualified`,
-`not_granted`, and `not_supported`. This native boundary does not add a CLI or
-Mod Studio stage command and grants no build, pack, deploy, runtime, or future
-reinspection authority. Strict FFI/Dart/session wiring, semantic preview/diff/
-undo, build lowering, and post-pack verification are separate work.
+`not_granted`, and `not_supported`. Closed raw FFI commands now expose exact-head
+prepare, list, and registry-only remove. They cap their envelopes before generic
+JSON materialization, preflight the PatchReceipt path without following unsafe
+file types, validate the complete live generation and manifest closure, reject
+all project/manifest numbers outside the signed Studio wire, and never return a
+local path, receipt text, raw offset, or authority-bearing handle.
+
+The FFI boundary still adds no CLI or visible Mod Studio stage action and grants
+no build, pack, deploy, runtime, or future reinspection authority. Strict Dart/
+session publication, semantic preview/diff/undo, build lowering, and post-pack
+verification are separate work.
 
 ## 6. Pack the patched pair without deploying it
 

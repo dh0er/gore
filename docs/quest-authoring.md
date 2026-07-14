@@ -167,8 +167,10 @@ The outcome remains permanently build-blocked and runtime-unqualified, grants
 no artifact authority, and requires a fresh capability for source inspection.
 The pure transaction performs no filesystem write, compile, package, deploy,
 launch, or fixed-head publication. The strict native prepare-only FFI route
-below orchestrates this v3 transaction with Store persistence; the Dart
-managed-session transaction and Mod Studio wizard remain missing.
+below orchestrates this v3 transaction with Store persistence. A strict Dart
+wrapper and managed-session transaction now consume that candidate and publish
+it through the guarded fixed-head lane; the Mod Studio catalog/wizard/editor
+remains missing.
 
 ### Native revision-3 prepare-only FFI route
 
@@ -202,9 +204,30 @@ and only these readiness/authority claims:
 
 It never replaces `gore-project.json`. A late source race can leave only verified
 immutable CAS orphans and returns no stale candidate response. The strict Dart
-DTO/wrapper, one managed-session semantic Quest operation with guarded fixed-head
-publication, and the catalog/wizard/editor UI are still required; this native
-route alone does not make Quest authoring available in Mod Studio or in game.
+DTO/wrapper and managed-session semantic Quest operation now validate the exact
+basis, complete Quest/ScriptModule/artifact candidate closure, status contract,
+and every signed-wire number before publishing by exact fixed-head byte CAS.
+They fully reopen the published checkpoint and poison the session if publication
+becomes uncertain. The catalog/wizard/editor UI is still required; this native
+and session path does not make Quest authoring visible in Mod Studio or qualified
+in game.
+
+### Managed revision-3 Studio transaction boundary
+
+`ManagedRevision3AuthoringProjectSession` builds the native request from its
+own exact opened checkpoint inside the serialized session lane. Callers provide
+only friendly Quest intent plus the game root; they cannot substitute a project
+basis, candidate head, collision evidence, generated module, or artifact seal.
+The Dart response parser is closed and duplicate-safe, canonicalizes every
+embedded transport, recursively rejects numbers outside the signed 64-bit wire,
+and checks the complete deterministic Quest/module relationship rather than
+trusting a successful native status.
+
+After a full candidate reopen, the session publishes only if the fixed-head
+bytes still equal the basis bytes, records the normal crash-repair journal, and
+fully reopens the published result. The result remains `blocked`,
+`runtime_unqualified`, `not_granted`, `fresh_capability_required`, and
+`not_supported`. No compile, pack, deploy, game write, or runtime claim is added.
 
 ## Safe qualification order
 
