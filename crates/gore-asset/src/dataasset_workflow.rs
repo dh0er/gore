@@ -6,7 +6,9 @@
 //! callers must obtain [`ValidatedExtractBinding`] through the validators in this module before
 //! using any receipt as provenance.
 
-use std::fs::{self, File};
+use std::collections::BTreeMap;
+use std::fmt;
+use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
@@ -15,9 +17,11 @@ use retoc::{FIoContainerId, FPackageId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::package::BoundRegularFile;
 use crate::{
-    FixedLeafSelector, FixedWireKind, PackageCarrier, PackageComponent, PackageLimits,
-    PackagePairSeal,
+    FixedLeafPatch, FixedLeafPatchReceipt, FixedLeafSelector, FixedWireKind, LegacyPackageEnvelope,
+    PackageCarrier, PackageComponent, PackageLimits, PackagePairSeal, PropertySpanWalker, SchemaDb,
+    UsmapLimits,
 };
 
 pub const MAX_USMAP_BYTES: u64 = 128 * 1024 * 1024;
@@ -28,6 +32,7 @@ pub const MAX_COOKED_PACKAGE_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_CONTAINER_COMPONENT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const MAX_MOUNT_UTOC_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_MOUNT_UCAS_BYTES: u64 = 128 * 1024 * 1024 * 1024;
+pub const MAX_GAME_EXECUTABLE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub const EXTRACT_RECEIPT_NAME: &str = "gore-asset-extract.json";
 pub const COPIED_USMAP_NAME: &str = "gore-generation.usmap";
 pub const PATCH_RECEIPT_SUFFIX: &str = ".gore-asset-patch.json";
@@ -440,6 +445,897 @@ impl VerifiedPatchReceipt {
     }
 }
 
+/// One optional cooked-package sidecar whose bytes were bound to a PatchReceipt v2 and then
+/// independently hashed from a no-follow file handle.
+///
+/// Fields remain private so receipt JSON or caller-provided digests cannot be promoted into a
+/// managed-stage input without passing [`verify_fixed_leaf_stage_input`].
+#[derive(Debug)]
+pub struct VerifiedFixedLeafStageSidecar {
+    role: SidecarRole,
+    bytes: Vec<u8>,
+    sha256: [u8; 32],
+}
+
+impl VerifiedFixedLeafStageSidecar {
+    pub const fn role(&self) -> SidecarRole {
+        self.role
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn length(&self) -> u64 {
+        u64::try_from(self.bytes.len()).expect("a loaded Vec length always fits u64")
+    }
+
+    pub const fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+}
+
+/// Opaque content identity of the live game executable selected by a validated ExtractReceipt.
+///
+/// The source path is intentionally not exposed. Construction hashes the executable through the
+/// same bounded, reparse-refusing file path used by the workflow's other live generation anchors.
+pub struct VerifiedGameExecutableAnchor {
+    source: BoundRegularFile,
+    length: u64,
+    sha256: [u8; 32],
+}
+
+impl fmt::Debug for VerifiedGameExecutableAnchor {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedGameExecutableAnchor")
+            .field("length", &self.length())
+            .field("sha256", &encode_hex(self.sha256()))
+            .finish()
+    }
+}
+
+impl VerifiedGameExecutableAnchor {
+    pub const fn length(&self) -> u64 {
+        self.length
+    }
+
+    pub const fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+
+    pub fn reverify(&self) -> Result<()> {
+        self.reverify_path_identity()?;
+        verify_file_hash(
+            self.source.path(),
+            self.length,
+            self.sha256,
+            MAX_GAME_EXECUTABLE_BYTES,
+            "ASSET_STAGE_EXECUTABLE",
+        )?;
+        self.reverify_path_identity()
+    }
+
+    /// Cheap write-boundary check against the originally held executable file identity and
+    /// length. Full SHA-256 reverification brackets long staging phases separately.
+    pub fn reverify_path_identity(&self) -> Result<()> {
+        self.source
+            .reverify_path_identity()
+            .context("ASSET_STAGE_EXECUTABLE: executable path identity changed")?;
+        let length = self
+            .source
+            .length()
+            .context("ASSET_STAGE_EXECUTABLE: reading held executable length")?;
+        if length != self.length {
+            bail!("ASSET_STAGE_EXECUTABLE: executable length changed");
+        }
+        Ok(())
+    }
+}
+
+/// Opaque, filesystem-bound input for one managed fixed-leaf DataAsset stage.
+///
+/// Construction consumes a verified PatchReceipt v2 and reopens its complete provenance chain,
+/// original pair, copied USMAP, patched pair, optional sidecars, live game generation, and live
+/// executable. Raw receipt bytes are deliberately discarded after verification. This value grants
+/// no build, runtime, deployment, project-head publication, or future-reinspection authority.
+pub struct VerifiedFixedLeafStageInput {
+    target_path: String,
+    generation: AssetGenerationReceipt,
+    selector: FixedLeafSelector,
+    replacement_hex: String,
+    patched_uasset: Vec<u8>,
+    patched_uexp: Vec<u8>,
+    usmap: Vec<u8>,
+    sidecars: Vec<VerifiedFixedLeafStageSidecar>,
+    game_root: PathBuf,
+    executable: VerifiedGameExecutableAnchor,
+}
+
+impl fmt::Debug for VerifiedFixedLeafStageInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sidecar_roles: Vec<_> = self.sidecars.iter().map(|sidecar| sidecar.role).collect();
+        formatter
+            .debug_struct("VerifiedFixedLeafStageInput")
+            .field("target_path", &self.target_path)
+            .field("generation", &self.generation)
+            .field("selector", &self.selector)
+            .field("replacement_hex", &self.replacement_hex)
+            .field("patched_uasset_bytes", &self.patched_uasset.len())
+            .field("patched_uexp_bytes", &self.patched_uexp.len())
+            .field("usmap_bytes", &self.usmap.len())
+            .field("sidecar_roles", &sidecar_roles)
+            .field("executable", &self.executable)
+            .finish()
+    }
+}
+
+impl VerifiedFixedLeafStageInput {
+    pub fn target_path(&self) -> &str {
+        &self.target_path
+    }
+
+    pub fn generation(&self) -> &AssetGenerationReceipt {
+        &self.generation
+    }
+
+    pub fn selector(&self) -> &FixedLeafSelector {
+        &self.selector
+    }
+
+    pub fn replacement_hex(&self) -> &str {
+        &self.replacement_hex
+    }
+
+    pub fn patched_component_bytes(&self, component: PackageComponent) -> &[u8] {
+        match component {
+            PackageComponent::Uasset => &self.patched_uasset,
+            PackageComponent::Uexp => &self.patched_uexp,
+        }
+    }
+
+    pub fn usmap_bytes(&self) -> &[u8] {
+        &self.usmap
+    }
+
+    pub fn sidecars(&self) -> &[VerifiedFixedLeafStageSidecar] {
+        &self.sidecars
+    }
+
+    pub fn executable_anchor(&self) -> &VerifiedGameExecutableAnchor {
+        &self.executable
+    }
+
+    /// Re-hash the opaque executable source without revealing its local path.
+    pub fn reverify_executable_anchor(&self) -> Result<()> {
+        self.executable.reverify()
+    }
+
+    /// Revalidate only held executable path identity/length for a tight Store write boundary.
+    pub fn reverify_executable_path_identity(&self) -> Result<()> {
+        self.executable.reverify_path_identity()
+    }
+
+    /// Re-probe the exact live IoStore generation selected by the validated ExtractReceipt.
+    pub fn reverify_live_generation(&self) -> Result<()> {
+        let current = probe_current_generation_receipt(
+            &self.game_root,
+            &self.target_path,
+            &self.generation,
+            "ASSET_STAGE_GENERATION",
+        )?;
+        if current != self.generation {
+            bail!("ASSET_STAGE_GENERATION: live target generation changed after verification");
+        }
+        Ok(())
+    }
+
+    /// Require a managed Store root to be completely outside the live game tree, in both
+    /// containment directions, without revealing the retained game-root path.
+    pub fn require_store_root_disjoint(&self, store_root: &Path) -> Result<()> {
+        let store_root =
+            validate_existing_path_no_reparse(store_root, true, "ASSET_STAGE_STORE_ROOT")?;
+        let game_root =
+            validate_existing_path_no_reparse(&self.game_root, true, "ASSET_STAGE_GAME_ROOT")?;
+        if store_root.starts_with(&game_root) || game_root.starts_with(&store_root) {
+            bail!("ASSET_STAGE_STORE_ROOT: managed Store and live game tree must be disjoint");
+        }
+        Ok(())
+    }
+}
+
+/// Consume one verified PatchReceipt v2 and bind every file needed by managed staging.
+///
+/// The output paths and historical source paths remain implementation details. Downstream
+/// manifests should persist only the target package path, generation facts, and content seals.
+pub fn verify_fixed_leaf_stage_input(
+    patch: VerifiedPatchReceipt,
+) -> Result<VerifiedFixedLeafStageInput> {
+    verify_fixed_leaf_stage_input_with_live_source(
+        patch,
+        |game_root, asset, _expected| {
+            capture_live_converted_stage_source(game_root, asset, "ASSET_STAGE_GENERATION")
+        },
+        |game_root, asset, expected| {
+            probe_current_generation_receipt(game_root, asset, expected, "ASSET_STAGE_GENERATION")
+        },
+    )
+}
+
+fn verify_fixed_leaf_stage_input_with_live_source<F, G>(
+    patch: VerifiedPatchReceipt,
+    live_source: F,
+    final_generation_probe: G,
+) -> Result<VerifiedFixedLeafStageInput>
+where
+    F: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<LiveConvertedStageSource>,
+    G: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<AssetGenerationReceipt>,
+{
+    let extract = read_chained_extract_receipt(&patch)?;
+    let patch_receipt = &patch.receipt;
+    let extract_receipt = &extract.receipt;
+    let extract_binding = &extract.binding;
+    if extract_receipt.asset != patch_receipt.asset
+        || extract_receipt.generation != patch_receipt.provenance.generation
+        || extract_receipt.package_seal != patch_receipt.input_package_seal
+        || extract_binding.components() != patch_receipt.provenance.extract_components
+        || extract_binding.sidecars() != patch_receipt.provenance.extracted_sidecars
+    {
+        bail!(
+            "ASSET_STAGE_INPUT: chained extract asset, generation, package, or component provenance mismatch"
+        );
+    }
+    if patch_receipt.provenance.usmap.file_name != extract_binding.copied_usmap().relative_path
+        || patch_receipt.provenance.usmap.length != extract_binding.copied_usmap().length
+        || patch_receipt.provenance.usmap.sha256 != extract_binding.copied_usmap().sha256
+    {
+        bail!("ASSET_STAGE_INPUT: copied USMAP provenance mismatch");
+    }
+    if patch_receipt.output_sidecars.len() != extract_binding.sidecars().len()
+        || patch_receipt
+            .output_sidecars
+            .iter()
+            .zip(extract_binding.sidecars())
+            .any(|(output, extracted)| {
+                output.role != extracted.role
+                    || output.length != extracted.length
+                    || output.sha256 != extracted.sha256
+            })
+    {
+        bail!("ASSET_STAGE_INPUT: patched sidecars differ from extracted provenance");
+    }
+    validate_sidecar_generation_mapping(
+        &patch_receipt.output_sidecars,
+        &patch_receipt.provenance.generation,
+        "ASSET_STAGE_INPUT",
+    )?;
+
+    let usmap_path = extract_binding
+        .output_root()
+        .join(&extract_binding.copied_usmap().relative_path);
+    let usmap = read_verified_file_bounded(&usmap_path, MAX_USMAP_BYTES, "ASSET_STAGE_USMAP")?;
+    if !patch_receipt
+        .provenance
+        .usmap
+        .matches_verified_input(&usmap)
+    {
+        bail!("ASSET_STAGE_INPUT: copied USMAP changed after receipt validation");
+    }
+
+    let original_uasset = extract_binding
+        .output_root()
+        .join(&extract_binding.uasset().relative_path);
+    let mut reproduced = PackageCarrier::load(&original_uasset, asset_package_limits())
+        .context("ASSET_STAGE_INPUT: loading original extracted package pair")?;
+    let original_sidecars = validate_extract_receipt_components(&extract, &reproduced, &usmap)?;
+    if original_sidecars.len() != extract_binding.sidecars().len() {
+        bail!("ASSET_STAGE_INPUT: verified extracted sidecar set changed");
+    }
+
+    let game_root = validate_existing_path_no_reparse(
+        Path::new(&extract_receipt.source.game_root),
+        true,
+        "ASSET_STAGE_GAME_ROOT",
+    )?;
+    // Seal the executable before touching the live containers so the final checks can prove that
+    // neither side of the target binding changed across the complete live reconstruction.
+    let executable = seal_game_executable(&game_root)?;
+    let live = live_source(
+        &game_root,
+        &patch_receipt.asset,
+        &patch_receipt.provenance.generation,
+    )?;
+    if live.generation != patch_receipt.provenance.generation {
+        bail!(
+            "ASSET_STAGE_GENERATION: converted live target generation differs from PatchReceipt v2"
+        );
+    }
+    for component in [PackageComponent::Uasset, PackageComponent::Uexp] {
+        let live_bytes = match component {
+            PackageComponent::Uasset => &live.uasset,
+            PackageComponent::Uexp => &live.uexp,
+        };
+        if reproduced.bytes(component) != live_bytes {
+            bail!("ASSET_STAGE_GENERATION: extracted package differs from a fresh live conversion");
+        }
+    }
+    let mut extracted_sidecars = BTreeMap::new();
+    for receipt in extract_binding.sidecars() {
+        let path = extract_binding.output_root().join(&receipt.file_name);
+        let input = read_verified_file_bounded(
+            &path,
+            MAX_OPTIONAL_SIDECAR_BYTES,
+            "ASSET_STAGE_EXTRACTED_SIDECAR",
+        )?;
+        if input.length() != receipt.length || encode_hex(input.sha256()) != receipt.sha256 {
+            bail!("ASSET_STAGE_GENERATION: extracted sidecar changed after validation");
+        }
+        if extracted_sidecars
+            .insert(receipt.role, input.bytes)
+            .is_some()
+        {
+            bail!("ASSET_STAGE_GENERATION: duplicate extracted sidecar role");
+        }
+    }
+    if live.sidecars != extracted_sidecars {
+        bail!("ASSET_STAGE_GENERATION: extracted sidecars differ from a fresh live conversion");
+    }
+
+    let schemas = SchemaDb::from_usmap_bounded(usmap.bytes(), UsmapLimits::default())
+        .context("ASSET_STAGE_USMAP: parsing exact copied USMAP")?;
+    let expected = patch_receipt
+        .input_selector
+        .expected_bytes()
+        .context("ASSET_STAGE_SELECTOR: decoding expected bytes")?;
+    let replacement = decode_canonical_hex(
+        &patch_receipt.replacement_hex,
+        patch_receipt.input_selector.kind.width(),
+        "ASSET_STAGE_REPLACEMENT",
+    )?;
+    let reproduced_patch = apply_fixed_leaf_selector_patch(
+        &mut reproduced,
+        &schemas,
+        &patch_receipt.input_selector,
+        &expected,
+        &replacement,
+    )
+    .context("ASSET_STAGE_SEMANTICS: reproducing fixed-leaf patch")?;
+    if reproduced_patch.before != patch_receipt.patch.before
+        || reproduced_patch.after != patch_receipt.patch.after
+        || reproduced_patch.export_index != patch_receipt.patch.export_index
+        || reproduced_patch.component != patch_receipt.patch.component
+        || reproduced_patch.absolute_offset != patch_receipt.patch.absolute_offset
+        || reproduced_patch.length != patch_receipt.patch.length
+        || reproduced_patch.kind != patch_receipt.patch.kind
+    {
+        bail!("ASSET_STAGE_SEMANTICS: reproduced patch proof differs from PatchReceipt v2");
+    }
+
+    let patched_pair = PackageCarrier::load(
+        Path::new(&patch_receipt.output.uasset.path),
+        asset_package_limits(),
+    )
+    .context("ASSET_STAGE_INPUT: loading patched package pair")?;
+    let source = patched_pair
+        .source_paths()
+        .context("ASSET_STAGE_INPUT: patched pair has no source paths")?;
+    if PackagePairSeal::capture(&patched_pair) != patch_receipt.output_package_seal {
+        bail!("ASSET_STAGE_INPUT: patched pair differs from PatchReceipt v2 output seal");
+    }
+    for component in [PackageComponent::Uasset, PackageComponent::Uexp] {
+        if reproduced.bytes(component) != patched_pair.bytes(component) {
+            bail!(
+                "ASSET_STAGE_SEMANTICS: patched package contains bytes outside the reproduced fixed-leaf edit"
+            );
+        }
+    }
+    validate_patch_output_against_carrier(&patch, source.uasset(), source.uexp(), &patched_pair)?;
+    let pair_bytes = u64::try_from(patched_pair.len(PackageComponent::Uasset))?
+        .checked_add(u64::try_from(patched_pair.len(PackageComponent::Uexp))?)
+        .context("ASSET_STAGE_INPUT: patched pair size overflowed")?;
+    let sidecar_seals = validate_patched_sidecars(&patch, source.uasset(), pair_bytes)?;
+    if sidecar_seals.len() != patch_receipt.output_sidecars.len() {
+        bail!("ASSET_STAGE_INPUT: verified sidecar set changed");
+    }
+    let mut sidecars = Vec::with_capacity(sidecar_seals.len());
+    for (receipt, seal) in patch_receipt.output_sidecars.iter().zip(sidecar_seals) {
+        let input = read_verified_file_bounded(
+            seal.path(),
+            MAX_OPTIONAL_SIDECAR_BYTES,
+            "ASSET_STAGE_SIDECAR",
+        )?;
+        if input.length() != seal.length() || input.sha256() != seal.sha256() {
+            bail!("ASSET_STAGE_INPUT: patched sidecar changed while being captured");
+        }
+        let sha256 = *input.sha256();
+        sidecars.push(VerifiedFixedLeafStageSidecar {
+            role: receipt.role,
+            bytes: input.bytes,
+            sha256,
+        });
+    }
+
+    let patched_uasset = patched_pair.bytes(PackageComponent::Uasset).to_vec();
+    let patched_uexp = patched_pair.bytes(PackageComponent::Uexp).to_vec();
+    let usmap = usmap.bytes;
+
+    // This is deliberately the final filesystem operation. The live conversion may take long
+    // enough for either the executable or a container to change after its first seal; re-hash the
+    // executable and then union-probe the complete live target generation immediately before the
+    // opaque authority is returned.
+    executable.reverify()?;
+    let current_generation = final_generation_probe(
+        &game_root,
+        &patch_receipt.asset,
+        &patch_receipt.provenance.generation,
+    )?;
+    if current_generation != patch_receipt.provenance.generation {
+        bail!("ASSET_STAGE_GENERATION: live target generation changed during verification");
+    }
+
+    Ok(VerifiedFixedLeafStageInput {
+        target_path: patch_receipt.asset.clone(),
+        generation: patch_receipt.provenance.generation.clone(),
+        selector: patch_receipt.input_selector.clone(),
+        replacement_hex: patch_receipt.replacement_hex.clone(),
+        patched_uasset,
+        patched_uexp,
+        usmap,
+        sidecars,
+        game_root,
+        executable,
+    })
+}
+
+/// Apply one offset-free selector edit through the same semantic path used by the CLI and managed
+/// staging verification.
+#[derive(Debug, Clone, Copy)]
+pub struct FixedLeafPatchDiagnosticCodes {
+    pub envelope: &'static str,
+    pub export: &'static str,
+    pub schema: &'static str,
+    pub walk: &'static str,
+    pub selector: &'static str,
+    pub replacement: &'static str,
+    pub drift: &'static str,
+}
+
+pub fn apply_fixed_leaf_selector_patch(
+    carrier: &mut PackageCarrier,
+    schemas: &SchemaDb,
+    selector: &FixedLeafSelector,
+    expected: &[u8],
+    replacement: &[u8],
+) -> Result<FixedLeafPatchReceipt> {
+    apply_fixed_leaf_selector_patch_with_codes(
+        carrier,
+        schemas,
+        selector,
+        expected,
+        replacement,
+        FixedLeafPatchDiagnosticCodes {
+            envelope: "ASSET_FIXED_LEAF_ENVELOPE",
+            export: "ASSET_FIXED_LEAF_EXPORT",
+            schema: "ASSET_FIXED_LEAF_SCHEMA",
+            walk: "ASSET_FIXED_LEAF_WALK",
+            selector: "ASSET_FIXED_LEAF_SELECTOR",
+            replacement: "ASSET_FIXED_LEAF_REPLACEMENT",
+            drift: "ASSET_FIXED_LEAF_DRIFT",
+        },
+    )
+}
+
+pub fn apply_fixed_leaf_selector_patch_with_codes(
+    carrier: &mut PackageCarrier,
+    schemas: &SchemaDb,
+    selector: &FixedLeafSelector,
+    expected: &[u8],
+    replacement: &[u8],
+    codes: FixedLeafPatchDiagnosticCodes,
+) -> Result<FixedLeafPatchReceipt> {
+    let patch = {
+        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(carrier).context(codes.envelope)?;
+        let export = package
+            .export(selector.export_index)
+            .context(codes.export)?;
+        let schema_id = export
+            .boundary()
+            .resolve_class_schema(schemas)
+            .context(codes.schema)?;
+        let block = PropertySpanWalker::g1r_ue5_4(schemas)
+            .walk(export.bytes(), schema_id)
+            .context(codes.walk)?;
+        let leaf = selector
+            .resolve(carrier, &export, schemas)
+            .context(codes.selector)?;
+        FixedLeafPatch::plan(
+            carrier,
+            &export,
+            schemas,
+            &block,
+            &leaf,
+            expected,
+            replacement,
+        )
+        .context(codes.replacement)?
+    };
+    patch.apply(carrier, schemas).context(codes.drift)
+}
+
+struct LiveConvertedStageSource {
+    generation: AssetGenerationReceipt,
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    sidecars: BTreeMap<SidecarRole, Vec<u8>>,
+}
+
+fn create_disjoint_private_conversion_dir(
+    game_root: &Path,
+    code: &'static str,
+) -> Result<tempfile::TempDir> {
+    create_disjoint_private_conversion_dir_in(game_root, &std::env::temp_dir(), code)
+}
+
+fn create_disjoint_private_conversion_dir_in(
+    game_root: &Path,
+    temp_parent: &Path,
+    code: &'static str,
+) -> Result<tempfile::TempDir> {
+    let game_root = validate_existing_path_no_reparse(game_root, true, code)?;
+    let temp_parent = validate_existing_path_no_reparse(temp_parent, true, code)
+        .with_context(|| format!("{code}: validating private conversion parent"))?;
+    if temp_parent.starts_with(&game_root) || game_root.starts_with(&temp_parent) {
+        bail!("{code}: private conversion parent and live game tree must be disjoint");
+    }
+
+    let temp = tempfile::Builder::new()
+        .prefix("gore-stage-live-")
+        .tempdir_in(&temp_parent)
+        .with_context(|| format!("{code}: creating private conversion directory"))?;
+    let created = validate_existing_path_no_reparse(temp.path(), true, code)
+        .with_context(|| format!("{code}: validating private conversion directory"))?;
+    if !created.starts_with(&temp_parent)
+        || created.starts_with(&game_root)
+        || game_root.starts_with(&created)
+    {
+        bail!("{code}: private conversion directory escaped its verified parent");
+    }
+    Ok(temp)
+}
+
+fn capture_live_converted_stage_source(
+    game_root: &Path,
+    asset: &str,
+    code: &'static str,
+) -> Result<LiveConvertedStageSource> {
+    let game_root = validate_existing_path_no_reparse(game_root, true, code)?;
+    let main_utoc = gore_tex::paths::main_container(&game_root)
+        .with_context(|| format!("{code}: resolving main UTOC"))?;
+    let live_usmap = gore_tex::paths::usmap(&game_root)
+        .with_context(|| format!("{code}: resolving live USMAP"))?;
+    let main_utoc_seal =
+        digest_regular_file_bounded(&main_utoc, MAX_CONTAINER_COMPONENT_BYTES, code)?;
+    let usmap_seal = digest_regular_file_bounded(&live_usmap, MAX_USMAP_BYTES, code)?;
+    let global_utoc_seal = digest_regular_file_bounded(
+        &game_root.join("G1R/Content/Paks/global.utoc"),
+        MAX_CONTAINER_COMPONENT_BYTES,
+        code,
+    )?;
+    let global_ucas_seal = digest_regular_file_bounded(
+        &game_root.join("G1R/Content/Paks/global.ucas"),
+        MAX_CONTAINER_COMPONENT_BYTES,
+        code,
+    )?;
+
+    let temp = create_disjoint_private_conversion_dir(&game_root, code)?;
+    let unpacked = gore_tex::container::unpack_asset_verified(
+        &main_utoc_seal.path,
+        &usmap_seal.path,
+        asset,
+        temp.path(),
+    )
+    .with_context(|| format!("{code}: converting the live target package"))?;
+    let mut source_utoc_seals = Vec::with_capacity(unpacked.metadata_utocs.len());
+    for source_utoc in &unpacked.metadata_utocs {
+        source_utoc_seals.push(digest_regular_file_bounded(
+            source_utoc,
+            MAX_CONTAINER_COMPONENT_BYTES,
+            code,
+        )?);
+    }
+    let generation = build_generation_receipt_from_probe(
+        asset,
+        &usmap_seal,
+        &main_utoc_seal,
+        &global_utoc_seal,
+        &global_ucas_seal,
+        &unpacked.consumed_chunks,
+        &source_utoc_seals,
+        code,
+    )?;
+
+    let pair = PackageCarrier::load(&unpacked.uasset, asset_package_limits())
+        .with_context(|| format!("{code}: reopening freshly converted package"))?;
+    let uasset = pair.bytes(PackageComponent::Uasset).to_vec();
+    let uexp = pair.bytes(PackageComponent::Uexp).to_vec();
+    let mut cooked_bytes = u64::try_from(uasset.len())?
+        .checked_add(u64::try_from(uexp.len())?)
+        .context("ASSET_STAGE_GENERATION: converted package size overflowed")?;
+    let mut sidecars = BTreeMap::new();
+    for role in SidecarRole::ALL {
+        let (_, path) = sidecar_path(&unpacked.uasset, role, code)?;
+        let Some(seal) =
+            digest_optional_regular_file_bounded(&path, MAX_OPTIONAL_SIDECAR_BYTES, code)?
+        else {
+            continue;
+        };
+        let input = read_verified_file_bounded(&path, MAX_OPTIONAL_SIDECAR_BYTES, code)?;
+        if input.length() != seal.length() || input.sha256() != seal.sha256() {
+            bail!("{code}: converted sidecar changed while being captured");
+        }
+        cooked_bytes = cooked_bytes
+            .checked_add(input.length())
+            .context("ASSET_STAGE_GENERATION: converted cooked size overflowed")?;
+        if cooked_bytes > MAX_COOKED_PACKAGE_BYTES {
+            bail!("{code}: converted cooked package exceeds aggregate size limit");
+        }
+        if sidecars.insert(role, input.bytes).is_some() {
+            bail!("{code}: duplicate converted sidecar role");
+        }
+    }
+
+    for seal in [
+        &usmap_seal,
+        &main_utoc_seal,
+        &global_utoc_seal,
+        &global_ucas_seal,
+    ]
+    .into_iter()
+    .chain(source_utoc_seals.iter())
+    {
+        let limit = if seal.path.extension().is_some_and(|value| value == "usmap") {
+            MAX_USMAP_BYTES
+        } else {
+            MAX_CONTAINER_COMPONENT_BYTES
+        };
+        seal.reverify(limit, code)?;
+    }
+
+    drop(pair);
+    drop(unpacked);
+    temp.close()
+        .context("ASSET_STAGE_GENERATION: removing private conversion directory")?;
+
+    Ok(LiveConvertedStageSource {
+        generation,
+        uasset,
+        uexp,
+        sidecars,
+    })
+}
+
+/// Reproduce the exact current asset generation from a live game tree.
+///
+/// `expected` contributes allowed dependency chunk IDs, but cannot narrow the live target package:
+/// every currently present target export/bulk/optional/memory-mapped chunk is also re-read. Every
+/// returned digest and winning-container fact is freshly derived from the live IoStore and bounded
+/// regular files; callers must compare the complete returned receipt with their expected receipt.
+pub fn probe_current_generation_receipt(
+    game_root: &Path,
+    asset: &str,
+    expected: &AssetGenerationReceipt,
+    code: &'static str,
+) -> Result<AssetGenerationReceipt> {
+    validate_generation_receipt(expected, code)?;
+    if expected.asset != asset {
+        bail!("{code}: expected generation targets a different asset");
+    }
+    let game_root = validate_existing_path_no_reparse(game_root, true, code)?;
+    let main_utoc = gore_tex::paths::main_container(&game_root)
+        .with_context(|| format!("{code}: resolving main UTOC"))?;
+    let usmap =
+        gore_tex::paths::usmap(&game_root).with_context(|| format!("{code}: resolving USMAP"))?;
+    let main_utoc_seal =
+        digest_regular_file_bounded(&main_utoc, MAX_CONTAINER_COMPONENT_BYTES, code)?;
+    let usmap_seal = digest_regular_file_bounded(&usmap, MAX_USMAP_BYTES, code)?;
+    let global_utoc_seal = digest_regular_file_bounded(
+        &game_root.join("G1R/Content/Paks/global.utoc"),
+        MAX_CONTAINER_COMPONENT_BYTES,
+        code,
+    )?;
+    let global_ucas_seal = digest_regular_file_bounded(
+        &game_root.join("G1R/Content/Paks/global.ucas"),
+        MAX_CONTAINER_COMPONENT_BYTES,
+        code,
+    )?;
+    let required_chunks: Vec<_> = expected
+        .target_chunks
+        .iter()
+        .map(|chunk| chunk.chunk_id.clone())
+        .collect();
+    let probe = gore_tex::container::probe_asset_generation_for_chunks_verified(
+        &main_utoc_seal.path,
+        asset,
+        &required_chunks,
+    )
+    .with_context(|| format!("{code}: probing live target generation"))?;
+    let mut source_utoc_seals = Vec::with_capacity(probe.metadata_utocs.len());
+    for source_utoc in &probe.metadata_utocs {
+        source_utoc_seals.push(digest_regular_file_bounded(
+            source_utoc,
+            MAX_CONTAINER_COMPONENT_BYTES,
+            code,
+        )?);
+    }
+    let current = build_generation_receipt_from_probe(
+        asset,
+        &usmap_seal,
+        &main_utoc_seal,
+        &global_utoc_seal,
+        &global_ucas_seal,
+        &probe.consumed_chunks,
+        &source_utoc_seals,
+        code,
+    )?;
+
+    for seal in [
+        &usmap_seal,
+        &main_utoc_seal,
+        &global_utoc_seal,
+        &global_ucas_seal,
+    ]
+    .into_iter()
+    .chain(source_utoc_seals.iter())
+    {
+        let limit = if seal.path.extension().is_some_and(|value| value == "usmap") {
+            MAX_USMAP_BYTES
+        } else {
+            MAX_CONTAINER_COMPONENT_BYTES
+        };
+        seal.reverify(limit, code)?;
+    }
+    Ok(current)
+}
+
+// The four distinguished game anchors and two probe collections are intentionally explicit: a
+// positional aggregate would make it easier to swap global/main/USMAP authority accidentally.
+#[allow(clippy::too_many_arguments)]
+fn build_generation_receipt_from_probe(
+    asset: &str,
+    usmap: &VerifiedFileSeal,
+    main_utoc: &VerifiedFileSeal,
+    global_utoc: &VerifiedFileSeal,
+    global_ucas: &VerifiedFileSeal,
+    chunks: &[gore_tex::container::VerifiedChunkReceipt],
+    source_utocs: &[VerifiedFileSeal],
+    code: &'static str,
+) -> Result<AssetGenerationReceipt> {
+    let mut by_path = BTreeMap::new();
+    let mut container_set = Vec::with_capacity(source_utocs.len());
+    for seal in source_utocs {
+        by_path.insert(seal.path.clone(), seal);
+        container_set.push(generation_anchor_from_verified_file(seal)?);
+    }
+    container_set.sort_by(|left, right| {
+        left.file_name
+            .cmp(&right.file_name)
+            .then(left.sha256.cmp(&right.sha256))
+    });
+    container_set.dedup();
+
+    let mut target_chunks = Vec::new();
+    for chunk in chunks.iter().filter(|chunk| {
+        matches!(
+            chunk.chunk_type.as_str(),
+            "ContainerHeader"
+                | "ExportBundleData"
+                | "BulkData"
+                | "OptionalBulkData"
+                | "MemoryMappedBulkData"
+        )
+    }) {
+        let canonical = validate_existing_path_no_reparse(&chunk.source_utoc, false, code)?;
+        let winner = by_path.get(&canonical).with_context(|| {
+            format!(
+                "{code}: winning TOC '{}' is absent from the verified source set",
+                canonical.display()
+            )
+        })?;
+        target_chunks.push(GenerationChunkAnchor {
+            chunk_id: chunk.chunk_id.clone(),
+            chunk_type: chunk.chunk_type.clone(),
+            winner_utoc: generation_anchor_from_verified_file(winner)?,
+            length: chunk.length,
+            blake3: chunk.blake3.clone(),
+            toc_hash: chunk.toc_hash.clone(),
+            toc_hash_bytes: chunk.toc_hash_bytes,
+        });
+    }
+    target_chunks.sort_by(|left, right| {
+        left.chunk_id
+            .cmp(&right.chunk_id)
+            .then(left.chunk_type.cmp(&right.chunk_type))
+            .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
+    });
+    if !target_chunks
+        .iter()
+        .any(|chunk| chunk.chunk_type == "ExportBundleData")
+        || !target_chunks
+            .iter()
+            .any(|chunk| chunk.chunk_type == "ContainerHeader")
+    {
+        bail!("{code}: live probe did not seal required package chunks");
+    }
+
+    let receipt = AssetGenerationReceipt {
+        format: "gore.asset.generation.v1".to_owned(),
+        asset: asset.to_owned(),
+        usmap: generation_anchor_from_verified_file(usmap)?,
+        main_utoc: generation_anchor_from_verified_file(main_utoc)?,
+        global_utoc: generation_anchor_from_verified_file(global_utoc)?,
+        global_ucas: generation_anchor_from_verified_file(global_ucas)?,
+        container_set,
+        target_chunks,
+    };
+    validate_generation_receipt(&receipt, code)?;
+    Ok(receipt)
+}
+
+fn generation_anchor_from_verified_file(seal: &VerifiedFileSeal) -> Result<GenerationFileAnchor> {
+    Ok(GenerationFileAnchor {
+        file_name: seal
+            .path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .context("generation anchor has a non-UTF-8 filename")?
+            .to_owned(),
+        length: seal.length,
+        sha256: encode_hex(&seal.sha256),
+    })
+}
+
+fn seal_game_executable(game_root: &Path) -> Result<VerifiedGameExecutableAnchor> {
+    let path = game_root
+        .join("G1R")
+        .join("Binaries")
+        .join("Win64")
+        .join("G1R-Win64-Shipping.exe");
+    let code = "ASSET_STAGE_EXECUTABLE";
+    let canonical = validate_existing_path_no_reparse(&path, false, code)?;
+    let mut source = BoundRegularFile::open(&canonical).with_context(|| {
+        format!(
+            "{code}: opening '{}' without following links",
+            canonical.display()
+        )
+    })?;
+    let advertised = source.length().context(code)?;
+    if advertised == 0 {
+        bail!("ASSET_STAGE_EXECUTABLE: live game executable is empty");
+    }
+    if advertised > MAX_GAME_EXECUTABLE_BYTES {
+        bail!("{code}: executable is {advertised} bytes; limit is {MAX_GAME_EXECUTABLE_BYTES}");
+    }
+    let (length, sha256) = digest_reader(source.file_mut(), MAX_GAME_EXECUTABLE_BYTES, code)?;
+    if length != advertised {
+        bail!("{code}: executable changed length while being sealed");
+    }
+    source
+        .reverify_path_identity()
+        .context("ASSET_STAGE_EXECUTABLE: executable identity changed while hashing")?;
+    verify_file_hash(
+        source.path(),
+        length,
+        sha256,
+        MAX_GAME_EXECUTABLE_BYTES,
+        code,
+    )?;
+    Ok(VerifiedGameExecutableAnchor {
+        source,
+        length,
+        sha256,
+    })
+}
+
 /// Read arbitrary supporting input with the same bounded/no-follow semantics as receipt inputs.
 /// The returned facts are opaque and therefore cannot be forged from caller-supplied hashes.
 pub fn read_verified_file_bounded(
@@ -521,12 +1417,8 @@ pub fn validate_generation_receipt(
     }
 
     fn validate_file(anchor: &GenerationFileAnchor, code: &'static str) -> Result<()> {
-        if anchor.file_name.is_empty()
-            || anchor.file_name.contains('/')
-            || anchor.file_name.contains('\\')
-            || anchor.length == 0
-            || !valid_hex(&anchor.sha256, 32)
-        {
+        validate_output_component(&anchor.file_name, code)?;
+        if anchor.file_name.len() > 255 || anchor.length == 0 || !valid_hex(&anchor.sha256, 32) {
             bail!("{code}: malformed generation file anchor");
         }
         Ok(())
@@ -541,6 +1433,7 @@ pub fn validate_generation_receipt(
     {
         bail!("{code}: malformed generation envelope");
     }
+    validate_game_asset_path(&generation.asset, code)?;
     for anchor in [
         &generation.usmap,
         &generation.main_utoc,
@@ -569,7 +1462,7 @@ pub fn validate_generation_receipt(
     }
 
     let mut ids = std::collections::BTreeSet::new();
-    let mut has_export = false;
+    let mut has_target_export = false;
     let mut has_header = false;
     for chunk in &generation.target_chunks {
         validate_file(&chunk.winner_utoc, code)?;
@@ -591,13 +1484,15 @@ pub fn validate_generation_receipt(
         }
         match chunk.chunk_type.as_str() {
             "ContainerHeader" => has_header = true,
-            "ExportBundleData" => has_export = true,
+            "ExportBundleData" => {
+                has_target_export |= chunk_id_matches_asset_path(&chunk.chunk_id, &generation.asset)
+            }
             "BulkData" | "OptionalBulkData" | "MemoryMappedBulkData" => {}
             _ => bail!("{code}: unsupported generation chunk type"),
         }
     }
-    if !has_export || !has_header {
-        bail!("{code}: generation must contain export and ContainerHeader chunks");
+    if !has_target_export || !has_header {
+        bail!("{code}: generation must contain the target export and ContainerHeader chunks");
     }
     Ok(())
 }
@@ -1272,7 +2167,7 @@ fn generation_anchor_from_source(
     })
 }
 
-fn validate_game_asset_path(asset: &str, code: &'static str) -> Result<()> {
+pub fn validate_game_asset_path(asset: &str, code: &'static str) -> Result<()> {
     if asset.len() > 512 || !asset.starts_with("/Game/") {
         bail!("{code}: expected an extensionless package path beginning with '/Game/'");
     }
@@ -1522,22 +2417,29 @@ fn digest_regular_file_bounded(
     code: &'static str,
 ) -> Result<VerifiedFileSeal> {
     let canonical = validate_existing_path_no_reparse(path, false, code)?;
-    let mut file = File::open(&canonical)
-        .with_context(|| format!("{code}: opening '{}'", canonical.display()))?;
-    let advertised = file.metadata().context(code)?.len();
+    let mut file = BoundRegularFile::open(&canonical).with_context(|| {
+        format!(
+            "{code}: opening '{}' without following links",
+            canonical.display()
+        )
+    })?;
+    let canonical = file.path().to_path_buf();
+    let advertised = file.length().context(code)?;
     if advertised > limit {
         bail!(
             "{code}: '{}' is {advertised} bytes; limit is {limit}",
             canonical.display()
         );
     }
-    let (length, sha256) = digest_reader(&mut file, limit, code)?;
+    let (length, sha256) = digest_reader(file.file_mut(), limit, code)?;
     if length != advertised {
         bail!(
             "{code}: input changed length while being read: {}",
             canonical.display()
         );
     }
+    file.reverify_path_identity()
+        .with_context(|| format!("{code}: source identity changed while hashing"))?;
     verify_file_hash(&canonical, length, sha256, limit, code)?;
     Ok(VerifiedFileSeal {
         path: canonical,
@@ -1546,7 +2448,11 @@ fn digest_regular_file_bounded(
     })
 }
 
-fn digest_reader(reader: &mut File, limit: u64, code: &'static str) -> Result<(u64, [u8; 32])> {
+fn digest_reader<R: Read>(
+    reader: &mut R,
+    limit: u64,
+    code: &'static str,
+) -> Result<(u64, [u8; 32])> {
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut length = 0u64;
@@ -1567,22 +2473,20 @@ fn digest_reader(reader: &mut File, limit: u64, code: &'static str) -> Result<(u
 }
 
 fn read_verified_bounded(path: &Path, limit: u64, code: &'static str) -> Result<VerifiedInput> {
-    let link_metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("{code}: inspecting '{}'", path.display()))?;
-    if metadata_is_reparse(&link_metadata) || !link_metadata.is_file() {
-        bail!(
-            "{code}: input is not a regular non-symlink file: {}",
-            path.display()
-        );
-    }
-    let canonical = fs::canonicalize(path)
-        .with_context(|| format!("{code}: canonicalizing '{}'", path.display()))?;
-    let mut file = File::open(&canonical)
-        .with_context(|| format!("{code}: opening '{}'", canonical.display()))?;
-    let advertised = file
-        .metadata()
-        .with_context(|| format!("{code}: reading metadata for '{}'", canonical.display()))?
-        .len();
+    let canonical = validate_existing_path_no_reparse(path, false, code)?;
+    let mut file = BoundRegularFile::open(&canonical).with_context(|| {
+        format!(
+            "{code}: opening '{}' without following links",
+            canonical.display()
+        )
+    })?;
+    let canonical = file.path().to_path_buf();
+    let advertised = file.length().with_context(|| {
+        format!(
+            "{code}: reading opened-file metadata for '{}'",
+            canonical.display()
+        )
+    })?;
     if advertised > limit {
         bail!(
             "{code}: '{}' is {advertised} bytes; limit is {limit}",
@@ -1595,7 +2499,7 @@ fn read_verified_bounded(path: &Path, limit: u64, code: &'static str) -> Result<
     bytes
         .try_reserve_exact(allocation)
         .with_context(|| format!("{code}: reserving {allocation} bytes"))?;
-    (&mut file)
+    file.file_mut()
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)
         .with_context(|| format!("{code}: reading '{}'", canonical.display()))?;
@@ -1605,6 +2509,8 @@ fn read_verified_bounded(path: &Path, limit: u64, code: &'static str) -> Result<
             canonical.display()
         );
     }
+    file.reverify_path_identity()
+        .with_context(|| format!("{code}: source identity changed while reading"))?;
     let sha256: [u8; 32] = Sha256::digest(&bytes).into();
     verify_file_hash(&canonical, advertised, sha256, limit, code)?;
     Ok(VerifiedInput {
@@ -1621,21 +2527,19 @@ fn verify_file_hash(
     limit: u64,
     code: &'static str,
 ) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("{code}: re-inspecting '{}'", path.display()))?;
-    if metadata_is_reparse(&metadata) || !metadata.is_file() {
-        bail!(
-            "{code}: input changed to a non-regular file: {}",
-            path.display()
-        );
-    }
-    let mut file =
-        File::open(path).with_context(|| format!("{code}: reopening '{}'", path.display()))?;
+    let canonical = validate_existing_path_no_reparse(path, false, code)?;
+    let mut file = BoundRegularFile::open(&canonical).with_context(|| {
+        format!(
+            "{code}: reopening '{}' without following links",
+            canonical.display()
+        )
+    })?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut actual_length = 0u64;
     loop {
         let read = file
+            .file_mut()
             .read(&mut buffer)
             .with_context(|| format!("{code}: reverifying '{}'", path.display()))?;
         if read == 0 {
@@ -1653,6 +2557,8 @@ fn verify_file_hash(
     if actual_length != expected_length || actual_sha256 != expected_sha256 {
         bail!("{code}: input changed while being read: {}", path.display());
     }
+    file.reverify_path_identity()
+        .with_context(|| format!("{code}: source identity changed during reverify"))?;
     Ok(())
 }
 
@@ -1728,7 +2634,18 @@ fn parse_chunk_id(value: &str) -> Option<[u8; 12]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{FixedLeafRole, FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE};
+    use crate::{
+        describe_fixed_leaves, FixedLeafRole, FIXED_LEAF_SELECTOR_FORMAT,
+        FIXED_LEAF_SELECTOR_PROFILE,
+    };
+    use retoc::legacy_asset::{
+        EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FObjectExport,
+        FObjectImport,
+    };
+    use retoc::logging::Log;
+    use retoc::version::EngineVersion;
+    use retoc::zen::FPackageIndex;
+    use std::io::Cursor;
 
     struct ExtractFixture {
         _temp: tempfile::TempDir,
@@ -1736,6 +2653,20 @@ mod tests {
         uasset: PathBuf,
         copied_usmap: PathBuf,
         sidecar: PathBuf,
+    }
+
+    struct ManagedStageFixture {
+        _temp: tempfile::TempDir,
+        game_root: PathBuf,
+        output_root: PathBuf,
+        original_uasset: Vec<u8>,
+        original_uexp: Vec<u8>,
+        patched_uasset: Vec<u8>,
+        patched_uexp: Vec<u8>,
+        usmap: Vec<u8>,
+        sidecar: Vec<u8>,
+        generation: AssetGenerationReceipt,
+        patch_path: PathBuf,
     }
 
     fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -2030,6 +2961,335 @@ mod tests {
         }
     }
 
+    fn verified_stage_fixture() -> (ManagedStageFixture, VerifiedFixedLeafStageInput) {
+        const EXPORT_BYTES: [u8; 3] = [0x00, 0x03, 0x01];
+
+        let temp = tempfile::tempdir().unwrap();
+        let game_root = fs::canonicalize(temp.path()).unwrap();
+        let output_root = game_root.join("output");
+        fs::create_dir(&output_root).unwrap();
+        let executable = game_root.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"fixture executable").unwrap();
+
+        let mut package = FLegacyPackageHeader::default();
+        package.summary.versioning_info.package_file_version =
+            EngineVersion::UE5_4.package_file_version();
+        package.summary.versioning_info.is_unversioned = true;
+        package.summary.package_name = "/Game/TestAsset".to_owned();
+        package.summary.package_flags = EPackageFlags::Cooked as u32
+            | EPackageFlags::FilterEditorOnly as u32
+            | EPackageFlags::UsesUnversionedProperties as u32;
+        let core_uobject = package.name_map.store("/Script/CoreUObject");
+        let package_class = package.name_map.store("Package");
+        let class_class = package.name_map.store("Class");
+        let module_name = package.name_map.store("/Script/Test");
+        let class_name = package.name_map.store("Fixture");
+        let module_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: package_class,
+            object_name: module_name,
+            ..FObjectImport::default()
+        });
+        let class_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: class_class,
+            outer_index: FPackageIndex::create_import(module_index as u32),
+            object_name: class_name,
+            ..FObjectImport::default()
+        });
+        let object_name = package.name_map.store("TestAsset");
+        package.exports.push(FObjectExport {
+            class_index: FPackageIndex::create_import(class_index as u32),
+            object_name,
+            serial_offset: 0,
+            serial_size: EXPORT_BYTES.len() as i64,
+            ..FObjectExport::default()
+        });
+        let mut serialized_header = Cursor::new(Vec::new());
+        package
+            .serialize(&mut serialized_header, None, &Log::no_log())
+            .unwrap();
+        let original_uasset = serialized_header.into_inner();
+        let mut original_uexp = EXPORT_BYTES.to_vec();
+        original_uexp.extend_from_slice(&FLegacyPackageFileSummary::PACKAGE_FILE_TAG.to_le_bytes());
+
+        let mapping = usmap::Usmap {
+            enums: Vec::new(),
+            structs: vec![usmap::Struct {
+                name: "Fixture".to_owned(),
+                super_struct: None,
+                properties: vec![usmap::Property {
+                    name: "Enabled".to_owned(),
+                    array_dim: 1,
+                    index: 0,
+                    inner: usmap::PropertyInner::Bool,
+                }],
+            }],
+            cext: None,
+            ppth: Some(usmap::ExtPpth {
+                version: 0,
+                enums: Vec::new(),
+                structs: vec!["/Script/Test".to_owned()],
+            }),
+            eatr: Some(usmap::ExtEatr {
+                version: 0,
+                enum_flags: Vec::new(),
+                struct_flags: vec![usmap::StructFlags {
+                    type_: usmap::FlagsType::Class,
+                    value: 0,
+                    prop_flags: Vec::new(),
+                }],
+            }),
+            envp: None,
+        };
+        let mut usmap = Vec::new();
+        mapping.write(&mut usmap).unwrap();
+
+        let original_path = output_root.join("TestAsset.uasset");
+        let sidecar = vec![0x40, 0x41, 0x42];
+        fs::write(&original_path, &original_uasset).unwrap();
+        fs::write(original_path.with_extension("uexp"), &original_uexp).unwrap();
+        fs::write(output_root.join("TestAsset.ubulk"), &sidecar).unwrap();
+        fs::write(output_root.join(COPIED_USMAP_NAME), &usmap).unwrap();
+        let schemas = SchemaDb::from_usmap_bounded(&usmap, UsmapLimits::default()).unwrap();
+        let original_carrier =
+            PackageCarrier::load(&original_path, asset_package_limits()).unwrap();
+        let selector = {
+            let envelope = LegacyPackageEnvelope::parse_g1r_ue5_4(&original_carrier).unwrap();
+            let export = envelope.export(0).unwrap();
+            describe_fixed_leaves(&original_carrier, &export, &schemas)
+                .unwrap()
+                .into_iter()
+                .find(|leaf| {
+                    leaf.editable
+                        && leaf.selector.kind == FixedWireKind::Bool
+                        && leaf.selector.expected_hex == "01"
+                })
+                .unwrap()
+                .selector
+        };
+        let mut patched_carrier = original_carrier.clone();
+        let proof =
+            apply_fixed_leaf_selector_patch(&mut patched_carrier, &schemas, &selector, &[1], &[0])
+                .unwrap();
+        let patched_uasset = patched_carrier.bytes(PackageComponent::Uasset).to_vec();
+        let patched_uexp = patched_carrier.bytes(PackageComponent::Uexp).to_vec();
+        let patched_path = output_root.join("Patched.uasset");
+        fs::write(&patched_path, &patched_uasset).unwrap();
+        fs::write(patched_path.with_extension("uexp"), &patched_uexp).unwrap();
+        fs::write(output_root.join("Patched.ubulk"), &sidecar).unwrap();
+
+        let asset = "/Game/TestAsset";
+        let main_utoc = game_root.join("G1R/Content/Paks/G1R-Windows.utoc");
+        let main_ucas = game_root.join("G1R/Content/Paks/G1R-Windows.ucas");
+        let global_utoc = game_root.join("G1R/Content/Paks/global.utoc");
+        let global_ucas = game_root.join("G1R/Content/Paks/global.ucas");
+        let source_usmap = game_root.join("G1R/Binaries/Win64/ue4ss/Mappings.usmap");
+        let main_anchor = GenerationFileAnchor {
+            file_name: "G1R-Windows.utoc".to_owned(),
+            length: 64,
+            sha256: "11".repeat(32),
+        };
+        let global_utoc_anchor = GenerationFileAnchor {
+            file_name: "global.utoc".to_owned(),
+            length: 32,
+            sha256: "22".repeat(32),
+        };
+        let global_ucas_anchor = GenerationFileAnchor {
+            file_name: "global.ucas".to_owned(),
+            length: 96,
+            sha256: "33".repeat(32),
+        };
+        let usmap_anchor = GenerationFileAnchor {
+            file_name: "Mappings.usmap".to_owned(),
+            length: usmap.len() as u64,
+            sha256: encode_hex(&sha256(&usmap)),
+        };
+        let mut container_set = vec![main_anchor.clone(), global_utoc_anchor.clone()];
+        container_set.sort_by(|left, right| {
+            left.file_name
+                .cmp(&right.file_name)
+                .then(left.sha256.cmp(&right.sha256))
+        });
+        let mut target_chunks = vec![
+            generation_chunk(asset, 1, "ContainerHeader", &main_anchor),
+            generation_chunk(asset, 2, "ExportBundleData", &main_anchor),
+            generation_chunk(asset, 3, "BulkData", &main_anchor),
+        ];
+        target_chunks.sort_by(|left, right| {
+            left.chunk_id
+                .cmp(&right.chunk_id)
+                .then(left.chunk_type.cmp(&right.chunk_type))
+                .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
+        });
+        let generation = AssetGenerationReceipt {
+            format: "gore.asset.generation.v1".to_owned(),
+            asset: asset.to_owned(),
+            usmap: usmap_anchor.clone(),
+            main_utoc: main_anchor.clone(),
+            global_utoc: global_utoc_anchor.clone(),
+            global_ucas: global_ucas_anchor.clone(),
+            container_set,
+            target_chunks: target_chunks.clone(),
+        };
+        let components = vec![
+            receipt_component("TestAsset.uasset", &original_uasset),
+            receipt_component("TestAsset.uexp", &original_uexp),
+            receipt_component(COPIED_USMAP_NAME, &usmap),
+            receipt_component("TestAsset.ubulk", &sidecar),
+        ];
+        let extracted_sidecar = SidecarReceipt {
+            role: SidecarRole::Bulk,
+            file_name: "TestAsset.ubulk".to_owned(),
+            length: sidecar.len() as u64,
+            sha256: encode_hex(&sha256(&sidecar)),
+        };
+        let output_sidecar = SidecarReceipt {
+            file_name: "Patched.ubulk".to_owned(),
+            ..extracted_sidecar.clone()
+        };
+        let extract_receipt = ExtractReceiptEnvelope {
+            format: "gore.asset.extract.v2".to_owned(),
+            status: "extracted".to_owned(),
+            asset: asset.to_owned(),
+            generation: generation.clone(),
+            source: ExtractReceiptSource {
+                game_root: game_root.display().to_string(),
+                composite_store_anchor: ExtractCompositeStoreAnchor {
+                    utoc: source_file(&main_utoc, &main_anchor),
+                    ucas: HeldIdentityReceipt {
+                        path: main_ucas.display().to_string(),
+                        length: 128,
+                        modified_stamp: "fixture-stamp".to_owned(),
+                        platform_identity: "fixture-identity".to_owned(),
+                        sha256: None,
+                        verification: HELD_IDENTITY_VERIFICATION.to_owned(),
+                        content_hash_omitted: true,
+                        limitation: HELD_IDENTITY_LIMITATION.to_owned(),
+                    },
+                    role: COMPOSITE_UCAS_ROLE.to_owned(),
+                },
+                consumed_chunks: target_chunks
+                    .iter()
+                    .map(|chunk| verified_chunk(chunk, &main_utoc))
+                    .collect(),
+                source_container_tocs: vec![
+                    source_file(&main_utoc, &main_anchor),
+                    source_file(&global_utoc, &global_utoc_anchor),
+                ],
+                content_binding: EXTRACT_CONTENT_BINDING.to_owned(),
+                usmap: ExtractUsmapProof {
+                    source: source_file(&source_usmap, &usmap_anchor),
+                    copied_relative_path: COPIED_USMAP_NAME.to_owned(),
+                    copy: components[2].clone(),
+                },
+                global_script_store: GlobalScriptStoreProof {
+                    utoc: source_file(&global_utoc, &global_utoc_anchor),
+                    ucas: source_file(&global_ucas, &global_ucas_anchor),
+                },
+            },
+            package_seal: proof.before.clone(),
+            output: ExtractReceiptOutput {
+                root: output_root.display().to_string(),
+                receipt: EXTRACT_RECEIPT_NAME.to_owned(),
+                components: components.clone(),
+            },
+            deployed: false,
+        };
+        let extract_path = output_root.join(EXTRACT_RECEIPT_NAME);
+        let extract_bytes = serde_json::to_vec(&extract_receipt).unwrap();
+        fs::write(&extract_path, &extract_bytes).unwrap();
+
+        let patch_path = output_root.join(format!("Patched{PATCH_RECEIPT_SUFFIX}"));
+        let patch_receipt = PatchReceiptEnvelope {
+            format: "gore.asset.patch-fixed.v2".to_owned(),
+            status: "patched".to_owned(),
+            asset: asset.to_owned(),
+            generation_bound: true,
+            provenance: PatchReceiptProvenance {
+                extract_receipt: ReceiptFileSeal {
+                    path: extract_path.display().to_string(),
+                    length: extract_bytes.len() as u64,
+                    sha256: encode_hex(&sha256(&extract_bytes)),
+                },
+                generation: generation.clone(),
+                usmap: GenerationFileAnchor {
+                    file_name: COPIED_USMAP_NAME.to_owned(),
+                    ..usmap_anchor
+                },
+                extract_components: components,
+                extracted_sidecars: vec![extracted_sidecar],
+            },
+            input_package_seal: proof.before.clone(),
+            output_package_seal: proof.after.clone(),
+            output_sidecars: vec![output_sidecar.clone()],
+            input_selector: selector.clone(),
+            output_requires_reinspect: true,
+            expected_hex: selector.expected_hex.clone(),
+            replacement_hex: "00".to_owned(),
+            patch: PatchOperationProof {
+                before: proof.before,
+                after: proof.after,
+                export_index: proof.export_index,
+                component: proof.component,
+                absolute_offset: proof.absolute_offset,
+                length: proof.length,
+                kind: proof.kind,
+            },
+            output: PatchReceiptOutput {
+                uasset: ComponentDigestProof {
+                    path: patched_path.display().to_string(),
+                    length: patched_uasset.len() as u64,
+                    sha256: encode_hex(&sha256(&patched_uasset)),
+                },
+                uexp: ComponentDigestProof {
+                    path: patched_path.with_extension("uexp").display().to_string(),
+                    length: patched_uexp.len() as u64,
+                    sha256: encode_hex(&sha256(&patched_uexp)),
+                },
+                sidecars: vec![output_sidecar],
+                receipt: patch_path.display().to_string(),
+            },
+        };
+        fs::write(&patch_path, serde_json::to_vec(&patch_receipt).unwrap()).unwrap();
+        let verified_patch = read_patch_receipt_v2(&patch_path).unwrap();
+        let live_uasset = original_uasset.clone();
+        let live_uexp = original_uexp.clone();
+        let live_sidecar = sidecar.clone();
+        let stage = verify_fixed_leaf_stage_input_with_live_source(
+            verified_patch,
+            move |_game_root, _asset, expected| {
+                Ok(LiveConvertedStageSource {
+                    generation: expected.clone(),
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_game_root, _asset, expected| Ok(expected.clone()),
+        )
+        .unwrap();
+        (
+            ManagedStageFixture {
+                _temp: temp,
+                game_root,
+                output_root,
+                original_uasset,
+                original_uexp,
+                patched_uasset,
+                patched_uexp,
+                usmap,
+                sidecar,
+                generation,
+                patch_path,
+            },
+            stage,
+        )
+    }
+
     fn normalized_extract_wire(fixture: &ExtractFixture) -> ExtractReceiptEnvelope {
         let mut receipt = fixture.receipt.clone();
         let paks = "/fixture/game/G1R/Content/Paks";
@@ -2227,6 +3487,14 @@ mod tests {
     #[test]
     fn generation_drift_is_rejected_by_extract_and_patch_receipts() {
         let fixture = extract_fixture();
+        for unsafe_name in [".", "..", "C:foo", "NUL.utoc", "bad\u{7}.utoc", "bad."] {
+            let mut malformed = fixture.receipt.generation.clone();
+            malformed.usmap.file_name = unsafe_name.to_owned();
+            assert!(
+                validate_generation_receipt(&malformed, "TEST_GENERATION").is_err(),
+                "unexpectedly accepted {unsafe_name:?}"
+            );
+        }
         let mut changed_generation = fixture.receipt.generation.clone();
         changed_generation.usmap.sha256 = "99".repeat(32);
         assert_eq!(
@@ -2257,5 +3525,182 @@ mod tests {
         let mut generation_drift = patch;
         generation_drift.provenance.generation.usmap.sha256 = "99".repeat(32);
         assert!(validate_patch_receipt_envelope(&generation_drift, &patch_path).is_err());
+    }
+
+    #[test]
+    fn managed_stage_input_binds_the_complete_verified_chain() {
+        let (fixture, stage) = verified_stage_fixture();
+        assert_eq!(stage.target_path(), "/Game/TestAsset");
+        assert_eq!(stage.generation().asset, stage.target_path());
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uasset),
+            fixture.patched_uasset
+        );
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uexp),
+            fixture.patched_uexp
+        );
+        assert_eq!(stage.usmap_bytes(), fixture.usmap);
+        assert_eq!(stage.sidecars().len(), 1);
+        assert_eq!(stage.sidecars()[0].role(), SidecarRole::Bulk);
+        assert_eq!(stage.sidecars()[0].bytes(), fixture.sidecar);
+        assert_eq!(stage.sidecars()[0].length(), fixture.sidecar.len() as u64);
+        assert_eq!(stage.sidecars()[0].sha256(), &sha256(&fixture.sidecar));
+        assert_eq!(stage.generation(), &fixture.generation);
+        assert!(stage.executable_anchor().length() > 0);
+
+        let debug = format!("{stage:?}");
+        assert!(!debug.contains(&fixture.game_root.display().to_string()));
+        assert!(!debug.contains(&fixture.output_root.display().to_string()));
+        assert!(!debug.contains(&fixture.patch_path.display().to_string()));
+    }
+
+    #[test]
+    fn managed_stage_input_owns_bytes_and_executable_drift_fails_closed() {
+        let (fixture, stage) = verified_stage_fixture();
+        fs::write(
+            fixture.output_root.join("Patched.uexp"),
+            vec![0xff; fixture.patched_uexp.len()],
+        )
+        .unwrap();
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uexp),
+            fixture.patched_uexp
+        );
+
+        let executable = fixture
+            .game_root
+            .join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+        let length = fs::metadata(&executable).unwrap().len() as usize;
+        fs::write(&executable, vec![b'x'; length]).unwrap();
+        stage.reverify_executable_path_identity().unwrap();
+        assert!(stage.reverify_executable_anchor().is_err());
+    }
+
+    #[test]
+    fn managed_stage_rejects_live_pair_and_final_generation_drift() {
+        let (fixture, _stage) = verified_stage_fixture();
+        let verified_patch = read_patch_receipt_v2(&fixture.patch_path).unwrap();
+        let mut wrong_uasset = fixture.original_uasset.clone();
+        wrong_uasset.push(0xff);
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+        let error = verify_fixed_leaf_stage_input_with_live_source(
+            verified_patch,
+            move |_root, _asset, expected| {
+                Ok(LiveConvertedStageSource {
+                    generation: expected.clone(),
+                    uasset: wrong_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_root, _asset, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("fresh live conversion"), "{error}");
+
+        let (fixture, _stage) = verified_stage_fixture();
+        let verified_patch = read_patch_receipt_v2(&fixture.patch_path).unwrap();
+        let live_uasset = fixture.original_uasset.clone();
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+        let error = verify_fixed_leaf_stage_input_with_live_source(
+            verified_patch,
+            move |_root, _asset, expected| {
+                Ok(LiveConvertedStageSource {
+                    generation: expected.clone(),
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_root, _asset, expected| {
+                let mut drifted = expected.clone();
+                drifted.target_chunks[0].length += 1;
+                Ok(drifted)
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("changed during verification"), "{error}");
+    }
+
+    #[test]
+    fn managed_stage_rejects_bytes_outside_the_semantic_edit() {
+        let (fixture, _stage) = verified_stage_fixture();
+        let mut patch: PatchReceiptEnvelope =
+            serde_json::from_slice(&fs::read(&fixture.patch_path).unwrap()).unwrap();
+        let uexp_path = PathBuf::from(&patch.output.uexp.path);
+        let mut forged = fs::read(&uexp_path).unwrap();
+        *forged.last_mut().unwrap() ^= 0x80;
+        fs::write(&uexp_path, &forged).unwrap();
+        let forged_pair = PackagePairSeal {
+            uasset_sha256: patch.output_package_seal.uasset_sha256,
+            uexp_sha256: sha256(&forged),
+        };
+        patch.output_package_seal = forged_pair.clone();
+        patch.patch.after = forged_pair;
+        patch.output.uexp.sha256 = encode_hex(&sha256(&forged));
+        fs::write(&fixture.patch_path, serde_json::to_vec(&patch).unwrap()).unwrap();
+
+        let verified_patch = read_patch_receipt_v2(&fixture.patch_path).unwrap();
+        let live_uasset = fixture.original_uasset.clone();
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+        let error = verify_fixed_leaf_stage_input_with_live_source(
+            verified_patch,
+            move |_root, _asset, expected| {
+                Ok(LiveConvertedStageSource {
+                    generation: expected.clone(),
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_root, _asset, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("reproduced patch proof")
+                || error.contains("outside the reproduced fixed-leaf edit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn conversion_temp_parent_and_store_root_must_be_disjoint_from_game() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let sibling = root.path().join("private-temp");
+        fs::create_dir(&game).unwrap();
+        fs::create_dir(&sibling).unwrap();
+        assert!(create_disjoint_private_conversion_dir_in(&game, root.path(), "TEST").is_err());
+        assert!(create_disjoint_private_conversion_dir_in(&game, &game, "TEST").is_err());
+        let owned = create_disjoint_private_conversion_dir_in(&game, &sibling, "TEST").unwrap();
+        owned.close().unwrap();
+
+        let (fixture, stage) = verified_stage_fixture();
+        assert!(stage
+            .require_store_root_disjoint(&fixture.game_root)
+            .is_err());
+        assert!(stage
+            .require_store_root_disjoint(&fixture.output_root)
+            .is_err());
+        let outside = tempfile::tempdir().unwrap();
+        stage.require_store_root_disjoint(outside.path()).unwrap();
+    }
+
+    #[test]
+    fn empty_game_executable_is_not_an_anchor() {
+        let root = tempfile::tempdir().unwrap();
+        let executable = root
+            .path()
+            .join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(executable, []).unwrap();
+        assert!(seal_game_executable(root.path()).is_err());
     }
 }

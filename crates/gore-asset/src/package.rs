@@ -712,6 +712,49 @@ fn canonical_regular_path(path: &Path) -> Result<PathBuf, PackageError> {
     Ok(canonical)
 }
 
+/// Crate-internal regular-file handle bound to a canonical path identity.
+///
+/// This lets higher workflow layers reuse the package carrier's platform no-follow open and
+/// pre/post path-identity checks without exposing a generic public filesystem capability.
+pub(crate) struct BoundRegularFile {
+    path: PathBuf,
+    file: File,
+    identity: FileIdentity,
+}
+
+impl BoundRegularFile {
+    pub(crate) fn open(path: &Path) -> Result<Self, PackageError> {
+        let path = canonical_regular_path(path)?;
+        let file = open_regular(&path)?;
+        let identity = identity_from_open_file(&file, &path)?;
+        Ok(Self {
+            path,
+            file,
+            identity,
+        })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn length(&self) -> Result<u64, PackageError> {
+        file_metadata_len(&self.file, &self.path)
+    }
+
+    pub(crate) fn file_mut(&mut self) -> &mut File {
+        &mut self.file
+    }
+
+    pub(crate) fn reverify_path_identity(&self) -> Result<(), PackageError> {
+        let current = open_regular(&self.path)?;
+        if identity_from_open_file(&current, &self.path)? != self.identity {
+            return Err(PackageError::ConcurrentIdentityChange(self.path.clone()));
+        }
+        Ok(())
+    }
+}
+
 fn normalized_output_paths(path: &Path) -> Result<PackagePaths, PackageError> {
     let paths = PackagePaths::from_uasset(path)?;
     let parent = paths

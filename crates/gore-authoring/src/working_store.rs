@@ -216,6 +216,20 @@ pub struct OpenedRevision3Checkpoint {
     pub project: ProjectRevision3,
 }
 
+/// Manifest-only first phase for a budgeted historical DataAsset basis reopen.
+///
+/// The snapshot itself has already been fully hashed and canonical-parsed. `verification_*`
+/// conservatively covers the later full reopen: snapshot, entity reads, every asset twice (the
+/// second pass bounds VoiceTake metadata), and one maximum-size nested basis per entity.
+pub(crate) struct Revision3DataAssetBasisPreflight {
+    pub(crate) head: WorkingHead,
+    pub(crate) project_id: ProjectId,
+    pub(crate) target: GameGenerationAnchor,
+    pub(crate) revision: u64,
+    pub(crate) verification_objects: u64,
+    pub(crate) verification_bytes: u64,
+}
+
 /// Physical blob verification performed while opening or checking an asset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -645,6 +659,21 @@ impl WorkingProjectStore {
         expected_head: Option<&WorkingHead>,
         project: &ProjectRevision3,
     ) -> Result<Revision3CheckpointPreparation, WorkingStoreError> {
+        self.prepare_revision3_checkpoint_with_write_guard(expected_head, project, || Ok(()))
+    }
+
+    /// Revision-3 checkpoint preparation with a caller-supplied guard immediately before every
+    /// immutable Store installation. Managed DataAsset staging uses this to revalidate its opaque
+    /// live executable binding at the actual write boundary.
+    pub(crate) fn prepare_revision3_checkpoint_with_write_guard<F>(
+        &self,
+        expected_head: Option<&WorkingHead>,
+        project: &ProjectRevision3,
+        mut before_write: F,
+    ) -> Result<Revision3CheckpointPreparation, WorkingStoreError>
+    where
+        F: FnMut() -> Result<(), WorkingStoreError>,
+    {
         self.ensure_root_safe()?;
         self.check_expected_head(expected_head)?;
         validate_revision3_persistability(project, &self.limits)?;
@@ -665,7 +694,12 @@ impl WorkingProjectStore {
         let mut entity_seals = BTreeMap::new();
         for (id, bytes, seal) in prepared_entities {
             let path = self.entity_path(id, seal.sha256);
-            self.install_immutable_bytes(&path, &bytes, &seal)?;
+            self.install_checkpoint_bytes_with_write_guard(
+                &path,
+                &bytes,
+                &seal,
+                &mut before_write,
+            )?;
             entity_seals.insert(id, seal);
         }
 
@@ -678,7 +712,12 @@ impl WorkingProjectStore {
         )?;
         let snapshot_seal = seal_bytes(&snapshot_bytes);
         let snapshot_path = self.snapshot_path(snapshot_seal.sha256);
-        self.install_immutable_bytes(&snapshot_path, &snapshot_bytes, &snapshot_seal)?;
+        self.install_checkpoint_bytes_with_write_guard(
+            &snapshot_path,
+            &snapshot_bytes,
+            &snapshot_seal,
+            &mut before_write,
+        )?;
 
         let head = WorkingHead {
             store_format: WorkingStoreFormat,
@@ -1340,6 +1379,257 @@ impl WorkingProjectStore {
         )
     }
 
+    /// Internal exact-head guard shared by authority-free managed DataAsset staging.
+    pub(crate) fn require_exact_head_for_dataasset(
+        &self,
+        expected_head: Option<&WorkingHead>,
+    ) -> Result<(), WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.check_expected_head(expected_head)
+    }
+
+    /// Complete the deterministic revision-3 Store sizing/encoding preflight used before a
+    /// DataAsset transaction installs any new CAS object.
+    pub(crate) fn preflight_revision3_dataasset_candidate(
+        &self,
+        project: &ProjectRevision3,
+    ) -> Result<(), WorkingStoreError> {
+        self.ensure_root_safe()?;
+        validate_revision3_persistability(project, &self.limits)?;
+        let mut entity_seals = BTreeMap::new();
+        for (id, entity) in &project.entities {
+            let bytes = canonical_json(entity)?;
+            entity_seals.insert(*id, seal_bytes(&bytes));
+        }
+        let snapshot = Revision3SnapshotManifest::from_project(project, entity_seals);
+        let snapshot_bytes = canonical_json(&snapshot)?;
+        enforce_limit(
+            "revision-3 snapshot bytes",
+            snapshot_bytes.len(),
+            self.limits.max_snapshot_bytes,
+        )?;
+        let head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: seal_bytes(&snapshot_bytes),
+        };
+        let head_bytes = canonical_json(&head)?;
+        enforce_limit("head bytes", head_bytes.len(), self.limits.max_head_bytes)
+    }
+
+    /// Hash and parse one historical manifest, returning a conservative full-reopen work charge.
+    /// Callers must aggregate and cap these charges before opening any basis with `Full` asset
+    /// verification; the returned identity alone is not full basis authority.
+    pub(crate) fn inspect_revision3_dataasset_basis(
+        &self,
+        snapshot: &ContentSeal,
+    ) -> Result<Revision3DataAssetBasisPreflight, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        validate_nonzero_seal(
+            snapshot,
+            self.limits.max_snapshot_bytes,
+            "DataAsset historical basis snapshot",
+        )?;
+        let bytes = self.read_sealed_object(
+            &self.snapshot_path(snapshot.sha256),
+            snapshot,
+            self.limits.max_snapshot_bytes,
+            "DataAsset historical basis snapshot",
+            AssetVerification::Full,
+        )?;
+        let manifest: Revision3SnapshotManifest =
+            parse_canonical_json(&bytes, "DataAsset historical basis snapshot")?;
+        self.validate_revision3_manifest_limits(&manifest)?;
+        let entity_count = u64::try_from(manifest.entities.len()).map_err(|_| {
+            WorkingStoreError::Invariant(
+                "DataAsset historical entity count does not fit u64".to_owned(),
+            )
+        })?;
+        let asset_count = u64::try_from(manifest.asset_store.assets.len()).map_err(|_| {
+            WorkingStoreError::Invariant(
+                "DataAsset historical asset count does not fit u64".to_owned(),
+            )
+        })?;
+        let entity_bytes = manifest.entities.values().try_fold(0u64, |total, seal| {
+            total.checked_add(seal.byte_len).ok_or_else(|| {
+                WorkingStoreError::Invariant(
+                    "DataAsset historical entity work overflowed".to_owned(),
+                )
+            })
+        })?;
+        let asset_bytes = manifest
+            .asset_store
+            .assets
+            .values()
+            .try_fold(0u64, |total, meta| {
+                total.checked_add(meta.byte_len).ok_or_else(|| {
+                    WorkingStoreError::Invariant(
+                        "DataAsset historical asset work overflowed".to_owned(),
+                    )
+                })
+            })?;
+        let verification_objects = 1u64
+            .checked_add(entity_count.checked_mul(2).ok_or_else(|| {
+                WorkingStoreError::Invariant(
+                    "DataAsset historical object work overflowed".to_owned(),
+                )
+            })?)
+            .and_then(|total| total.checked_add(asset_count.checked_mul(2)?))
+            .ok_or_else(|| {
+                WorkingStoreError::Invariant(
+                    "DataAsset historical object work overflowed".to_owned(),
+                )
+            })?;
+        let nested_basis_bytes = entity_count
+            .checked_mul(self.limits.max_snapshot_bytes as u64)
+            .ok_or_else(|| {
+                WorkingStoreError::Invariant(
+                    "DataAsset historical nested-basis work overflowed".to_owned(),
+                )
+            })?;
+        let verification_bytes = snapshot
+            .byte_len
+            .checked_add(entity_bytes)
+            .and_then(|total| total.checked_add(asset_bytes.checked_mul(2)?))
+            .and_then(|total| total.checked_add(nested_basis_bytes))
+            .ok_or_else(|| {
+                WorkingStoreError::Invariant("DataAsset historical byte work overflowed".to_owned())
+            })?;
+        Ok(Revision3DataAssetBasisPreflight {
+            head: WorkingHead {
+                store_format: WorkingStoreFormat,
+                snapshot: snapshot.clone(),
+            },
+            project_id: manifest.project_id,
+            target: manifest.target,
+            revision: manifest.revision,
+            verification_objects,
+            verification_bytes,
+        })
+    }
+
+    /// Install already-owned, upstream-verified DataAsset bytes under an exact expected seal.
+    ///
+    /// The fixed head is checked before and after no-clobber installation. A late race can leave
+    /// only the immutable CAS blob as an orphan; it can never publish a partial project.
+    pub(crate) fn import_exact_dataasset_bytes_with_write_guard<F>(
+        &self,
+        bytes: &[u8],
+        expected: &ContentSeal,
+        max_bytes: u64,
+        kind: &'static str,
+        basis_head: &WorkingHead,
+        before_write: F,
+    ) -> Result<bool, WorkingStoreError>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        self.import_exact_dataasset_bytes_with_hooks(
+            bytes,
+            expected,
+            max_bytes,
+            kind,
+            basis_head,
+            before_write,
+            || Ok(()),
+        )
+    }
+
+    #[cfg(test)]
+    fn import_exact_dataasset_bytes_with_final_head_hook<F>(
+        &self,
+        bytes: &[u8],
+        expected: &ContentSeal,
+        max_bytes: u64,
+        kind: &'static str,
+        basis_head: &WorkingHead,
+        before_final_head_check: F,
+    ) -> Result<bool, WorkingStoreError>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        self.import_exact_dataasset_bytes_with_hooks(
+            bytes,
+            expected,
+            max_bytes,
+            kind,
+            basis_head,
+            || Ok(()),
+            before_final_head_check,
+        )
+    }
+
+    // Keeping the two independent write/final race hooks beside the complete seal/head contract
+    // makes this security boundary explicit; bundling them into an ambient context would obscure
+    // which point each hook protects.
+    #[allow(clippy::too_many_arguments)]
+    fn import_exact_dataasset_bytes_with_hooks<F, G>(
+        &self,
+        bytes: &[u8],
+        expected: &ContentSeal,
+        max_bytes: u64,
+        kind: &'static str,
+        basis_head: &WorkingHead,
+        before_write: F,
+        before_final_head_check: G,
+    ) -> Result<bool, WorkingStoreError>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+        G: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        if expected.byte_len == 0 || expected.byte_len > max_bytes {
+            return Err(WorkingStoreError::LimitExceeded {
+                kind,
+                actual: expected.byte_len,
+                limit: max_bytes,
+            });
+        }
+        if bytes.len() as u64 != expected.byte_len || seal_bytes(bytes) != *expected {
+            return Err(WorkingStoreError::Invariant(format!(
+                "{kind} bytes differ from their verified seal"
+            )));
+        }
+        self.ensure_root_safe()?;
+        self.check_expected_head(Some(basis_head))?;
+        let destination = self.asset_path(expected.sha256);
+        // Existing CAS objects are fully verified without consuming the caller's first-write
+        // generation guard. Only a missing destination reaches this closure, after all long byte
+        // hashing and immediately before creation of the staging file.
+        let mut before_write = Some(before_write);
+        let mut guarded_write = || {
+            before_write
+                .take()
+                .expect("immutable install invokes its write guard at most once")()?;
+            self.ensure_root_safe()?;
+            self.check_expected_head(Some(basis_head))
+        };
+        let deduplicated = self.install_checkpoint_bytes_with_write_guard(
+            &destination,
+            bytes,
+            expected,
+            &mut guarded_write,
+        )?;
+        self.verify_seal_at(&destination, expected, AssetVerification::Full, false)?;
+        before_final_head_check()?;
+        self.check_expected_head(Some(basis_head))?;
+        Ok(deduplicated)
+    }
+
+    pub(crate) fn read_exact_dataasset_blob(
+        &self,
+        seal: &ContentSeal,
+        max_bytes: usize,
+        kind: &'static str,
+    ) -> Result<Vec<u8>, WorkingStoreError> {
+        self.ensure_root_safe()?;
+        self.read_sealed_object(
+            &self.asset_path(seal.sha256),
+            seal,
+            max_bytes,
+            kind,
+            AssetVerification::Full,
+        )
+    }
+
     /// Stream, bound, hash, validate, and no-clobber install one Ogg asset.
     ///
     /// The source is opened without following a final symlink/reparse point. Deleting or changing
@@ -1871,6 +2161,29 @@ impl WorkingProjectStore {
                 source,
             }),
             (Err(error), _) => Err(error),
+        }
+    }
+
+    fn install_checkpoint_bytes_with_write_guard<F>(
+        &self,
+        destination: &Path,
+        bytes: &[u8],
+        seal: &ContentSeal,
+        before_write: &mut F,
+    ) -> Result<bool, WorkingStoreError>
+    where
+        F: FnMut() -> Result<(), WorkingStoreError>,
+    {
+        match fs::symlink_metadata(destination) {
+            Ok(_) => {
+                self.verify_existing_collision(destination, seal)?;
+                Ok(true)
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                before_write()?;
+                self.install_immutable_bytes(destination, bytes, seal)
+            }
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -3085,6 +3398,119 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fs::read(store.head_path()).unwrap(), raced_head_bytes);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dataasset_component_post_install_head_race_leaves_only_verified_orphan() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-dataasset-component-race-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x71);
+        let raced_head = WorkingHead {
+            store_format: WorkingStoreFormat,
+            snapshot: ContentSeal {
+                byte_len: 1,
+                sha256: Sha256Digest::from_bytes([0x72; 32]),
+            },
+        };
+        let raced_head_bytes = canonical_json(&raced_head).unwrap();
+        let bytes = b"verified DataAsset component";
+        let component = seal_bytes(bytes);
+
+        let result = store.import_exact_dataasset_bytes_with_final_head_hook(
+            bytes,
+            &component,
+            1024,
+            "DataAsset component test",
+            &basis.head,
+            || {
+                fs::write(store.head_path(), &raced_head_bytes)?;
+                Ok(())
+            },
+        );
+        assert!(matches!(
+            result,
+            Err(WorkingStoreError::HeadConflict {
+                expected: Some(expected),
+                actual: Some(actual),
+            }) if expected == basis.head && actual == raced_head
+        ));
+        store
+            .verify_seal_at(
+                &store.asset_path(component.sha256),
+                &component,
+                AssetVerification::Full,
+                false,
+            )
+            .unwrap();
+        assert_eq!(fs::read(store.head_path()).unwrap(), raced_head_bytes);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn dataasset_write_guard_skips_dedupe_and_runs_for_the_first_missing_blob() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-dataasset-dedupe-guard-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x73);
+        let existing_bytes = b"existing DataAsset component";
+        let existing = seal_bytes(existing_bytes);
+        store
+            .import_exact_dataasset_bytes_with_write_guard(
+                existing_bytes,
+                &existing,
+                1024,
+                "DataAsset component test",
+                &basis.head,
+                || Ok(()),
+            )
+            .unwrap();
+
+        let calls = std::cell::Cell::new(0usize);
+        assert!(store
+            .import_exact_dataasset_bytes_with_write_guard(
+                existing_bytes,
+                &existing,
+                1024,
+                "DataAsset component test",
+                &basis.head,
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                },
+            )
+            .unwrap());
+        assert_eq!(
+            calls.get(),
+            0,
+            "dedupe must not consume the first-write guard"
+        );
+
+        let new_bytes = b"new DataAsset component";
+        let new_seal = seal_bytes(new_bytes);
+        assert!(!store
+            .import_exact_dataasset_bytes_with_write_guard(
+                new_bytes,
+                &new_seal,
+                1024,
+                "DataAsset component test",
+                &basis.head,
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                },
+            )
+            .unwrap());
+        assert_eq!(calls.get(), 1);
         let _ = fs::remove_dir_all(root);
     }
 

@@ -8,13 +8,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use gore_asset::dataasset_workflow::{
-    asset_package_limits, generation_mismatch_reason, read_chained_extract_receipt,
-    read_extract_receipt_v2, read_patch_receipt_v2, read_verified_file_bounded,
-    validate_extract_receipt_components, validate_extract_receipt_envelope,
-    validate_patch_output_against_carrier, validate_patch_receipt_envelope,
-    validate_patched_sidecars, validate_sidecar_generation_mapping, AssetGenerationReceipt,
-    ComponentDigestProof, ExtractCompositeStoreAnchor, ExtractReceiptEnvelope,
-    ExtractReceiptOutput, ExtractReceiptSource, ExtractUsmapProof, GenerationChunkAnchor,
+    apply_fixed_leaf_selector_patch_with_codes, asset_package_limits, generation_mismatch_reason,
+    read_chained_extract_receipt, read_extract_receipt_v2, read_patch_receipt_v2,
+    read_verified_file_bounded, validate_extract_receipt_components,
+    validate_extract_receipt_envelope, validate_patch_output_against_carrier,
+    validate_patch_receipt_envelope, validate_patched_sidecars,
+    validate_sidecar_generation_mapping, AssetGenerationReceipt, ComponentDigestProof,
+    ExtractCompositeStoreAnchor, ExtractReceiptEnvelope, ExtractReceiptOutput,
+    ExtractReceiptSource, ExtractUsmapProof, FixedLeafPatchDiagnosticCodes, GenerationChunkAnchor,
     GenerationFileAnchor, GlobalScriptStoreProof, HeldIdentityReceipt, PatchOperationProof,
     PatchReceiptEnvelope, PatchReceiptOutput, PatchReceiptProvenance, ReceiptComponent,
     ReceiptFileSeal, ReceiptVerifiedChunk, SidecarReceipt, SidecarRole, SourceFileReceipt,
@@ -24,10 +25,9 @@ use gore_asset::dataasset_workflow::{
     MAX_OPTIONAL_SIDECAR_BYTES, MAX_SELECTOR_BYTES, MAX_USMAP_BYTES, PATCH_RECEIPT_SUFFIX,
 };
 use gore_asset::{
-    describe_fixed_leaves, FixedLeafDescriptor, FixedLeafPatch, FixedLeafSelector,
-    FixedLeafSelectorStep, LegacyPackageEnvelope, PackageCarrier, PackageComponent,
-    PackagePairSeal, PropertySpanWalker, SchemaDb, FIXED_LEAF_SELECTOR_FORMAT,
-    FIXED_LEAF_SELECTOR_PROFILE,
+    describe_fixed_leaves, FixedLeafDescriptor, FixedLeafSelector, FixedLeafSelectorStep,
+    LegacyPackageEnvelope, PackageCarrier, PackageComponent, PackagePairSeal, PropertySpanWalker,
+    SchemaDb, FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -2304,41 +2304,7 @@ fn probe_current_generation_receipt(
     expected: &AssetGenerationReceipt,
     code: &'static str,
 ) -> Result<AssetGenerationReceipt> {
-    let main_utoc =
-        gore_tex::paths::main_container(game).with_context(|| format!("{code}: main UTOC"))?;
-    let usmap = gore_tex::paths::usmap(game).with_context(|| format!("{code}: USMAP"))?;
-    let main_utoc_seal =
-        digest_regular_file_bounded(&main_utoc, MAX_CONTAINER_COMPONENT_BYTES, code)?;
-    let usmap_seal = digest_regular_file_bounded(&usmap, MAX_USMAP_BYTES, code)?;
-    let (global_utoc_seal, global_ucas_seal) = seal_global_script_store(game, code)?;
-    let required_chunks: Vec<_> = expected
-        .target_chunks
-        .iter()
-        .map(|chunk| chunk.chunk_id.clone())
-        .collect();
-    let probe = gore_tex::container::probe_asset_generation_for_chunks_verified(
-        &main_utoc_seal.path,
-        asset,
-        &required_chunks,
-    )
-    .with_context(|| format!("{code}: final target generation probe"))?;
-    let mut source_utoc_seals = Vec::with_capacity(probe.metadata_utocs.len());
-    for source_utoc in &probe.metadata_utocs {
-        source_utoc_seals.push(digest_regular_file_bounded(
-            source_utoc,
-            MAX_CONTAINER_COMPONENT_BYTES,
-            code,
-        )?);
-    }
-    build_generation_receipt(
-        asset,
-        &usmap_seal,
-        &main_utoc_seal,
-        &global_utoc_seal,
-        &global_ucas_seal,
-        &probe.consumed_chunks,
-        &source_utoc_seals,
-    )
+    gore_asset::dataasset_workflow::probe_current_generation_receipt(game, asset, expected, code)
 }
 
 fn run_final_publish_gate<T>(
@@ -2664,34 +2630,22 @@ fn patch_fixed(args: PatchFixedArgs) -> Result<()> {
         output_sidecar_paths.push((role, path));
     }
 
-    let patch = {
-        let package = LegacyPackageEnvelope::parse_g1r_ue5_4(&carrier).context("ASSET_ENVELOPE")?;
-        let export = package
-            .export(selector.export_index)
-            .context("ASSET_EXPORT")?;
-        let schema_id = export
-            .boundary()
-            .resolve_class_schema(&schemas)
-            .context("ASSET_SCHEMA")?;
-        let block = PropertySpanWalker::g1r_ue5_4(&schemas)
-            .walk(export.bytes(), schema_id)
-            .context("ASSET_WALK")?;
-        let leaf = selector
-            .resolve(&carrier, &export, &schemas)
-            .context("ASSET_SELECTOR")?;
-        FixedLeafPatch::plan(
-            &carrier,
-            &export,
-            &schemas,
-            &block,
-            &leaf,
-            &expected,
-            &replacement,
-        )
-        .context("ASSET_REPLACEMENT")?
-    };
-
-    let patch_receipt = patch.apply(&mut carrier, &schemas).context("ASSET_DRIFT")?;
+    let patch_receipt = apply_fixed_leaf_selector_patch_with_codes(
+        &mut carrier,
+        &schemas,
+        &selector,
+        &expected,
+        &replacement,
+        FixedLeafPatchDiagnosticCodes {
+            envelope: "ASSET_ENVELOPE",
+            export: "ASSET_EXPORT",
+            schema: "ASSET_SCHEMA",
+            walk: "ASSET_WALK",
+            selector: "ASSET_SELECTOR",
+            replacement: "ASSET_REPLACEMENT",
+            drift: "ASSET_DRIFT",
+        },
+    )?;
     let output_package_seal = PackagePairSeal::capture(&carrier);
     let mut output_guard = PatchOutputGuard::new();
     let mut output_sidecars = Vec::new();

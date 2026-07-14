@@ -766,10 +766,9 @@ pub fn probe_asset_generation_verified(
     probe_asset_generation_inner(utoc, asset_path, None)
 }
 
-/// As [`probe_asset_generation_verified`], but re-reads an exact prior set of
-/// package/dependency chunk IDs. This lets a provenance verifier reproduce the
-/// chunks consumed by legacy conversion, including imported package headers,
-/// rather than silently narrowing the comparison to the target package alone.
+/// As [`probe_asset_generation_verified`], but unions an allowed prior dependency set with every
+/// current target export/bulk/optional/memory-mapped chunk. Required IDs can reproduce imported
+/// package headers consumed by legacy conversion, but can never narrow away a live target chunk.
 pub fn probe_asset_generation_for_chunks_verified(
     utoc: &Path,
     asset_path: &str,
@@ -818,45 +817,12 @@ fn probe_asset_generation_inner(
         return Err(TexError::AssetNotFound(asset_path.into()));
     }
 
-    let package_chunks: Vec<_> = if let Some(required) = required_chunk_ids {
-        required
-            .iter()
-            .map(|encoded| -> anyhow::Result<Option<FIoChunkId>> {
-                let raw = encoded
-                    .parse::<retoc::FIoChunkIdRaw>()
-                    .with_context(|| format!("invalid provenance chunk id {encoded:?}"))?;
-                let id = FIoChunkId::from_raw(raw, container_version);
-                match id.get_chunk_type() {
-                    EIoChunkType::ContainerHeader => Ok(None),
-                    EIoChunkType::ExportBundleData
-                    | EIoChunkType::BulkData
-                    | EIoChunkType::OptionalBulkData
-                    | EIoChunkType::MemoryMappedBulkData => Ok(Some(id)),
-                    other => {
-                        anyhow::bail!("unsupported provenance chunk type {other:?} for {encoded}")
-                    }
-                }
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect()
-    } else {
-        snapshot
-            .chunks()
-            .filter(|chunk| {
-                chunk.id().get_package_id() == package_id
-                    && matches!(
-                        chunk.id().get_chunk_type(),
-                        EIoChunkType::ExportBundleData
-                            | EIoChunkType::BulkData
-                            | EIoChunkType::OptionalBulkData
-                            | EIoChunkType::MemoryMappedBulkData
-                    )
-            })
-            .map(|chunk| chunk.id())
-            .collect()
-    };
+    let package_chunks = select_generation_probe_chunks(
+        snapshot.chunks().map(|chunk| chunk.id()),
+        package_id,
+        container_version,
+        required_chunk_ids,
+    )?;
     for chunk_id in package_chunks {
         snapshot.read_verified(chunk_id)?;
     }
@@ -865,6 +831,53 @@ fn probe_asset_generation_inner(
         consumed_chunks: snapshot.receipts()?,
         metadata_utocs: snapshot.metadata_utocs(),
     })
+}
+
+/// Select the complete live target package surface plus any prior conversion dependencies.
+///
+/// A caller-provided required set may widen the probe to dependency package chunks, but can never
+/// narrow away a currently present target bulk/optional/memory-mapped sidecar. ContainerHeader
+/// chunks are already read by `prime_container_metadata` and are therefore omitted here.
+fn select_generation_probe_chunks(
+    live_chunks: impl IntoIterator<Item = FIoChunkId>,
+    package_id: FPackageId,
+    container_version: EIoStoreTocVersion,
+    required_chunk_ids: Option<&[String]>,
+) -> anyhow::Result<Vec<FIoChunkId>> {
+    let mut selected = std::collections::BTreeMap::<[u8; 12], FIoChunkId>::new();
+    for id in live_chunks.into_iter().filter(|id| {
+        id.get_package_id() == package_id
+            && matches!(
+                id.get_chunk_type(),
+                EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData
+            )
+    }) {
+        selected.insert(id.get_raw().id, id);
+    }
+    if let Some(required) = required_chunk_ids {
+        for encoded in required {
+            let raw = encoded
+                .parse::<FIoChunkIdRaw>()
+                .with_context(|| format!("invalid provenance chunk id {encoded:?}"))?;
+            let id = FIoChunkId::from_raw(raw, container_version);
+            match id.get_chunk_type() {
+                EIoChunkType::ContainerHeader => {}
+                EIoChunkType::ExportBundleData
+                | EIoChunkType::BulkData
+                | EIoChunkType::OptionalBulkData
+                | EIoChunkType::MemoryMappedBulkData => {
+                    selected.insert(id.get_raw().id, id);
+                }
+                other => {
+                    anyhow::bail!("unsupported provenance chunk type {other:?} for {encoded}")
+                }
+            }
+        }
+    }
+    Ok(selected.into_values().collect())
 }
 
 fn package_id_from_asset_path(asset_path: &str) -> FPackageId {
@@ -1623,7 +1636,53 @@ impl Ord for TextureEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
     use std::path::PathBuf;
+
+    fn raw_chunk_hex(id: FIoChunkId) -> String {
+        id.get_raw().id.iter().fold(String::new(), |mut hex, byte| {
+            write!(&mut hex, "{byte:02x}").unwrap();
+            hex
+        })
+    }
+
+    #[test]
+    fn generation_probe_required_chunks_cannot_hide_live_target_optional_bulk() {
+        let version = EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash;
+        let target = FPackageId(0x0102_0304_0506_0708);
+        let dependency = FPackageId(0x1112_1314_1516_1718);
+        let target_export = FIoChunkId::from_package_id(target, 0, EIoChunkType::ExportBundleData)
+            .with_version(version);
+        let target_optional =
+            FIoChunkId::from_package_id(target, 0, EIoChunkType::OptionalBulkData)
+                .with_version(version);
+        let dependency_export =
+            FIoChunkId::from_package_id(dependency, 0, EIoChunkType::ExportBundleData)
+                .with_version(version);
+        let metadata = FIoChunkId::from_package_id(target, 0, EIoChunkType::ContainerHeader)
+            .with_version(version);
+        let required = vec![
+            raw_chunk_hex(target_export),
+            raw_chunk_hex(dependency_export),
+            raw_chunk_hex(metadata),
+        ];
+
+        let selected = select_generation_probe_chunks(
+            [target_export, target_optional, dependency_export],
+            target,
+            version,
+            Some(&required),
+        )
+        .unwrap();
+        let selected: std::collections::BTreeSet<_> =
+            selected.into_iter().map(|id| id.get_raw().id).collect();
+
+        assert!(selected.contains(&target_export.get_raw().id));
+        assert!(selected.contains(&target_optional.get_raw().id));
+        assert!(selected.contains(&dependency_export.get_raw().id));
+        assert!(!selected.contains(&metadata.get_raw().id));
+        assert_eq!(selected.len(), 3);
+    }
 
     fn minimal_raw_toc() -> Vec<u8> {
         let mut bytes = vec![0u8; 0x90];

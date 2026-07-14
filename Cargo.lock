@@ -905,6 +905,7 @@ name = "gore-asset"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "gore-tex",
  "libc",
  "retoc",
  "serde",
@@ -921,6 +922,7 @@ dependencies = [
 name = "gore-authoring"
 version = "0.0.0"
 dependencies = [
+ "gore-asset",
  "gore-vo",
  "serde",
  "serde_json",
