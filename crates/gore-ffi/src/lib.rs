@@ -54,6 +54,11 @@
 //!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
 //!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
 //!   `gore-project.json`.
+//! - `authoring_store_inspect_revision3_npc_source_v1` fully opens one exact-current managed NPC
+//!   Draft and verifies its persisted NPC/ScriptModule closure, parent provenance, source seal,
+//!   input fingerprint, and exact source regeneration. It accepts no project or game bytes,
+//!   writes no Store/game/save state, and grants no compile, build, spawn, runtime, deployment,
+//!   or publication authority.
 //! - `authoring_store_prepare_revision3_quest_draft_v3` rebuilds fresh native game/catalog
 //!   collision authority, consumes the repeated-Quest transaction, imports its structural
 //!   artifact, and fully reopens a prepared revision-3 checkpoint. It returns only structural,
@@ -134,6 +139,7 @@
 
 mod authoring;
 mod authoring_content_revision3;
+mod authoring_dataasset_package_index_revision3;
 mod authoring_dataasset_revision3;
 mod authoring_drafts;
 mod authoring_npc_catalog;
@@ -142,6 +148,7 @@ mod authoring_story;
 mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_inventory;
+mod authoring_story_npc_inspection_revision3;
 mod authoring_story_npc_revision3;
 mod authoring_story_quest;
 mod authoring_story_quest_context_revision3;
@@ -189,6 +196,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_read_dataasset_extract_receipt_v2",
     "authoring_store_build_revision3_voice_v1",
     "authoring_store_import_ogg",
+    "authoring_store_inspect_revision3_npc_source_v1",
     "authoring_store_inspect_revision3_quest_source_v1",
     "authoring_store_list_revision3_dataasset_stages_v1",
     "authoring_store_open",
@@ -212,6 +220,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_voice_take_v1",
     "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
+    "authoring_store_read_revision3_dataasset_package_index_v1",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -468,6 +477,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_build_revision3_voice_v1" => {
             Some(authoring_voice_build_revision3::build_revision3_voice_v1_raw)
         }
+        "authoring_store_inspect_revision3_npc_source_v1" => Some(
+            authoring_story_npc_inspection_revision3::inspect_revision3_npc_source_v1_raw,
+        ),
         "authoring_store_inspect_revision3_quest_source_v1" => Some(
             authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw,
         ),
@@ -514,6 +526,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_read_revision3_content_index_v1" => {
             Some(authoring_content_revision3::read_revision3_content_index_v1_raw)
         }
+        "authoring_store_read_revision3_dataasset_package_index_v1" => Some(
+            authoring_dataasset_package_index_revision3::read_revision3_dataasset_package_index_v1_raw,
+        ),
         _ => None,
     }
 }
@@ -1531,6 +1546,7 @@ mod tests {
                     "authoring_read_dataasset_extract_receipt_v2",
                     "authoring_store_build_revision3_voice_v1",
                     "authoring_store_import_ogg",
+                    "authoring_store_inspect_revision3_npc_source_v1",
                     "authoring_store_inspect_revision3_quest_source_v1",
                     "authoring_store_list_revision3_dataasset_stages_v1",
                     "authoring_store_open",
@@ -1554,6 +1570,7 @@ mod tests {
                     "authoring_store_prepare_revision3_voice_take_v1",
                     "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
+                    "authoring_store_read_revision3_dataasset_package_index_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
@@ -1634,6 +1651,9 @@ mod tests {
             .any(|command| command == "authoring_store_list_revision3_dataasset_stages_v1"));
         assert!(commands
             .iter()
+            .any(|command| command == "authoring_store_inspect_revision3_npc_source_v1"));
+        assert!(commands
+            .iter()
             .any(|command| command == "authoring_store_inspect_revision3_quest_source_v1"));
         assert!(commands
             .iter()
@@ -1677,6 +1697,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_content_index_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_read_revision3_dataasset_package_index_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));
