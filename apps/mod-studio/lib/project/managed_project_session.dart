@@ -117,6 +117,35 @@ final class ManagedRevision3QuestDraftCheckpoint {
   final bool artifactDeduplicated;
 }
 
+/// One NPC Draft/module pair returned only after its native candidate was fully reopened,
+/// fixed-head CAS published, and fully reopened again. It grants no build, runtime, catalog,
+/// collision, source-inspection, spawn, deployment, or native-publication authority.
+final class ManagedRevision3NpcDraftCheckpoint {
+  const ManagedRevision3NpcDraftCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.npcId,
+    required this.scriptModuleId,
+    required this.displayName,
+    required this.moduleNamespace,
+    required this.uniqueName,
+    required this.parentCatalogId,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String npcId;
+  final String scriptModuleId;
+  final String displayName;
+  final String moduleNamespace;
+  final String uniqueName;
+  final String parentCatalogId;
+}
+
 /// One DataAsset stage returned only after its candidate was fully reopened, fixed-head CAS
 /// published, and fully reopened again. It carries no build, runtime, pack, deploy, or native
 /// publication claim.
@@ -254,6 +283,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String questRequestJson,
   });
 
+  Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcDraftRequestV1 request,
+  });
+
   Future<AuthoringRevision3ContentIndexResult> readContentIndex({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -323,6 +359,19 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     questRequestJson: questRequestJson,
+  );
+
+  @override
+  Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcDraftRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3NpcDraftV1(
+    root: root,
+    gameRoot: gameRoot,
+    currentProjectJson: currentProjectJson,
+    request: request,
   );
 
   @override
@@ -711,6 +760,77 @@ class ManagedRevision3AuthoringProjectSession {
               questId: prepared.questId,
               scriptModuleId: prepared.scriptModuleId,
               artifactDeduplicated: prepared.artifactDeduplicated,
+            ),
+          );
+        },
+      );
+
+  /// Prepare and publish one offline-only revision-3 NPC Draft/module pair.
+  ///
+  /// The request's project ID, revision, target, and head are derived only after entering the
+  /// serialized session lane. Native preparation may install immutable CAS objects but cannot
+  /// replace the fixed head. This session independently checks the complete response binding,
+  /// fully reopens the candidate, publishes through the crash-recoverable exact byte-CAS lane,
+  /// and fully reopens the published generation before returning.
+  Future<ManagedRevision3NpcDraftCheckpoint> prepareAndPublishNpcDraftV1({
+    required String gameRoot,
+    required String npcId,
+    required String scriptModuleId,
+    required String displayName,
+    required AuthoringRevision3NpcDraftIntentV1 intent,
+  }) => _core
+      ._publishPreparedRevision3Checkpoint<ManagedRevision3NpcDraftCheckpoint>(
+        operation: 'prepareAndPublishNpcDraftV1',
+        handlePrepareError: _core._throwRevision3NpcPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 NPC transaction has no exact project identity',
+            );
+          }
+          final request = AuthoringRevision3NpcDraftRequestV1.forProject(
+            expectedHead: basis.head,
+            currentProjectJson: basis.projectJson,
+            npcId: npcId,
+            scriptModuleId: scriptModuleId,
+            displayName: displayName,
+            intent: intent,
+          );
+          final prepared = await _store.prepareNpcDraftV1(
+            root: root.path,
+            gameRoot: gameRoot,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.npcId != request.npcId ||
+              prepared.scriptModuleId != request.scriptModuleId ||
+              prepared.displayName != request.displayName ||
+              prepared.moduleNamespace != request.intent.moduleNamespace ||
+              prepared.uniqueName != request.intent.uniqueName ||
+              prepared.parentCatalogId != request.intent.parentCatalogId) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 NPC preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<ManagedRevision3NpcDraftCheckpoint>(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3NpcDraftCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              npcId: prepared.npcId,
+              scriptModuleId: prepared.scriptModuleId,
+              displayName: prepared.displayName,
+              moduleNamespace: prepared.moduleNamespace,
+              uniqueName: prepared.uniqueName,
+              parentCatalogId: prepared.parentCatalogId,
             ),
           );
         },
@@ -1262,6 +1382,46 @@ class _ManagedProjectSessionCore {
     Error.throwWithStackTrace(error, stackTrace);
   }
 
+  Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3NpcPrepareErrorIsRetryable(error.code)) {
+        // Selection, collision, capacity, game-input, and unsupported-generation errors are
+        // retryable after the caller has rechecked the exact fixed head around native work.
+        // Native preparation can leave only immutable CAS orphans.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      // Fail closed for every integrity code and every future/unknown native code. A newly added
+      // native failure must be classified deliberately before this session may retry it.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      // These arise only while locally constructing the typed request before calling native code.
+      // Native response-shape failures are wrapped as MALFORMED_NATIVE_RESPONSE by ModFfi.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 NPC preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DataAssetError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT') {
@@ -1571,6 +1731,29 @@ bool _revision3QuestPrepareErrorRequiresReopen(String code) => const {
   'AUTHORING_REVISION3_QUEST_STORE_PATH_UNSAFE',
   'AUTHORING_REVISION3_QUEST_STORE_ROOT_MISSING',
   'AUTHORING_REVISION3_QUEST_STORE_SEAL_MISMATCH',
+}.contains(code);
+
+bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_NPC_CATALOG_FAILED',
+  'AUTHORING_REVISION3_NPC_CATALOG_LIMIT',
+  'AUTHORING_REVISION3_NPC_CATALOG_SELECTION_INVALID',
+  'AUTHORING_REVISION3_NPC_CATALOG_SELECTION_UNQUALIFIED',
+  'AUTHORING_REVISION3_NPC_COLLISION',
+  'AUTHORING_REVISION3_NPC_COLLISION_FAILED',
+  'AUTHORING_REVISION3_NPC_COLLISION_LIMIT',
+  'AUTHORING_REVISION3_NPC_INPUT_CHANGED',
+  'AUTHORING_REVISION3_NPC_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_INPUT_MISSING',
+  'AUTHORING_REVISION3_NPC_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_NPC_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_NPC_INTENT_INVALID',
+  'AUTHORING_REVISION3_NPC_LIMIT',
+  'AUTHORING_REVISION3_NPC_PRISTINE_UNAVAILABLE',
+  'AUTHORING_REVISION3_NPC_PROJECT_TARGET_MISMATCH',
+  'AUTHORING_REVISION3_NPC_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_NPC_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_NPC_STORE_GAME_ALIAS',
+  'AUTHORING_REVISION3_NPC_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3ContentReadErrorRequiresReopen(String code) => const {

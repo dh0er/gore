@@ -10,6 +10,7 @@ import 'core_service.dart';
 export '../dataasset/domain/dataasset_inspection.dart';
 
 part '../project/revision3_dataasset_stage.dart';
+part '../project/revision3_npc_draft.dart';
 
 const _maxNativeErrorCodeLength = 128;
 const _maxNativeErrorMessageLength = 64 * 1024;
@@ -28,6 +29,7 @@ const _maxAuthoringRevision3DataAssetStages = 1024;
 const _maxAuthoringRevision3DataAssetManifestBytes = 8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetManifestStringBytes = 32 * 1024;
 const _maxAuthoringRevision3QuestRequestJsonBytes = 64 * 1024;
+const _maxAuthoringRevision3NpcRequestJsonBytes = 32 * 1024;
 const _maxAuthoringRevision3QuestCollisionArtifactBytes = 24 * 1024 * 1024;
 const _authoringRevision3QuestGeneratorId =
     'gore-authoring.draft-quest-skeleton';
@@ -683,6 +685,56 @@ class ModFfi {
     return AuthoringRevision3QuestDraftPreparation.fromJson(response);
   }
 
+  /// Prepare one revision-3 NPC Draft and its deterministic ScriptModule without publishing the
+  /// fixed head.
+  ///
+  /// The request is bound to the exact canonical project/head by its typed constructor. Native
+  /// code rebuilds fresh Story, NPC-archetype, and base/current collision inputs. This wrapper
+  /// grants no build, runtime, catalog, collision, source-inspection, deployment, or native
+  /// publication authority.
+  Future<AuthoringRevision3NpcDraftPreparation>
+  authoringStorePrepareRevision3NpcDraftV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcDraftRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_npc_draft_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    _authoringRevision3NpcPrepareEnvelopePreflight(
+      command,
+      root,
+      gameRoot,
+      currentProjectJson,
+      request.canonicalJson,
+    );
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'npc_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3NpcDraftPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Verify one PatchReceipt-v2 chain and prepare a fixed-leaf DataAsset stage without
   /// publishing the fixed revision-3 head.
   ///
@@ -1163,6 +1215,35 @@ void _authoringRevision3QuestPrepareEnvelopePreflight(
   encodedBytes = _authoringAddEscapedJsonStringBytes(
     questRequestJson,
     'questRequestJson',
+    encodedBytes,
+  );
+  _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);
+}
+
+void _authoringRevision3NpcPrepareEnvelopePreflight(
+  String command,
+  String root,
+  String gameRoot,
+  String currentProjectJson,
+  String npcRequestJson,
+) {
+  var encodedBytes =
+      '{"command":"","payload":{"current_project_json":"","game_root":"","npc_request_json":"","root":""}}'
+          .length +
+      command.length;
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    currentProjectJson,
+    'currentProjectJson',
+    encodedBytes,
+  );
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    gameRoot,
+    'gameRoot',
+    encodedBytes,
+  );
+  encodedBytes = _authoringAddEscapedJsonStringBytes(
+    npcRequestJson,
+    'npcRequestJson',
     encodedBytes,
   );
   _authoringAddEscapedJsonStringBytes(root, 'root', encodedBytes);

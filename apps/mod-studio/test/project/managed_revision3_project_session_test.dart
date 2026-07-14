@@ -13,6 +13,7 @@ import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
 
 void main() {
@@ -74,6 +75,19 @@ void main() {
         };
       final candidateProject = jsonEncode(candidateMap);
       final candidateHead = fixtureStore.register(candidateProject);
+      final npcRequest = AuthoringRevision3NpcDraftRequestV1.forProject(
+        expectedHead: head,
+        currentProjectJson: project,
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      final npcFixture = Revision3NpcFixture.fromBasis(
+        basisHead: head,
+        basisProjectJson: project,
+        request: npcRequest,
+      );
       final core = FakeGoreCoreFfiService(
         responses: <String, Map<String, Object?>>{
           'authoring_store_open_revision3': _openedResponse(head, project),
@@ -97,6 +111,8 @@ void main() {
                 questId: questRequest.questId,
                 scriptModuleId: questRequest.scriptModuleId,
               ),
+          'authoring_store_prepare_revision3_npc_draft_v1': npcFixture
+              .response(),
         },
       );
       final adapter = ModFfiManagedRevision3AuthoringStore(ModFfi(core));
@@ -122,6 +138,12 @@ void main() {
         currentProjectJson: project,
         questRequestJson: questRequest.canonicalJson,
       );
+      await adapter.prepareNpcDraftV1(
+        root: fixture.path,
+        gameRoot: r'D:\Games\Gothic Remake',
+        currentProjectJson: project,
+        request: npcRequest,
+      );
 
       expect(core.calls.map((call) => call.command), <String>[
         'authoring_store_open_revision3',
@@ -129,6 +151,7 @@ void main() {
         'authoring_store_open_revision3_head_bytes',
         'authoring_store_read_revision3_content_index_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
+        'authoring_store_prepare_revision3_npc_draft_v1',
       ]);
       expect(core.calls[0].payload, <String, Object?>{
         'root': fixture.path,
@@ -152,6 +175,12 @@ void main() {
         'current_project_json': project,
         'game_root': r'D:\Games\Gothic Remake',
         'quest_request_json': questRequest.canonicalJson,
+        'root': fixture.path,
+      });
+      expect(core.calls[5].payload, <String, Object?>{
+        'current_project_json': project,
+        'game_root': r'D:\Games\Gothic Remake',
+        'npc_request_json': npcRequest.canonicalJson,
         'root': fixture.path,
       });
     },
@@ -289,6 +318,293 @@ void main() {
       );
       expect(reopened.projectJson, results[1].projectJson);
       expect(reopened.projectRevision, 2);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'queued NPC transactions bind latest R3 basis and publish fully reopened candidates',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_queue');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'NPC project');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final originalHead = session.head.canonicalJson;
+      final genericPrepares = store.prepareCalls;
+
+      final first = session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard 1',
+        intent: _npcIntent(1),
+      );
+      final second = session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000083',
+        scriptModuleId: '00000000000000000000000000000084',
+        displayName: 'Managed Guard 2',
+        intent: _npcIntent(2),
+      );
+      final results = await Future.wait(
+        <Future<ManagedRevision3NpcDraftCheckpoint>>[first, second],
+      );
+
+      expect(store.prepareCalls, genericPrepares);
+      expect(store.npcPrepareCalls, 2);
+      expect(store.npcCurrentProjects[0], original);
+      expect(store.npcRequests[0].expectedHead.canonicalJson, originalHead);
+      expect(store.npcRequests[0].expectedRevision, 0);
+      expect(
+        store.npcRequests[1].expectedHead.canonicalJson,
+        results[0].head.canonicalJson,
+      );
+      expect(store.npcRequests[1].expectedRevision, 1);
+      expect(store.npcGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(results[0].projectRevision, 1);
+      expect(results[0].npcId, '00000000000000000000000000000081');
+      expect(results[0].uniqueName, 'GoreManagedNpc1');
+      expect(results[1].projectRevision, 2);
+      expect(results[1].npcId, '00000000000000000000000000000083');
+      expect(results[1].parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+      expect(session.projectJson, results[1].projectJson);
+      expect(session.projectRevision, 2);
+      expect(session.head.canonicalJson, results[1].head.canonicalJson);
+      expect(
+        await session.headFile.readAsString(),
+        results[1].head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(
+        store.openVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, results[1].projectJson);
+      expect(reopened.projectRevision, 2);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'NPC local input and semantic collisions retry while integrity uncertainty poisons',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'npc_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(revision: 0, name: 'NPC retry'),
+      );
+      final exactRetryHead = await retrySession.headFile.readAsBytes();
+      final beforeLocal = retryStore.npcPrepareCalls;
+      await expectLater(
+        retrySession.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000000',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Invalid local NPC',
+          intent: _npcIntent(1),
+        ),
+        throwsFormatException,
+      );
+      expect(retryStore.npcPrepareCalls, beforeLocal);
+      expect(retrySession.requiresReopen, isFalse);
+
+      for (final retryableCode in <String>[
+        'AUTHORING_REVISION3_NPC_COLLISION',
+        'AUTHORING_REVISION3_NPC_INPUT_LIMIT',
+        'AUTHORING_REVISION3_NPC_RECOVERY_REQUIRED',
+      ]) {
+        retryStore.nextNpcError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_draft_v1',
+          code: retryableCode,
+          message: 'fake retryable NPC rejection',
+        );
+        await expectLater(
+          retrySession.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000081',
+            scriptModuleId: '00000000000000000000000000000082',
+            displayName: 'Managed Guard',
+            intent: _npcIntent(1),
+          ),
+          throwsA(
+            isA<ModFfiException>().having(
+              (error) => error.code,
+              'code',
+              retryableCode,
+            ),
+          ),
+          reason: retryableCode,
+        );
+        expect(await retrySession.headFile.readAsBytes(), exactRetryHead);
+        expect(retrySession.requiresReopen, isFalse);
+      }
+      await retrySession.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      await retrySession.close();
+
+      for (final errorCode in <String>[
+        'AUTHORING_REVISION3_NPC_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_NPC_PROJECT_LIMIT',
+        'AUTHORING_REVISION3_NPC_REQUEST_LIMIT',
+        'AUTHORING_REVISION3_NPC_REVISION_LIMIT',
+        'AUTHORING_REVISION3_NPC_STORE_SEAL_MISMATCH',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_NPC_FUTURE_UNKNOWN',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: errorCode.toLowerCase(),
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: _projectJson(revision: 0, name: errorCode),
+        );
+        final exactHead = await session.headFile.readAsBytes();
+        store.nextNpcError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_draft_v1',
+          code: errorCode,
+          message: 'fake NPC integrity failure',
+        );
+        await expectLater(
+          session.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000081',
+            scriptModuleId: '00000000000000000000000000000082',
+            displayName: 'Managed Guard',
+            intent: _npcIntent(1),
+          ),
+          throwsA(
+            errorCode.endsWith('HEAD_CONFLICT')
+                ? isA<ManagedProjectHeadConflictException>()
+                : isA<ManagedProjectVerificationException>(),
+          ),
+          reason: errorCode,
+        );
+        expect(await session.headFile.readAsBytes(), exactHead);
+        expect(session.requiresReopen, isTrue);
+        final npcCalls = store.npcPrepareCalls;
+        await expectLater(
+          session.prepareAndPublishNpcDraftV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            npcId: '00000000000000000000000000000083',
+            scriptModuleId: '00000000000000000000000000000084',
+            displayName: 'Managed Guard 2',
+            intent: _npcIntent(2),
+          ),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.npcPrepareCalls, npcCalls);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'NPC candidate reopen mismatch stays unpublished and may be retried',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_reopen');
+      final store = _FakeRevision3Store();
+      final original = _projectJson(revision: 0, name: 'NPC reopen');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final exactHead = await session.headFile.readAsBytes();
+      store.nextHeadOverride = store.register(
+        _projectJson(revision: 70, name: 'Wrong NPC candidate reopen'),
+      );
+
+      await expectLater(
+        session.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000081',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Managed Guard',
+          intent: _npcIntent(1),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(await session.headFile.readAsBytes(), exactHead);
+      expect(session.projectJson, original);
+      expect(session.requiresReopen, isFalse);
+
+      final published = await session.prepareAndPublishNpcDraftV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        npcId: '00000000000000000000000000000081',
+        scriptModuleId: '00000000000000000000000000000082',
+        displayName: 'Managed Guard',
+        intent: _npcIntent(1),
+      );
+      expect(session.head.canonicalJson, published.head.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'head drift during native NPC prepare never clobbers the winner',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'npc_race');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(revision: 0, name: 'NPC race'),
+      );
+      final externalProject = _projectJson(
+        revision: 90,
+        name: 'External NPC winner',
+      );
+      final externalHead = store.register(externalProject);
+      store.afterNpcPrepare = (rootPath, _, _, _) => File(
+        p.join(rootPath, 'gore-project.json'),
+      ).writeAsString(externalHead.canonicalJson, flush: true);
+
+      await expectLater(
+        session.prepareAndPublishNpcDraftV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          npcId: '00000000000000000000000000000081',
+          scriptModuleId: '00000000000000000000000000000082',
+          displayName: 'Managed Guard',
+          intent: _npcIntent(1),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(await session.headFile.readAsString(), externalHead.canonicalJson);
+      expect(session.projectRevision, 0);
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, externalProject);
       await reopened.close();
     },
   );
@@ -1427,6 +1743,14 @@ typedef _AfterQuestPrepare =
       String candidateProjectJson,
     );
 
+typedef _AfterNpcPrepare =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead basisHead,
+      AuthoringWorkingHead candidateHead,
+      String candidateProjectJson,
+    );
+
 typedef _AfterContentRead =
     FutureOr<void> Function(
       String root,
@@ -1454,12 +1778,14 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int _sequence = 0;
   int prepareCalls = 0;
   int questPrepareCalls = 0;
+  int npcPrepareCalls = 0;
   int contentReadCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetRemoveCalls = 0;
   _AfterPrepare? afterPrepare;
   _AfterQuestPrepare? afterQuestPrepare;
+  _AfterNpcPrepare? afterNpcPrepare;
   _AfterContentRead? afterContentRead;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
@@ -1467,8 +1793,13 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> questCurrentProjects = <String>[];
   final List<AuthoringRevision3QuestDraftRequestV3> questRequests =
       <AuthoringRevision3QuestDraftRequestV3>[];
+  final List<String> npcGameRoots = <String>[];
+  final List<String> npcCurrentProjects = <String>[];
+  final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
+      <AuthoringRevision3NpcDraftRequestV1>[];
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
+  Object? nextNpcError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
   Object? nextDataAssetError;
@@ -1680,6 +2011,52 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcDraftRequestV1 request,
+  }) async {
+    npcPrepareCalls++;
+    npcGameRoots.add(gameRoot);
+    npcCurrentProjects.add(currentProjectJson);
+    npcRequests.add(request);
+    final injectedError = nextNpcError;
+    nextNpcError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_npc_draft_v1',
+        code: 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT',
+        message: 'fake native NPC basis CAS rejected',
+      );
+    }
+    final fixture = Revision3NpcFixture.fromBasis(
+      basisHead: request.expectedHead,
+      basisProjectJson: currentProjectJson,
+      request: request,
+    );
+    _projectsByHead[fixture.candidateHead.canonicalJson] =
+        fixture.candidateProjectJson;
+    final hook = afterNpcPrepare;
+    afterNpcPrepare = null;
+    await hook?.call(
+      root,
+      request.expectedHead,
+      fixture.candidateHead,
+      fixture.candidateProjectJson,
+    );
+    return AuthoringRevision3NpcDraftPreparation.fromJson(
+      fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3ContentIndexResult> readContentIndex({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -1847,27 +2224,30 @@ Future<Directory> _projectRoot(Directory fixture, {String suffix = ''}) async {
   return root;
 }
 
-String _projectJson({required int revision, required String name}) =>
-    jsonEncode(<String, Object?>{
-      'format': 2,
-      'schema_revision': 3,
-      'project_id': '00000000000000000000000000000003',
-      'revision': revision,
-      'meta': <String, Object?>{
-        'name': name,
-        'version': '1.0.0',
-        'author': 'revision-3 session tests',
-      },
-      'target': <String, Object?>{
-        'executable': <String, Object?>{
-          'byte_len': 1,
-          'sha256': List<String>.filled(64, '3').join(),
-        },
-      },
-      'authoring_locales': <Object?>[],
-      'entities': <String, Object?>{},
-      'asset_store': <String, Object?>{'assets': <String, Object?>{}},
-    });
+String _projectJson({
+  required int revision,
+  required String name,
+}) => jsonEncode(<String, Object?>{
+  'format': 2,
+  'schema_revision': 3,
+  'project_id': '00000000000000000000000000000003',
+  'revision': revision,
+  'meta': <String, Object?>{
+    'name': name,
+    'version': '1.0.0',
+    'author': 'revision-3 session tests',
+  },
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entities': <String, Object?>{},
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
 
 Map<String, Object?> _contentResponse(
   AuthoringWorkingHead head,
@@ -2071,6 +2451,13 @@ AuthoringRevision3QuestDraftIntentV3 _questIntent(int ordinal) =>
       title: 'Managed Quest $ordinal',
       description: 'Exercise safe managed Quest publication.',
       objectiveTitle: 'Finish Managed Quest $ordinal',
+    );
+
+AuthoringRevision3NpcDraftIntentV1 _npcIntent(int ordinal) =>
+    AuthoringRevision3NpcDraftIntentV1(
+      moduleNamespace: 'GoreMods.Npcs.Managed$ordinal',
+      uniqueName: 'GoreManagedNpc$ordinal',
+      parentCatalogId: 'g1r:npc:om_grd_asghan_263',
     );
 
 Map<String, Object?> _preparedResponse(AuthoringWorkingHead head) =>

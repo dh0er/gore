@@ -63,6 +63,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_remove_revision3_dataasset_stage_v1',
   'authoring_store_prepare_revision3_checkpoint',
   'authoring_store_prepare_revision3_dataasset_stage_v1',
+  'authoring_store_prepare_revision3_npc_draft_v1',
   'authoring_store_prepare_revision3_quest_draft_v3',
   'authoring_store_read_revision3_content_index_v1',
   'authoring_store_verify_asset',
