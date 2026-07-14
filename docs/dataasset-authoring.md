@@ -103,12 +103,15 @@ and returns only sealed package facts plus offset-free selectors. The UI reports
 `walked`, `partial`, and `unsupported` exports separately, searches the proven
 leaf facts, and keeps large result lists lazy.
 
-This first Studio surface is deliberately evidence-only. It has no patch,
-stage, save, pack, deploy, or runtime-qualification control, and native paths or
-raw offsets are never returned in its result. Use the receipt-bound CLI workflow
-below for the currently supported copy-on-write patch operation. A future
-semantic editor must preserve these exact selector and provenance gates rather
-than treating a successfully opened package as general write support.
+The DataAsset Lab itself remains deliberately evidence-only. It has no patch,
+project-save, pack, deploy, or runtime-qualification control, and native paths
+or raw offsets are never returned in its result. Use the receipt-bound CLI
+workflow below for the currently supported copy-on-write patch operation. A
+separate managed revision-3 project view can now import the resulting verified
+PatchReceipt into its stage registry; that does not turn the Lab into a semantic
+editor or grant build/deploy authority. Any future semantic editor must preserve
+these exact selector and provenance gates rather than treating a successfully
+opened package as general write support.
 
 ## 3. Prepare one raw fixed-width replacement
 
@@ -225,10 +228,23 @@ fixed-head byte-CAS, and post-publication reopen lane used by other revision-3
 mutations. Listing is an exact-head serialized read. Head drift never clobbers
 the winner; malformed or integrity-uncertain results poison the session, while
 bounded local-input/response-limit failures remain retryable after the disk
-head is rechecked. The FFI/session boundary still adds no visible Mod Studio
-stage action and grants no build, pack, deploy, runtime, or future reinspection
-authority. Semantic preview/diff/undo, build lowering, and post-pack
-verification are separate work.
+head is rechecked.
+
+Managed revision-3 Home now exposes that exact registry as **Verified DataAsset
+edits**. The author can search friendly asset names or `/Game` paths, inspect
+bounded verified facts, import a PatchReceipt JSON through a file picker, and
+remove an entry from the project registry after confirmation. Initial or failed
+exact-head loading, checkpoint drift, and `requiresReopen` lock mutation. Add and
+remove are bound to the exact project root, project ID, revision, and head; each
+successful mutation advances and reloads the visible project checkpoint. A
+registry removal does not modify the source receipt or game installation.
+
+This visible surface manages independently receipt-verified fixed-size edits;
+it is not yet a semantic value editor. It grants no build, pack, deploy,
+gameplay, runtime, or future-reinspection authority. Semantic schema/forms,
+authoring a value directly in Studio, preview/diff/undo, build lowering,
+post-pack verification, structural edits, and the sealed Unreal handoff remain
+separate work.
 
 ## 6. Pack the patched pair without deploying it
 

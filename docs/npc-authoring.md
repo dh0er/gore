@@ -117,13 +117,27 @@ the vanilla identity; it is not a substitute for this new linked class chain.
 
 ## Mod Studio boundary
 
-Mod Studio can safely provide a Draft NPC wizard that selects a qualified
-vanilla archetype, generates the definition/config/spawn classes and unique
-namespace, previews the exact source, and runs the offline verifier. The UI can
-mark that class chain as offline-qualified while keeping runtime spawn,
-persistence, dialog, and quest capabilities explicitly blocked or
-Experimental. It must not label a compiled but unspawned class chain as a
-working new NPC.
+Managed revision-3 Home now provides the first Guided NPC Draft wizard. The
+author supplies only a display name and selects a qualified vanilla archetype
+through the searchable picker. The wizard rebuilds and joins the Story and broad
+NPC catalogs when it opens and refreshes them again immediately before
+publication. Entity IDs, module namespace, source path, generated class names,
+and unique runtime identity are derived from the exact project checkpoint and
+remain hidden in normal mode.
+
+Publication is bound to the exact project root, project ID, revision, and head.
+A changed checkpoint or a session that requires reopen locks the wizard rather
+than applying stale intent. On success the managed session publishes the
+NPC/`ScriptModule` pair through guarded fixed-head byte CAS, fully reopens the
+published checkpoint, and refreshes the visible project revision and content
+library.
+
+This is deliberately a logical-clone **Draft** only. The wizard does not compile,
+build, deploy, spawn, write game files, change a save, or claim gameplay
+behavior. Visuals, faction, stats, inventory, routine, dialog, quests, and world
+placement are not authored by this step. The result remains build-blocked,
+runtime-unqualified, and not spawned; the UI must not describe it as a working
+new NPC.
 
 ## Native read-only archetype catalog
 
@@ -181,8 +195,17 @@ the fixed head or writes into the game. Its only status claims are:
 - `source_inspection: fresh_native_context_required`;
 - `publication_status: not_supported`.
 
-This lands the native prepare-only revision-3 boundary, not managed-session or
-Studio publication, a semantic NPC editor, generated production build output,
-spawn support, or runtime qualification. The retained live FFI test remains
-environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI fixtures do
-not substitute for that pinned-game proof.
+Strict Dart request/result DTOs validate the exact basis, statuses, generated
+NPC/module closure, catalog-resolved parent evidence, AssetStore bindings, and
+candidate checkpoint returned by that command. The managed revision-3 session
+then independently reopens and publishes the candidate through its serialized
+repair-journal and fixed-head byte-CAS lane, followed by a full published
+reopen. Retryable catalog/input failures remain distinct from integrity or
+publication uncertainty; uncertain state requires reopening the session.
+
+Together with the Guided wizard above, this lands managed-session and visible
+Studio publication of the bounded NPC Draft. It does **not** land a complete
+semantic NPC editor, generated production build output, class residence,
+discovery, spawn support, or runtime qualification. The retained live FFI test
+remains environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI
+fixtures do not substitute for that pinned-game proof.

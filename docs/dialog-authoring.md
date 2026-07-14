@@ -48,6 +48,48 @@ byte-identical. The only difference was three ASCII digits in the already-known
 `/Engine/Transient.GothicScreenshotsSave_*` object name in
 `PersistentDataList.sav`; its other bytes and every slot save were unchanged.
 
+## Current version-3 requalification candidate
+
+The current production generator now emits runtime version 3. Its exact Viper
+candidate is retained under
+`work/probe/viper-dialog-fixture/candidate-public-v3/`. It reuses the
+live-proven 3,150-byte AngelScript mini and exact Viper registration, but freezes
+the current batch-preflight runtime from repository HEAD
+`48f52a9928f0e373c3fa06967a0505e2539d185e`.
+
+Two public builds produced the same five files. The generated Lua is 30,519
+bytes with SHA-256
+`8C2B1FC454BB44CBDDCBF924EF9282E3BBE7023BC2BDD6B7485120AF578EAAC2`.
+The version-3 verifier requires the exact participant/class/sentinel row, one
+`AddTopic` site, nullable-object handling, render-before-mutation hook order,
+and participant, all-active-class, context, and all-topic-lookup preflights
+before the mutation loop. It rejects object scans, delayed/game-thread work,
+console/key paths, direct conversation requests, ability grant/activation,
+save/quest/knowledge/property writes, removals, and array mutation. The current
+focused runtime suite passes all 31 tests.
+
+A copied-cache deployment produced the same 7,306-module combined-cache hash as
+the earlier visual proof. Undeploy restored the exact original seven-entry
+sandbox tree with full-tree SHA-256
+`07724E3444617A3DF56489C9132F6DDE0CE46E6523A1C6DE092C4077F03F05A8`;
+the record, backup, loader, holder, recovery, and temporary residue were absent.
+This is an offline/sandbox qualification, not a live result.
+
+The candidate-local `live-qualification.ps1` is read-only toward the game,
+saves, and UE4SS markers. It admits only the pinned UE4SS 3.0.1 Beta #0 build
+(`272ce2f8`) with the sealed loader/proxy payloads, the exact game process and
+executable generation, the exact save root and sealed pre-run save tree, the
+sole fixture marker, and a sealed log prefix followed by the one ordered
+version-3 sequence while the menu is open. Postflight checks require the
+pristine cache, restored markers, no reparse points, and byte-identical saves
+after separately performed undeploy. The sole admitted save difference is a
+same-length numeric change to the root `GothicScreenshotsSave_<id>` token in
+`PersistentDataList.sav`; any other difference fails. The harness never
+deploys, isolates mods, launches the game, clicks, saves, or restores files.
+Those setup and cleanup operations stay separate and visible; one natural
+Viper-menu open with no selection and no save is the only remaining in-game
+interaction needed to requalify render-only runtime v3.
+
 ## Minimal compiled topic
 
 Derive from the existing conversation root for the target NPC. This exact
@@ -234,8 +276,9 @@ therefore be tested on a disposable save with semantic before/after inspection.
 - The controlled visual proof currently covers Gothic 1 Remake 1.0.3 with
   UE4SS 3.0.1. Both the reviewed v0.4 fixture and version 1 of the exact adapter
   emitted by the parameterized production generator completed the clean live
-  visual proof. The current generated runtime is version 3: its batch class
-  preflight and observer behavior have deterministic mock coverage, but the
+  visual proof. The current generated runtime is version 3: its frozen candidate,
+  deterministic builds, batch class preflight, observer behavior, forbidden-
+  operation boundary, and exact sandbox closure are offline-qualified, but the
   exact version-3 artifact still needs the same clean visual requalification.
   Other game, UE4SS, and runtime combinations remain to be qualified.
 - Topic selection, authored knowledge/quest changes, recorded voice, and
