@@ -21,6 +21,7 @@ mod revision3_quest_source_v2;
 mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
+mod story_transaction_revision3_npc;
 mod strict_json;
 mod validate;
 mod validate_revision2;
@@ -147,6 +148,20 @@ pub use story_transaction_revision3::{
     Revision3QuestDraftIntentV2, Revision3QuestDraftRuntimeStatusV2, Revision3QuestEntityRoleV2,
     Revision3QuestSourceInspectionStatusV2, Revision3StoryIdentityKindV2,
     MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_QUEST_DRAFT_REQUEST_JSON_BYTES,
+};
+pub use story_transaction_revision3_npc::{
+    apply_revision3_npc_draft_transaction_v1, Revision3NpcCatalogAuthorityV1,
+    Revision3NpcCatalogSelectionV1, Revision3NpcCollisionAuthorityV1,
+    Revision3NpcCollisionInventoryV1, Revision3NpcDraftBuildStatusV1,
+    Revision3NpcDraftInsertConflictV1, Revision3NpcDraftInsertErrorV1,
+    Revision3NpcDraftInsertEvaluationV1, Revision3NpcDraftInsertOutcomeV1,
+    Revision3NpcDraftInsertRejectionV1, Revision3NpcDraftInsertRequestJsonErrorV1,
+    Revision3NpcDraftInsertRequestV1, Revision3NpcDraftIntentV1,
+    Revision3NpcDraftPublicationStatusV1, Revision3NpcDraftRuntimeStatusV1,
+    Revision3NpcEntityRoleV1, Revision3NpcSourceInspectionStatusV1,
+    Revision3NpcStoryIdentityKindV1, MAX_REVISION3_NPC_CATALOG_ID_BYTES_V1,
+    MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
+    REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
 };
 pub use validate::{Diagnostic, DiagnosticCode, DiagnosticSeverity, ValidationProfile};
 pub use working_store::{

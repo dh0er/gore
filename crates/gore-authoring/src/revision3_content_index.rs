@@ -665,7 +665,7 @@ mod tests {
     use crate::model_revision3::{
         DialogLine, Entity, NpcDraft, NpcDraftInput, NpcParentClassInput, OggMetadata,
         QuestCollisionArtifactRef, QuestDraft, QuestDraftInput, QuestGiverInput, QuestParentInput,
-        ScriptAuthoringStatus, ScriptModule, ScriptRuntimeStatus, TypedRef, VoiceSlot, VoiceTake,
+        ScriptModule, TypedRef, VoiceSlot, VoiceTake,
     };
     use crate::{
         AssetMeta, AssetRef, AssetStoreIndex, FormatV2, ProjectMeta, SchemaRevisionV3,
@@ -850,6 +850,24 @@ mod tests {
             },
         );
         let npc_owner = TypedRef::new(project.project_id, npc_id, EntityKind::NpcDraft);
+        let npc = NpcDraft {
+            generator_id: crate::LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
+            generator_version: crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
+            input: NpcDraftInput {
+                target: target(),
+                module_namespace: "PROJECT.NPCS.GATEGUARD".to_owned(),
+                unique_name: "GORE_GATE_GUARD".to_owned(),
+                parent_character_definition: parent("UCharacterDefinition_Asghan"),
+                parent_ai_agent_config: parent("UAIAgentConfig_Asghan"),
+                parent_spawn_definition: parent("USpawnAIAgentDefinition_Asghan"),
+            },
+            script_module: TypedRef::new(
+                project.project_id,
+                npc_module_id,
+                EntityKind::ScriptModule,
+            ),
+        };
+        let npc_module = npc.regenerate_script_module(npc_owner.clone()).unwrap();
         project.entities.insert(
             npc_id,
             Entity {
@@ -857,23 +875,7 @@ mod tests {
                 display_name: "Gate Guard".to_owned(),
                 origin: new_origin("GORE_GATE_GUARD"),
                 revision: 0,
-                payload: EntityPayload::NpcDraft(NpcDraft {
-                    generator_id: crate::LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
-                    generator_version: crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-                    input: NpcDraftInput {
-                        target: target(),
-                        module_namespace: "PROJECT.NPCS.GATEGUARD".to_owned(),
-                        unique_name: "GORE_GATE_GUARD".to_owned(),
-                        parent_character_definition: parent("UCharacterDefinition_Asghan"),
-                        parent_ai_agent_config: parent("UAIAgentConfig_Asghan"),
-                        parent_spawn_definition: parent("USpawnAIAgentDefinition_Asghan"),
-                    },
-                    script_module: TypedRef::new(
-                        project.project_id,
-                        npc_module_id,
-                        EntityKind::ScriptModule,
-                    ),
-                }),
+                payload: EntityPayload::NpcDraft(npc),
             },
         );
         project.entities.insert(
@@ -887,20 +889,7 @@ mod tests {
                     owner: npc_owner.clone(),
                 },
                 revision: 0,
-                payload: EntityPayload::ScriptModule(ScriptModule {
-                    generator_id: crate::LOGICAL_NPC_CLONE_GENERATOR_ID.to_owned(),
-                    generator_version: crate::LOGICAL_NPC_CLONE_GENERATOR_VERSION,
-                    owner: npc_owner,
-                    module_namespace: "PROJECT.NPCS.GATEGUARD".to_owned(),
-                    module_relative_path: "Project/Npcs/GateGuard.as".to_owned(),
-                    source: "class SecretGeneratedBody {}".to_owned(),
-                    source_sha256: digest(0x55),
-                    input_fingerprint: digest(0x56),
-                    status: ScriptModuleStatus {
-                        authoring: ScriptAuthoringStatus::OfflineDraft,
-                        runtime: ScriptRuntimeStatus::RuntimeUnqualified,
-                    },
-                }),
+                payload: EntityPayload::ScriptModule(npc_module),
             },
         );
 
@@ -928,7 +917,7 @@ mod tests {
 
         let json = index.to_canonical_json().unwrap();
         assert_eq!(json, index.to_canonical_json().unwrap());
-        assert!(!json.contains("SecretGeneratedBody"));
+        assert!(!json.contains("class UCharacterDefinition_Human_GORE_GATE_GUARD"));
         assert!(json.contains("GORE_GATE_GUARD"));
         assert!(json.contains("missing_entity"));
     }

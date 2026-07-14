@@ -365,6 +365,14 @@ pub enum ProjectRevision3ValidationError {
     InvalidQuestScriptReference { quest: EntityId },
     #[error("revision-3 Quest {quest} ScriptModule target is missing or has the wrong kind")]
     MissingQuestScriptModule { quest: EntityId },
+    #[error("revision-3 NPC {npc} has invalid closed generator state: {reason}")]
+    InvalidNpcDraft { npc: EntityId, reason: String },
+    #[error("revision-3 NPC {npc} has an invalid local ScriptModule reference")]
+    InvalidNpcScriptReference { npc: EntityId },
+    #[error("revision-3 NPC {npc} ScriptModule target is missing or has the wrong kind")]
+    MissingNpcScriptModule { npc: EntityId },
+    #[error("revision-3 NPC-generated ScriptModule {module} has no exact owning NPC closure")]
+    OrphanNpcScriptModule { module: EntityId },
     #[error("revision-3 canonical serializer emitted non-UTF-8 bytes")]
     NonUtf8Serialization,
 }
