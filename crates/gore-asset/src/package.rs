@@ -391,6 +391,11 @@ impl PackageCarrier {
         }
     }
 
+    /// Consume an in-memory carrier without duplicating its potentially large cooked pair.
+    pub(crate) fn into_bytes(self) -> (Vec<u8>, Vec<u8>) {
+        (self.uasset, self.uexp)
+    }
+
     pub fn len(&self, component: PackageComponent) -> usize {
         self.bytes(component).len()
     }

@@ -6,10 +6,27 @@ import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 
 import '../dataasset/dataasset_test_fixtures.dart';
+import '../support/revision3_dataasset_fixture.dart';
 
 const _root = r'C:\Projects\DataAssetBrowser.goreproj';
 const _gameRoot = r'C:\Games\Gothic 1 Remake';
 const _projectId = '31313131313131313131313131313131';
+
+String _basisProjectJson() => jsonEncode(<String, Object?>{
+  'format': 2,
+  'schema_revision': 3,
+  'project_id': _projectId,
+  'revision': 7,
+  'meta': <String, Object?>{
+    'name': 'Installed DataAsset fixture',
+    'version': '1.0.0',
+    'author': 'tests',
+  },
+  'target': <String, Object?>{'executable': _digitSeal(171698176, 'd')},
+  'authoring_locales': <Object?>[],
+  'entities': <String, Object?>{},
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
 
 Map<String, Object?> _seal(int byteLength, String sha256) => <String, Object?>{
   'byte_len': byteLength,
@@ -125,6 +142,14 @@ Map<String, Object?> _installedInspectionResponse({
     'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
     'source_snapshot_seal': snapshot['source_snapshot_seal'],
     'target_path': candidate['target_path'],
+    'usmap_content_seal': <String, Object?>{
+      'byte_len': 256,
+      'sha256': 'c' * 64,
+    },
+    'usmap_inventory_seal': <String, Object?>{
+      'byte_len': 96,
+      'sha256': 'e' * 64,
+    },
   };
 }
 
@@ -151,6 +176,22 @@ Future<void> _expectMalformed(Map<String, Object?> response) async {
 }
 
 void main() {
+  test('installed proof binding matches the frozen native golden', () {
+    expect(
+      DataAssetInstalledSemanticEditIntent.computeInstalledProofBindingSha256(
+        candidateOrdinal: 7,
+        packageIndex: (byteLength: 1, sha256: '11' * 32),
+        sourceSnapshot: (byteLength: 2, sha256: '22' * 32),
+        usmapContent: (byteLength: 3, sha256: '33' * 32),
+        usmapInventory: (byteLength: 4, sha256: '44' * 32),
+        uasset: (byteLength: 5, sha256: '55' * 32),
+        uexp: (byteLength: 6, sha256: '66' * 32),
+        usmap: (byteLength: 7, sha256: '77' * 32),
+      ),
+      '827161c17b537a2b63095c51ff204cb398d653d3144bc012d276b4957cea5aed',
+    );
+  });
+
   test('Studio handshake requires the sorted installed DataAsset commands', () {
     expect(
       requiredStudioCoreCommands,
@@ -394,6 +435,162 @@ void main() {
         result.authorityStatus,
         AuthoringRevision3InstalledDataAssetAuthorityStatus.notGranted,
       );
+    },
+  );
+
+  test(
+    'installed edit sends only sealed proof authority and parses its unpublished stage',
+    () async {
+      final customIndex =
+          jsonDecode(_completeIndexJson()) as Map<String, Object?>;
+      final customCandidates = customIndex['candidates']! as List<Object?>;
+      customCandidates[1] = <String, Object?>{
+        'target_path': revision3DataAssetTargetPath,
+        'package_id_hex': 'e54f79b8fc97323c',
+      };
+      final snapshotResponse = _response(indexJson: jsonEncode(customIndex));
+      final inspectionJson = validDataAssetInspectionResponse();
+      (inspectionJson['binding']! as Map<String, Object?>)['usmap_sha256'] =
+          '3' * 64;
+      dataAssetSelector(inspectionJson)['usmap_sha256'] = '3' * 64;
+      final inspectionResponse =
+          _installedInspectionResponse(inspection: inspectionJson)
+            ..['target_path'] = revision3DataAssetTargetPath
+            ..['package_id_hex'] = 'e54f79b8fc97323c'
+            ..['package_index_seal'] = snapshotResponse['package_index_seal']
+            ..['usmap_content_seal'] = _seal(256, '3' * 64);
+      final evidenceCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_read_revision3_dataasset_package_index_v1':
+              snapshotResponse,
+          'authoring_store_inspect_revision3_installed_dataasset_v1':
+              inspectionResponse,
+        },
+      );
+      final evidenceFfi = ModFfi(evidenceCore);
+      final head = AuthoringWorkingHead.fromCanonicalJson(_headJson());
+      final snapshot = await evidenceFfi
+          .authoringStoreReadRevision3DataAssetPackageIndexV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+          );
+      final candidate = snapshot.index.candidates[1];
+      final inspection = await evidenceFfi
+          .authoringStoreInspectRevision3InstalledDataAssetV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+            expectedSnapshot: snapshot,
+            candidate: candidate,
+          );
+      final change = DataAssetSemanticValueEditor.fromLeaf(
+        inspection.inspection.exports.single.leaves.single,
+      ).changeScalar(value: '2');
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: change,
+      );
+      final fixture = Revision3DataAssetFixture.fromBasis(
+        basisHead: head,
+        basisProjectJson: _basisProjectJson(),
+        targetPath: candidate.targetPath,
+        selector: intent.selector.toJson(),
+        replacementHex: '02000000',
+      );
+      final nativeFields = intent.toNativeFields();
+      final response = fixture.prepareResponse()
+        ..['intent_binding_sha256'] = intent.intentBindingSha256
+        ..['installed_proof_binding_sha256'] =
+            intent.installedProofBindingSha256
+        ..['installed_source'] = <String, Object?>{
+          'candidate_ordinal': candidate.ordinal,
+          'format': 'gore.authoring.revision3-installed-dataasset-source.v1',
+          'inspection_binding': nativeFields['expected_inspection_binding'],
+          'package_index_seal': nativeFields['expected_package_index_seal'],
+          'source_snapshot_seal': nativeFields['expected_source_snapshot_seal'],
+          'usmap_content_seal': nativeFields['expected_usmap_content_seal'],
+          'usmap_inventory_seal': nativeFields['expected_usmap_inventory_seal'],
+        };
+      final editCore = FakeGoreCoreFfiService(
+        responses: <String, Map<String, Object?>>{
+          'authoring_store_prepare_revision3_installed_dataasset_edit_v1':
+              response,
+        },
+      );
+
+      final prepared = await ModFfi(editCore)
+          .authoringStorePrepareRevision3InstalledDataAssetEditV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+            intent: intent,
+          );
+
+      expect(prepared.stage.targetPath, candidate.targetPath);
+      expect(prepared.installedSource?.candidateOrdinal, candidate.ordinal);
+      expect(editCore.calls.single.payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        ...nativeFields,
+        'game_root': _gameRoot,
+        'root': _root,
+      });
+      expect(editCore.calls.single.payload, isNot(contains('target_path')));
+      expect(editCore.calls.single.payload, isNot(contains('package_id_hex')));
+      expect(editCore.calls.single.payload, isNot(contains('receipt')));
+      expect(editCore.calls.single.payload, isNot(contains('output')));
+
+      for (final mutate in <void Function(Map<String, Object?>)>[
+        (value) => value['installed_proof_binding_sha256'] = '0' * 64,
+        (value) =>
+            (value['installed_source']!
+                    as Map<String, Object?>)['candidate_ordinal'] =
+                0,
+        (value) =>
+            ((value['installed_source']!
+                        as Map<String, Object?>)['package_index_seal']!
+                    as Map<String, Object?>)['sha256'] =
+                '0' * 64,
+        (value) {
+          final source = value['installed_source']! as Map<String, Object?>;
+          final binding = source['inspection_binding']! as Map<String, Object?>;
+          final uexp = binding['uexp']! as Map<String, Object?>;
+          uexp['sha256'] = '0' * 64;
+        },
+        (value) =>
+            (value['installed_source']!
+                    as Map<String, Object?>)['target_path'] =
+                revision3DataAssetTargetPath,
+      ]) {
+        final malformed = (jsonDecode(jsonEncode(response)) as Map)
+            .cast<String, Object?>();
+        mutate(malformed);
+        final malformedCore = FakeGoreCoreFfiService(
+          responses: <String, Map<String, Object?>>{
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1':
+                malformed,
+          },
+        );
+        await expectLater(
+          ModFfi(
+            malformedCore,
+          ).authoringStorePrepareRevision3InstalledDataAssetEditV1(
+            root: _root,
+            gameRoot: _gameRoot,
+            expectedHead: head,
+            intent: intent,
+          ),
+          throwsA(
+            isA<ModFfiException>().having(
+              (error) => error.code,
+              'code',
+              ModFfiException.malformedNativeResponseCode,
+            ),
+          ),
+        );
+      }
     },
   );
 

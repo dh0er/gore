@@ -531,6 +531,14 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3DataAssetPackageCandidate candidate,
   });
 
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetInstalledSemanticEditIntent intent,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -733,6 +741,20 @@ final class ModFfiManagedRevision3AuthoringStore
     expectedHead: expectedHead,
     expectedSnapshot: expectedSnapshot,
     candidate: candidate,
+  );
+
+  @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) => ffi.authoringStorePrepareRevision3InstalledDataAssetEditV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    intent: intent,
   );
 
   @override
@@ -1882,6 +1904,36 @@ class ManagedRevision3AuthoringProjectSession {
     ),
   );
 
+  /// Revalidate one exact installed snapshot and its inspection, independently
+  /// reconstruct the selected package, then publish only the resulting closed
+  /// stage through the existing fixed-head byte-CAS lane.
+  Future<ManagedRevision3DataAssetStageCheckpoint>
+  prepareAndPublishInstalledDataAssetEditV1({
+    required String gameRoot,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) => _prepareAndPublishDataAssetStage(
+    operation: 'prepareAndPublishInstalledDataAssetEditV1',
+    handlePrepareError: _core._throwRevision3InstalledDataAssetEditError,
+    prepare: (basis) {
+      if (intent.snapshot.head.canonicalJson != basis.head.canonicalJson ||
+          intent.snapshot.projectId != basis.projectId ||
+          intent.snapshot.projectRevision != basis.projectRevision ||
+          intent.inspection.head.canonicalJson != basis.head.canonicalJson ||
+          intent.inspection.projectId != basis.projectId ||
+          intent.inspection.projectRevision != basis.projectRevision) {
+        throw const ManagedProjectVerificationException(
+          'installed DataAsset edit is not bound to the exact session basis',
+        );
+      }
+      return _store.prepareInstalledDataAssetEditV1(
+        root: root.path,
+        gameRoot: gameRoot,
+        expectedHead: basis.head,
+        intent: intent,
+      );
+    },
+  );
+
   Future<ManagedRevision3DataAssetStageCheckpoint>
   _prepareAndPublishDataAssetStage({
     required String operation,
@@ -1889,12 +1941,14 @@ class ManagedRevision3AuthoringProjectSession {
       _ManagedOpenedCheckpoint basis,
     )
     prepare,
+    Never Function(Object error, StackTrace stackTrace)? handlePrepareError,
   }) =>
       _core._publishPreparedRevision3Checkpoint<
         ManagedRevision3DataAssetStageCheckpoint
       >(
         operation: operation,
-        handlePrepareError: _core._throwRevision3DataAssetError,
+        handlePrepareError:
+            handlePrepareError ?? _core._throwRevision3DataAssetError,
         prepare: (basis) async {
           final projectId = basis.projectId;
           final projectRevision = basis.projectRevision;
@@ -3250,6 +3304,50 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3InstalledDataAssetEditError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (const {
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT',
+      }.contains(error.code)) {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3InstalledDataAssetEditErrorIsRetryable(error.code) ||
+          _revision3InstalledDataAssetInspectionErrorIsRetryable(error.code)) {
+        // Source, selector, inventory, capacity, and bounded response failures
+        // occur before fixed-head publication. Immutable CAS orphans are safe;
+        // the caller can obtain a fresh installed inspection and retry.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (error.code.startsWith('AUTHORING_REVISION3_DATAASSET_')) {
+        _throwRevision3DataAssetError(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 installed DataAsset edit could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3ContentReadError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_CONTENT_HEAD_CONFLICT') {
@@ -3803,6 +3901,23 @@ bool _revision3DataAssetErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_DATAASSET_REVISION_LIMIT',
   'AUTHORING_REVISION3_DATAASSET_TARGET_EXISTS',
   'AUTHORING_REVISION3_DATAASSET_TARGET_MISSING',
+}.contains(code);
+
+bool _revision3InstalledDataAssetEditErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INSPECTION_BINDING_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INSPECTION_FAILED',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_PACKAGE_INDEX_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REVISION_LIMIT',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SELECTOR_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH',
+  'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_INVENTORY_MISMATCH',
 }.contains(code);
 
 Future<AuthoringWorkingHead> _readCanonicalHead(File file) async {

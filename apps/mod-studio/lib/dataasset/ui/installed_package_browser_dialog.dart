@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../core/mod_ffi.dart';
 import '../../project/current_project_controller.dart';
 import 'dataasset_lab.dart';
+import 'installed_dataasset_semantic_edit_dialog.dart';
 
 typedef Revision3InstalledPackageIndexLoader =
     Future<AuthoringRevision3DataAssetPackageIndexResult> Function({
@@ -19,20 +20,23 @@ typedef Revision3InstalledDataAssetInspector =
       required AuthoringRevision3DataAssetPackageCandidate candidate,
     });
 
-/// Search-first, read-only browser over one exact installed package snapshot.
-/// Candidate paths are discovery metadata only; selecting or copying one grants
-/// no extraction, edit, build, deployment, or runtime authority.
+/// Search-first browser over one exact installed package snapshot. Candidate
+/// paths remain discovery metadata only. An optional typed publisher can
+/// promote a proven editable leaf without granting caller-selected paths,
+/// offsets, bytes, build, deployment, or runtime authority.
 class InstalledPackageBrowserDialog extends StatefulWidget {
   const InstalledPackageBrowserDialog({
     required this.gameRoot,
     required this.load,
     this.inspect,
+    this.publish,
     super.key,
   });
 
   final String gameRoot;
   final Revision3InstalledPackageIndexLoader load;
   final Revision3InstalledDataAssetInspector? inspect;
+  final InstalledDataAssetSemanticStagePublisher? publish;
 
   @override
   State<InstalledPackageBrowserDialog> createState() =>
@@ -422,7 +426,20 @@ class _InstalledPackageBrowserDialogState
       );
       if (!mounted || epoch != _inspectionEpoch) return;
       setState(() => _inspectingOrdinal = null);
-      await _showInspection(result);
+      final editResult = await _showInspection(snapshot, candidate, result);
+      if (!mounted || epoch != _inspectionEpoch || editResult == null) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      Navigator.of(context).pop();
+      final publication = editResult.publication;
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            publication != null
+                ? '${publication.targetPath} staged in project revision ${publication.revision}. Build and runtime remain blocked.'
+                : editResult.unavailable!.message,
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted || epoch != _inspectionEpoch) return;
       if (error
@@ -450,7 +467,9 @@ class _InstalledPackageBrowserDialogState
     }
   }
 
-  Future<void> _showInspection(
+  Future<InstalledDataAssetSemanticEditResult?> _showInspection(
+    AuthoringRevision3DataAssetPackageIndexResult snapshot,
+    AuthoringRevision3DataAssetPackageCandidate candidate,
     AuthoringRevision3InstalledDataAssetInspectionResult result,
   ) {
     final viewport = MediaQuery.sizeOf(context);
@@ -459,9 +478,9 @@ class _InstalledPackageBrowserDialogState
     final height = (viewport.height - 170 - (textScale - 1).clamp(0, 4) * 112)
         .clamp(180.0, 760.0)
         .toDouble();
-    return showDialog<void>(
+    return showDialog<InstalledDataAssetSemanticEditResult>(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         key: const Key('installed-dataasset-inspection-dialog'),
         title: Text(result.targetPath),
         content: SizedBox(
@@ -469,13 +488,33 @@ class _InstalledPackageBrowserDialogState
           height: height,
           child: DataAssetInspectionReport(
             inspection: result.inspection,
+            onEditLeaf: widget.publish == null
+                ? null
+                : (leaf) async {
+                    final editResult =
+                        await showDialog<InstalledDataAssetSemanticEditResult>(
+                          context: dialogContext,
+                          barrierDismissible: false,
+                          builder: (context) =>
+                              InstalledDataAssetSemanticEditDialog(
+                                snapshot: snapshot,
+                                candidate: candidate,
+                                inspection: result,
+                                leaf: leaf,
+                                publish: widget.publish!,
+                              ),
+                        );
+                    if (editResult != null && dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop(editResult);
+                    }
+                  },
             header: Card(
-              color: Theme.of(context).colorScheme.secondaryContainer,
+              color: Theme.of(dialogContext).colorScheme.secondaryContainer,
               child: const ListTile(
                 leading: Icon(Icons.policy_outlined),
-                title: Text('Installed package — read-only evidence'),
+                title: Text('Installed package — exact evidence'),
                 subtitle: Text(
-                  'Extracted to bounded memory from one exact installed snapshot. No game or project files were changed; edit, build, runtime, deployment, and publication authority remain unavailable.',
+                  'Extracted to bounded memory from one exact installed snapshot. Proven value leaves can be staged only after a fresh native re-read; build, runtime, and deployment remain unavailable.',
                 ),
               ),
             ),
@@ -484,7 +523,7 @@ class _InstalledPackageBrowserDialogState
         actions: [
           TextButton(
             key: const Key('installed-dataasset-inspection-close'),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Close'),
           ),
         ],

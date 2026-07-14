@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/dataasset/ui/installed_package_browser_dialog.dart';
+import 'package:gore_mod/dataasset/ui/installed_dataasset_semantic_edit_dialog.dart';
+import 'package:gore_mod/dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 
 import 'dataasset_test_fixtures.dart';
@@ -316,7 +318,7 @@ void main() {
         find.byKey(const Key('installed-dataasset-inspection-dialog')),
         findsOneWidget,
       );
-      expect(find.textContaining('read-only evidence'), findsOneWidget);
+      expect(find.textContaining('exact evidence'), findsOneWidget);
     },
   );
 
@@ -379,13 +381,424 @@ void main() {
       );
     },
   );
+
+  testWidgets('stages only a typed leaf from the exact installed inspection', (
+    tester,
+  ) async {
+    final snapshot = _packageIndexResult();
+    final candidate = snapshot.index.candidates.first;
+    late final AuthoringRevision3InstalledDataAssetInspectionResult evidence;
+    DataAssetInstalledSemanticEditIntent? publishedIntent;
+    await tester.pumpWidget(
+      _BrowserHost(
+        load: ({required gameRoot}) async => snapshot,
+        inspect:
+            ({
+              required gameRoot,
+              required expectedSnapshot,
+              required candidate,
+            }) async {
+              evidence = _installedInspectionResult(
+                expectedSnapshot: expectedSnapshot,
+                candidate: candidate,
+              );
+              return evidence;
+            },
+        publish: (intent) async {
+          publishedIntent = intent;
+          return DataAssetSemanticStagePublication(
+            targetPath: intent.expectedTargetPath,
+            revision: 8,
+          );
+        },
+      ),
+    );
+    await _openFirstInstalledEdit(tester);
+    expect(
+      find.byKey(const Key('installed-dataasset-semantic-edit-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.enterText(
+      find.byKey(const Key('dataasset-semantic-value')),
+      '2',
+    );
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-preview-action')),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const Key('installed-dataasset-semantic-preview')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+    );
+    await tester.pumpAndSettle();
+
+    final intent = publishedIntent!;
+    expect(identical(intent.snapshot, snapshot), isTrue);
+    expect(identical(intent.candidate, candidate), isTrue);
+    expect(identical(intent.inspection, evidence), isTrue);
+    expect(intent.toNativeFields(), isNot(contains('target_path')));
+    expect(intent.toNativeFields(), isNot(contains('package_id_hex')));
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsNothing,
+    );
+    expect(find.textContaining('project revision 8'), findsOneWidget);
+  });
+
+  testWidgets('announces invalid installed edits as a live status', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    final snapshot = _packageIndexResult();
+    await tester.pumpWidget(
+      _BrowserHost(
+        load: ({required gameRoot}) async => snapshot,
+        inspect:
+            ({
+              required gameRoot,
+              required expectedSnapshot,
+              required candidate,
+            }) async => _installedInspectionResult(
+              expectedSnapshot: expectedSnapshot,
+              candidate: candidate,
+            ),
+        publish: (_) async => throw StateError('unexpected publication'),
+      ),
+    );
+    await _openFirstInstalledEdit(tester);
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-preview-action')),
+    );
+    await tester.pump();
+
+    expect(
+      tester.getSemantics(
+        find.byKey(const Key('installed-dataasset-semantic-error-status')),
+      ),
+      matchesSemantics(
+        label: 'Choose a new value; the current value would not change.',
+        isLiveRegion: true,
+      ),
+    );
+    semantics.dispose();
+  });
+
+  testWidgets(
+    'closes all installed evidence dialogs when publication becomes stale',
+    (tester) async {
+      final snapshot = _packageIndexResult();
+      await tester.pumpWidget(
+        _BrowserHost(
+          load: ({required gameRoot}) async => snapshot,
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async => _installedInspectionResult(
+                expectedSnapshot: expectedSnapshot,
+                candidate: candidate,
+              ),
+          publish: (_) async {
+            throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+          },
+        ),
+      );
+      await _openFirstInstalledEdit(tester);
+      await tester.enterText(
+        find.byKey(const Key('dataasset-semantic-value')),
+        '2',
+      );
+      await tester.tap(
+        find.byKey(const Key('installed-dataasset-semantic-preview-action')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('installed-dataasset-semantic-edit-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('installed-package-browser-dialog')),
+        findsNothing,
+      );
+      expect(find.textContaining('project changed'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'closes all evidence when the publication outcome cannot be confirmed',
+    (tester) async {
+      final snapshot = _packageIndexResult();
+      await tester.pumpWidget(
+        _BrowserHost(
+          load: ({required gameRoot}) async => snapshot,
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async => _installedInspectionResult(
+                expectedSnapshot: expectedSnapshot,
+                candidate: candidate,
+              ),
+          publish: (_) async => throw StateError(
+            'simulated failure after an indeterminate publication boundary',
+          ),
+        ),
+      );
+      await _openFirstInstalledEdit(tester);
+      await _previewInstalledEdit(tester);
+      await tester.tap(
+        find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('installed-dataasset-semantic-edit-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('installed-package-browser-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.textContaining('outcome could not be confirmed'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('source drift closes evidence but keeps the project usable', (
+    tester,
+  ) async {
+    final snapshot = _packageIndexResult();
+    await tester.pumpWidget(
+      _BrowserHost(
+        load: ({required gameRoot}) async => snapshot,
+        inspect:
+            ({
+              required gameRoot,
+              required expectedSnapshot,
+              required candidate,
+            }) async => _installedInspectionResult(
+              expectedSnapshot: expectedSnapshot,
+              candidate: candidate,
+            ),
+        publish: (_) async {
+          throw const DataAssetSemanticStageUnavailableException.sourceEvidenceStale();
+        },
+      ),
+    );
+    await _openFirstInstalledEdit(tester);
+    await _previewInstalledEdit(tester);
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.textContaining('managed project remains usable'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('outcome could not be confirmed'), findsNothing);
+  });
+
+  testWidgets('an already staged target gives an actionable safe rejection', (
+    tester,
+  ) async {
+    final snapshot = _packageIndexResult();
+    await tester.pumpWidget(
+      _BrowserHost(
+        load: ({required gameRoot}) async => snapshot,
+        inspect:
+            ({
+              required gameRoot,
+              required expectedSnapshot,
+              required candidate,
+            }) async => _installedInspectionResult(
+              expectedSnapshot: expectedSnapshot,
+              candidate: candidate,
+            ),
+        publish: (_) async {
+          throw const DataAssetSemanticStageUnavailableException.targetAlreadyStaged();
+        },
+      ),
+    );
+    await _openFirstInstalledEdit(tester);
+    await _previewInstalledEdit(tester);
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsNothing,
+    );
+    expect(find.textContaining('already has a staged edit'), findsOneWidget);
+    expect(find.textContaining('Inspect it again'), findsNothing);
+    expect(find.textContaining('outcome could not be confirmed'), findsNothing);
+  });
+
+  testWidgets('cannot dismiss an installed edit while publication is active', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    final snapshot = _packageIndexResult();
+    final completion = Completer<DataAssetSemanticStagePublication>();
+    var publications = 0;
+    await tester.pumpWidget(
+      _BrowserHost(
+        load: ({required gameRoot}) async => snapshot,
+        inspect:
+            ({
+              required gameRoot,
+              required expectedSnapshot,
+              required candidate,
+            }) async => _installedInspectionResult(
+              expectedSnapshot: expectedSnapshot,
+              candidate: candidate,
+            ),
+        publish: (intent) {
+          publications++;
+          return completion.future;
+        },
+      ),
+    );
+    await _openFirstInstalledEdit(tester);
+    await _previewInstalledEdit(tester);
+    await tester.tap(
+      find.byKey(const Key('installed-dataasset-semantic-stage-action')),
+    );
+    await tester.pump();
+    expect(publications, 1);
+    expect(
+      find.byKey(const Key('installed-dataasset-semantic-progress')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSemantics(
+        find.byKey(const Key('installed-dataasset-semantic-busy-status')),
+      ),
+      matchesSemantics(
+        label:
+            'Re-reading the exact package and preparing the managed candidate',
+        isLiveRegion: true,
+      ),
+    );
+    semantics.dispose();
+
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pump();
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const Key('installed-dataasset-semantic-edit-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsOneWidget,
+    );
+
+    completion.complete(
+      const DataAssetSemanticStagePublication(
+        targetPath: '/Game/Characters/DA_Asghan',
+        revision: 8,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsNothing,
+    );
+    expect(find.textContaining('project revision 8'), findsOneWidget);
+  });
+}
+
+Future<void> _openFirstInstalledEdit(WidgetTester tester) async {
+  await tester.tap(find.byKey(const Key('open-browser')));
+  await tester.pumpAndSettle();
+  await tester.enterText(
+    find.byKey(const Key('installed-package-browser-search')),
+    'asghan',
+  );
+  await tester.pump(const Duration(milliseconds: 180));
+  await tester.tap(find.byKey(const Key('installed-package-inspect-0')));
+  await tester.pumpAndSettle();
+  await tester.drag(
+    find.byKey(const Key('dataasset-inspection-report')),
+    const Offset(0, -360),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const Key('dataasset-export-tile-0')));
+  await tester.pumpAndSettle();
+
+  final editLeaf = find.byKey(const Key('dataasset-edit-leaf-0-0'));
+  await tester.ensureVisible(editLeaf);
+  await tester.pumpAndSettle();
+  await tester.tap(editLeaf);
+  await tester.pumpAndSettle();
+  expect(
+    find.byKey(const Key('installed-dataasset-semantic-edit-dialog')),
+    findsOneWidget,
+  );
+}
+
+Future<void> _previewInstalledEdit(WidgetTester tester) async {
+  await tester.enterText(
+    find.byKey(const Key('dataasset-semantic-value')),
+    '2',
+  );
+  await tester.tap(
+    find.byKey(const Key('installed-dataasset-semantic-preview-action')),
+  );
+  await tester.pump();
+  expect(
+    find.byKey(const Key('installed-dataasset-semantic-preview')),
+    findsOneWidget,
+  );
 }
 
 class _BrowserHost extends StatelessWidget {
-  const _BrowserHost({required this.load, this.inspect, this.textScale});
+  const _BrowserHost({
+    required this.load,
+    this.inspect,
+    this.publish,
+    this.textScale,
+  });
 
   final Revision3InstalledPackageIndexLoader load;
   final Revision3InstalledDataAssetInspector? inspect;
+  final InstalledDataAssetSemanticStagePublisher? publish;
   final double? textScale;
 
   @override
@@ -408,6 +821,7 @@ class _BrowserHost extends StatelessWidget {
               gameRoot: _gameRoot,
               load: load,
               inspect: inspect,
+              publish: publish,
             ),
           ),
           child: const Text('Open'),
@@ -519,6 +933,8 @@ _installedInspectionResult({
       expectedSnapshot.sourceSnapshotSeal.sha256,
     ),
     'target_path': candidate.targetPath,
+    'usmap_content_seal': _seal(256, 'c' * 64),
+    'usmap_inventory_seal': _seal(96, 'e' * 64),
   },
   expectedSnapshot: expectedSnapshot,
   requestedOrdinal: candidate.ordinal,

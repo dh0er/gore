@@ -603,6 +603,12 @@ pub trait IoStoreTrait: Send + Sync {
     fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry>;
     fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId>;
 
+    /// Native source identity for one concrete opened child container. Composite wrappers may
+    /// return `None`; callers iterating their children can require this proof for every child.
+    fn opened_utoc_identity(&self) -> Option<(&Path, &[u8; 32])> {
+        None
+    }
+
     fn load_script_objects(&self) -> Result<ZenScriptObjects> {
         if self.container_file_version().unwrap() > EIoStoreTocVersion::PerfectHash {
             let script_objects_data = self.read(FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects))?;
@@ -905,6 +911,8 @@ pub struct IoStoreContainer {
     name: String,
     #[allow(unused)]
     path: PathBuf,
+    /// BLAKE3 of the exact bounded UTOC bytes parsed by this opened container.
+    toc_blake3: [u8; 32],
     toc: Toc,
     cas: FilePool,
     metadata_bytes: u64,
@@ -957,11 +965,13 @@ impl IoStoreContainer {
             Cursor::new(&toc_bytes).de_ctx(config.clone())
         }))
         .map_err(|_| anyhow::anyhow!("TOC parser panicked after bounded preflight"))??;
+        let toc_blake3 = *blake3::hash(&toc_bytes).as_bytes();
         let cas = FilePool::new(&ucas_path, rayon::max_num_threads())?;
 
         let mut container = Self {
             name: path.file_stem().context("failed to get container name")?.to_string_lossy().into(),
             path,
+            toc_blake3,
             toc,
             cas,
             metadata_bytes,
@@ -997,6 +1007,11 @@ impl IoStoreContainer {
         self.path.as_ref()
     }
 
+    /// Content identity of the exact UTOC byte buffer this container parsed.
+    pub fn toc_blake3(&self) -> &[u8; 32] {
+        &self.toc_blake3
+    }
+
     fn chunk_path_ref(&self, chunk_id: FIoChunkId) -> Option<ChunkPathRef<'_>> {
         self.toc
             .chunk_id_map
@@ -1017,6 +1032,9 @@ impl IoStoreTrait for IoStoreContainer {
     }
     fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
         self.container_header.as_ref().map(|x| x.version)
+    }
+    fn opened_utoc_identity(&self) -> Option<(&Path, &[u8; 32])> {
+        Some((self.container_path(), self.toc_blake3()))
     }
     fn print_info(&self, mut depth: usize) {
         indent_println!(depth, "{}", self.container_name());

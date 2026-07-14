@@ -13,6 +13,8 @@ license = "MIT"
 #     of Epic's proprietary oo2core_9_win64.dll loaded via `oodle_loader`.
 #   * `oodle_loader` dependency removed; `repak`'s `oodle` feature removed so no
 #     part of the build fetches/links oo2core.
+#   * IoStore containers retain and expose a read-only BLAKE3 identity of the
+#     exact bounded UTOC byte buffer they parsed, for native source-ABA proofs.
 #   * Only the `retoc` library crate is vendored (CLI / load_logger / test
 #     fixtures dropped) since gore-tex consumes it as a library.
 

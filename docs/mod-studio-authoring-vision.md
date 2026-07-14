@@ -432,9 +432,27 @@ The guided summary/confirmation/Before-After workflow is connected to the
 shared managed session and Home DataAsset surface. Publication is bound to the
 exact root/project/revision/head and reloads the managed checkpoint; no temporary
 path, receipt, raw offset, or additional authority escapes. This first slice
-edits only proven fixed-width leaves in the managed project. It neither creates
-a package nor builds, packs, deploys, writes the game installation, touches a
-save file, or qualifies gameplay/runtime behavior.
+edits only proven fixed-width leaves in the managed project.
+
+The normal installed-package browser no longer requires an independently
+materialized ExtractReceipt for that same narrow edit. It resolves one sealed
+candidate ordinal, inspects the bounded in-memory package, and lets only an
+`editable=true` selector open the typed Before/After editor. Save sends no
+caller-selected target, package ID, package bytes, receipt, output path, or raw
+offset. Native code rebuilds the package and USMAP inventories, independently
+reconverts the target, and requires the complete pair, role-bearing sidecars,
+opened UTOC set, consumed chunk winners/hashes, and exact USMAP name/bytes to
+match before reusing the existing closed stage transaction. The IoStore reader
+binds the bytes it actually parsed for every opened UTOC, including zero-chunk
+children, to the held installed inventory so transient same-path swaps fail.
+Strict Dart binds the source echo and two domain-separated proof digests before
+the managed exact-head publication lane may advance.
+
+Neither typed route creates a new package identity or structural asset. They do
+not build, pack, deploy, write the game installation, touch a save file, or
+qualify gameplay/runtime behavior. Expected hotfix/source drift discards the old
+inspection but keeps the managed project usable; an unconfirmed publication
+outcome closes the evidence chain and requires a project reopen.
 
 The semantic layer is a registry of reviewed schemas and widgets for known
 gameplay concepts. It provides domain names, units, ranges, typed references,

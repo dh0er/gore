@@ -25,6 +25,22 @@ final class DataAssetSemanticReplacement {
   final Uint8List _comparisonBytes;
 
   Map<String, Object> toJson() => Map<String, Object>.from(_wire);
+
+  /// Compute the native edit binding without exposing raw replacement bytes
+  /// to either source-authority wire format.
+  String intentBindingSha256For({
+    required String expectedTargetPath,
+    required FixedLeafSelector selector,
+  }) {
+    final bytes = BytesBuilder(copy: false)
+      ..add(
+        utf8.encode('gore.authoring.r3-dataasset-edit.intent-binding.v1\u0000'),
+      );
+    _addLengthPrefixed(bytes, utf8.encode(expectedTargetPath));
+    _addLengthPrefixed(bytes, utf8.encode(jsonEncode(selector.toJson())));
+    _addLengthPrefixed(bytes, _comparisonBytes);
+    return crypto.sha256.convert(bytes.takeBytes()).toString();
+  }
 }
 
 final class DataAssetSemanticEditIntent {
@@ -50,16 +66,10 @@ final class DataAssetSemanticEditIntent {
   /// Domain-separated exact request binding checked against the native
   /// prepare-only response. It covers the confirmed target, the complete
   /// offset-free selector, and the exact native replacement bytes.
-  String get intentBindingSha256 {
-    final bytes = BytesBuilder(copy: false)
-      ..add(
-        utf8.encode('gore.authoring.r3-dataasset-edit.intent-binding.v1\u0000'),
-      );
-    _addLengthPrefixed(bytes, utf8.encode(expectedTargetPath));
-    _addLengthPrefixed(bytes, utf8.encode(jsonEncode(selector.toJson())));
-    _addLengthPrefixed(bytes, replacement._comparisonBytes);
-    return crypto.sha256.convert(bytes.takeBytes()).toString();
-  }
+  String get intentBindingSha256 => replacement.intentBindingSha256For(
+    expectedTargetPath: expectedTargetPath,
+    selector: selector,
+  );
 }
 
 /// Native-verified, read-only identity of one exact ExtractReceipt-v2.
@@ -215,6 +225,64 @@ final class DataAssetSemanticEditPreview {
   final DataAssetSemanticEditIntent intent;
 }
 
+/// One validated semantic value change before it is bound to a concrete
+/// native source authority.
+///
+/// Receipt-backed and installed-snapshot-backed authoring deliberately share
+/// this value-only step. The source proof is attached afterwards, so neither
+/// route can accidentally serialize the other route's authority fields.
+final class DataAssetSemanticValueChange {
+  const DataAssetSemanticValueChange._({
+    required this.pathLabel,
+    required this.typeLabel,
+    required this.previousValue,
+    required this.replacementValue,
+    required this.selector,
+    required this.replacement,
+  });
+
+  final String pathLabel;
+  final String typeLabel;
+  final String previousValue;
+  final String replacementValue;
+  final FixedLeafSelector selector;
+  final DataAssetSemanticReplacement replacement;
+
+  DataAssetSemanticEditPreview bindExtractReceipt({
+    required String extractReceiptPath,
+    required String expectedTargetPath,
+  }) {
+    final path = extractReceiptPath.trim();
+    if (path.isEmpty ||
+        path.length > 32768 ||
+        utf8.encode(path).length > 32768 ||
+        path.contains('\u0000')) {
+      throw const DataAssetSemanticEditException(
+        'Choose the exact ExtractReceipt-v2 used for this inspected package.',
+      );
+    }
+    final targetPath = expectedTargetPath.trim();
+    if (targetPath != expectedTargetPath ||
+        !_isCanonicalGameAssetPath(targetPath)) {
+      throw const DataAssetSemanticEditException(
+        'Verify and confirm the exact ExtractReceipt-v2 target first.',
+      );
+    }
+    return DataAssetSemanticEditPreview._(
+      pathLabel: pathLabel,
+      typeLabel: typeLabel,
+      previousValue: previousValue,
+      replacementValue: replacementValue,
+      intent: DataAssetSemanticEditIntent._(
+        extractReceiptPath: path,
+        expectedTargetPath: targetPath,
+        selector: selector,
+        replacement: replacement,
+      ),
+    );
+  }
+}
+
 final class DataAssetSemanticValueEditor {
   DataAssetSemanticValueEditor._({
     required this.leaf,
@@ -329,14 +397,19 @@ final class DataAssetSemanticValueEditor {
     required String expectedTargetPath,
     required bool value,
   }) {
+    return changeBool(value: value).bindExtractReceipt(
+      extractReceiptPath: extractReceiptPath,
+      expectedTargetPath: expectedTargetPath,
+    );
+  }
+
+  DataAssetSemanticValueChange changeBool({required bool value}) {
     if (!isBoolean) {
       throw const DataAssetSemanticEditException(
         'The selected value is not an on/off field.',
       );
     }
-    return _preview(
-      extractReceiptPath,
-      expectedTargetPath,
+    return _change(
       DataAssetSemanticReplacement._(
         kind: kind,
         displayValue: value ? 'On' : 'Off',
@@ -351,6 +424,13 @@ final class DataAssetSemanticValueEditor {
     required String expectedTargetPath,
     required String value,
   }) {
+    return changeScalar(value: value).bindExtractReceipt(
+      extractReceiptPath: extractReceiptPath,
+      expectedTargetPath: expectedTargetPath,
+    );
+  }
+
+  DataAssetSemanticValueChange changeScalar({required String value}) {
     if (isBoolean || isComposite) {
       throw const DataAssetSemanticEditException(
         'The selected value requires its dedicated editor.',
@@ -407,12 +487,21 @@ final class DataAssetSemanticValueEditor {
         'The selected fixed leaf is not a scalar value field.',
       ),
     };
-    return _preview(extractReceiptPath, expectedTargetPath, replacement);
+    return _change(replacement);
   }
 
   DataAssetSemanticEditPreview previewComponents({
     required String extractReceiptPath,
     required String expectedTargetPath,
+    required List<String> values,
+  }) {
+    return changeComponents(values: values).bindExtractReceipt(
+      extractReceiptPath: extractReceiptPath,
+      expectedTargetPath: expectedTargetPath,
+    );
+  }
+
+  DataAssetSemanticValueChange changeComponents({
     required List<String> values,
   }) {
     if (!isComposite || values.length != 4) {
@@ -450,9 +539,7 @@ final class DataAssetSemanticValueEditor {
             'z': normalized[2],
             'w': normalized[3],
           };
-    return _preview(
-      extractReceiptPath,
-      expectedTargetPath,
+    return _change(
       DataAssetSemanticReplacement._(
         kind: kind,
         displayValue: _componentDisplay(componentLabels, normalized),
@@ -508,43 +595,21 @@ final class DataAssetSemanticValueEditor {
     );
   }
 
-  DataAssetSemanticEditPreview _preview(
-    String extractReceiptPath,
-    String expectedTargetPath,
+  DataAssetSemanticValueChange _change(
     DataAssetSemanticReplacement replacement,
   ) {
-    final path = extractReceiptPath.trim();
-    if (path.isEmpty ||
-        path.length > 32768 ||
-        utf8.encode(path).length > 32768 ||
-        path.contains('\u0000')) {
-      throw const DataAssetSemanticEditException(
-        'Choose the exact ExtractReceipt-v2 used for this inspected package.',
-      );
-    }
-    final targetPath = expectedTargetPath.trim();
-    if (targetPath != expectedTargetPath ||
-        !_isCanonicalGameAssetPath(targetPath)) {
-      throw const DataAssetSemanticEditException(
-        'Verify and confirm the exact ExtractReceipt-v2 target first.',
-      );
-    }
     if (_sameBytes(_expectedBytes, replacement._comparisonBytes)) {
       throw const DataAssetSemanticEditException(
         'Choose a new value; the current value would not change.',
       );
     }
-    return DataAssetSemanticEditPreview._(
+    return DataAssetSemanticValueChange._(
       pathLabel: selector.pathLabel,
       typeLabel: typeLabel,
       previousValue: initialScalarValue,
       replacementValue: replacement.displayValue,
-      intent: DataAssetSemanticEditIntent._(
-        extractReceiptPath: path,
-        expectedTargetPath: targetPath,
-        selector: selector,
-        replacement: replacement,
-      ),
+      selector: selector,
+      replacement: replacement,
     );
   }
 }

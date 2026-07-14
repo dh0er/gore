@@ -2739,6 +2739,262 @@ void main() {
   );
 
   test(
+    'installed DataAsset edit is exact-evidence bound and refreshes state',
+    () async {
+      final stage = _dataAssetStage();
+      final initialHead = _head(4);
+      final snapshot = _controllerDataAssetPackageIndexResult(
+        head: initialHead,
+        projectId: stage.projectId,
+        projectRevision: 4,
+        targetPath: stage.targetPath,
+        packageIdHex: 'e54f79b8fc97323c',
+      );
+      final candidate = snapshot.index.candidates.single;
+      final inspection = _controllerInstalledDataAssetInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: DataAssetSemanticValueEditor.fromLeaf(
+          inspection.inspection.exports.single.leaves.single,
+        ).changeScalar(value: '2'),
+      );
+      late _FakeManagedLease managed;
+      managed = _FakeManagedLease(
+        root: Directory('managed-installed-dataasset-edit'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: initialHead,
+        onInstalledDataAssetEditPublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'D:\Games\Gothic Remake');
+          expect(received, same(intent));
+          expect(received.toNativeFields(), isNot(contains('target_path')));
+          lease.projectRevision = 5;
+          lease.head = _head(5);
+          return Revision3DataAssetStagePublication(
+            projectId: stage.projectId,
+            projectRevision: 5,
+            stage: stage,
+            deduplicatedBlobs: 0,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final published = await coordinator
+          .addCurrentRevision3InstalledDataAssetEdit(
+            expectedRoot: managed.root.path,
+            expectedProjectId: stage.projectId,
+            expectedProjectRevision: 4,
+            expectedHead: initialHead,
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: intent,
+          );
+
+      expect(published.stage, same(stage));
+      expect(managed.installedDataAssetEditPublishCalls, 1);
+      expect(managed.installedDataAssetEditIntents.single, same(intent));
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 5);
+      expect(state.head.canonicalJson, _head(5).canonicalJson);
+    },
+  );
+
+  test(
+    'installed DataAsset source drift closes evidence without poisoning the project',
+    () async {
+      final stage = _dataAssetStage();
+      final initialHead = _head(4);
+      final snapshot = _controllerDataAssetPackageIndexResult(
+        head: initialHead,
+        projectId: stage.projectId,
+        projectRevision: 4,
+        targetPath: stage.targetPath,
+        packageIdHex: 'e54f79b8fc97323c',
+      );
+      final candidate = snapshot.index.candidates.single;
+      final inspection = _controllerInstalledDataAssetInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: DataAssetSemanticValueEditor.fromLeaf(
+          inspection.inspection.exports.single.leaves.single,
+        ).changeScalar(value: '2'),
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('managed-installed-dataasset-edit-source-drift'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: initialHead,
+        onInstalledDataAssetEditPublish: (_, _, _) => throw const ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+          code:
+              'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
+          message: 'fake installed source drift',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.addCurrentRevision3InstalledDataAssetEdit(
+          expectedRoot: managed.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 4,
+          expectedHead: initialHead,
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: intent,
+        ),
+        throwsA(
+          isA<Revision3InstalledDataAssetEditSourceEvidenceStaleException>(),
+        ),
+      );
+      expect(managed.installedDataAssetEditPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 4);
+      expect(state.requiresReopen, isFalse);
+
+      final stagedTargetLease = _FakeManagedLease(
+        root: Directory('managed-installed-dataasset-edit-target-exists'),
+        projectIdValue: stage.projectId,
+        projectRevision: 4,
+        head: initialHead,
+        onInstalledDataAssetEditPublish: (_, _, _) => throw const ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+          code: 'AUTHORING_REVISION3_DATAASSET_TARGET_EXISTS',
+          message: 'fake target already staged',
+        ),
+      );
+      final stagedTargetCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => stagedTargetLease,
+      );
+      addTearDown(() async {
+        await stagedTargetCoordinator.shutdown();
+        stagedTargetCoordinator.dispose();
+      });
+      await stagedTargetCoordinator.openManagedRevision3(
+        stagedTargetLease.root,
+      );
+      await expectLater(
+        stagedTargetCoordinator.addCurrentRevision3InstalledDataAssetEdit(
+          expectedRoot: stagedTargetLease.root.path,
+          expectedProjectId: stage.projectId,
+          expectedProjectRevision: 4,
+          expectedHead: initialHead,
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: intent,
+        ),
+        throwsA(
+          isA<Revision3InstalledDataAssetEditRejectedException>().having(
+            (error) => error.reason,
+            'reason',
+            Revision3InstalledDataAssetEditRejectionReason.targetAlreadyStaged,
+          ),
+        ),
+      );
+      final stagedState =
+          stagedTargetCoordinator.state as ManagedRevision3CurrentProjectState;
+      expect(stagedState.projectRevision, 4);
+      expect(stagedState.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'installed DataAsset local preparation errors reject without poisoning the project',
+    () async {
+      final stage = _dataAssetStage();
+      final initialHead = _head(4);
+      final snapshot = _controllerDataAssetPackageIndexResult(
+        head: initialHead,
+        projectId: stage.projectId,
+        projectRevision: 4,
+        targetPath: stage.targetPath,
+        packageIdHex: 'e54f79b8fc97323c',
+      );
+      final candidate = snapshot.index.candidates.single;
+      final inspection = _controllerInstalledDataAssetInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+      );
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: DataAssetSemanticValueEditor.fromLeaf(
+          inspection.inspection.exports.single.leaves.single,
+        ).changeScalar(value: '2'),
+      );
+      final errors = <Object>[
+        ArgumentError('fake local request preflight rejection'),
+        const FormatException('fake local response preflight rejection'),
+      ];
+
+      for (var index = 0; index < errors.length; index++) {
+        final error = errors[index];
+        final managed = _FakeManagedLease(
+          root: Directory('managed-installed-dataasset-local-error-$index'),
+          projectIdValue: stage.projectId,
+          projectRevision: 4,
+          head: initialHead,
+          onInstalledDataAssetEditPublish: (_, _, _) => throw error,
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        await coordinator.openManagedRevision3(managed.root);
+
+        await expectLater(
+          coordinator.addCurrentRevision3InstalledDataAssetEdit(
+            expectedRoot: managed.root.path,
+            expectedProjectId: stage.projectId,
+            expectedProjectRevision: 4,
+            expectedHead: initialHead,
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: intent,
+          ),
+          throwsA(
+            isA<Revision3InstalledDataAssetEditRejectedException>().having(
+              (error) => error.reason,
+              'reason',
+              Revision3InstalledDataAssetEditRejectionReason.preparationFailed,
+            ),
+          ),
+        );
+        final state = coordinator.state as ManagedRevision3CurrentProjectState;
+        expect(state.projectRevision, 4);
+        expect(state.requiresReopen, isFalse);
+      }
+    },
+  );
+
+  test(
     'DataAsset mutations reject divergent roots and heads before lease access',
     () async {
       final stage = _dataAssetStage();
@@ -3161,6 +3417,12 @@ typedef _DataAssetSemanticPublishHook =
       _FakeManagedLease lease,
       DataAssetSemanticEditIntent intent,
     );
+typedef _InstalledDataAssetEditPublishHook =
+    FutureOr<Revision3DataAssetStagePublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      DataAssetInstalledSemanticEditIntent intent,
+    );
 typedef _VoiceSelectionPublishHook =
     FutureOr<Revision3VoiceTakeSelectionPublication> Function(
       _FakeManagedLease lease,
@@ -3207,6 +3469,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onVoiceBuild,
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
+    this.onInstalledDataAssetEditPublish,
     this.onDataAssetRemove,
     this.onDataAssetPackageIndexRead,
     this.onInstalledDataAssetInspection,
@@ -3239,6 +3502,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _VoiceBuildHook? onVoiceBuild;
   final _DataAssetPublishHook? onDataAssetPublish;
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
+  final _InstalledDataAssetEditPublishHook? onInstalledDataAssetEditPublish;
   final _DataAssetRemoveHook? onDataAssetRemove;
   final _DataAssetPackageIndexReadHook? onDataAssetPackageIndexRead;
   final _InstalledDataAssetInspectionHook? onInstalledDataAssetInspection;
@@ -3268,6 +3532,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
+  int installedDataAssetEditPublishCalls = 0;
+  final List<String> installedDataAssetEditGameRoots = <String>[];
+  final List<DataAssetInstalledSemanticEditIntent>
+  installedDataAssetEditIntents = <DataAssetInstalledSemanticEditIntent>[];
   int dataAssetRemoveCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
@@ -3363,6 +3631,24 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       );
     }
     return inspect(this, gameRoot, expectedSnapshot, candidate);
+  }
+
+  @override
+  Future<Revision3DataAssetStagePublication>
+  prepareAndPublishInstalledDataAssetEditV1({
+    required String gameRoot,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) async {
+    installedDataAssetEditPublishCalls++;
+    installedDataAssetEditGameRoots.add(gameRoot);
+    installedDataAssetEditIntents.add(intent);
+    final publish = onInstalledDataAssetEditPublish;
+    if (publish == null) {
+      throw StateError(
+        'fake managed lease has no installed DataAsset edit publisher',
+      );
+    }
+    return publish(this, gameRoot, intent);
   }
 
   @override
@@ -3689,6 +3975,8 @@ _controllerDataAssetPackageIndexResult({
   required AuthoringWorkingHead head,
   required String projectId,
   required int projectRevision,
+  String targetPath = '/Game/Characters/DA_Asghan',
+  String packageIdHex = '0123456789abcdef',
 }) {
   final indexJson = jsonEncode(<String, Object?>{
     'status': 'complete_index',
@@ -3698,8 +3986,8 @@ _controllerDataAssetPackageIndexResult({
     'out_of_scope_export_bundle_count': 0,
     'candidates': <Object?>[
       <String, Object?>{
-        'target_path': '/Game/Characters/DA_Asghan',
-        'package_id_hex': '0123456789abcdef',
+        'target_path': targetPath,
+        'package_id_hex': packageIdHex,
       },
     ],
     'partial_reasons': <Object?>[],
@@ -3769,6 +4057,14 @@ _controllerInstalledDataAssetInspectionResult({
       'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
     },
     'target_path': candidate.targetPath,
+    'usmap_content_seal': <String, Object?>{
+      'byte_len': 256,
+      'sha256': 'c' * 64,
+    },
+    'usmap_inventory_seal': <String, Object?>{
+      'byte_len': 96,
+      'sha256': 'e' * 64,
+    },
   },
   expectedSnapshot: expectedSnapshot,
   requestedOrdinal: candidate.ordinal,

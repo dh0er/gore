@@ -114,6 +114,17 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 | Build and release | Studio can build/deploy represented legacy domains. Project-wide semantic build roots, dependencies/rebase, immutable releases, and CI are not integrated. | The bundle engine can build/reopen/inspect represented components. | A bundle is not gameplay proof. End state adds deterministic profiles, semantic plans/conflicts, compatibility, rollback, provenance, and closed-world release validation. |
 | Collaboration and extension | No semantic collaboration workflow is integrated. | Canonical V2 primitives are groundwork, not merge/sync implementation. | Planned after the single-author managed-project/transaction contract; core authoring must not require a cloud account. |
 
+DataAsset status addendum (2026-07-14): the managed installed-package browser
+now supplies a second normal typed fixed-leaf route alongside the retained
+ExtractReceipt workflow described in the matrix. It selects only a sealed
+original ordinal, binds the exact package/USMAP inspection, independently
+reconstructs and compares package bytes, role-bearing sidecars, parsed UTOC
+identities, chunk winners, and USMAP name/bytes, then publishes only the same
+build-blocked revision-3 stage by exact-head CAS. No extracted receipt or
+caller-supplied target/package/output authority crosses this route. Structural
+editing, package creation, build/pack/deploy, and runtime qualification remain
+missing exactly as stated above.
+
 "Complete" does not mean exposing every Unreal file type. It means every
 advertised operation is semantic, reversible, deterministic, inspectable, and
 qualified for the selected game version. Unknown game-source/property

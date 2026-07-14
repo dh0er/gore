@@ -2013,6 +2013,168 @@ void main() {
   );
 
   test(
+    'installed DataAsset edit retains exact evidence through guarded publication',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Installed DataAsset value edit',
+        ),
+      );
+      final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+        _dataAssetPackageIndexResponse(
+          session.head,
+          session.projectJson,
+          targetPath: revision3DataAssetTargetPath,
+          packageIdHex: 'e54f79b8fc97323c',
+        ),
+        expectedHead: session.head,
+      );
+      final candidate = snapshot.index.candidates.single;
+      final inspection = _installedDataAssetInspectionResult(
+        expectedSnapshot: snapshot,
+        candidate: candidate,
+        usmapSha256: '3' * 64,
+      );
+      final intent = DataAssetInstalledSemanticEditIntent.fromInspection(
+        snapshot: snapshot,
+        candidate: candidate,
+        inspection: inspection,
+        change: DataAssetSemanticValueEditor.fromLeaf(
+          inspection.inspection.exports.single.leaves.single,
+        ).changeScalar(value: '2'),
+      );
+
+      final published = await session.prepareAndPublishInstalledDataAssetEditV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        intent: intent,
+      );
+
+      expect(store.installedDataAssetEditPrepareCalls, 1);
+      expect(store.installedDataAssetEditGameRoots, <String>[
+        r'D:\Games\Gothic Remake',
+      ]);
+      expect(store.installedDataAssetEditIntents.single, same(intent));
+      expect(published.projectRevision, 1);
+      expect(published.stage.targetPath, revision3DataAssetTargetPath);
+      expect(session.projectRevision, 1);
+      expect(await session.listDataAssetStagesV1(), hasLength(1));
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'installed DataAsset edit classifies drift, head conflict, and integrity separately',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Installed DataAsset edit retry',
+        ),
+      );
+      final retryIntent = _installedSemanticDataAssetIntent(retrySession);
+      for (final code in <String>[
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH',
+        'AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_GAME_CHANGED',
+      ]) {
+        retryStore.nextDataAssetError = ModFfiException(
+          command:
+              'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+          code: code,
+          message: 'fake retryable installed DataAsset source drift',
+        );
+        await expectLater(
+          retrySession.prepareAndPublishInstalledDataAssetEditV1(
+            gameRoot: r'D:\Games\Gothic Remake',
+            intent: retryIntent,
+          ),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      expect(retrySession.projectRevision, 0);
+      await retrySession.close();
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_head_conflict',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Installed DataAsset edit head conflict',
+            ),
+          );
+      conflictStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message: 'fake installed DataAsset head conflict',
+      );
+      await expectLater(
+        conflictSession.prepareAndPublishInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _installedSemanticDataAssetIntent(conflictSession),
+        ),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      await conflictSession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'installed_dataasset_edit_integrity',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Installed DataAsset edit integrity',
+            ),
+          );
+      poisonStore.nextDataAssetError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INVARIANT',
+        message: 'fake installed DataAsset integrity failure',
+      );
+      await expectLater(
+        poisonSession.prepareAndPublishInstalledDataAssetEditV1(
+          gameRoot: r'D:\Games\Gothic Remake',
+          intent: _installedSemanticDataAssetIntent(poisonSession),
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test(
     'semantic DataAsset edit head drift preserves winner and requires reopen',
     () async {
       final root = await _projectRoot(fixture, suffix: 'dataasset_edit_race');
@@ -4028,6 +4190,34 @@ DataAssetSemanticEditIntent _semanticDataAssetIntent() {
       .intent;
 }
 
+DataAssetInstalledSemanticEditIntent _installedSemanticDataAssetIntent(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final snapshot = AuthoringRevision3DataAssetPackageIndexResult.fromJson(
+    _dataAssetPackageIndexResponse(
+      session.head,
+      session.projectJson,
+      targetPath: revision3DataAssetTargetPath,
+      packageIdHex: 'e54f79b8fc97323c',
+    ),
+    expectedHead: session.head,
+  );
+  final candidate = snapshot.index.candidates.single;
+  final inspection = _installedDataAssetInspectionResult(
+    expectedSnapshot: snapshot,
+    candidate: candidate,
+    usmapSha256: '3' * 64,
+  );
+  return DataAssetInstalledSemanticEditIntent.fromInspection(
+    snapshot: snapshot,
+    candidate: candidate,
+    inspection: inspection,
+    change: DataAssetSemanticValueEditor.fromLeaf(
+      inspection.inspection.exports.single.leaves.single,
+    ).changeScalar(value: '2'),
+  );
+}
+
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
 
@@ -4054,6 +4244,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int npcInspectionCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
   int installedDataAssetInspectionCalls = 0;
+  int installedDataAssetEditPrepareCalls = 0;
   int dataAssetPrepareCalls = 0;
   int dataAssetEditPrepareCalls = 0;
   int dataAssetListCalls = 0;
@@ -4133,6 +4324,9 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<AuthoringRevision3DataAssetPackageCandidate>
   installedDataAssetInspectionCandidates =
       <AuthoringRevision3DataAssetPackageCandidate>[];
+  final List<String> installedDataAssetEditGameRoots = <String>[];
+  final List<DataAssetInstalledSemanticEditIntent>
+  installedDataAssetEditIntents = <DataAssetInstalledSemanticEditIntent>[];
   String? nextOpenProjectOverride;
   AuthoringWorkingHead? nextHeadOverride;
   String? nextHeadProjectOverride;
@@ -5090,6 +5284,64 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  prepareInstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) async {
+    installedDataAssetEditPrepareCalls++;
+    installedDataAssetEditGameRoots.add(gameRoot);
+    installedDataAssetEditIntents.add(intent);
+    final injected = nextDataAssetError;
+    nextDataAssetError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    final project = _projectsByHead[actual];
+    if (actual != expectedHead.canonicalJson || project == null) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
+        code: 'AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT',
+        message: 'fake native installed DataAsset edit basis CAS rejected',
+      );
+    }
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: expectedHead,
+      basisProjectJson: project,
+      targetPath: intent.expectedTargetPath,
+      selector: intent.selector.toJson(),
+      replacementHex: _installedSemanticReplacementHex(intent),
+    );
+    _projectsByHead[fixture.stagedHead.canonicalJson] =
+        fixture.stagedProjectJson;
+    _dataAssetByHead[fixture.stagedHead.canonicalJson] = fixture;
+    final hook = afterDataAssetPrepare;
+    afterDataAssetPrepare = null;
+    await hook?.call(root, expectedHead, fixture.stagedHead);
+    final nativeFields = intent.toNativeFields();
+    final response = fixture.prepareResponse()
+      ..['intent_binding_sha256'] = intent.intentBindingSha256
+      ..['installed_proof_binding_sha256'] = intent.installedProofBindingSha256
+      ..['installed_source'] = <String, Object?>{
+        'candidate_ordinal': intent.candidate.ordinal,
+        'format': 'gore.authoring.revision3-installed-dataasset-source.v1',
+        'inspection_binding': nativeFields['expected_inspection_binding'],
+        'package_index_seal': nativeFields['expected_package_index_seal'],
+        'source_snapshot_seal': nativeFields['expected_source_snapshot_seal'],
+        'usmap_content_seal': nativeFields['expected_usmap_content_seal'],
+        'usmap_inventory_seal': nativeFields['expected_usmap_inventory_seal'],
+      };
+    return AuthoringRevision3DataAssetStagePreparation.fromJson(
+      response,
+      expectedHead: expectedHead,
+      expectedIntentBindingSha256: intent.intentBindingSha256,
+      expectedInstalledIntent: intent,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3DataAssetStagePreparation> prepareDataAssetStageV1({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -5258,8 +5510,15 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 }
 
-String _semanticReplacementHex(DataAssetSemanticEditIntent intent) {
-  final wire = intent.replacement.toJson();
+String _semanticReplacementHex(DataAssetSemanticEditIntent intent) =>
+    _semanticReplacementWireHex(intent.replacement);
+
+String _installedSemanticReplacementHex(
+  DataAssetInstalledSemanticEditIntent intent,
+) => _semanticReplacementWireHex(intent.replacement);
+
+String _semanticReplacementWireHex(DataAssetSemanticReplacement replacement) {
+  final wire = replacement.toJson();
   final kind = wire['kind']! as String;
   final bytes = switch (kind) {
     'bool' => <int>[(wire['value']! as bool) ? 1 : 0],
@@ -5390,8 +5649,10 @@ Map<String, Object?> _contentResponse(
 
 Map<String, Object?> _dataAssetPackageIndexResponse(
   AuthoringWorkingHead head,
-  String projectJson,
-) {
+  String projectJson, {
+  String targetPath = '/Game/Characters/DA_Asghan',
+  String packageIdHex = '0123456789abcdef',
+}) {
   final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
   final target = (project['target'] as Map).cast<String, Object?>();
   final indexJson = jsonEncode(<String, Object?>{
@@ -5402,8 +5663,8 @@ Map<String, Object?> _dataAssetPackageIndexResponse(
     'out_of_scope_export_bundle_count': 0,
     'candidates': <Object?>[
       <String, Object?>{
-        'target_path': '/Game/Characters/DA_Asghan',
-        'package_id_hex': '0123456789abcdef',
+        'target_path': targetPath,
+        'package_id_hex': packageIdHex,
       },
     ],
     'partial_reasons': <Object?>[],
@@ -5445,35 +5706,51 @@ AuthoringRevision3InstalledDataAssetInspectionResult
 _installedDataAssetInspectionResult({
   required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
   required AuthoringRevision3DataAssetPackageCandidate candidate,
-}) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
-  <String, Object?>{
-    'authority_status': 'not_granted',
-    'build_status': 'not_evaluated',
-    'candidate_ordinal': candidate.ordinal,
-    'head_json': expectedSnapshot.head.canonicalJson,
-    'inspection': validDataAssetInspectionResponse(),
-    'mutation_status': 'not_supported',
-    'ok': true,
-    'outcome': 'inspection_only',
-    'package_id_hex': candidate.packageIdHex,
-    'package_index_seal': <String, Object?>{
-      'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
-      'sha256': expectedSnapshot.packageIndexSeal.sha256,
+  String usmapSha256 = '',
+}) {
+  final inspection = validDataAssetInspectionResponse();
+  final expectedUsmap = usmapSha256.isEmpty ? 'c' * 64 : usmapSha256;
+  (inspection['binding']! as Map<String, Object?>)['usmap_sha256'] =
+      expectedUsmap;
+  dataAssetSelector(inspection)['usmap_sha256'] = expectedUsmap;
+  return AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+    <String, Object?>{
+      'authority_status': 'not_granted',
+      'build_status': 'not_evaluated',
+      'candidate_ordinal': candidate.ordinal,
+      'head_json': expectedSnapshot.head.canonicalJson,
+      'inspection': inspection,
+      'mutation_status': 'not_supported',
+      'ok': true,
+      'outcome': 'inspection_only',
+      'package_id_hex': candidate.packageIdHex,
+      'package_index_seal': <String, Object?>{
+        'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
+        'sha256': expectedSnapshot.packageIndexSeal.sha256,
+      },
+      'project_id': expectedSnapshot.projectId,
+      'project_revision': expectedSnapshot.projectRevision,
+      'publication_status': 'not_supported',
+      'runtime_status': 'runtime_unqualified',
+      'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+      'source_snapshot_seal': <String, Object?>{
+        'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
+        'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
+      },
+      'target_path': candidate.targetPath,
+      'usmap_content_seal': <String, Object?>{
+        'byte_len': 256,
+        'sha256': expectedUsmap,
+      },
+      'usmap_inventory_seal': <String, Object?>{
+        'byte_len': 96,
+        'sha256': 'e' * 64,
+      },
     },
-    'project_id': expectedSnapshot.projectId,
-    'project_revision': expectedSnapshot.projectRevision,
-    'publication_status': 'not_supported',
-    'runtime_status': 'runtime_unqualified',
-    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
-    'source_snapshot_seal': <String, Object?>{
-      'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
-      'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
-    },
-    'target_path': candidate.targetPath,
-  },
-  expectedSnapshot: expectedSnapshot,
-  requestedOrdinal: candidate.ordinal,
-);
+    expectedSnapshot: expectedSnapshot,
+    requestedOrdinal: candidate.ordinal,
+  );
+}
 
 AuthoringRevision3QuestSourceInspectionResult _questSourceInspectionResult({
   required AuthoringWorkingHead head,

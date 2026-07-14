@@ -905,6 +905,7 @@ name = "gore-asset"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "gore-tex",
  "libc",
  "retoc",

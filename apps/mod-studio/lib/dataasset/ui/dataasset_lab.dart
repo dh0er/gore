@@ -340,17 +340,20 @@ class _InspectionError extends StatelessWidget {
   );
 }
 
-/// Reusable, read-only rendering of one strictly parsed fixed-leaf inspection.
-/// It exposes proven facts only and deliberately has no mutation controls.
+/// Reusable rendering of one strictly parsed fixed-leaf inspection.
+/// It exposes proven facts only. A caller may attach one typed edit action to
+/// editable value leaves without granting path, offset, or byte authority.
 class DataAssetInspectionReport extends StatefulWidget {
   const DataAssetInspectionReport({
     required this.inspection,
     this.header,
+    this.onEditLeaf,
     super.key,
   });
 
   final DataAssetInspection inspection;
   final Widget? header;
+  final ValueChanged<DataAssetLeafReport>? onEditLeaf;
 
   @override
   State<DataAssetInspectionReport> createState() =>
@@ -425,6 +428,7 @@ class _DataAssetInspectionReportState extends State<DataAssetInspectionReport> {
                   'dataasset-export-${visibleExports[index].index}',
                 ),
                 report: visibleExports[index],
+                onEditLeaf: widget.onEditLeaf,
               ),
               childCount: visibleExports.length,
             ),
@@ -496,8 +500,13 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _ExportCard extends StatelessWidget {
-  const _ExportCard({super.key, required this.report});
+  const _ExportCard({
+    super.key,
+    required this.report,
+    required this.onEditLeaf,
+  });
   final DataAssetExportReport report;
+  final ValueChanged<DataAssetLeafReport>? onEditLeaf;
 
   @override
   Widget build(BuildContext context) {
@@ -552,6 +561,7 @@ class _ExportCard extends StatelessWidget {
                       itemBuilder: (context, index) => _LeafFact(
                         key: ValueKey('dataasset-leaf-${report.index}-$index'),
                         leaf: report.leaves[index],
+                        onEdit: onEditLeaf,
                       ),
                     ),
                   ),
@@ -563,8 +573,9 @@ class _ExportCard extends StatelessWidget {
 }
 
 class _LeafFact extends StatelessWidget {
-  const _LeafFact({super.key, required this.leaf});
+  const _LeafFact({super.key, required this.leaf, required this.onEdit});
   final DataAssetLeafReport leaf;
+  final ValueChanged<DataAssetLeafReport>? onEdit;
 
   @override
   Widget build(BuildContext context) {
@@ -583,8 +594,22 @@ class _LeafFact extends StatelessWidget {
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
-      trailing: Chip(
-        label: Text(leaf.editable ? 'value-only' : 'restricted role'),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Chip(label: Text(leaf.editable ? 'value-only' : 'restricted role')),
+          if (leaf.editable && onEdit != null) ...[
+            const SizedBox(width: 6),
+            IconButton.filledTonal(
+              key: ValueKey(
+                'dataasset-edit-leaf-${leaf.selector.exportIndex}-${leaf.index}',
+              ),
+              tooltip: 'Edit this proven value',
+              onPressed: () => onEdit!(leaf),
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          ],
+        ],
       ),
     );
   }

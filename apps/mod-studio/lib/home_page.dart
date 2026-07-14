@@ -18,6 +18,7 @@ import 'core/mod_ffi.dart';
 import 'core/providers.dart';
 import 'dataasset/ui/dataasset_lab.dart';
 import 'dataasset/ui/installed_package_browser_dialog.dart';
+import 'dataasset/ui/installed_dataasset_semantic_edit_dialog.dart';
 import 'dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'audio/ui/audio_tab.dart';
 import 'dialog/ui/dialoge_tab.dart';
@@ -704,6 +705,45 @@ class _HomePageState extends ConsumerState<HomePage>
                     expectedSnapshot: expectedSnapshot,
                     candidate: candidate,
                   ),
+          publishInstalledDataAssetSemanticEdit: (intent) async {
+            final configuredGameRoot = gameRoot;
+            if (configuredGameRoot == null) {
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+            }
+            try {
+              final publication = await ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .addCurrentRevision3InstalledDataAssetEdit(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    gameRoot: configuredGameRoot,
+                    intent: intent,
+                  );
+              return DataAssetSemanticStagePublication(
+                targetPath: publication.stage.targetPath,
+                revision: publication.projectRevision,
+              );
+            } on Revision3DataAssetStaleCheckpointException {
+              throw const DataAssetSemanticStageUnavailableException.staleCheckpoint();
+            } on Revision3DataAssetRequiresReopenException {
+              throw const DataAssetSemanticStageUnavailableException.requiresReopen();
+            } on Revision3InstalledDataAssetEditSourceEvidenceStaleException {
+              throw const DataAssetSemanticStageUnavailableException.sourceEvidenceStale();
+            } on Revision3InstalledDataAssetEditRejectedException catch (
+              error
+            ) {
+              throw switch (error.reason) {
+                Revision3InstalledDataAssetEditRejectionReason
+                    .targetAlreadyStaged =>
+                  const DataAssetSemanticStageUnavailableException.targetAlreadyStaged(),
+                Revision3InstalledDataAssetEditRejectionReason
+                    .preparationFailed =>
+                  const DataAssetSemanticStageUnavailableException.preparationRejected(),
+              };
+            }
+          },
           publishDataAssetStage: ({required patchReceiptPath}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .addCurrentRevision3DataAssetStage(
@@ -1007,6 +1047,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.loadDataAssetStages,
     required this.loadInstalledPackageIndex,
     required this.inspectInstalledDataAsset,
+    required this.publishInstalledDataAssetSemanticEdit,
     required this.publishDataAssetStage,
     required this.publishDataAssetSemanticEdit,
     required this.removeDataAssetStage,
@@ -1041,6 +1082,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3DataAssetStageLoader loadDataAssetStages;
   final Revision3InstalledPackageIndexLoader loadInstalledPackageIndex;
   final Revision3InstalledDataAssetInspector inspectInstalledDataAsset;
+  final InstalledDataAssetSemanticStagePublisher
+  publishInstalledDataAssetSemanticEdit;
   final Revision3DataAssetStagePublisher publishDataAssetStage;
   final DataAssetSemanticStagePublisher publishDataAssetSemanticEdit;
   final Revision3DataAssetStageRemover removeDataAssetStage;
@@ -1645,6 +1688,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       gameRoot: configuredGameRoot,
       load: loadInstalledPackageIndex,
       inspect: inspectInstalledDataAsset,
+      publish: publishInstalledDataAssetSemanticEdit,
     ),
   );
 

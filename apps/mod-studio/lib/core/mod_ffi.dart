@@ -43,6 +43,10 @@ const _maxAuthoringRevision3DataAssetEditRequestBytes =
     _maxDataAssetPathBytes * 8 +
     _maxAuthoringHeadJsonBytes * 2 +
     8 * 1024 * 1024;
+const _maxAuthoringRevision3InstalledDataAssetEditRequestBytes =
+    (_maxAuthoringStorePathBytes * 2 + _maxAuthoringHeadJsonBytes) * 6 +
+    8 * 1024 +
+    8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetStages = 1024;
 const _maxAuthoringRevision3DataAssetManifestBytes = 8 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetManifestStringBytes = 32 * 1024;
@@ -880,6 +884,63 @@ class ModFfi {
         expectedSnapshot: expectedSnapshot,
         requestedOrdinal: candidate.ordinal,
       );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one typed fixed-leaf edit from the exact installed snapshot and
+  /// read-only inspection that produced the selector. Native code reopens and
+  /// revalidates both source authorities, independently reconstructs the
+  /// cooked package, and returns only an unpublished managed stage candidate.
+  Future<AuthoringRevision3DataAssetStagePreparation>
+  authoringStorePrepareRevision3InstalledDataAssetEditV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_installed_dataasset_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    if (intent.snapshot.head.canonicalJson != expectedHead.canonicalJson ||
+        intent.inspection.head.canonicalJson != expectedHead.canonicalJson) {
+      throw ArgumentError(
+        'installed DataAsset edit must use the exact requested head',
+        'intent',
+      );
+    }
+    final payload = <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      ...intent.toNativeFields(),
+      'game_root': gameRoot,
+      'root': root,
+    };
+    _authoringRevision3DataAssetEditEnvelopePreflight(
+      command,
+      payload,
+      maxBytes: _maxAuthoringRevision3InstalledDataAssetEditRequestBytes,
+    );
+    final response = await _call(command, payload);
+    try {
+      final prepared = AuthoringRevision3DataAssetStagePreparation.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedIntentBindingSha256: intent.intentBindingSha256,
+        expectedInstalledIntent: intent,
+      );
+      final selector = intent.selector;
+      if (prepared.installedSource == null ||
+          prepared.stage.targetPath != intent.expectedTargetPath ||
+          prepared.stage.selectorKind != selector.kind.wireName ||
+          prepared.stage.selectorPathDepth != selector.path.length ||
+          prepared.stage.replacementByteLength != selector.kind.width) {
+        throw const FormatException(
+          'prepared stage does not match the installed typed selector shape',
+        );
+      }
+      return prepared;
     } on FormatException catch (error) {
       throw ModFfiException._malformed(command: command, reason: error.message);
     }
@@ -1819,19 +1880,20 @@ void _authoringRevision3DataAssetEnvelopePreflight(
 
 void _authoringRevision3DataAssetEditEnvelopePreflight(
   String command,
-  Map<String, Object?> payload,
-) {
+  Map<String, Object?> payload, {
+  int maxBytes = _maxAuthoringRevision3DataAssetEditRequestBytes,
+}) {
   final wire = jsonEncode(<String, Object?>{
     'command': command,
     'payload': payload,
   });
   final byteLength = utf8.encode(wire).length;
-  if (byteLength > _maxAuthoringRevision3DataAssetEditRequestBytes) {
+  if (byteLength > maxBytes) {
     throw ArgumentError.value(
       '<$byteLength UTF-8 bytes>',
       'intent',
       'escaped command envelope exceeds the '
-          '$_maxAuthoringRevision3DataAssetEditRequestBytes-byte native limit',
+          '$maxBytes-byte native limit',
     );
   }
 }

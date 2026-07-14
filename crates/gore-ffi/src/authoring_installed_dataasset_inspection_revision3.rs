@@ -11,6 +11,8 @@
 use std::io;
 use std::path::Path;
 
+use gore_asset::dataasset_workflow::verify_fixed_leaf_stage_edit_from_installed_snapshot_v1;
+use gore_asset::FixedLeafSelector;
 use gore_authoring::{
     AssetVerification, OpenedRevision3Checkpoint, ProjectRevision3, WorkingHead,
     WorkingProjectStore, WorkingStoreError, WorkingStoreLimits, MAX_PROJECT_JSON_BYTES,
@@ -26,16 +28,21 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
 
+use crate::authoring_dataasset_revision3::{self, SemanticReplacementWire};
 use crate::{dataasset, err};
 
 pub(super) const COMMAND: &str = "authoring_store_inspect_revision3_installed_dataasset_v1";
+pub(super) const PREPARE_EDIT_COMMAND: &str =
+    "authoring_store_prepare_revision3_installed_dataasset_edit_v1";
 
 const MAX_PATH_BYTES: usize = 32 * 1024;
 const MAX_HEAD_JSON_BYTES: usize = 64 * 1024;
 const MAX_ERROR_MESSAGE_BYTES: usize = 4 * 1024;
 const MAX_WIRE_BYTES: usize = (MAX_PATH_BYTES * 2 + MAX_HEAD_JSON_BYTES) * 6 + 8 * 1024;
+const MAX_PREPARE_EDIT_WIRE_BYTES: usize = MAX_WIRE_BYTES + 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = crate::transport::MAX_TRANSPORT_RESPONSE_BYTES;
 const MAX_TARGET_PATH_BYTES: usize = 512;
+const INSTALLED_SOURCE_FORMAT: &str = "gore.authoring.revision3-installed-dataasset-source.v1";
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,11 +62,35 @@ struct InspectInstalledDataAssetWirePayload {
     root: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrepareInstalledDataAssetEditWirePayload {
+    candidate_ordinal: u64,
+    expected_head_json: String,
+    expected_inspection_binding: InspectionBindingWire,
+    expected_package_index_seal: ExpectedSealWire,
+    expected_source_snapshot_seal: ExpectedSealWire,
+    expected_usmap_content_seal: ExpectedSealWire,
+    expected_usmap_inventory_seal: ExpectedSealWire,
+    game_root: String,
+    replacement: SemanticReplacementWire,
+    root: String,
+    selector: FixedLeafSelector,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ExpectedSealWire {
     byte_len: u64,
     sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct InspectionBindingWire {
+    uasset: ExpectedSealWire,
+    uexp: ExpectedSealWire,
+    usmap: ExpectedSealWire,
 }
 
 #[derive(Debug)]
@@ -83,6 +114,11 @@ impl Failure {
 
 pub(super) fn inspect_revision3_installed_dataasset_v1_raw(input: &str) -> Value {
     inspect_revision3_installed_dataasset_v1_inner(input, MAX_RESPONSE_BYTES)
+        .unwrap_or_else(Failure::response)
+}
+
+pub(super) fn prepare_revision3_installed_dataasset_edit_v1_raw(input: &str) -> Value {
+    prepare_revision3_installed_dataasset_edit_v1_inner(input, MAX_RESPONSE_BYTES)
         .unwrap_or_else(Failure::response)
 }
 
@@ -258,6 +294,8 @@ fn inspect_revision3_installed_dataasset_v1_inner(
                 "package_id_hex": candidate.package_id_hex,
                 "package_index_seal": package_snapshot.index_seal(),
                 "source_snapshot_seal": package_snapshot.source_snapshot_seal(),
+                "usmap_content_seal": usmap_snapshot.content_seal(),
+                "usmap_inventory_seal": usmap_snapshot.inventory_seal(),
                 "inspection": inspection,
                 "scope": "selected_installed_dataasset_fixed_leaf_inspection_only",
                 "mutation_status": "not_supported",
@@ -272,6 +310,304 @@ fn inspect_revision3_installed_dataasset_v1_inner(
 
     // Security drift wins over extraction, parsing, and response-budget errors. These checks run
     // after the complete nested response has already been constructed and measured.
+    close_all_windows(
+        &package_snapshot,
+        &usmap_snapshot,
+        &store,
+        &before,
+        &expected_head,
+        &payload.expected_head_json,
+    )?;
+    operation_result
+}
+
+fn prepare_revision3_installed_dataasset_edit_v1_inner(
+    input: &str,
+    response_limit: usize,
+) -> Result<Value, Failure> {
+    let payload: PrepareInstalledDataAssetEditWirePayload = parse_exact_edit_wire(input)?;
+    validate_edit_path(&payload.root)?;
+    validate_edit_path(&payload.game_root)?;
+    validate_edit_candidate_ordinal(payload.candidate_ordinal)?;
+    for seal in [
+        &payload.expected_package_index_seal,
+        &payload.expected_source_snapshot_seal,
+        &payload.expected_usmap_content_seal,
+        &payload.expected_usmap_inventory_seal,
+        &payload.expected_inspection_binding.uasset,
+        &payload.expected_inspection_binding.uexp,
+        &payload.expected_inspection_binding.usmap,
+    ] {
+        validate_edit_expected_seal(seal)?;
+    }
+    if payload.expected_inspection_binding.usmap != payload.expected_usmap_content_seal {
+        return Err(edit_invalid_request());
+    }
+    let expected_head = parse_canonical_edit_head(&payload.expected_head_json)?;
+
+    // The Store CAS basis is authoritative and is checked before touching the game install.
+    let store = WorkingProjectStore::open_existing(Path::new(&payload.root), ffi_store_limits())
+        .map_err(map_store_error)?;
+    let before = store
+        .open_current_revision3(AssetVerification::Full)
+        .map_err(map_store_error)?;
+    if before.head != expected_head {
+        return Err(edit_head_conflict());
+    }
+    let head_json = serde_json::to_string(&before.head).map_err(|_| edit_invariant_failure())?;
+    if head_json != payload.expected_head_json {
+        return Err(edit_head_invalid());
+    }
+    if validate_project(&before.project).is_err() {
+        close_store_window(&store, &before, &expected_head, &payload.expected_head_json)?;
+        return Err(edit_invariant_failure());
+    }
+    if before.project.revision >= i64::MAX as u64 {
+        close_store_window(&store, &before, &expected_head, &payload.expected_head_json)?;
+        return Err(Failure::new(
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REVISION_LIMIT",
+            "the published project revision cannot be incremented safely",
+        ));
+    }
+
+    let executable_anchor = ExpectedInstalledExecutableV1 {
+        byte_len: before.project.target.executable.byte_len,
+        sha256: *before.project.target.executable.sha256.as_bytes(),
+    };
+    let package_snapshot = match inspect_installed_package_index_v1(
+        Path::new(&payload.game_root),
+        executable_anchor,
+    ) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let failure = map_package_snapshot_error(error);
+            close_store_window(&store, &before, &expected_head, &payload.expected_head_json)?;
+            return Err(failure);
+        }
+    };
+    if let Err(failure) = validate_package_snapshot(&package_snapshot, &before.project) {
+        close_package_and_store_window(
+            &package_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(failure);
+    }
+    if !wire_seal_matches(
+        &payload.expected_package_index_seal,
+        package_snapshot.index_seal(),
+    ) {
+        close_package_and_store_window(
+            &package_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_package_index_mismatch());
+    }
+    if !wire_seal_matches(
+        &payload.expected_source_snapshot_seal,
+        package_snapshot.source_snapshot_seal(),
+    ) {
+        close_package_and_store_window(
+            &package_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_source_snapshot_mismatch());
+    }
+
+    let ordinal = match usize::try_from(payload.candidate_ordinal) {
+        Ok(ordinal) => ordinal,
+        Err(_) => {
+            close_package_and_store_window(
+                &package_snapshot,
+                &store,
+                &before,
+                &expected_head,
+                &payload.expected_head_json,
+            )?;
+            return Err(edit_candidate_invalid());
+        }
+    };
+    let Some(candidate) = package_snapshot.index().candidates.get(ordinal) else {
+        close_package_and_store_window(
+            &package_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_candidate_invalid());
+    };
+    if candidate.target_path.len() > MAX_TARGET_PATH_BYTES
+        || candidate.package_id_hex.len() != 16
+        || !is_lower_hex(&candidate.package_id_hex)
+    {
+        close_package_and_store_window(
+            &package_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_invariant_failure());
+    }
+    let selected_target_path = candidate.target_path.clone();
+
+    let usmap_snapshot = match inspect_installed_usmap_v1(Path::new(&payload.game_root)) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            let failure = map_usmap_error(error);
+            close_package_and_store_window(
+                &package_snapshot,
+                &store,
+                &before,
+                &expected_head,
+                &payload.expected_head_json,
+            )?;
+            return Err(failure);
+        }
+    };
+    if let Err(failure) = validate_usmap_snapshot(&usmap_snapshot) {
+        close_all_windows(
+            &package_snapshot,
+            &usmap_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(failure);
+    }
+    if !wire_seal_matches(
+        &payload.expected_usmap_content_seal,
+        usmap_snapshot.content_seal(),
+    ) {
+        close_all_windows(
+            &package_snapshot,
+            &usmap_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_usmap_content_mismatch());
+    }
+    if !wire_seal_matches(
+        &payload.expected_usmap_inventory_seal,
+        usmap_snapshot.inventory_seal(),
+    ) {
+        close_all_windows(
+            &package_snapshot,
+            &usmap_snapshot,
+            &store,
+            &before,
+            &expected_head,
+            &payload.expected_head_json,
+        )?;
+        return Err(edit_usmap_inventory_mismatch());
+    }
+
+    let operation_result = (|| {
+        let extracted = package_snapshot
+            .extract_candidate_to_memory_v1(payload.candidate_ordinal)
+            .map_err(map_extraction_error)?;
+        if extracted.candidate_ordinal() != payload.candidate_ordinal
+            || extracted.target_path() != selected_target_path
+        {
+            return Err(edit_invariant_failure());
+        }
+
+        // Re-run the same bounded whole-package inspector used to mint the prior proof. The
+        // caller cannot smuggle raw bytes or a target; only a selector that is still reported as
+        // editable for this exact installed byte triple may advance into staging.
+        let inspection = dataasset::fixed_inspect_verified_bytes_v1(
+            clone_verified_bytes(extracted.uasset_bytes()).map_err(|_| edit_input_limit())?,
+            clone_verified_bytes(extracted.uexp_bytes()).map_err(|_| edit_input_limit())?,
+            clone_verified_bytes(usmap_snapshot.bytes()).map_err(|_| edit_input_limit())?,
+            None,
+        )
+        .map_err(map_fixed_edit_inspection_error)?;
+        validate_nested_inspection(&inspection).map_err(|_| edit_invariant_failure())?;
+        let actual_inspection_binding = inspection_binding(&inspection)?;
+        if actual_inspection_binding != payload.expected_inspection_binding {
+            return Err(edit_inspection_binding_mismatch());
+        }
+        require_exact_editable_selector(&inspection, &payload.selector)?;
+
+        let replacement_bytes = payload
+            .replacement
+            .encode_bytes_for(payload.selector.kind)
+            .map_err(map_shared_dataasset_failure)?;
+        let selector_json =
+            serde_json::to_vec(&payload.selector).map_err(|_| edit_invariant_failure())?;
+        let request_intent_binding = authoring_dataasset_revision3::intent_binding_sha256(
+            &selected_target_path,
+            &selector_json,
+            &replacement_bytes,
+        );
+        let replacement_hex = authoring_dataasset_revision3::encode_wire_bytes(&replacement_bytes);
+        let verified = verify_fixed_leaf_stage_edit_from_installed_snapshot_v1(
+            Path::new(&payload.game_root),
+            extracted,
+            &usmap_snapshot,
+            payload.selector,
+            &replacement_hex,
+        )
+        .map_err(|_| edit_semantic_invalid())?;
+        let prepared = store
+            .prepare_revision3_dataasset_stage_v1(&expected_head, verified)
+            .map_err(authoring_dataasset_revision3::map_staging_error)
+            .map_err(map_shared_dataasset_failure)?;
+        let prepared_intent_binding =
+            authoring_dataasset_revision3::stage_intent_binding_sha256(prepared.stage())
+                .map_err(map_shared_dataasset_failure)?;
+        if prepared_intent_binding != request_intent_binding {
+            return Err(edit_invariant_failure());
+        }
+
+        let proof_binding = installed_proof_binding_sha256(
+            payload.candidate_ordinal,
+            package_snapshot.index_seal(),
+            package_snapshot.source_snapshot_seal(),
+            usmap_snapshot.content_seal(),
+            usmap_snapshot.inventory_seal(),
+            &actual_inspection_binding,
+        )?;
+        let installed_source = json!({
+            "format": INSTALLED_SOURCE_FORMAT,
+            "candidate_ordinal": payload.candidate_ordinal,
+            "package_index_seal": package_snapshot.index_seal(),
+            "source_snapshot_seal": package_snapshot.source_snapshot_seal(),
+            "usmap_content_seal": usmap_snapshot.content_seal(),
+            "usmap_inventory_seal": usmap_snapshot.inventory_seal(),
+            "inspection_binding": actual_inspection_binding,
+        });
+        let mut response = authoring_dataasset_revision3::prepared_response(
+            prepared,
+            Some(prepared_intent_binding),
+        )
+        .map_err(map_shared_dataasset_failure)?;
+        let object = response
+            .as_object_mut()
+            .ok_or_else(edit_invariant_failure)?;
+        object.insert(
+            "installed_proof_binding_sha256".to_owned(),
+            Value::String(proof_binding),
+        );
+        object.insert("installed_source".to_owned(), installed_source);
+        enforce_edit_response_budget(response, response_limit)
+    })();
+
+    // Package, USMAP, and published Store drift always outrank parsing, patching, staging, and
+    // response errors. Immutable CAS objects may have been installed, but the fixed head is never
+    // published by this prepare-only route.
     close_all_windows(
         &package_snapshot,
         &usmap_snapshot,
@@ -298,6 +634,59 @@ fn parse_exact_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
         return Err(invalid_request());
     }
     Ok(request.payload)
+}
+
+fn parse_exact_edit_wire<P: DeserializeOwned>(input: &str) -> Result<P, Failure> {
+    if input.len() > MAX_PREPARE_EDIT_WIRE_BYTES {
+        return Err(Failure::new(
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT",
+            format!(
+                "installed DataAsset edit request exceeds the {MAX_PREPARE_EDIT_WIRE_BYTES}-byte limit"
+            ),
+        ));
+    }
+    let request: ExactWireRequest<P> =
+        serde_json::from_str(input).map_err(|_| edit_invalid_request())?;
+    if request.command != PREPARE_EDIT_COMMAND {
+        return Err(edit_invalid_request());
+    }
+    Ok(request.payload)
+}
+
+fn validate_edit_path(path: &str) -> Result<(), Failure> {
+    if path.is_empty() || path.len() > MAX_PATH_BYTES || path.contains('\0') {
+        return Err(edit_invalid_request());
+    }
+    Ok(())
+}
+
+fn parse_canonical_edit_head(input: &str) -> Result<WorkingHead, Failure> {
+    if input.is_empty() || input.len() > MAX_HEAD_JSON_BYTES {
+        return Err(edit_head_invalid());
+    }
+    let head: WorkingHead = serde_json::from_str(input).map_err(|_| edit_head_invalid())?;
+    if serde_json::to_string(&head).map_err(|_| edit_invariant_failure())? != input {
+        return Err(edit_head_invalid());
+    }
+    Ok(head)
+}
+
+fn validate_edit_expected_seal(seal: &ExpectedSealWire) -> Result<(), Failure> {
+    if seal.byte_len == 0
+        || seal.byte_len > i64::MAX as u64
+        || seal.sha256.len() != 64
+        || !is_lower_hex(&seal.sha256)
+    {
+        return Err(edit_invalid_request());
+    }
+    Ok(())
+}
+
+fn validate_edit_candidate_ordinal(value: u64) -> Result<(), Failure> {
+    if value > i64::MAX as u64 {
+        return Err(edit_candidate_invalid());
+    }
+    Ok(())
 }
 
 fn validate_path(path: &str) -> Result<(), Failure> {
@@ -423,6 +812,129 @@ fn validate_nested_inspection(inspection: &Value) -> Result<(), Failure> {
     Ok(())
 }
 
+fn inspection_binding(inspection: &Value) -> Result<InspectionBindingWire, Failure> {
+    let input = inspection
+        .get("input")
+        .and_then(Value::as_object)
+        .ok_or_else(edit_invariant_failure)?;
+    let binding = inspection
+        .get("binding")
+        .and_then(Value::as_object)
+        .ok_or_else(edit_invariant_failure)?;
+    let package = binding
+        .get("package_seal")
+        .and_then(Value::as_object)
+        .ok_or_else(edit_invariant_failure)?;
+    let seal = |length_key: &str, digest_key: &str| -> Result<ExpectedSealWire, Failure> {
+        let value = ExpectedSealWire {
+            byte_len: input
+                .get(length_key)
+                .and_then(Value::as_u64)
+                .ok_or_else(edit_invariant_failure)?,
+            sha256: package
+                .get(digest_key)
+                .and_then(Value::as_str)
+                .ok_or_else(edit_invariant_failure)?
+                .to_owned(),
+        };
+        validate_edit_expected_seal(&value).map_err(|_| edit_invariant_failure())?;
+        Ok(value)
+    };
+    let usmap = ExpectedSealWire {
+        byte_len: input
+            .get("usmap_length")
+            .and_then(Value::as_u64)
+            .ok_or_else(edit_invariant_failure)?,
+        sha256: binding
+            .get("usmap_sha256")
+            .and_then(Value::as_str)
+            .ok_or_else(edit_invariant_failure)?
+            .to_owned(),
+    };
+    validate_edit_expected_seal(&usmap).map_err(|_| edit_invariant_failure())?;
+    Ok(InspectionBindingWire {
+        uasset: seal("uasset_length", "uasset_sha256")?,
+        uexp: seal("uexp_length", "uexp_sha256")?,
+        usmap,
+    })
+}
+
+fn require_exact_editable_selector(
+    inspection: &Value,
+    selector: &FixedLeafSelector,
+) -> Result<(), Failure> {
+    let selector = serde_json::to_value(selector).map_err(|_| edit_invariant_failure())?;
+    let exports = inspection
+        .get("exports")
+        .and_then(Value::as_array)
+        .ok_or_else(edit_invariant_failure)?;
+    let mut matches = 0_u64;
+    for leaf in exports
+        .iter()
+        .filter_map(|export| export.get("leaves").and_then(Value::as_array))
+        .flatten()
+    {
+        if leaf.get("editable") == Some(&Value::Bool(true))
+            && leaf.get("selector") == Some(&selector)
+        {
+            matches = matches.checked_add(1).ok_or_else(edit_invariant_failure)?;
+        }
+    }
+    if matches != 1 {
+        return Err(edit_selector_mismatch());
+    }
+    Ok(())
+}
+
+fn installed_proof_binding_sha256(
+    candidate_ordinal: u64,
+    package_index: &InstalledPackageContentSealV1,
+    source_snapshot: &InstalledPackageContentSealV1,
+    usmap_content: &InstalledPackageContentSealV1,
+    usmap_inventory: &InstalledPackageContentSealV1,
+    inspection: &InspectionBindingWire,
+) -> Result<String, Failure> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"gore.authoring.r3-installed-dataasset-proof-binding.v1\0");
+    hasher.update(candidate_ordinal.to_le_bytes());
+    for (byte_len, sha256) in [
+        (package_index.byte_len, package_index.sha256.as_str()),
+        (source_snapshot.byte_len, source_snapshot.sha256.as_str()),
+        (usmap_content.byte_len, usmap_content.sha256.as_str()),
+        (usmap_inventory.byte_len, usmap_inventory.sha256.as_str()),
+        (
+            inspection.uasset.byte_len,
+            inspection.uasset.sha256.as_str(),
+        ),
+        (inspection.uexp.byte_len, inspection.uexp.sha256.as_str()),
+        (inspection.usmap.byte_len, inspection.usmap.sha256.as_str()),
+    ] {
+        hasher.update(byte_len.to_le_bytes());
+        hasher.update(decode_sha256(sha256)?);
+    }
+    Ok(hex_digest(&hasher.finalize()))
+}
+
+fn decode_sha256(value: &str) -> Result<[u8; 32], Failure> {
+    if value.len() != 64 || !is_lower_hex(value) {
+        return Err(edit_invariant_failure());
+    }
+    let mut decoded = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        decoded[index] =
+            (decode_lower_hex_nibble(pair[0])? << 4) | decode_lower_hex_nibble(pair[1])?;
+    }
+    Ok(decoded)
+}
+
+fn decode_lower_hex_nibble(value: u8) -> Result<u8, Failure> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        _ => Err(edit_invariant_failure()),
+    }
+}
+
 fn clone_verified_bytes(bytes: &[u8]) -> Result<Vec<u8>, Failure> {
     let mut cloned = Vec::new();
     cloned.try_reserve_exact(bytes.len()).map_err(|_| {
@@ -544,6 +1056,25 @@ fn enforce_response_budget(response: Value, limit: usize) -> Result<Value, Failu
     Ok(response)
 }
 
+fn enforce_edit_response_budget(response: Value, limit: usize) -> Result<Value, Failure> {
+    let mut counter = BoundedResponseCounter {
+        bytes: 0,
+        limit,
+        exceeded: false,
+    };
+    if serde_json::to_writer(&mut counter, &response).is_err() {
+        return if counter.exceeded {
+            Err(Failure::new(
+                "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT",
+                "installed DataAsset edit response exceeds its bounded transport budget",
+            ))
+        } else {
+            Err(edit_invariant_failure())
+        };
+    }
+    Ok(response)
+}
+
 fn ffi_store_limits() -> WorkingStoreLimits {
     WorkingStoreLimits {
         max_referenced_entity_bytes: MAX_PROJECT_JSON_BYTES as u64,
@@ -556,6 +1087,101 @@ fn invalid_request() -> Failure {
         "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_REQUEST_INVALID",
         "request must contain exactly candidate_ordinal, expected_head_json, expected_package_index_seal, expected_source_snapshot_seal, game_root, and root",
     )
+}
+
+fn edit_invalid_request() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+        "request must contain exactly the installed snapshot seals, prior inspection binding, candidate ordinal, exact head, roots, selector, and typed replacement",
+    )
+}
+
+fn edit_head_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_INVALID",
+        "expected_head_json is not one exact duplicate-free canonical revision-3 head",
+    )
+}
+
+fn edit_head_conflict() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT",
+        "the revision-3 Store head changed or differs from the caller's exact head",
+    )
+}
+
+fn edit_candidate_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID",
+        "candidate_ordinal is outside the exact rebuilt installed package snapshot",
+    )
+}
+
+fn edit_package_index_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_PACKAGE_INDEX_MISMATCH",
+        "the exact installed package index no longer matches the prior inspection proof",
+    )
+}
+
+fn edit_source_snapshot_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH",
+        "the exact installed source snapshot no longer matches the prior inspection proof",
+    )
+}
+
+fn edit_usmap_content_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH",
+        "the exact installed USMAP content no longer matches the prior inspection proof",
+    )
+}
+
+fn edit_usmap_inventory_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_INVENTORY_MISMATCH",
+        "the installed USMAP inventory no longer matches the prior inspection proof",
+    )
+}
+
+fn edit_inspection_binding_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INSPECTION_BINDING_MISMATCH",
+        "the re-inspected installed package bytes no longer match the prior inspection proof",
+    )
+}
+
+fn edit_selector_mismatch() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SELECTOR_MISMATCH",
+        "the selector is not one exact editable leaf in the re-inspected installed package",
+    )
+}
+
+fn edit_semantic_invalid() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INVALID",
+        "the exact installed snapshot cannot authorize this typed fixed-leaf edit",
+    )
+}
+
+fn edit_input_limit() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT",
+        "the verified installed DataAsset exceeds the bounded edit input limit",
+    )
+}
+
+fn edit_invariant_failure() -> Failure {
+    Failure::new(
+        "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INVARIANT",
+        "the native installed DataAsset edit failed an internal invariant",
+    )
+}
+
+fn map_shared_dataasset_failure(error: authoring_dataasset_revision3::Failure) -> Failure {
+    Failure::new(error.code(), error.message())
 }
 
 fn head_invalid() -> Failure {
@@ -745,6 +1371,10 @@ fn map_extraction_error(error: InstalledPackageExtractionErrorV1) -> Failure {
             "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_EXTRACTION_FAILED",
             "the server-selected installed package could not be converted exactly",
         ),
+        InstalledPackageExtractionErrorV1::SourceEvidence => Failure::new(
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_EXTRACTION_FAILED",
+            "the server-selected installed package source evidence was incomplete",
+        ),
         InstalledPackageExtractionErrorV1::CounterOverflow => invariant_failure(),
     }
 }
@@ -830,6 +1460,20 @@ fn map_fixed_inspection_error(error: dataasset::Failure) -> Failure {
     }
 }
 
+fn map_fixed_edit_inspection_error(error: dataasset::Failure) -> Failure {
+    match error.code() {
+        "DATAASSET_INPUT_LIMIT" => edit_input_limit(),
+        "DATAASSET_RESPONSE_LIMIT" => Failure::new(
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT",
+            "the re-inspected fixed-leaf report exceeds its bounded response limit",
+        ),
+        _ => Failure::new(
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INSPECTION_FAILED",
+            "the exact installed package and USMAP could not be re-inspected safely",
+        ),
+    }
+}
+
 fn is_lower_hex(value: &str) -> bool {
     value
         .bytes()
@@ -868,6 +1512,10 @@ mod tests {
     #[cfg(windows)]
     use std::path::PathBuf;
 
+    use gore_asset::{
+        FixedLeafRole, FixedLeafSelectorStep, FixedLeafWireType, PackageComponent, PackagePairSeal,
+        FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
+    };
     use gore_authoring::{
         AssetStoreIndex, ContentSeal, FormatV2, GameGenerationAnchor, ProjectId, ProjectMeta,
         SchemaRevisionV3, Sha256Digest,
@@ -926,8 +1574,61 @@ mod tests {
         })
     }
 
+    fn bool_selector() -> FixedLeafSelector {
+        FixedLeafSelector {
+            format: FIXED_LEAF_SELECTOR_FORMAT,
+            profile: FIXED_LEAF_SELECTOR_PROFILE.to_owned(),
+            package_seal: PackagePairSeal {
+                uasset_sha256: [0x11; 32],
+                uexp_sha256: [0x22; 32],
+            },
+            usmap_sha256: "33".repeat(32),
+            export_index: 0,
+            object_name: "Fixture".to_owned(),
+            class_path: "/Script/Test.Fixture".to_owned(),
+            component: PackageComponent::Uexp,
+            export_sha256: "44".repeat(32),
+            role: FixedLeafRole::PropertyValue,
+            kind: gore_asset::FixedWireKind::Bool,
+            path: vec![FixedLeafSelectorStep::Property {
+                schema_index: 0,
+                property_name: "Enabled".to_owned(),
+                array_index: 0,
+                array_dimension: 1,
+                declaring_schema_name: "Fixture".to_owned(),
+                declaring_module_path: Some("/Script/Test".to_owned()),
+                property_type: FixedLeafWireType::Bool {},
+            }],
+            expected_hex: "01".to_owned(),
+        }
+    }
+
+    fn valid_edit_shape() -> Value {
+        json!({
+            "candidate_ordinal": 0,
+            "expected_head_json": "{}",
+            "expected_inspection_binding": {
+                "uasset": seal_json(10, '1'),
+                "uexp": seal_json(20, '2'),
+                "usmap": seal_json(30, '3'),
+            },
+            "expected_package_index_seal": seal_json(40, '4'),
+            "expected_source_snapshot_seal": seal_json(50, '5'),
+            "expected_usmap_content_seal": seal_json(30, '3'),
+            "expected_usmap_inventory_seal": seal_json(60, '6'),
+            "game_root": "C:/missing-game",
+            "replacement": {"kind": "bool", "value": false},
+            "root": "C:/missing-store",
+            "selector": bool_selector(),
+        })
+    }
+
     fn raw_request(payload: Value) -> String {
         json!({"command": COMMAND, "payload": payload}).to_string()
+    }
+
+    fn raw_edit_request(payload: Value) -> String {
+        json!({"command": PREPARE_EDIT_COMMAND, "payload": payload}).to_string()
     }
 
     fn tree_bytes(root: &Path) -> BTreeMap<String, Option<Vec<u8>>> {
@@ -1018,6 +1719,141 @@ mod tests {
                 "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_REQUEST_INVALID"
             );
         }
+    }
+
+    #[test]
+    fn installed_edit_wire_is_closed_path_minimal_and_seal_bound() {
+        let parsed: PrepareInstalledDataAssetEditWirePayload =
+            parse_exact_edit_wire(&raw_edit_request(valid_edit_shape())).unwrap();
+        assert_eq!(parsed.candidate_ordinal, 0);
+        assert_eq!(parsed.expected_inspection_binding.uasset.byte_len, 10);
+
+        for forbidden in [
+            "target_path",
+            "package_id_hex",
+            "output_path",
+            "patch_receipt_path",
+            "extract_receipt_path",
+            "usmap_path",
+            "uasset_path",
+            "uexp_path",
+            "raw_bytes",
+            "project_json",
+            "export_index",
+        ] {
+            let mut payload = valid_edit_shape();
+            payload[forbidden] = json!("forged-authority");
+            assert_eq!(
+                prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(payload))
+                    ["error"]["code"],
+                "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+                "accepted forbidden field {forbidden}"
+            );
+        }
+
+        for required in [
+            "candidate_ordinal",
+            "expected_head_json",
+            "expected_inspection_binding",
+            "expected_package_index_seal",
+            "expected_source_snapshot_seal",
+            "expected_usmap_content_seal",
+            "expected_usmap_inventory_seal",
+            "game_root",
+            "replacement",
+            "root",
+            "selector",
+        ] {
+            let mut payload = valid_edit_shape();
+            payload.as_object_mut().unwrap().remove(required);
+            assert_eq!(
+                prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(payload))
+                    ["error"]["code"],
+                "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID",
+                "accepted missing field {required}"
+            );
+        }
+
+        let mut invalid = valid_edit_shape();
+        invalid["expected_usmap_inventory_seal"]["sha256"] = json!("A".repeat(64));
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(invalid))["error"]
+                ["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+        );
+        let mut invalid = valid_edit_shape();
+        invalid["expected_inspection_binding"]["uexp"]["byte_len"] = json!(0);
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(invalid))["error"]
+                ["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+        );
+        let mut invalid = valid_edit_shape();
+        invalid["expected_inspection_binding"]["usmap"]["sha256"] = json!("7".repeat(64));
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(invalid))["error"]
+                ["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_REQUEST_INVALID"
+        );
+        let mut invalid = valid_edit_shape();
+        invalid["candidate_ordinal"] = json!(i64::MAX as u64 + 1);
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(invalid))["error"]
+                ["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID"
+        );
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_raw(
+                &" ".repeat(MAX_PREPARE_EDIT_WIRE_BYTES + 1)
+            )["error"]["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INPUT_LIMIT"
+        );
+    }
+
+    #[test]
+    fn installed_proof_digest_contract_is_domain_separated_and_stable() {
+        let native = |byte_len: u64, byte: char| InstalledPackageContentSealV1 {
+            byte_len,
+            sha256: byte.to_string().repeat(64),
+        };
+        let inspection = InspectionBindingWire {
+            uasset: ExpectedSealWire {
+                byte_len: 5,
+                sha256: "5".repeat(64),
+            },
+            uexp: ExpectedSealWire {
+                byte_len: 6,
+                sha256: "6".repeat(64),
+            },
+            usmap: ExpectedSealWire {
+                byte_len: 7,
+                sha256: "7".repeat(64),
+            },
+        };
+        let digest = installed_proof_binding_sha256(
+            7,
+            &native(1, '1'),
+            &native(2, '2'),
+            &native(3, '3'),
+            &native(4, '4'),
+            &inspection,
+        )
+        .unwrap();
+        assert_eq!(
+            digest,
+            "827161c17b537a2b63095c51ff204cb398d653d3144bc012d276b4957cea5aed"
+        );
+
+        let changed = installed_proof_binding_sha256(
+            8,
+            &native(1, '1'),
+            &native(2, '2'),
+            &native(3, '3'),
+            &native(4, '4'),
+            &inspection,
+        )
+        .unwrap();
+        assert_ne!(changed, digest);
     }
 
     #[test]
@@ -1128,6 +1964,9 @@ mod tests {
         let commands = info["commands"].as_array().unwrap();
         assert!(commands.iter().any(|command| command == COMMAND));
         assert!(commands
+            .iter()
+            .any(|command| command == PREPARE_EDIT_COMMAND));
+        assert!(commands
             .windows(2)
             .all(|pair| { pair[0].as_str().unwrap() < pair[1].as_str().unwrap() }));
     }
@@ -1151,6 +1990,17 @@ mod tests {
         assert_eq!(
             response["error"]["code"],
             "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_HEAD_CONFLICT"
+        );
+        assert!(!missing_game.exists());
+
+        let mut edit = valid_edit_shape();
+        edit["expected_head_json"] = json!(serde_json::to_string(&stale).unwrap());
+        edit["game_root"] = json!(missing_game);
+        edit["root"] = json!(store_root);
+        let response = prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(edit));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_HEAD_CONFLICT"
         );
         assert!(!missing_game.exists());
     }
@@ -1183,6 +2033,10 @@ mod tests {
         );
         assert_eq!(
             map_extraction_error(InstalledPackageExtractionErrorV1::Conversion).code,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_EXTRACTION_FAILED"
+        );
+        assert_eq!(
+            map_extraction_error(InstalledPackageExtractionErrorV1::SourceEvidence).code,
             "AUTHORING_REVISION3_INSTALLED_DATAASSET_INSPECTION_EXTRACTION_FAILED"
         );
         assert_eq!(
@@ -1350,6 +2204,24 @@ mod tests {
             )
             .unwrap();
         writer.finalize().unwrap();
+
+        // The managed-stage generation proof independently follows the game's real split layout:
+        // package data in G1R-Windows plus the global script-object table in global.*.
+        let mut global_writer = IoStoreWriter::new(
+            utoc.with_file_name("global.utoc"),
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        global_writer
+            .write_chunk(
+                FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects),
+                Some(UEPath::new("../../../G1R/Content/ScriptObjects.bin")),
+                &script_objects,
+            )
+            .unwrap();
+        global_writer.finalize().unwrap();
     }
 
     #[cfg(windows)]
@@ -1403,7 +2275,12 @@ mod tests {
             use retoc::version::EngineVersion;
             use retoc::{EIoChunkType, FIoChunkId, FIoContainerId, FPackageId, UEPath, UEPathBuf};
 
-            let temp = TempDir::new().unwrap();
+            // Keep the synthetic game outside the OS temporary directory because the production
+            // converter deliberately rejects a temp parent that contains the live game tree.
+            let temp = tempfile::Builder::new()
+                .prefix(".gore-ffi-installed-")
+                .tempdir_in(std::env::current_dir().unwrap())
+                .unwrap();
             let store_root = temp.path().join("store");
             let head_json = publish_store(&store_root);
             let game_root = temp.path().join("game");
@@ -1496,6 +2373,35 @@ mod tests {
                 sha256: self.source_snapshot_seal.sha256.clone(),
             }
         }
+
+        fn edit_payload(&self, inspection: &Value) -> Value {
+            json!({
+                "candidate_ordinal": inspection["candidate_ordinal"],
+                "expected_head_json": self.head_json,
+                "expected_inspection_binding": {
+                    "uasset": {
+                        "byte_len": inspection["inspection"]["input"]["uasset_length"],
+                        "sha256": inspection["inspection"]["binding"]["package_seal"]["uasset_sha256"],
+                    },
+                    "uexp": {
+                        "byte_len": inspection["inspection"]["input"]["uexp_length"],
+                        "sha256": inspection["inspection"]["binding"]["package_seal"]["uexp_sha256"],
+                    },
+                    "usmap": {
+                        "byte_len": inspection["inspection"]["input"]["usmap_length"],
+                        "sha256": inspection["inspection"]["binding"]["usmap_sha256"],
+                    },
+                },
+                "expected_package_index_seal": inspection["package_index_seal"],
+                "expected_source_snapshot_seal": inspection["source_snapshot_seal"],
+                "expected_usmap_content_seal": inspection["usmap_content_seal"],
+                "expected_usmap_inventory_seal": inspection["usmap_inventory_seal"],
+                "game_root": self.game_root,
+                "replacement": {"kind": "bool", "value": false},
+                "root": self.store_root,
+                "selector": inspection["inspection"]["exports"][0]["leaves"][0]["selector"],
+            })
+        }
     }
 
     #[cfg(windows)]
@@ -1537,6 +2443,8 @@ mod tests {
                 "scope",
                 "source_snapshot_seal",
                 "target_path",
+                "usmap_content_seal",
+                "usmap_inventory_seal",
             ])
         );
         assert_eq!(response["outcome"], "inspection_only");
@@ -1554,6 +2462,13 @@ mod tests {
             response["source_snapshot_seal"],
             serde_json::to_value(&fixture.source_snapshot_seal).unwrap()
         );
+        assert_eq!(
+            response["usmap_content_seal"]["sha256"],
+            response["inspection"]["binding"]["usmap_sha256"]
+        );
+        assert!(response["usmap_inventory_seal"]["byte_len"]
+            .as_u64()
+            .is_some_and(|length| length > 0));
         assert_eq!(
             response["scope"],
             "selected_installed_dataasset_fixed_leaf_inspection_only"
@@ -1609,6 +2524,227 @@ mod tests {
         );
         assert_eq!(tree_bytes(&fixture.store_root), store_before);
         assert_eq!(tree_bytes(&fixture.game_root), game_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn exact_installed_inspection_promotes_to_one_unpublished_typed_stage() {
+        let fixture = WindowsFixture::valid();
+        let package = fixture.package_wire();
+        let source = fixture.source_wire();
+        let inspection =
+            inspect_revision3_installed_dataasset_v1_raw(&fixture.request(0, &package, &source));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        let fixed_head_before = fs::read(fixture.store_root.join("gore-project.json")).unwrap();
+        let game_before = tree_bytes(&fixture.game_root);
+
+        let edit_payload = fixture.edit_payload(&inspection);
+        let expected_inspection_binding = edit_payload["expected_inspection_binding"].clone();
+        let response =
+            prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(edit_payload));
+
+        assert_eq!(response["ok"], true, "{response}");
+        assert_eq!(response["outcome"], "prepared_unpublished");
+        assert_eq!(response["revision"], 10);
+        assert_eq!(response["build_status"], "blocked");
+        assert_eq!(response["runtime_status"], "runtime_unqualified");
+        assert_eq!(response["artifact_authority"], "not_granted");
+        assert_eq!(response["publication_status"], "not_supported");
+        assert_eq!(
+            response["installed_source"]["format"],
+            INSTALLED_SOURCE_FORMAT
+        );
+        assert_eq!(response["installed_source"]["candidate_ordinal"], 0);
+        assert_eq!(
+            response["installed_source"]["package_index_seal"],
+            inspection["package_index_seal"]
+        );
+        assert_eq!(
+            response["installed_source"]["source_snapshot_seal"],
+            inspection["source_snapshot_seal"]
+        );
+        assert_eq!(
+            response["installed_source"]["usmap_content_seal"],
+            inspection["usmap_content_seal"]
+        );
+        assert_eq!(
+            response["installed_source"]["usmap_inventory_seal"],
+            inspection["usmap_inventory_seal"]
+        );
+        assert_eq!(
+            response["installed_source"]["inspection_binding"],
+            expected_inspection_binding
+        );
+        for digest_field in ["intent_binding_sha256", "installed_proof_binding_sha256"] {
+            let digest = response[digest_field].as_str().unwrap();
+            assert_eq!(digest.len(), 64);
+            assert!(is_lower_hex(digest));
+        }
+        assert_eq!(response["stage"]["manifest"]["target_path"], TARGET);
+        assert_eq!(response["stage"]["manifest"]["replacement_hex"], "00");
+        assert_eq!(
+            fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
+            fixed_head_before
+        );
+        assert_eq!(tree_bytes(&fixture.game_root), game_before);
+
+        let encoded = response.to_string();
+        assert!(!encoded.contains(&fixture.store_root.to_string_lossy().to_string()));
+        assert!(!encoded.contains(&fixture.game_root.to_string_lossy().to_string()));
+        for forbidden in [
+            "patch_receipt_path",
+            "extract_receipt_path",
+            "uasset_path",
+            "uexp_path",
+            "usmap_path",
+            "output_path",
+            "raw_bytes",
+        ] {
+            assert!(!encoded.contains(forbidden), "leaked {forbidden}");
+        }
+
+        assert_eq!(
+            prepare_revision3_installed_dataasset_edit_v1_inner(
+                &raw_edit_request(fixture.edit_payload(&inspection)),
+                128,
+            )
+            .unwrap_err()
+            .code,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_RESPONSE_LIMIT"
+        );
+        assert_eq!(
+            fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
+            fixed_head_before
+        );
+        assert_eq!(tree_bytes(&fixture.game_root), game_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_edit_rebuilds_every_prior_proof_before_staging() {
+        let fixture = WindowsFixture::valid();
+        let inspection = inspect_revision3_installed_dataasset_v1_raw(&fixture.request(
+            0,
+            &fixture.package_wire(),
+            &fixture.source_wire(),
+        ));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        let fixed_head_before = fs::read(fixture.store_root.join("gore-project.json")).unwrap();
+        let game_before = tree_bytes(&fixture.game_root);
+        let changed_digest = |value: &mut Value| {
+            let mut digest = value.as_str().unwrap().to_owned();
+            let replacement = if digest.starts_with("ff") { "00" } else { "ff" };
+            digest.replace_range(..2, replacement);
+            *value = Value::String(digest);
+        };
+
+        let mut cases = Vec::new();
+        let mut payload = fixture.edit_payload(&inspection);
+        payload["candidate_ordinal"] = json!(1);
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_CANDIDATE_INVALID",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        changed_digest(&mut payload["expected_package_index_seal"]["sha256"]);
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_PACKAGE_INDEX_MISMATCH",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        changed_digest(&mut payload["expected_source_snapshot_seal"]["sha256"]);
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        changed_digest(&mut payload["expected_usmap_content_seal"]["sha256"]);
+        payload["expected_inspection_binding"]["usmap"] =
+            payload["expected_usmap_content_seal"].clone();
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        changed_digest(&mut payload["expected_usmap_inventory_seal"]["sha256"]);
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_INVENTORY_MISMATCH",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        changed_digest(&mut payload["expected_inspection_binding"]["uexp"]["sha256"]);
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_INSPECTION_BINDING_MISMATCH",
+        ));
+        let mut payload = fixture.edit_payload(&inspection);
+        payload["selector"]["expected_hex"] = json!("00");
+        cases.push((
+            payload,
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SELECTOR_MISMATCH",
+        ));
+
+        for (payload, expected_code) in cases {
+            let response =
+                prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(payload));
+            assert_eq!(response["error"]["code"], expected_code, "{response}");
+            let encoded = response.to_string();
+            assert!(!encoded.contains(&fixture.store_root.to_string_lossy().to_string()));
+            assert!(!encoded.contains(&fixture.game_root.to_string_lossy().to_string()));
+        }
+        assert_eq!(
+            fs::read(fixture.store_root.join("gore-project.json")).unwrap(),
+            fixed_head_before
+        );
+        assert_eq!(tree_bytes(&fixture.game_root), game_before);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn installed_edit_rejects_package_and_usmap_drift_since_inspection() {
+        let package_fixture = WindowsFixture::valid();
+        let inspection = inspect_revision3_installed_dataasset_v1_raw(&package_fixture.request(
+            0,
+            &package_fixture.package_wire(),
+            &package_fixture.source_wire(),
+        ));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        fs::write(
+            package_fixture.paks.join("late-source.txt"),
+            b"source drift after inspection",
+        )
+        .unwrap();
+        let response = prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(
+            package_fixture.edit_payload(&inspection),
+        ));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_SOURCE_SNAPSHOT_MISMATCH",
+            "{response}"
+        );
+
+        let usmap_fixture = WindowsFixture::valid();
+        let inspection = inspect_revision3_installed_dataasset_v1_raw(&usmap_fixture.request(
+            0,
+            &usmap_fixture.package_wire(),
+            &usmap_fixture.source_wire(),
+        ));
+        assert_eq!(inspection["ok"], true, "{inspection}");
+        fs::write(
+            usmap_fixture
+                .game_root
+                .join("G1R/Binaries/Win64/ue4ss/Mappings.usmap"),
+            b"changed after exact installed inspection",
+        )
+        .unwrap();
+        let response = prepare_revision3_installed_dataasset_edit_v1_raw(&raw_edit_request(
+            usmap_fixture.edit_payload(&inspection),
+        ));
+        assert_eq!(
+            response["error"]["code"],
+            "AUTHORING_REVISION3_INSTALLED_DATAASSET_EDIT_USMAP_CONTENT_MISMATCH",
+            "{response}"
+        );
     }
 
     #[cfg(windows)]

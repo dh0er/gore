@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 gore-tex = { path = "../gore-tex" }
 retoc = { path = "../../vendor/retoc" }
 serde = { version = "1", features = ["derive"] }

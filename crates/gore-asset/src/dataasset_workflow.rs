@@ -13,6 +13,10 @@ use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use gore_tex::installed_package_index::{
+    InstalledPackageSidecarRoleV1, InstalledPackageSourceEvidenceV1,
+    VerifiedInstalledPackageExtractionV1, VerifiedInstalledUsmapV1,
+};
 use retoc::{FIoContainerId, FPackageId};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -57,6 +61,7 @@ pub struct VerifiedFileSeal {
     path: PathBuf,
     length: u64,
     sha256: [u8; 32],
+    blake3: [u8; 32],
 }
 
 impl VerifiedFileSeal {
@@ -695,6 +700,232 @@ pub fn verify_fixed_leaf_stage_edit(
     )
 }
 
+/// Promote one still-live installed-package snapshot directly into the existing managed
+/// fixed-leaf stage authority without accepting or materializing an extract/patch receipt.
+///
+/// The target path and original cooked bytes come only from the server-selected installed
+/// extraction. This function independently reconstructs the same target from `game_root`,
+/// compares the complete package pair, every role-bearing sidecar, and the exact single installed
+/// USMAP, then applies the offset-free semantic edit in memory. The returned value deliberately
+/// reuses [`VerifiedFixedLeafStageInput`] and its generation-v1 revalidation contract, so this
+/// grants no deployment, build, runtime, or project-publication authority.
+///
+/// Both an install root and its direct `G1R` child are accepted. No game or caller-selected output
+/// path is written; the live conversion uses only the workflow's private disjoint temporary tree.
+pub fn verify_fixed_leaf_stage_edit_from_installed_snapshot_v1(
+    game_root: &Path,
+    extraction: VerifiedInstalledPackageExtractionV1<'_>,
+    installed_usmap: &VerifiedInstalledUsmapV1,
+    selector: FixedLeafSelector,
+    replacement_hex: &str,
+) -> Result<VerifiedFixedLeafStageInput> {
+    extraction
+        .revalidate_source()
+        .context("ASSET_STAGE_INSTALLED_SOURCE: preflight source snapshot changed")?;
+    installed_usmap
+        .revalidate()
+        .context("ASSET_STAGE_INSTALLED_USMAP: preflight installed USMAP changed")?;
+
+    let mut installed_sidecars = BTreeMap::new();
+    for sidecar in extraction.sidecars() {
+        let role = match sidecar.role() {
+            InstalledPackageSidecarRoleV1::Bulk => SidecarRole::Bulk,
+            InstalledPackageSidecarRoleV1::Optional => SidecarRole::Optional,
+            InstalledPackageSidecarRoleV1::MemoryMapped => SidecarRole::MemoryMapped,
+        };
+        if installed_sidecars.insert(role, sidecar.bytes()).is_some() {
+            bail!("ASSET_STAGE_INSTALLED_SIDECAR: duplicate installed sidecar role");
+        }
+    }
+    let installed_source =
+        InstalledGenerationSourceProof::from_installed(extraction.source_evidence());
+
+    let result = verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source(
+        game_root,
+        extraction.target_path(),
+        extraction.uasset_bytes(),
+        extraction.uexp_bytes(),
+        &installed_sidecars,
+        &installed_source,
+        installed_usmap.bytes(),
+        installed_usmap.selected_file_name(),
+        selector,
+        replacement_hex,
+        |root, asset| {
+            capture_live_converted_stage_source(root, asset, "ASSET_STAGE_INSTALLED_GENERATION")
+        },
+        |root, asset, expected| {
+            probe_current_generation_receipt(
+                root,
+                asset,
+                expected,
+                "ASSET_STAGE_INSTALLED_GENERATION",
+            )
+        },
+    );
+
+    // Drift wins over parsing or patch diagnostics. Both retained authorities are checked even
+    // when the inner operation failed, and no stage value escapes unless each stayed exact.
+    let source_revalidation = extraction.revalidate_source();
+    let usmap_revalidation = installed_usmap.revalidate();
+    if let Err(error) = source_revalidation {
+        return Err(error)
+            .context("ASSET_STAGE_INSTALLED_SOURCE: source snapshot changed during verification");
+    }
+    if let Err(error) = usmap_revalidation {
+        return Err(error)
+            .context("ASSET_STAGE_INSTALLED_USMAP: installed USMAP changed during verification");
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source<F, G>(
+    game_root: &Path,
+    target_path: &str,
+    installed_uasset: &[u8],
+    installed_uexp: &[u8],
+    installed_sidecars: &BTreeMap<SidecarRole, &[u8]>,
+    installed_source: &InstalledGenerationSourceProof,
+    installed_usmap: &[u8],
+    installed_usmap_file_name: &str,
+    selector: FixedLeafSelector,
+    replacement_hex: &str,
+    live_source: F,
+    final_generation_probe: G,
+) -> Result<VerifiedFixedLeafStageInput>
+where
+    F: FnOnce(&Path, &str) -> Result<LiveConvertedStageSource>,
+    G: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<AssetGenerationReceipt>,
+{
+    let width = selector.kind.width();
+    if !is_canonical_hex(replacement_hex, width) {
+        bail!(
+            "ASSET_STAGE_INSTALLED_REPLACEMENT: replacement must be exactly {width} lowercase wire bytes"
+        );
+    }
+    let expected = selector
+        .expected_bytes()
+        .context("ASSET_STAGE_INSTALLED_SELECTOR: decoding sealed current value")?;
+    let replacement =
+        decode_canonical_hex(replacement_hex, width, "ASSET_STAGE_INSTALLED_REPLACEMENT")?;
+    if replacement == expected {
+        bail!("ASSET_STAGE_INSTALLED_REPLACEMENT: replacement would make no change");
+    }
+
+    let game_root = normalize_game_install_root(game_root, "ASSET_STAGE_INSTALLED_ROOT")?;
+    let executable = seal_game_executable(&game_root)?;
+    let live = live_source(&game_root, target_path)?;
+    if live.generation.asset != target_path {
+        bail!("ASSET_STAGE_INSTALLED_GENERATION: live conversion selected a different target");
+    }
+    if !installed_source.matches(&live.generation) {
+        bail!(
+            "ASSET_STAGE_INSTALLED_SOURCE: installed chunk winners or source UTOCs differ from the independent live generation"
+        );
+    }
+    if live.uasset != installed_uasset || live.uexp != installed_uexp {
+        bail!(
+            "ASSET_STAGE_INSTALLED_GENERATION: installed package differs from an independent live conversion"
+        );
+    }
+    if live.sidecars.len() != installed_sidecars.len()
+        || live.sidecars.iter().any(|(role, bytes)| {
+            installed_sidecars
+                .get(role)
+                .is_none_or(|installed| *installed != bytes.as_slice())
+        })
+    {
+        bail!(
+            "ASSET_STAGE_INSTALLED_GENERATION: installed sidecars differ from an independent live conversion"
+        );
+    }
+
+    let live_usmap_path = gore_tex::paths::usmap(&game_root)
+        .context("ASSET_STAGE_INSTALLED_USMAP: resolving exact live USMAP")?;
+    let live_usmap = read_verified_file_bounded(
+        &live_usmap_path,
+        MAX_USMAP_BYTES,
+        "ASSET_STAGE_INSTALLED_USMAP",
+    )?;
+    if live.generation.usmap.file_name != installed_usmap_file_name
+        || !live.generation.usmap.matches_verified_input(&live_usmap)
+        || live_usmap.bytes() != installed_usmap
+    {
+        bail!(
+            "ASSET_STAGE_INSTALLED_USMAP: installed USMAP differs from the independently reconstructed generation"
+        );
+    }
+
+    let schemas = SchemaDb::from_usmap_bounded(live_usmap.bytes(), UsmapLimits::default())
+        .context("ASSET_STAGE_INSTALLED_USMAP: parsing exact installed USMAP")?;
+    let LiveConvertedStageSource {
+        generation,
+        uasset,
+        uexp,
+        sidecars: live_sidecars,
+    } = live;
+    let mut patched = PackageCarrier::from_bytes(uasset, uexp, asset_package_limits())
+        .context("ASSET_STAGE_INSTALLED_INPUT: loading exact installed package pair")?;
+    apply_fixed_leaf_selector_patch(&mut patched, &schemas, &selector, &expected, &replacement)
+        .context("ASSET_STAGE_INSTALLED_SEMANTICS: applying offset-free fixed-leaf edit")?;
+
+    let mut cooked_bytes = u64::try_from(patched.len(PackageComponent::Uasset))?
+        .checked_add(u64::try_from(patched.len(PackageComponent::Uexp))?)
+        .context("ASSET_STAGE_INSTALLED_INPUT: cooked package size overflowed")?;
+    let mut sidecars = Vec::with_capacity(live_sidecars.len());
+    for (role, bytes) in live_sidecars {
+        let length = u64::try_from(bytes.len())?;
+        if length > MAX_OPTIONAL_SIDECAR_BYTES {
+            bail!("ASSET_STAGE_INSTALLED_SIDECAR: sidecar exceeds the per-component size limit");
+        }
+        cooked_bytes = cooked_bytes
+            .checked_add(length)
+            .context("ASSET_STAGE_INSTALLED_INPUT: cooked package size overflowed")?;
+        if cooked_bytes > MAX_COOKED_PACKAGE_BYTES {
+            bail!("ASSET_STAGE_INSTALLED_INPUT: cooked package exceeds the aggregate size limit");
+        }
+        let sha256 = Sha256::digest(&bytes).into();
+        sidecars.push(VerifiedFixedLeafStageSidecar {
+            role,
+            bytes,
+            sha256,
+        });
+    }
+
+    // Recheck the exact USMAP bytes, executable, and complete target generation after parsing and
+    // patching. The retained installed guards are checked once more by the public wrapper.
+    verify_file_hash(
+        live_usmap.path(),
+        live_usmap.length(),
+        *live_usmap.sha256(),
+        MAX_USMAP_BYTES,
+        "ASSET_STAGE_INSTALLED_USMAP",
+    )?;
+    executable.reverify()?;
+    let current_generation = final_generation_probe(&game_root, target_path, &generation)?;
+    if current_generation != generation {
+        bail!(
+            "ASSET_STAGE_INSTALLED_GENERATION: live target generation changed during verification"
+        );
+    }
+    let (patched_uasset, patched_uexp) = patched.into_bytes();
+
+    Ok(VerifiedFixedLeafStageInput {
+        target_path: target_path.to_owned(),
+        generation,
+        selector,
+        replacement_hex: replacement_hex.to_owned(),
+        patched_uasset,
+        patched_uexp,
+        usmap: live_usmap.bytes,
+        sidecars,
+        game_root,
+        retained_source_roots: Vec::new(),
+        executable,
+    })
+}
+
 fn verify_fixed_leaf_stage_edit_with_live_source_in<F, G>(
     extract: VerifiedExtractReceipt,
     selector: FixedLeafSelector,
@@ -1204,6 +1435,103 @@ struct LiveConvertedStageSource {
     sidecars: BTreeMap<SidecarRole, Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InstalledGenerationSourceProof {
+    container_set: Vec<GenerationFileAnchor>,
+    target_chunks: Vec<GenerationChunkAnchor>,
+}
+
+impl InstalledGenerationSourceProof {
+    fn from_installed(evidence: &InstalledPackageSourceEvidenceV1) -> Self {
+        let mut container_set = evidence
+            .metadata_utocs()
+            .iter()
+            .map(|utoc| GenerationFileAnchor {
+                file_name: utoc.file_name().to_owned(),
+                length: utoc.content_seal().byte_len,
+                sha256: utoc.content_seal().sha256.clone(),
+            })
+            .collect::<Vec<_>>();
+        container_set.sort_by(|left, right| {
+            left.file_name
+                .cmp(&right.file_name)
+                .then(left.sha256.cmp(&right.sha256))
+        });
+        container_set.dedup();
+
+        let mut target_chunks = evidence
+            .consumed_chunks()
+            .iter()
+            .map(|chunk| GenerationChunkAnchor {
+                chunk_id: chunk.chunk_id().to_owned(),
+                chunk_type: chunk.chunk_type().to_owned(),
+                winner_utoc: GenerationFileAnchor {
+                    file_name: chunk.winner_utoc().file_name().to_owned(),
+                    length: chunk.winner_utoc().content_seal().byte_len,
+                    sha256: chunk.winner_utoc().content_seal().sha256.clone(),
+                },
+                length: chunk.length(),
+                blake3: chunk.blake3().to_owned(),
+                toc_hash: chunk.toc_hash().to_owned(),
+                toc_hash_bytes: chunk.toc_hash_bytes(),
+            })
+            .collect::<Vec<_>>();
+        target_chunks.sort_by(|left, right| {
+            left.chunk_id
+                .cmp(&right.chunk_id)
+                .then(left.chunk_type.cmp(&right.chunk_type))
+                .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
+        });
+        Self {
+            container_set,
+            target_chunks,
+        }
+    }
+
+    fn matches(&self, generation: &AssetGenerationReceipt) -> bool {
+        self.container_set == generation.container_set
+            && self.target_chunks == generation.target_chunks
+            && self
+                .container_set
+                .iter()
+                .any(|utoc| utoc == &generation.main_utoc)
+            && self
+                .container_set
+                .iter()
+                .any(|utoc| utoc == &generation.global_utoc)
+    }
+
+    #[cfg(test)]
+    fn from_generation(generation: &AssetGenerationReceipt) -> Self {
+        Self {
+            container_set: generation.container_set.clone(),
+            target_chunks: generation.target_chunks.clone(),
+        }
+    }
+}
+
+fn normalize_game_install_root(game_root: &Path, code: &'static str) -> Result<PathBuf> {
+    let root = validate_existing_path_no_reparse(game_root, true, code)?;
+    if root.file_name().is_some_and(|name| name == "G1R") {
+        let parent = root
+            .parent()
+            .context("ASSET_STAGE_INSTALLED_ROOT: direct G1R root has no install parent")?;
+        let parent = validate_existing_path_no_reparse(parent, true, code)?;
+        let canonical_g1r = validate_existing_path_no_reparse(&parent.join("G1R"), true, code)?;
+        if canonical_g1r != root {
+            bail!("{code}: direct G1R root does not belong to the normalized install parent");
+        }
+        Ok(parent)
+    } else {
+        let canonical_g1r = validate_existing_path_no_reparse(&root.join("G1R"), true, code)
+            .with_context(|| format!("{code}: resolving the direct G1R directory"))?;
+        if canonical_g1r.parent() != Some(root.as_path()) {
+            bail!("{code}: G1R directory escaped the normalized install root");
+        }
+        Ok(root)
+    }
+}
+
 fn create_disjoint_private_conversion_dir(
     game_root: &Path,
     code: &'static str,
@@ -1286,6 +1614,7 @@ fn capture_live_converted_stage_source(
         &global_ucas_seal,
         &unpacked.consumed_chunks,
         &source_utoc_seals,
+        &unpacked.opened_utocs,
         code,
     )?;
 
@@ -1410,6 +1739,7 @@ pub fn probe_current_generation_receipt(
         &global_ucas_seal,
         &probe.consumed_chunks,
         &source_utoc_seals,
+        &probe.opened_utocs,
         code,
     )?;
 
@@ -1443,13 +1773,42 @@ fn build_generation_receipt_from_probe(
     global_ucas: &VerifiedFileSeal,
     chunks: &[gore_tex::container::VerifiedChunkReceipt],
     source_utocs: &[VerifiedFileSeal],
+    opened_utocs: &[gore_tex::container::VerifiedOpenedUtocReceipt],
     code: &'static str,
 ) -> Result<AssetGenerationReceipt> {
     let mut by_path = BTreeMap::new();
     let mut container_set = Vec::with_capacity(source_utocs.len());
     for seal in source_utocs {
-        by_path.insert(seal.path.clone(), seal);
+        if by_path.insert(seal.path.clone(), seal).is_some() {
+            bail!("{code}: duplicate verified source UTOC path");
+        }
         container_set.push(generation_anchor_from_verified_file(seal)?);
+    }
+    let mut opened_by_path = BTreeMap::new();
+    for opened in opened_utocs {
+        let canonical = validate_existing_path_no_reparse(&opened.source_utoc, false, code)?;
+        let sealed = by_path.get(&canonical).with_context(|| {
+            format!(
+                "{code}: parsed UTOC '{}' is absent from the verified source set",
+                canonical.display()
+            )
+        })?;
+        if opened.source_utoc_blake3 != encode_hex(&sealed.blake3) {
+            bail!("{code}: parsed UTOC bytes differ from the verified source file");
+        }
+        if opened_by_path
+            .insert(canonical, opened.source_utoc_blake3.as_str())
+            .is_some()
+        {
+            bail!("{code}: duplicate parsed source UTOC identity");
+        }
+    }
+    if opened_by_path.len() != by_path.len()
+        || by_path
+            .keys()
+            .any(|source_path| !opened_by_path.contains_key(source_path))
+    {
+        bail!("{code}: parsed and verified source UTOC sets differ");
     }
     container_set.sort_by(|left, right| {
         left.file_name
@@ -1476,6 +1835,9 @@ fn build_generation_receipt_from_probe(
                 canonical.display()
             )
         })?;
+        if chunk.source_utoc_blake3 != encode_hex(&winner.blake3) {
+            bail!("{code}: winning chunk UTOC bytes differ from the verified source file");
+        }
         target_chunks.push(GenerationChunkAnchor {
             chunk_id: chunk.chunk_id.clone(),
             chunk_type: chunk.chunk_type.clone(),
@@ -1550,7 +1912,8 @@ fn seal_game_executable(game_root: &Path) -> Result<VerifiedGameExecutableAnchor
     if advertised > MAX_GAME_EXECUTABLE_BYTES {
         bail!("{code}: executable is {advertised} bytes; limit is {MAX_GAME_EXECUTABLE_BYTES}");
     }
-    let (length, sha256) = digest_reader(source.file_mut(), MAX_GAME_EXECUTABLE_BYTES, code)?;
+    let (length, sha256, _blake3) =
+        digest_reader(source.file_mut(), MAX_GAME_EXECUTABLE_BYTES, code)?;
     if length != advertised {
         bail!("{code}: executable changed length while being sealed");
     }
@@ -2666,7 +3029,7 @@ fn digest_regular_file_bounded(
             canonical.display()
         );
     }
-    let (length, sha256) = digest_reader(file.file_mut(), limit, code)?;
+    let (length, sha256, blake3) = digest_reader(file.file_mut(), limit, code)?;
     if length != advertised {
         bail!(
             "{code}: input changed length while being read: {}",
@@ -2680,6 +3043,7 @@ fn digest_regular_file_bounded(
         path: canonical,
         length,
         sha256,
+        blake3,
     })
 }
 
@@ -2687,8 +3051,9 @@ fn digest_reader<R: Read>(
     reader: &mut R,
     limit: u64,
     code: &'static str,
-) -> Result<(u64, [u8; 32])> {
+) -> Result<(u64, [u8; 32], [u8; 32])> {
     let mut hasher = Sha256::new();
+    let mut blake3 = blake3::Hasher::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut length = 0u64;
     loop {
@@ -2703,8 +3068,13 @@ fn digest_reader<R: Read>(
             bail!("{code}: file exceeded {limit} bytes while being read");
         }
         hasher.update(&buffer[..read]);
+        blake3.update(&buffer[..read]);
     }
-    Ok((length, hasher.finalize().into()))
+    Ok((
+        length,
+        hasher.finalize().into(),
+        *blake3.finalize().as_bytes(),
+    ))
 }
 
 fn read_verified_bounded(path: &Path, limit: u64, code: &'static str) -> Result<VerifiedInput> {
@@ -3867,6 +4237,374 @@ mod tests {
                 "replacement {replacement:?}: {error}"
             );
             assert_eq!(fs::read_dir(private_parent.path()).unwrap().count(), 0);
+        }
+    }
+
+    #[test]
+    fn installed_snapshot_stage_edit_reuses_exact_live_bytes_and_normalizes_direct_g1r_root() {
+        let (fixture, existing_stage) = verified_stage_fixture();
+        let live_usmap = fixture
+            .game_root
+            .join("G1R/Binaries/Win64/ue4ss/Mappings.usmap");
+        fs::create_dir_all(live_usmap.parent().unwrap()).unwrap();
+        fs::write(&live_usmap, &fixture.usmap).unwrap();
+        let target_path = existing_stage.target_path().to_owned();
+        let selector = existing_stage.selector().clone();
+        let installed_sidecars = BTreeMap::from([(SidecarRole::Bulk, fixture.sidecar.as_slice())]);
+        let installed_source = InstalledGenerationSourceProof::from_generation(&fixture.generation);
+        let normalized_root = fixture.game_root.clone();
+        let closure_target_path = target_path.clone();
+        let live_generation = fixture.generation.clone();
+        let final_generation = fixture.generation.clone();
+        let live_uasset = fixture.original_uasset.clone();
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+
+        let stage = verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source(
+            &fixture.game_root.join("G1R"),
+            &target_path,
+            &fixture.original_uasset,
+            &fixture.original_uexp,
+            &installed_sidecars,
+            &installed_source,
+            &fixture.usmap,
+            "Mappings.usmap",
+            selector,
+            "00",
+            move |root, asset| {
+                assert_eq!(root, normalized_root);
+                assert_eq!(asset, closure_target_path);
+                Ok(LiveConvertedStageSource {
+                    generation: live_generation,
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            move |_root, _asset, expected| {
+                assert_eq!(expected, &final_generation);
+                Ok(final_generation)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(stage.target_path(), "/Game/TestAsset");
+        assert_eq!(stage.generation(), &fixture.generation);
+        assert_eq!(stage.replacement_hex(), "00");
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uasset),
+            fixture.patched_uasset
+        );
+        assert_eq!(
+            stage.patched_component_bytes(PackageComponent::Uexp),
+            fixture.patched_uexp
+        );
+        assert_eq!(stage.usmap_bytes(), fixture.usmap);
+        assert_eq!(stage.sidecars()[0].role(), SidecarRole::Bulk);
+        assert_eq!(stage.sidecars()[0].bytes(), fixture.sidecar);
+        assert!(stage.retained_source_roots.is_empty());
+    }
+
+    #[test]
+    fn installed_snapshot_stage_edit_rejects_pair_sidecar_winner_and_usmap_identity_mismatches() {
+        enum Drift {
+            Pair,
+            Sidecar,
+            Winner,
+            Usmap,
+            UsmapFileName,
+        }
+
+        for drift in [
+            Drift::Pair,
+            Drift::Sidecar,
+            Drift::Winner,
+            Drift::Usmap,
+            Drift::UsmapFileName,
+        ] {
+            let (fixture, existing_stage) = verified_stage_fixture();
+            let live_usmap = fixture
+                .game_root
+                .join("G1R/Binaries/Win64/ue4ss/Mappings.usmap");
+            fs::create_dir_all(live_usmap.parent().unwrap()).unwrap();
+            fs::write(&live_usmap, &fixture.usmap).unwrap();
+            let target_path = existing_stage.target_path().to_owned();
+            let selector = existing_stage.selector().clone();
+            let mut installed_uasset = fixture.original_uasset.clone();
+            let mut installed_sidecar = fixture.sidecar.clone();
+            let mut installed_source =
+                InstalledGenerationSourceProof::from_generation(&fixture.generation);
+            let mut installed_usmap = fixture.usmap.clone();
+            let mut installed_usmap_file_name = "Mappings.usmap";
+            let expected_code = match drift {
+                Drift::Pair => {
+                    installed_uasset[0] ^= 0x01;
+                    "ASSET_STAGE_INSTALLED_GENERATION"
+                }
+                Drift::Sidecar => {
+                    installed_sidecar[0] ^= 0x01;
+                    "ASSET_STAGE_INSTALLED_GENERATION"
+                }
+                Drift::Winner => {
+                    installed_source
+                        .target_chunks
+                        .iter_mut()
+                        .find(|chunk| chunk.chunk_type == "ExportBundleData")
+                        .unwrap()
+                        .winner_utoc
+                        .file_name = "SameBytesOverride.utoc".to_owned();
+                    "ASSET_STAGE_INSTALLED_SOURCE"
+                }
+                Drift::Usmap => {
+                    installed_usmap[0] ^= 0x01;
+                    "ASSET_STAGE_INSTALLED_USMAP"
+                }
+                Drift::UsmapFileName => {
+                    installed_usmap_file_name = "SameBytesOther.usmap";
+                    "ASSET_STAGE_INSTALLED_USMAP"
+                }
+            };
+            let installed_sidecars =
+                BTreeMap::from([(SidecarRole::Bulk, installed_sidecar.as_slice())]);
+            let live_generation = fixture.generation.clone();
+            let live_uasset = fixture.original_uasset.clone();
+            let live_uexp = fixture.original_uexp.clone();
+            let live_sidecar = fixture.sidecar.clone();
+
+            let error = verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source(
+                &fixture.game_root,
+                &target_path,
+                &installed_uasset,
+                &fixture.original_uexp,
+                &installed_sidecars,
+                &installed_source,
+                &installed_usmap,
+                installed_usmap_file_name,
+                selector,
+                "00",
+                move |_root, _asset| {
+                    Ok(LiveConvertedStageSource {
+                        generation: live_generation,
+                        uasset: live_uasset,
+                        uexp: live_uexp,
+                        sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                    })
+                },
+                |_root, _asset, _expected| {
+                    panic!("mismatched installed bytes must fail before final generation probe")
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(expected_code), "{error}");
+        }
+    }
+
+    #[test]
+    fn generation_builder_rejects_parsed_utoc_aba_and_incomplete_opened_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let main_path = temp.path().join("G1R-Windows.utoc");
+        let global_path = temp.path().join("global.utoc");
+        let global_ucas_path = temp.path().join("global.ucas");
+        let usmap_path = temp.path().join("Mappings.usmap");
+        fs::write(&main_path, b"exact main toc bytes").unwrap();
+        fs::write(&global_path, b"exact global toc bytes").unwrap();
+        fs::write(&global_ucas_path, b"exact global ucas bytes").unwrap();
+        fs::write(&usmap_path, b"exact mapping bytes").unwrap();
+        let main = digest_regular_file_bounded(&main_path, 1024, "TEST_GENERATION").unwrap();
+        let global = digest_regular_file_bounded(&global_path, 1024, "TEST_GENERATION").unwrap();
+        let global_ucas =
+            digest_regular_file_bounded(&global_ucas_path, 1024, "TEST_GENERATION").unwrap();
+        let usmap = digest_regular_file_bounded(&usmap_path, 1024, "TEST_GENERATION").unwrap();
+        let asset = "/Game/TestAsset";
+        let chunks = vec![
+            gore_tex::container::VerifiedChunkReceipt {
+                chunk_id: chunk_id(asset, 1),
+                chunk_type: "ContainerHeader".to_owned(),
+                source_utoc: main.path.clone(),
+                source_utoc_blake3: encode_hex(&main.blake3),
+                length: 1,
+                blake3: "a1".repeat(32),
+                toc_hash: "b2".repeat(20),
+                toc_hash_bytes: 20,
+            },
+            gore_tex::container::VerifiedChunkReceipt {
+                chunk_id: chunk_id(asset, 2),
+                chunk_type: "ExportBundleData".to_owned(),
+                source_utoc: main.path.clone(),
+                source_utoc_blake3: encode_hex(&main.blake3),
+                length: 1,
+                blake3: "a3".repeat(32),
+                toc_hash: "b4".repeat(20),
+                toc_hash_bytes: 20,
+            },
+        ];
+        let opened = vec![
+            gore_tex::container::VerifiedOpenedUtocReceipt {
+                source_utoc: main.path.clone(),
+                source_utoc_blake3: encode_hex(&main.blake3),
+            },
+            gore_tex::container::VerifiedOpenedUtocReceipt {
+                source_utoc: global.path.clone(),
+                source_utoc_blake3: encode_hex(&global.blake3),
+            },
+        ];
+
+        build_generation_receipt_from_probe(
+            asset,
+            &usmap,
+            &main,
+            &global,
+            &global_ucas,
+            &chunks,
+            &[main.clone(), global.clone()],
+            &opened,
+            "TEST_GENERATION",
+        )
+        .unwrap();
+
+        let mut transient_open = opened.clone();
+        transient_open[0].source_utoc_blake3 = "ff".repeat(32);
+        let error = build_generation_receipt_from_probe(
+            asset,
+            &usmap,
+            &main,
+            &global,
+            &global_ucas,
+            &chunks,
+            &[main.clone(), global.clone()],
+            &transient_open,
+            "TEST_GENERATION",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("parsed UTOC bytes differ"), "{error}");
+
+        let mut transient_winner = chunks.clone();
+        transient_winner[1].source_utoc_blake3 = "ee".repeat(32);
+        let error = build_generation_receipt_from_probe(
+            asset,
+            &usmap,
+            &main,
+            &global,
+            &global_ucas,
+            &transient_winner,
+            &[main.clone(), global.clone()],
+            &opened,
+            "TEST_GENERATION",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("winning chunk UTOC bytes differ"), "{error}");
+
+        let error = build_generation_receipt_from_probe(
+            asset,
+            &usmap,
+            &main,
+            &global,
+            &global_ucas,
+            &chunks,
+            &[main.clone(), global.clone()],
+            &opened[..1],
+            "TEST_GENERATION",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("source UTOC sets differ"), "{error}");
+    }
+
+    #[test]
+    fn installed_snapshot_stage_edit_rejects_final_generation_drift() {
+        let (fixture, existing_stage) = verified_stage_fixture();
+        let live_usmap = fixture
+            .game_root
+            .join("G1R/Binaries/Win64/ue4ss/Mappings.usmap");
+        fs::create_dir_all(live_usmap.parent().unwrap()).unwrap();
+        fs::write(&live_usmap, &fixture.usmap).unwrap();
+        let installed_sidecars = BTreeMap::from([(SidecarRole::Bulk, fixture.sidecar.as_slice())]);
+        let installed_source = InstalledGenerationSourceProof::from_generation(&fixture.generation);
+        let live_generation = fixture.generation.clone();
+        let live_uasset = fixture.original_uasset.clone();
+        let live_uexp = fixture.original_uexp.clone();
+        let live_sidecar = fixture.sidecar.clone();
+
+        let error = verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source(
+            &fixture.game_root,
+            existing_stage.target_path(),
+            &fixture.original_uasset,
+            &fixture.original_uexp,
+            &installed_sidecars,
+            &installed_source,
+            &fixture.usmap,
+            "Mappings.usmap",
+            existing_stage.selector().clone(),
+            "00",
+            move |_root, _asset| {
+                Ok(LiveConvertedStageSource {
+                    generation: live_generation,
+                    uasset: live_uasset,
+                    uexp: live_uexp,
+                    sidecars: BTreeMap::from([(SidecarRole::Bulk, live_sidecar)]),
+                })
+            },
+            |_root, _asset, expected| {
+                let mut drifted = expected.clone();
+                drifted.target_chunks[0].length += 1;
+                Ok(drifted)
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("changed during verification"), "{error}");
+    }
+
+    #[test]
+    fn installed_snapshot_stage_edit_rejects_invalid_values_before_live_access() {
+        let root = Path::new("this root must never be opened");
+        for replacement in ["01", "0A", "0000"] {
+            let selector = FixedLeafSelector {
+                format: FIXED_LEAF_SELECTOR_FORMAT,
+                profile: FIXED_LEAF_SELECTOR_PROFILE.to_owned(),
+                package_seal: PackagePairSeal {
+                    uasset_sha256: [0; 32],
+                    uexp_sha256: [0; 32],
+                },
+                usmap_sha256: "00".repeat(32),
+                export_index: 0,
+                object_name: "TestAsset".to_owned(),
+                class_path: "/Script/Test.Fixture".to_owned(),
+                component: PackageComponent::Uexp,
+                export_sha256: "00".repeat(32),
+                role: FixedLeafRole::PropertyValue,
+                kind: FixedWireKind::Bool,
+                path: Vec::new(),
+                expected_hex: "01".to_owned(),
+            };
+            let error = verify_fixed_leaf_stage_edit_from_installed_parts_with_live_source(
+                root,
+                "/Game/TestAsset",
+                &[],
+                &[],
+                &BTreeMap::new(),
+                &InstalledGenerationSourceProof {
+                    container_set: Vec::new(),
+                    target_chunks: Vec::new(),
+                },
+                &[],
+                "Mappings.usmap",
+                selector,
+                replacement,
+                |_root, _asset| panic!("invalid edit must fail before live conversion"),
+                |_root, _asset, _expected| {
+                    panic!("invalid edit must fail before final generation probe")
+                },
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("ASSET_STAGE_INSTALLED_REPLACEMENT"),
+                "{error}"
+            );
         }
     }
 

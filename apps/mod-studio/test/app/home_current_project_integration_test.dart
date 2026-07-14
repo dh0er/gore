@@ -2197,6 +2197,15 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   );
 
   @override
+  Future<Revision3DataAssetStagePublication>
+  prepareAndPublishInstalledDataAssetEditV1({
+    required String gameRoot,
+    required DataAssetInstalledSemanticEditIntent intent,
+  }) => throw StateError(
+    'fake managed lease has no installed DataAsset edit publisher',
+  );
+
+  @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
     required String gameRoot,
     required Revision3QuestDraftAuthoringInput input,

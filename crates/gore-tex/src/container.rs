@@ -50,6 +50,9 @@ pub struct VerifiedChunkReceipt {
     pub chunk_id: String,
     pub chunk_type: String,
     pub source_utoc: PathBuf,
+    /// BLAKE3 of the exact bounded UTOC bytes parsed by Retoc for this winner.
+    #[serde(skip_serializing)]
+    pub source_utoc_blake3: String,
     pub length: u64,
     pub blake3: String,
     pub toc_hash: String,
@@ -62,6 +65,7 @@ pub struct VerifiedUnpackedAsset {
     pub uasset: PathBuf,
     pub consumed_chunks: Vec<VerifiedChunkReceipt>,
     pub metadata_utocs: Vec<PathBuf>,
+    pub opened_utocs: Vec<VerifiedOpenedUtocReceipt>,
 }
 
 /// One known optional component emitted while converting a Zen package to the
@@ -80,6 +84,13 @@ pub(crate) struct VerifiedLegacySidecarBytes {
     pub(crate) bytes: Vec<u8>,
 }
 
+/// Path plus content identity of the exact UTOC bytes parsed for one opened child container.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct VerifiedOpenedUtocReceipt {
+    pub source_utoc: PathBuf,
+    pub source_utoc_blake3: String,
+}
+
 /// Snapshot-backed Zen-to-legacy conversion held entirely in memory.
 ///
 /// The source container paths in the native receipts are retained for
@@ -92,7 +103,7 @@ pub(crate) struct VerifiedUnpackedAssetBytes {
     pub(crate) uexp: Vec<u8>,
     pub(crate) sidecars: Vec<VerifiedLegacySidecarBytes>,
     pub(crate) consumed_chunks: Vec<VerifiedChunkReceipt>,
-    pub(crate) metadata_utocs: Vec<PathBuf>,
+    pub(crate) metadata_utocs: Vec<VerifiedOpenedUtocReceipt>,
 }
 
 /// Exact, write-free generation probe for one package in a composite store.
@@ -100,6 +111,7 @@ pub(crate) struct VerifiedUnpackedAssetBytes {
 pub struct VerifiedAssetGeneration {
     pub consumed_chunks: Vec<VerifiedChunkReceipt>,
     pub metadata_utocs: Vec<PathBuf>,
+    pub opened_utocs: Vec<VerifiedOpenedUtocReceipt>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,20 +163,32 @@ impl<'a> VerifiedSnapshotStore<'a> {
         Ok(())
     }
 
-    fn metadata_utocs(&self) -> Vec<PathBuf> {
-        let mut paths: Vec<_> = self
-            .inner
-            .child_containers()
-            .filter_map(|container| {
-                container
-                    .chunks()
-                    .next()
-                    .map(|chunk| chunk.container().container_path().to_path_buf())
-            })
-            .collect();
-        paths.sort();
-        paths.dedup();
-        paths
+    fn metadata_utoc_receipts(&self) -> anyhow::Result<Vec<VerifiedOpenedUtocReceipt>> {
+        let mut receipts = Vec::new();
+        for container in self.inner.child_containers() {
+            let (source_utoc, parsed_blake3) = container
+                .opened_utoc_identity()
+                .ok_or_else(|| anyhow::anyhow!("opened child container has no UTOC identity"))?;
+            receipts.push(VerifiedOpenedUtocReceipt {
+                source_utoc: source_utoc.to_path_buf(),
+                source_utoc_blake3: encode_bytes(parsed_blake3),
+            });
+        }
+        receipts.sort();
+        let before_dedup = receipts.len();
+        receipts.dedup();
+        if receipts.len() != before_dedup {
+            anyhow::bail!("opened child-container UTOC identities are duplicated");
+        }
+        Ok(receipts)
+    }
+
+    fn metadata_utocs(&self) -> anyhow::Result<Vec<PathBuf>> {
+        Ok(self
+            .metadata_utoc_receipts()?
+            .into_iter()
+            .map(|receipt| receipt.source_utoc)
+            .collect())
     }
 
     fn read_verified(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
@@ -325,6 +349,7 @@ fn verified_chunk_receipt(
         chunk_id: encode_bytes(&chunk_id.get_raw().id),
         chunk_type: format!("{:?}", chunk_id.get_chunk_type()),
         source_utoc: info.container().container_path().to_path_buf(),
+        source_utoc_blake3: encode_bytes(info.container().toc_blake3()),
         length: u64::try_from(bytes.len())?,
         blake3: encode_bytes(actual.as_bytes()),
         toc_hash: encode_bytes(&expected[..toc_hash_bytes]),
@@ -747,10 +772,16 @@ pub fn unpack_asset_verified(
     std::fs::create_dir_all(out_dir)?;
     let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
     let uasset = legacy_from_package(&snapshot, package_id, leaf, out_dir)?;
+    let opened_utocs = snapshot.metadata_utoc_receipts()?;
+    let metadata_utocs = opened_utocs
+        .iter()
+        .map(|receipt| receipt.source_utoc.clone())
+        .collect();
     Ok(VerifiedUnpackedAsset {
         uasset,
         consumed_chunks: snapshot.receipts()?,
-        metadata_utocs: snapshot.metadata_utocs(),
+        metadata_utocs,
+        opened_utocs,
     })
 }
 
@@ -773,7 +804,7 @@ pub(crate) fn unpack_asset_from_open_store_verified_to_memory(
         uexp: converted.uexp,
         sidecars: converted.sidecars,
         consumed_chunks: snapshot.receipts()?,
-        metadata_utocs: snapshot.metadata_utocs(),
+        metadata_utocs: snapshot.metadata_utoc_receipts()?,
     })
 }
 
@@ -892,9 +923,15 @@ fn probe_asset_generation_inner(
         snapshot.read_verified(chunk_id)?;
     }
 
+    let opened_utocs = snapshot.metadata_utoc_receipts()?;
+    let metadata_utocs = opened_utocs
+        .iter()
+        .map(|receipt| receipt.source_utoc.clone())
+        .collect();
     Ok(VerifiedAssetGeneration {
         consumed_chunks: snapshot.receipts()?,
-        metadata_utocs: snapshot.metadata_utocs(),
+        metadata_utocs,
+        opened_utocs,
     })
 }
 
@@ -1435,7 +1472,7 @@ pub fn repack_to_zen_verified(
     Ok(VerifiedRepackedTriplet {
         triplet: [utoc_path, planned[1].clone(), pak_path],
         source_chunks: source_snapshot.receipts()?,
-        metadata_utocs: source_snapshot.metadata_utocs(),
+        metadata_utocs: source_snapshot.metadata_utocs()?,
     })
 }
 

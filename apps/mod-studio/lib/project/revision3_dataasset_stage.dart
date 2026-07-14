@@ -173,6 +173,7 @@ final class AuthoringRevision3DataAssetStagePreparation {
     required this.runtimeStatus,
     required this.artifactAuthority,
     required this.publicationStatus,
+    this.installedSource,
   });
 
   final AuthoringWorkingHead basisHead;
@@ -186,11 +187,13 @@ final class AuthoringRevision3DataAssetStagePreparation {
   final AuthoringRevision3DataAssetRuntimeStatus runtimeStatus;
   final AuthoringRevision3DataAssetArtifactAuthority artifactAuthority;
   final AuthoringRevision3DataAssetNativePublicationStatus publicationStatus;
+  final AuthoringRevision3InstalledDataAssetSourceProof? installedSource;
 
   factory AuthoringRevision3DataAssetStagePreparation.fromJson(
     Map<String, Object?> json, {
     required AuthoringWorkingHead expectedHead,
     String? expectedIntentBindingSha256,
+    DataAssetInstalledSemanticEditIntent? expectedInstalledIntent,
   }) {
     _dataAssetResponsePreflight(json, <String>{
       'ok',
@@ -206,6 +209,8 @@ final class AuthoringRevision3DataAssetStagePreparation {
       'artifact_authority',
       'publication_status',
       if (expectedIntentBindingSha256 != null) 'intent_binding_sha256',
+      if (expectedInstalledIntent != null) 'installed_proof_binding_sha256',
+      if (expectedInstalledIntent != null) 'installed_source',
     }, 'revision-3 DataAsset preparation response');
     if (json['ok'] != true || json['outcome'] != 'prepared_unpublished') {
       throw const FormatException(
@@ -247,6 +252,27 @@ final class AuthoringRevision3DataAssetStagePreparation {
         );
       }
     }
+    AuthoringRevision3InstalledDataAssetSourceProof? installedSource;
+    if (expectedInstalledIntent != null) {
+      final actualProofBinding = _dataAssetString(
+        json,
+        'installed_proof_binding_sha256',
+        'revision-3 DataAsset preparation response',
+        maxBytes: 64,
+      );
+      if (!_authoringSha256Pattern.hasMatch(actualProofBinding) ||
+          actualProofBinding !=
+              expectedInstalledIntent.installedProofBindingSha256) {
+        throw const FormatException(
+          'authoring revision-3 DataAsset response changed the exact installed proof binding',
+        );
+      }
+      installedSource =
+          AuthoringRevision3InstalledDataAssetSourceProof._fromJson(
+            json['installed_source'],
+            expected: expectedInstalledIntent,
+          );
+    }
     if (stage.projectId != candidate.projectId ||
         !stage.projectTargetExecutable._same(candidate.targetExecutable) ||
         stage.basisHead.canonicalJson != basisHead.canonicalJson ||
@@ -283,6 +309,7 @@ final class AuthoringRevision3DataAssetStagePreparation {
       runtimeStatus: statuses.runtime,
       artifactAuthority: statuses.artifact,
       publicationStatus: statuses.publication,
+      installedSource: installedSource,
     );
   }
 }

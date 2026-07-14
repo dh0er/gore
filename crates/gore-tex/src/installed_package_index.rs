@@ -18,7 +18,8 @@
 //! the filesystem on any non-Windows target.
 
 use crate::container::{
-    unpack_asset_from_open_store_verified_to_memory, VerifiedUnpackedAssetBytes,
+    unpack_asset_from_open_store_verified_to_memory, VerifiedOpenedUtocReceipt,
+    VerifiedUnpackedAssetBytes,
 };
 use crate::package_index::{
     index_winning_game_packages_with_limits, validate_unambiguous_container_priority_names,
@@ -291,16 +292,139 @@ pub struct VerifiedInstalledPackageIndexV1 {
 
 /// One server-selected installed package converted to bounded, path-free legacy
 /// bytes while its originating installation snapshot remained live.
-pub struct VerifiedInstalledPackageExtractionV1 {
+///
+/// The private source reference prevents this evidence from outliving the
+/// installed snapshot whose retained handles guard it. Call
+/// [`Self::revalidate_source`] after parsing the returned bytes and before
+/// exposing any facts derived from them.
+pub struct VerifiedInstalledPackageExtractionV1<'snapshot> {
+    source: &'snapshot VerifiedInstalledPackageIndexV1,
     candidate_ordinal: u64,
     target_path: String,
     package_id_hex: String,
     uasset: Vec<u8>,
     uexp: Vec<u8>,
+    sidecars: Vec<InstalledPackageSidecarV1>,
+    source_evidence: InstalledPackageSourceEvidenceV1,
     sidecar_count: u64,
 }
 
-impl fmt::Debug for VerifiedInstalledPackageExtractionV1 {
+/// Stable semantic role of one optional legacy cooked-package component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InstalledPackageSidecarRoleV1 {
+    Bulk,
+    Optional,
+    MemoryMapped,
+}
+
+/// Complete, path-free bytes for one optional legacy cooked-package component.
+#[derive(Clone, PartialEq, Eq)]
+pub struct InstalledPackageSidecarV1 {
+    role: InstalledPackageSidecarRoleV1,
+    bytes: Vec<u8>,
+}
+
+/// Path-free content identity of one UTOC participating in a package conversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPackageUtocEvidenceV1 {
+    file_name: String,
+    content_seal: InstalledPackageContentSealV1,
+}
+
+impl InstalledPackageUtocEvidenceV1 {
+    pub fn file_name(&self) -> &str {
+        &self.file_name
+    }
+
+    pub fn content_seal(&self) -> &InstalledPackageContentSealV1 {
+        &self.content_seal
+    }
+}
+
+/// Path-free identity of one verified IoStore chunk consumed by conversion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPackageChunkEvidenceV1 {
+    chunk_id: String,
+    chunk_type: String,
+    winner_utoc: InstalledPackageUtocEvidenceV1,
+    length: u64,
+    blake3: String,
+    toc_hash: String,
+    toc_hash_bytes: usize,
+}
+
+impl InstalledPackageChunkEvidenceV1 {
+    pub fn chunk_id(&self) -> &str {
+        &self.chunk_id
+    }
+
+    pub fn chunk_type(&self) -> &str {
+        &self.chunk_type
+    }
+
+    pub fn winner_utoc(&self) -> &InstalledPackageUtocEvidenceV1 {
+        &self.winner_utoc
+    }
+
+    pub const fn length(&self) -> u64 {
+        self.length
+    }
+
+    pub fn blake3(&self) -> &str {
+        &self.blake3
+    }
+
+    pub fn toc_hash(&self) -> &str {
+        &self.toc_hash
+    }
+
+    pub const fn toc_hash_bytes(&self) -> usize {
+        self.toc_hash_bytes
+    }
+}
+
+/// Exact path-free source provenance retained from the guarded installed conversion.
+///
+/// `metadata_utocs` is the complete opened child-container set represented by file-name plus
+/// SHA-256 identity. `consumed_chunks` contains the same generation-relevant chunk classes used by
+/// the managed DataAsset generation receipt, including the exact winning UTOC for every chunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledPackageSourceEvidenceV1 {
+    metadata_utocs: Vec<InstalledPackageUtocEvidenceV1>,
+    consumed_chunks: Vec<InstalledPackageChunkEvidenceV1>,
+}
+
+impl InstalledPackageSourceEvidenceV1 {
+    pub fn metadata_utocs(&self) -> &[InstalledPackageUtocEvidenceV1] {
+        &self.metadata_utocs
+    }
+
+    pub fn consumed_chunks(&self) -> &[InstalledPackageChunkEvidenceV1] {
+        &self.consumed_chunks
+    }
+}
+
+impl fmt::Debug for InstalledPackageSidecarV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InstalledPackageSidecarV1")
+            .field("role", &self.role)
+            .field("byte_len", &self.bytes.len())
+            .finish()
+    }
+}
+
+impl InstalledPackageSidecarV1 {
+    pub const fn role(&self) -> InstalledPackageSidecarRoleV1 {
+        self.role
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl fmt::Debug for VerifiedInstalledPackageExtractionV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("VerifiedInstalledPackageExtractionV1")
@@ -310,11 +434,19 @@ impl fmt::Debug for VerifiedInstalledPackageExtractionV1 {
             .field("uasset_bytes", &self.uasset.len())
             .field("uexp_bytes", &self.uexp.len())
             .field("sidecar_count", &self.sidecar_count)
+            .field(
+                "source_utoc_count",
+                &self.source_evidence.metadata_utocs.len(),
+            )
+            .field(
+                "source_chunk_count",
+                &self.source_evidence.consumed_chunks.len(),
+            )
             .finish()
     }
 }
 
-impl VerifiedInstalledPackageExtractionV1 {
+impl VerifiedInstalledPackageExtractionV1<'_> {
     pub const fn candidate_ordinal(&self) -> u64 {
         self.candidate_ordinal
     }
@@ -335,8 +467,24 @@ impl VerifiedInstalledPackageExtractionV1 {
         &self.uexp
     }
 
+    pub fn sidecars(&self) -> &[InstalledPackageSidecarV1] {
+        &self.sidecars
+    }
+
+    pub fn source_evidence(&self) -> &InstalledPackageSourceEvidenceV1 {
+        &self.source_evidence
+    }
+
     pub const fn sidecar_count(&self) -> u64 {
         self.sidecar_count
+    }
+
+    /// Fully revalidate the retained installed source snapshot.
+    ///
+    /// Callers should invoke this after parsing any borrowed package bytes and
+    /// before publishing derived facts or proceeding to a separate operation.
+    pub fn revalidate_source(&self) -> Result<(), InstalledPackageIndexErrorV1> {
+        self.source.revalidate()
     }
 
     pub fn into_core_bytes(self) -> (Vec<u8>, Vec<u8>) {
@@ -356,6 +504,8 @@ pub enum InstalledPackageExtractionErrorV1 {
     OpenedContainerSetChanged,
     #[error("the selected installed package could not be converted exactly")]
     Conversion,
+    #[error("the selected installed package source evidence is incomplete or inconsistent")]
+    SourceEvidence,
     #[error("an installed package extraction counter overflowed")]
     CounterOverflow,
 }
@@ -431,7 +581,7 @@ impl VerifiedInstalledPackageIndexV1 {
     pub fn extract_candidate_to_memory_v1(
         &self,
         candidate_ordinal: u64,
-    ) -> Result<VerifiedInstalledPackageExtractionV1, InstalledPackageExtractionErrorV1> {
+    ) -> Result<VerifiedInstalledPackageExtractionV1<'_>, InstalledPackageExtractionErrorV1> {
         self.extract_candidate_to_memory_with_hooks_v1(
             candidate_ordinal,
             |_| {},
@@ -448,7 +598,7 @@ impl VerifiedInstalledPackageIndexV1 {
         before_open: BeforeOpen,
         convert: Convert,
         after_convert: AfterConvert,
-    ) -> Result<VerifiedInstalledPackageExtractionV1, InstalledPackageExtractionErrorV1>
+    ) -> Result<VerifiedInstalledPackageExtractionV1<'_>, InstalledPackageExtractionErrorV1>
     where
         BeforeOpen: FnOnce(&Path),
         Convert: FnOnce(
@@ -502,20 +652,174 @@ impl VerifiedInstalledPackageIndexV1 {
             uasset,
             uexp,
             sidecars,
-            consumed_chunks: _,
-            metadata_utocs: _,
+            consumed_chunks,
+            metadata_utocs,
         } = package;
+        let source_evidence = build_installed_package_source_evidence_v1(
+            &self.inventory,
+            &consumed_chunks,
+            &metadata_utocs,
+        );
         let sidecar_count = u64::try_from(sidecars.len())
             .map_err(|_| InstalledPackageExtractionErrorV1::CounterOverflow)?;
+        let sidecars = sidecars
+            .into_iter()
+            .map(|sidecar| InstalledPackageSidecarV1 {
+                role: match sidecar.kind {
+                    crate::container::VerifiedLegacySidecarKind::Bulk => {
+                        InstalledPackageSidecarRoleV1::Bulk
+                    }
+                    crate::container::VerifiedLegacySidecarKind::Optional => {
+                        InstalledPackageSidecarRoleV1::Optional
+                    }
+                    crate::container::VerifiedLegacySidecarKind::MemoryMapped => {
+                        InstalledPackageSidecarRoleV1::MemoryMapped
+                    }
+                },
+                bytes: sidecar.bytes,
+            })
+            .collect();
+
+        // Evidence construction also stays inside the retained source boundary. A final full
+        // revalidation runs even when evidence was inconsistent, so filesystem drift wins over
+        // the weaker conversion diagnostic.
+        self.revalidate()?;
+        let source_evidence = source_evidence?;
         Ok(VerifiedInstalledPackageExtractionV1 {
+            source: self,
             candidate_ordinal,
             target_path: candidate.target_path,
             package_id_hex: candidate.package_id_hex,
             uasset,
             uexp,
+            sidecars,
+            source_evidence,
             sidecar_count,
         })
     }
+}
+
+fn build_installed_package_source_evidence_v1(
+    inventory: &MountInventory,
+    consumed_chunks: &[crate::container::VerifiedChunkReceipt],
+    metadata_utocs: &[VerifiedOpenedUtocReceipt],
+) -> Result<InstalledPackageSourceEvidenceV1, InstalledPackageExtractionErrorV1> {
+    if metadata_utocs.len() != inventory.expected_container_names.len() {
+        return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+    }
+    let mut metadata_by_path = BTreeMap::new();
+    for opened in metadata_utocs {
+        let (canonical_path, evidence) =
+            installed_utoc_evidence_v1(inventory, &opened.source_utoc)?;
+        if opened.source_utoc_blake3 != evidence.1 {
+            return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+        }
+        if metadata_by_path.insert(canonical_path, evidence).is_some() {
+            return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+        }
+    }
+    if metadata_by_path.is_empty() {
+        return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+    }
+
+    let mut metadata = metadata_by_path
+        .values()
+        .map(|(evidence, _opened_blake3)| evidence.clone())
+        .collect::<Vec<_>>();
+    metadata.sort_by(|left, right| {
+        left.file_name
+            .cmp(&right.file_name)
+            .then(left.content_seal.sha256.cmp(&right.content_seal.sha256))
+    });
+    metadata.dedup();
+
+    let mut chunks = Vec::new();
+    for chunk in consumed_chunks.iter().filter(|chunk| {
+        matches!(
+            chunk.chunk_type.as_str(),
+            "ContainerHeader"
+                | "ExportBundleData"
+                | "BulkData"
+                | "OptionalBulkData"
+                | "MemoryMappedBulkData"
+        )
+    }) {
+        let canonical_source =
+            canonical_existing_plain(&chunk.source_utoc, NodeKind::File, "converted source UTOC")
+                .map_err(|_| InstalledPackageExtractionErrorV1::SourceEvidence)?;
+        let (winner, expected_opened_blake3) = metadata_by_path
+            .get(&canonical_source)
+            .ok_or(InstalledPackageExtractionErrorV1::SourceEvidence)?;
+        if chunk.source_utoc_blake3 != *expected_opened_blake3 {
+            return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+        }
+        chunks.push(InstalledPackageChunkEvidenceV1 {
+            chunk_id: chunk.chunk_id.clone(),
+            chunk_type: chunk.chunk_type.clone(),
+            winner_utoc: winner.clone(),
+            length: chunk.length,
+            blake3: chunk.blake3.clone(),
+            toc_hash: chunk.toc_hash.clone(),
+            toc_hash_bytes: chunk.toc_hash_bytes,
+        });
+    }
+    chunks.sort_by(|left, right| {
+        left.chunk_id
+            .cmp(&right.chunk_id)
+            .then(left.chunk_type.cmp(&right.chunk_type))
+            .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
+    });
+    if !chunks
+        .iter()
+        .any(|chunk| chunk.chunk_type == "ExportBundleData")
+        || !chunks
+            .iter()
+            .any(|chunk| chunk.chunk_type == "ContainerHeader")
+    {
+        return Err(InstalledPackageExtractionErrorV1::SourceEvidence);
+    }
+
+    Ok(InstalledPackageSourceEvidenceV1 {
+        metadata_utocs: metadata,
+        consumed_chunks: chunks,
+    })
+}
+
+fn installed_utoc_evidence_v1(
+    inventory: &MountInventory,
+    source_path: &Path,
+) -> Result<(PathBuf, (InstalledPackageUtocEvidenceV1, String)), InstalledPackageExtractionErrorV1>
+{
+    let source_path =
+        canonical_existing_plain(source_path, NodeKind::File, "converted source UTOC")
+            .map_err(|_| InstalledPackageExtractionErrorV1::SourceEvidence)?;
+    let mount = inventory
+        .mounts
+        .iter()
+        .find(|mount| mount.kind == DirectMountKind::Utoc && mount.file.path == source_path)
+        .ok_or(InstalledPackageExtractionErrorV1::SourceEvidence)?;
+    let sha256 = mount
+        .file
+        .sha256
+        .ok_or(InstalledPackageExtractionErrorV1::SourceEvidence)?;
+    let blake3 = mount
+        .file
+        .blake3
+        .ok_or(InstalledPackageExtractionErrorV1::SourceEvidence)?;
+    Ok((
+        mount.file.path.clone(),
+        (
+            InstalledPackageUtocEvidenceV1 {
+                file_name: mount.file_name.clone(),
+                content_seal: RawSeal {
+                    byte_len: mount.file.snapshot.length,
+                    sha256,
+                }
+                .public(),
+            },
+            hex_digest(&blake3),
+        ),
+    ))
 }
 
 #[derive(Debug, Error)]
@@ -1412,6 +1716,7 @@ struct HeldFile {
     kind: NodeKind,
     max_bytes: Option<u64>,
     sha256: Option<[u8; 32]>,
+    blake3: Option<[u8; 32]>,
 }
 
 impl HeldFile {
@@ -1464,7 +1769,7 @@ impl HeldFile {
                 });
             }
         }
-        let sha256 = if hash {
+        let digests = if hash {
             Some(hash_held_file(
                 &file,
                 max_bytes.expect("hashed files have a limit"),
@@ -1479,7 +1784,8 @@ impl HeldFile {
             snapshot,
             kind,
             max_bytes,
-            sha256,
+            sha256: digests.map(|digests| digests.sha256),
+            blake3: digests.map(|digests| digests.blake3),
         };
         held.revalidate_identity(role)?;
         Ok(held)
@@ -1519,12 +1825,12 @@ impl HeldFile {
 
     fn revalidate_hashed(&self, role: &'static str) -> Result<(), InstalledPackageIndexErrorV1> {
         self.revalidate_identity(role)?;
-        let digest = hash_held_file(
+        let digests = hash_held_file(
             &self.file,
             self.max_bytes.expect("hashed files retain their limit"),
             role,
         )?;
-        if self.sha256 != Some(digest) {
+        if self.sha256 != Some(digests.sha256) || self.blake3 != Some(digests.blake3) {
             return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
         }
         self.revalidate_identity(role)
@@ -1570,7 +1876,8 @@ impl HeldFile {
             return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
         }
         let digest: [u8; 32] = Sha256::digest(&bytes).into();
-        if self.sha256 != Some(digest) {
+        let blake3 = *blake3::hash(&bytes).as_bytes();
+        if self.sha256 != Some(digest) || self.blake3 != Some(blake3) {
             return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
         }
         self.revalidate_hashed(role)?;
@@ -1802,11 +2109,17 @@ fn file_identity_snapshot(
     Err(InstalledPackageIndexErrorV1::UnsupportedPlatform)
 }
 
+#[derive(Clone, Copy)]
+struct FileContentDigests {
+    sha256: [u8; 32],
+    blake3: [u8; 32],
+}
+
 fn hash_held_file(
     file: &File,
     max_bytes: u64,
     role: &'static str,
-) -> Result<[u8; 32], InstalledPackageIndexErrorV1> {
+) -> Result<FileContentDigests, InstalledPackageIndexErrorV1> {
     let metadata = file
         .metadata()
         .map_err(|source| InstalledPackageIndexErrorV1::Filesystem {
@@ -1828,6 +2141,7 @@ fn hash_held_file(
             source,
         })?;
     let mut hasher = Sha256::new();
+    let mut blake3 = blake3::Hasher::new();
     let mut buffer = [0u8; 64 * 1024];
     let mut length = 0u64;
     loop {
@@ -1853,11 +2167,15 @@ fn hash_held_file(
             });
         }
         hasher.update(&buffer[..read]);
+        blake3.update(&buffer[..read]);
     }
     if length != metadata.len() {
         return Err(InstalledPackageIndexErrorV1::SourceChanged { role });
     }
-    Ok(hasher.finalize().into())
+    Ok(FileContentDigests {
+        sha256: hasher.finalize().into(),
+        blake3: *blake3.finalize().as_bytes(),
+    })
 }
 
 fn mount_inventory_seal(
@@ -2194,16 +2512,55 @@ mod tests {
         assert_eq!(fs::metadata(path).unwrap().len(), length);
     }
 
+    fn opened_utoc_blake3(path: &Path) -> String {
+        hex_digest(blake3::hash(&fs::read(path).unwrap()).as_bytes())
+    }
+
     fn dummy_converted_package(secret_root: &Path) -> VerifiedUnpackedAssetBytes {
+        let source_utoc = secret_root.join("install/G1R/Content/Paks/G1R-Windows.utoc");
         VerifiedUnpackedAssetBytes {
             uasset: b"bounded-uasset".to_vec(),
             uexp: b"bounded-uexp".to_vec(),
-            sidecars: vec![VerifiedLegacySidecarBytes {
-                kind: VerifiedLegacySidecarKind::Bulk,
-                bytes: b"bounded-sidecar".to_vec(),
+            sidecars: vec![
+                VerifiedLegacySidecarBytes {
+                    kind: VerifiedLegacySidecarKind::Bulk,
+                    bytes: b"bounded-bulk".to_vec(),
+                },
+                VerifiedLegacySidecarBytes {
+                    kind: VerifiedLegacySidecarKind::Optional,
+                    bytes: b"bounded-optional".to_vec(),
+                },
+                VerifiedLegacySidecarBytes {
+                    kind: VerifiedLegacySidecarKind::MemoryMapped,
+                    bytes: b"bounded-memory-mapped".to_vec(),
+                },
+            ],
+            consumed_chunks: vec![
+                crate::container::VerifiedChunkReceipt {
+                    chunk_id: "01".repeat(12),
+                    chunk_type: "ContainerHeader".to_owned(),
+                    source_utoc: source_utoc.clone(),
+                    source_utoc_blake3: opened_utoc_blake3(&source_utoc),
+                    length: 11,
+                    blake3: "02".repeat(32),
+                    toc_hash: "03".repeat(20),
+                    toc_hash_bytes: 20,
+                },
+                crate::container::VerifiedChunkReceipt {
+                    chunk_id: "04".repeat(12),
+                    chunk_type: "ExportBundleData".to_owned(),
+                    source_utoc: source_utoc.clone(),
+                    source_utoc_blake3: opened_utoc_blake3(&source_utoc),
+                    length: 13,
+                    blake3: "05".repeat(32),
+                    toc_hash: "06".repeat(20),
+                    toc_hash_bytes: 20,
+                },
+            ],
+            metadata_utocs: vec![VerifiedOpenedUtocReceipt {
+                source_utoc: source_utoc.clone(),
+                source_utoc_blake3: opened_utoc_blake3(&source_utoc),
             }],
-            consumed_chunks: Vec::new(),
-            metadata_utocs: vec![secret_root.join("must-not-leak.utoc")],
         }
     }
 
@@ -2420,7 +2777,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinal_extraction_returns_only_sanitized_bounded_core_bytes() {
+    fn ordinal_extraction_returns_complete_path_free_bounded_bytes() {
         let fixture = Fixture::new("extract-success");
         let before = tree_bytes(&fixture.root);
         let verified =
@@ -2445,7 +2802,39 @@ mod tests {
         assert_eq!(extracted.package_id_hex(), expected_package_id);
         assert_eq!(extracted.uasset_bytes(), b"bounded-uasset");
         assert_eq!(extracted.uexp_bytes(), b"bounded-uexp");
-        assert_eq!(extracted.sidecar_count(), 1);
+        assert_eq!(extracted.sidecar_count(), 3);
+        assert_eq!(
+            extracted
+                .sidecars()
+                .iter()
+                .map(InstalledPackageSidecarV1::role)
+                .collect::<Vec<_>>(),
+            vec![
+                InstalledPackageSidecarRoleV1::Bulk,
+                InstalledPackageSidecarRoleV1::Optional,
+                InstalledPackageSidecarRoleV1::MemoryMapped,
+            ]
+        );
+        assert_eq!(extracted.sidecars()[0].bytes(), b"bounded-bulk");
+        assert_eq!(extracted.sidecars()[1].bytes(), b"bounded-optional");
+        assert_eq!(extracted.sidecars()[2].bytes(), b"bounded-memory-mapped");
+        assert_eq!(extracted.source_evidence().metadata_utocs().len(), 1);
+        assert_eq!(
+            extracted.source_evidence().metadata_utocs()[0].file_name(),
+            MAIN_CONTAINER_FILE_NAME
+        );
+        assert_eq!(extracted.source_evidence().consumed_chunks().len(), 2);
+        assert_eq!(
+            extracted.source_evidence().consumed_chunks()[1].chunk_type(),
+            "ExportBundleData"
+        );
+        assert_eq!(
+            extracted.source_evidence().consumed_chunks()[1]
+                .winner_utoc()
+                .file_name(),
+            MAIN_CONTAINER_FILE_NAME
+        );
+        extracted.revalidate_source().unwrap();
         let debug = format!("{extracted:?}");
         assert!(!debug.contains(&fixture.root.to_string_lossy().to_string()));
         assert!(!debug.contains("must-not-leak.utoc"));
@@ -2454,6 +2843,71 @@ mod tests {
         assert_eq!(uexp, b"bounded-uexp");
         verified.revalidate().unwrap();
         assert_eq!(tree_bytes(&fixture.root), before);
+    }
+
+    #[test]
+    fn extracted_bytes_remain_bound_to_a_revalidatable_source_snapshot() {
+        fn extraction_with_source_lifetime<'snapshot>(
+            source: &'snapshot VerifiedInstalledPackageIndexV1,
+            fixture: &Fixture,
+        ) -> VerifiedInstalledPackageExtractionV1<'snapshot> {
+            source
+                .extract_candidate_to_memory_with_hooks_v1(
+                    0,
+                    |_| {},
+                    |_, _| Ok(dummy_converted_package(&fixture.root)),
+                    |_| {},
+                )
+                .unwrap()
+        }
+
+        let fixture = Fixture::new("extract-retained-source");
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let extracted = extraction_with_source_lifetime(&verified, &fixture);
+        extracted.revalidate_source().unwrap();
+
+        fs::write(
+            fixture.paks.join("late-source-member.txt"),
+            b"source drift after conversion",
+        )
+        .unwrap();
+        assert!(matches!(
+            extracted.revalidate_source(),
+            Err(InstalledPackageIndexErrorV1::TreeChanged
+                | InstalledPackageIndexErrorV1::SourceChanged { .. })
+        ));
+    }
+
+    #[test]
+    fn ordinal_extraction_rejects_same_path_transient_utoc_identity() {
+        let fixture = Fixture::new("extract-transient-utoc");
+        let verified =
+            inspect_installed_package_index_v1(&fixture.install_root, fixture.expected_executable)
+                .unwrap();
+        let error = verified
+            .extract_candidate_to_memory_with_hooks_v1(
+                0,
+                |_| {},
+                |_, _| {
+                    let mut converted = dummy_converted_package(&fixture.root);
+                    for metadata in &mut converted.metadata_utocs {
+                        metadata.source_utoc_blake3 = "ff".repeat(32);
+                    }
+                    for chunk in &mut converted.consumed_chunks {
+                        chunk.source_utoc_blake3 = "ff".repeat(32);
+                    }
+                    Ok(converted)
+                },
+                |_| {},
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            InstalledPackageExtractionErrorV1::SourceEvidence
+        ));
     }
 
     #[test]

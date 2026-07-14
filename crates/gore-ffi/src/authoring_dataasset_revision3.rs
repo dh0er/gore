@@ -82,7 +82,7 @@ struct ReadExtractWirePayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-enum SemanticReplacementWire {
+pub(super) enum SemanticReplacementWire {
     Bool {
         value: bool,
     },
@@ -146,7 +146,7 @@ struct RemoveWirePayload {
 }
 
 #[derive(Debug)]
-struct Failure {
+pub(super) struct Failure {
     code: &'static str,
     message: String,
 }
@@ -161,6 +161,14 @@ impl Failure {
 
     fn response(self) -> Value {
         err(self.code, self.message)
+    }
+
+    pub(super) const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    pub(super) fn message(&self) -> &str {
+        &self.message
     }
 }
 
@@ -444,7 +452,7 @@ fn require_exact_basis(
     Ok(opened.project.revision)
 }
 
-fn prepared_response(
+pub(super) fn prepared_response(
     prepared: PreparedRevision3DataAssetStageV1,
     intent_binding_sha256: Option<String>,
 ) -> Result<Value, Failure> {
@@ -583,7 +591,7 @@ fn ffi_store_limits() -> WorkingStoreLimits {
 }
 
 impl SemanticReplacementWire {
-    fn encode_bytes_for(self, expected_kind: FixedWireKind) -> Result<Vec<u8>, Failure> {
+    pub(super) fn encode_bytes_for(self, expected_kind: FixedWireKind) -> Result<Vec<u8>, Failure> {
         let bytes = match (self, expected_kind) {
             (Self::Bool { value }, FixedWireKind::Bool) => vec![u8::from(value)],
             (Self::Byte { decimal }, FixedWireKind::Byte) => {
@@ -645,7 +653,7 @@ impl SemanticReplacementWire {
     }
 }
 
-fn intent_binding_sha256(
+pub(super) fn intent_binding_sha256(
     expected_target_path: &str,
     canonical_selector_json: &[u8],
     replacement_bytes: &[u8],
@@ -663,7 +671,9 @@ fn intent_binding_sha256(
     encode_wire_bytes(&hasher.finalize())
 }
 
-fn stage_intent_binding_sha256(stage: &Revision3DataAssetStageViewV1) -> Result<String, Failure> {
+pub(super) fn stage_intent_binding_sha256(
+    stage: &Revision3DataAssetStageViewV1,
+) -> Result<String, Failure> {
     let manifest = stage.manifest();
     let selector_json = serde_json::to_vec(manifest.selector()).map_err(|_| {
         Failure::new(
@@ -761,7 +771,7 @@ fn parse_f64_decimal(value: &str) -> Result<f64, Failure> {
     Ok(parsed)
 }
 
-fn encode_wire_bytes(bytes: &[u8]) -> String {
+pub(super) fn encode_wire_bytes(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
 
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -831,7 +841,7 @@ fn verified_input_invalid() -> Failure {
     )
 }
 
-fn map_staging_error(error: Revision3DataAssetStagingErrorV1) -> Failure {
+pub(super) fn map_staging_error(error: Revision3DataAssetStagingErrorV1) -> Failure {
     match error {
         Revision3DataAssetStagingErrorV1::Store(error) => map_store_error(error),
         Revision3DataAssetStagingErrorV1::Manifest(error) => map_manifest_error(error),

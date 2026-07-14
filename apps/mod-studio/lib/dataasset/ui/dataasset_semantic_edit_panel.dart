@@ -12,7 +12,14 @@ typedef DataAssetSemanticStagePublisher =
       DataAssetSemanticEditIntent intent,
     );
 
-enum DataAssetSemanticStageUnavailableReason { staleCheckpoint, requiresReopen }
+enum DataAssetSemanticStageUnavailableReason {
+  staleCheckpoint,
+  requiresReopen,
+  sourceEvidenceStale,
+  targetAlreadyStaged,
+  preparationRejected,
+  unknownOutcome,
+}
 
 /// A managed-project failure that cannot be corrected inside the currently
 /// open value wizard. Receipt/selector mismatches deliberately do not use this
@@ -28,6 +35,26 @@ final class DataAssetSemanticStageUnavailableException implements Exception {
     : reason = DataAssetSemanticStageUnavailableReason.requiresReopen,
       message =
           'Reopen the managed project before creating another DataAsset edit.';
+
+  const DataAssetSemanticStageUnavailableException.unknownOutcome()
+    : reason = DataAssetSemanticStageUnavailableReason.unknownOutcome,
+      message =
+          'The edit outcome could not be confirmed. Reopen the managed project before editing again.';
+
+  const DataAssetSemanticStageUnavailableException.sourceEvidenceStale()
+    : reason = DataAssetSemanticStageUnavailableReason.sourceEvidenceStale,
+      message =
+          'The installed package or its mapping changed. Inspect it again; the managed project remains usable.';
+
+  const DataAssetSemanticStageUnavailableException.targetAlreadyStaged()
+    : reason = DataAssetSemanticStageUnavailableReason.targetAlreadyStaged,
+      message =
+          'This DataAsset already has a staged edit. Remove it from Verified DataAsset edits before staging another one.';
+
+  const DataAssetSemanticStageUnavailableException.preparationRejected()
+    : reason = DataAssetSemanticStageUnavailableReason.preparationRejected,
+      message =
+          'The edit could not be prepared, but the managed project remains usable. Review its DataAsset edits and try again.';
 
   final DataAssetSemanticStageUnavailableReason reason;
   final String message;
@@ -522,7 +549,7 @@ class _DataAssetSemanticEditPanelState
           const SizedBox(height: 4),
           Text('${editor.typeLabel} · Current: ${editor.initialScalarValue}'),
           const SizedBox(height: 12),
-          _ValueEditor(
+          DataAssetSemanticValueFields(
             editor: editor,
             scalarController: _scalarController,
             componentControllers: _componentControllers,
@@ -615,8 +642,9 @@ class _DataAssetSemanticEditPanelState
   }
 }
 
-class _ValueEditor extends StatelessWidget {
-  const _ValueEditor({
+class DataAssetSemanticValueFields extends StatelessWidget {
+  const DataAssetSemanticValueFields({
+    super.key,
     required this.editor,
     required this.scalarController,
     required this.componentControllers,

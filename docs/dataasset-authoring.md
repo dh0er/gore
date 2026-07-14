@@ -124,15 +124,26 @@ server-side, selects and guards the installed generation USMAP, converts the
 package to bounded in-memory `.uasset`/`.uexp` bytes, and feeds those bytes into
 the same fixed-leaf inspector used by the Lab. No extracted files are published.
 
-The resulting dialog is read-only and shows the ordinary strict inspection
-report. Refreshing the package inventory invalidates an in-flight selection.
-The manual `/Game` field remains syntax-and-copy only and cannot be inspected,
-because it has no sealed package candidate. This slice does not create an
-ExtractReceipt, enable Save, stage a project edit, pack, deploy, touch the game
-installation or a save, or qualify runtime behavior. Promoting an inspected
-installed package into the typed edit transaction remains a separate capability
-that must preserve the selected package/USMAP proof and the existing exact-head
-publication boundary.
+The report remains read-only evidence, but each `editable=true` leaf can now
+open a separate typed value editor. It shows a Before/After preview and can
+publish one managed revision-3 fixed-leaf stage. Refreshing the inventory
+invalidates an in-flight selection, and stale or `requiresReopen` publication
+closes the editor, inspection, and old browser together. The manual `/Game`
+field remains syntax-and-copy only and cannot be inspected or edited because it
+has no sealed package candidate.
+
+This installed route creates no ExtractReceipt and accepts no caller-supplied
+target path, package ID, package bytes, receipt path, output path, or raw offset.
+Native code rebuilds the exact package and USMAP inventories, extracts only the
+server-selected ordinal, and independently reconstructs the same target. It
+requires the complete package pair, every role-bearing sidecar, the exact USMAP
+name and bytes, the opened UTOC set, and every generation-relevant chunk winner
+to match before applying the offset-free semantic edit in memory. The normal
+closed stage verifier and exact-head publication lane are then reused. A final
+generation/source recheck wins over parsing or patch diagnostics.
+
+The result is still an offline, build-blocked project stage. It does not pack,
+deploy, touch the game installation or a save, or qualify runtime behavior.
 
 ## 3. Prepare one raw fixed-width replacement
 
@@ -315,6 +326,32 @@ structural edits, and the sealed Unreal handoff remain separate work. The typed
 workflow writes only immutable objects and the guarded fixed head inside the
 managed project; it never writes the installed game or any save file.
 
+### Direct installed fixed-leaf staging
+
+`authoring_store_prepare_revision3_installed_dataasset_edit_v1` is the normal
+Studio route from the installed-package browser. Its closed request carries the
+exact managed head, original candidate ordinal, package-index/source-snapshot
+seals, USMAP content/inventory seals, the three package-inspection component
+seals, the canonical selector, and the typed replacement. Only the Store and
+game roots are paths; no extracted artifact or receipt is created.
+
+The retained installed extraction owns the exact in-memory pair and sidecars
+plus path-free evidence for the complete opened UTOC set and every consumed
+generation-relevant chunk. A second live conversion must reproduce those UTOC
+identities, chunk IDs/types/winners/hashes, package bytes, sidecars, and the
+selected USMAP filename and bytes. The hash of the UTOC bytes actually parsed by
+the IoStore reader is checked against the held installed inventory so a
+transient same-path container swap cannot be relabelled as the retained source.
+Preflight and post-operation guards revalidate the installed snapshot and USMAP;
+the existing final generation probe then closes the patch-to-stage handoff.
+
+The response is the ordinary `prepared_unpublished` stage candidate plus a
+closed path-free installed-source echo and a domain-separated binding over the
+ordinal and all caller-visible seals. Dart recomputes that binding and validates
+the source echo, target/selector shape, intent binding, candidate, manifest, and
+head before the managed session may publish by exact fixed-head CAS. Source or
+checkpoint drift fails closed and leaves the game and saves untouched.
+
 ## 6. Pack the patched pair without deploying it
 
 Pack the re-inspected pair back into an additive Zen triplet. As with extract,
@@ -405,8 +442,9 @@ source-snapshot seals and revalidates the live installation before returning.
 UTOC and PAK contents are hashed. UCAS files deliberately retain only held
 identity, length, and modification evidence; they are not content-hashed. The
 composite source-snapshot seal covers the executable, mount inventory, and
-canonical candidate index only. It does not bind one selected package's bytes,
-USMAP, sidecars, or project head.
+canonical candidate index only. Selected-package bytes, sidecars, source
+containers/chunk winners, USMAP, and project head are bound separately by the
+inspection and installed-edit transaction described above.
 Other platforms fail with `PLATFORM_UNSUPPORTED` before inspecting the supplied
 tree; this avoids claiming pathname-snapshot guarantees that the current Unix
 backend cannot provide.
@@ -423,15 +461,17 @@ Dart/session/controller lane exposes the snapshot through Mod Studio's
 lazy rendered matches, complete/partial status, a manual `/Game` fallback, and
 advanced seals and counters. Refresh always requests a new exact snapshot. The
 manual field validates canonical syntax only; it proves neither that a package
-exists nor that it belongs to the returned snapshot. The current dialog is
-copy-only and does not select a candidate into the edit pipeline.
+exists nor that it belongs to the returned snapshot, so it stays copy-only.
 
-A candidate path remains discovery metadata only. The browser grants no package
-contents, class, schema, selector, extraction, patch, mutation, build,
-publication, or runtime authority, and neither the project nor game installation
-is written. Selection must still be followed by fresh exact extraction and the
-existing sealed inspection/edit pipeline; wiring that transition is the next
-normal-user DataAsset slice.
+A listed candidate path remains discovery metadata only. Inspect resolves only
+its sealed original ordinal, rebuilds the snapshot, converts the exact package
+to bounded memory, selects the installed generation USMAP, and returns the
+ordinary fixed-leaf report with closed authority statuses. Only a proven
+`editable=true` selector can enter the typed editor. Save triggers another fresh
+snapshot/USMAP verification and an independent live conversion; it never trusts
+the display path as authority. Success publishes only a build-blocked managed
+stage. Package construction, deployment, runtime authority, structural edits,
+and writes to the installed game remain unavailable.
 
 ## Receipts, source proofs, and limits
 

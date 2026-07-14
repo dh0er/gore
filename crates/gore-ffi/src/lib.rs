@@ -140,6 +140,10 @@
 //!   revision-3 head, installed package-snapshot seals, game/Store roots, and a candidate ordinal.
 //!   It rebuilds every native authority and returns bounded whole-package fixed-leaf inspection
 //!   evidence without accepting package, output, or USMAP paths.
+//! - `authoring_store_prepare_revision3_installed_dataasset_edit_v1` reopens that exact installed
+//!   proof, re-inspects the server-selected candidate, applies one typed fixed-leaf edit wholly
+//!   in memory, and returns an unpublished revision-3 stage candidate. It never accepts raw
+//!   package bytes, receipt paths, output paths, or publication/deployment authority.
 
 mod authoring;
 mod authoring_content_revision3;
@@ -217,6 +221,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_checkpoint",
     "authoring_store_prepare_revision3_dataasset_edit_v1",
     "authoring_store_prepare_revision3_dataasset_stage_v1",
+    "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
     "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
@@ -508,6 +513,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_dataasset_stage_v1" => {
             Some(authoring_dataasset_revision3::prepare_raw)
         }
+        "authoring_store_prepare_revision3_installed_dataasset_edit_v1" => Some(
+            authoring_installed_dataasset_inspection_revision3::prepare_revision3_installed_dataasset_edit_v1_raw,
+        ),
         "authoring_store_prepare_revision3_npc_draft_v1" => {
             Some(authoring_story_npc_revision3::prepare_revision3_npc_draft_v1_raw)
         }
@@ -1571,6 +1579,7 @@ mod tests {
                     "authoring_store_prepare_revision3_checkpoint",
                     "authoring_store_prepare_revision3_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
+                    "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
