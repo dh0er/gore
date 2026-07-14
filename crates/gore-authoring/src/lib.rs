@@ -23,6 +23,7 @@ mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_npc;
+mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_voice;
 mod story_transaction_revision3_voice_target;
 mod strict_json;
@@ -176,6 +177,15 @@ pub use story_transaction_revision3_npc::{
     Revision3NpcStoryIdentityKindV1, MAX_REVISION3_NPC_CATALOG_ID_BYTES_V1,
     MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
     REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
+};
+pub use story_transaction_revision3_quest_outline::{
+    apply_revision3_quest_outline_edit_transaction_v1, Revision3QuestOutlineEditBuildStatusV1,
+    Revision3QuestOutlineEditConflictV1, Revision3QuestOutlineEditErrorV1,
+    Revision3QuestOutlineEditEvaluationV1, Revision3QuestOutlineEditOutcomeV1,
+    Revision3QuestOutlineEditRejectionV1, Revision3QuestOutlineEditRequestJsonErrorV1,
+    Revision3QuestOutlineEditRequestV1, Revision3QuestOutlineEditRuntimeStatusV1,
+    MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V1,
+    MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_voice::{
     apply_revision3_voice_take_transaction_v1, preflight_revision3_voice_take_transaction_v1,
