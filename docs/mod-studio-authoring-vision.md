@@ -177,7 +177,7 @@ proof. It does not widen that evidence to adjacent use cases.
 
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
-| Project save/load | **Partial Studio paths; bounded managed revision-3 authoring shell proven** | The compatibility session still saves `.goremod` format 1, and the separate visible Story create/open flow still owns a schema-revision-2 managed working directory. A dedicated revision-3 managed session reuses the proven exclusive-lock, serialized derive/save/read, immutable checkpoint, full-reopen, exact fixed-head CAS, repair-journal, and poison-on-uncertain-publication safety core. The typed current-project coordinator drives Home, the Project menu, and `Ctrl+S`: it opens and fully validates an existing R3 directory before adoption, shows root/project ID/revision/head hash and size, maps managed Save to exact-current-head full-asset reopen verification, and serializes exact-head reads and mutations. Dirty Legacy work is confirmed before a format transition; failed candidates preserve the current lease; terminal cleanup failures and `requiresReopen` are surfaced without leaking private diagnostics. While R3 is authoritative, legacy editors and Build/Deploy are hidden and Legacy Save As and Story actions are disabled. `gore-authoring` has closed revision-1/2/3 documents, explicit revision-2-to-3 migration, an immutable working store, and a bounded native semantic index for every current entity kind, typed-reference resolution, and AssetStore metadata without generated source/blob bytes. Home exposes that index through strict Dart DTOs as a searchable/filterable content library with honest unevaluated-build/runtime-unqualified status. Resolved entity/asset references and exact-project incoming backlinks are navigable in both directions. Bounded Guided Quest/NPC Draft publication, managed Voice-take import, and verified DataAsset editing now mutate the same exact managed lease and refresh the visible checkpoint. General semantic editors, migration orchestration, managed New/import/clone/Save As, full history/recovery, global/dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
+| Project save/load | **Partial Studio paths; bounded managed revision-3 authoring shell proven** | The compatibility session still saves `.goremod` format 1, and the separate visible Story create/open flow still owns a schema-revision-2 managed working directory. A dedicated revision-3 managed session reuses the proven exclusive-lock, serialized derive/save/read, immutable checkpoint, full-reopen, exact fixed-head CAS, repair-journal, and poison-on-uncertain-publication safety core. The typed current-project coordinator drives Home, the Project menu, and `Ctrl+S`: it opens and fully validates an existing R3 directory before adoption, shows root/project ID/revision/head hash and size, maps managed Save to exact-current-head full-asset reopen verification, and serializes exact-head reads and mutations. Dirty Legacy work is confirmed before a format transition; failed candidates preserve the current lease; terminal cleanup failures and `requiresReopen` are surfaced without leaking private diagnostics. While R3 is authoritative, legacy editors and Build/Deploy are hidden and Legacy Save As and Story actions are disabled. `gore-authoring` has closed revision-1/2/3 documents, explicit revision-2-to-3 migration, an immutable working store, and a bounded native semantic index for every current entity kind, typed-reference resolution, and AssetStore metadata without generated source/blob bytes. Home exposes that index through strict Dart DTOs as a searchable/filterable content library with honest unevaluated-build/runtime-unqualified status. Resolved entity/asset references and exact-project incoming backlinks are navigable in both directions. Bounded Guided Quest/NPC Draft publication, existing-Quest outline/context/lifecycle edits, managed Voice-take import, and verified DataAsset editing now mutate the same exact managed lease and refresh the visible checkpoint. General semantic editors, migration orchestration, managed New/import/clone/Save As, full history/recovery, global/dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
 | Unified content browser | **Missing as a unified surface** | Items, dialog/localization, FMOD audio, textures, scripts, the read-only DataAsset Lab, and the managed R3 registry/wizards remain separate surfaces. A searchable R3 content library, bidirectional exact-project reference navigation, generation-bound NPC archetype picker, and bounded NPC/Quest/Voice/DataAsset actions now exist, but there is still no global/dependency search, semantic NPC/quest browser, source-aware clone workflow, or one cross-domain editing workspace. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
 | Existing NPC edits | **Partial backend and source-sealed picker; semantic editor missing** | The visible schema-revision-2 Story flow now has a searchable, generation-bound NPC archetype catalog and picker. It selects a source-sealed catalog record and drives new-Draft creation, but it does not semantically edit an existing NPC entity or provide an end-to-end existing-NPC inspector. Generic CDO overrides remain a separate existing-class subset. |
@@ -185,7 +185,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Existing localized dialog lines | **Proven** | The Dialogs tab groups `info_`/`dia_`/`gvl_`/`svm_` IDs, edits languages, and can add an explicit missing localization ID. Localization alone does not create a selectable topic. |
 | New dialog topic insertion/rendering | **Earlier narrow render proof; version-3 candidate offline-qualified, one controlled live visual run remains** | A compiled `UChoice` class plus explicit participant/topic/sentinel registration previously reached the natural choice UI and was visually confirmed. The current version-3 candidate is deterministic, passes the strengthened forbidden-operation and preflight-order verifier, and deploys/undeploys to exact sandbox tree identity. That is offline/sandbox evidence, not a live version-3 result. Requalification requires exactly one natural Viper-menu run with no selection and no save; automatic discovery and selection effects remain unproven. See [dialog authoring](dialog-authoring.md). |
 | Dialog selection effects | **Unproven** | Topic selection, quest/knowledge changes, `ActedTopics`, and selection-side save effects are outside the render proof. The safe proof intentionally selected nothing. |
-| Quest inspection/edit/create | **Managed revision-3 ordered-outline Draft creation plus separate existing-Quest outline and context edits proven; complete semantic editor missing** | Managed R3 Home exposes a bounded Quest Draft wizard for name, description, one through eight ordered objectives, Quest family, and giver. Objectives can be added, removed, and reordered; friendly Story-catalog choices are rebuilt at open and immediately before publication. The UI hides generated IDs/namespaces/paths, derives technical identities from project ID, current revision, and authored intent, separately binds publication to the exact managed root/canonical head, rejects stale-wizard publication, and refreshes the revision/content library after success. Existing single-objective R3 entities retain project generator version 2 with byte-identical canonical JSON and source; multi-objective entities use version 3 and regenerate the complete ordered source. Selecting an existing Quest in the R3 Content Library now opens an **Edit Quest** menu with separate **Name & objectives** and **Description & connections** actions. The first is count-preserving and edits only library name, player-facing title, and existing objective text/order. The second edits only description, family/parent, and giver. Together they preserve objective count, stable IDs, technical identity, ownership, origin/provenance, and the collision `ArtifactRef`; each transaction advances the project, Quest, and owned module revisions exactly once for a real change. The outline route deliberately accepts no `game_root`. The context route instead rebuilds a fresh Story catalog, requires the Quest's exact current parent and giver to each map uniquely, shows only friendly choices, and fails closed without guessing when either mapping is missing or ambiguous. It reloads the catalog immediately before Save, binds the exact reviewed catalog seal and selected choices, and requires renewed review on catalog drift. The pure transactions prove and regenerate the exact Quest/module closure while preserving technical identity. Their strict native prepare-only routes fully bind the current Store/project/head/target, fully reopen only immutable unpublished candidates, and never replace the fixed head. Strict Dart validation and the managed session publish only by guarded exact-head byte CAS, repair journal, and full published reopen. Creation, outline edit, and context edit remain `blocked`, `runtime_unqualified`, and native-publication `not_supported`; Draft creation additionally grants no artifact authority and requires fresh source inspection. Objective order is persisted source shape, not proof that runtime transitions enforce it. The semantic Quest state/transition editor, conditions/effects, journal/reward authoring, complete source diagnostics/build lowering, and runtime workflow remain missing. The retained `Available` instances prove only narrow discovery on one generation, not transitions, dialog selection, effects, rewards, or persistence. These operations do not write the game installation or a save file; context catalog access is read-only. See [quest authoring](quest-authoring.md). |
+| Quest inspection/edit/create | **Managed revision-3 creation, outline/context, and bounded V4 states-and-transitions editing proven; build/runtime missing** | Managed R3 Home exposes the friendly one-to-eight-objective Quest Draft wizard. A selected Quest's **Edit Quest** menu now separates **Name & objectives**, **Description & connections**, and **States & transitions**. The V4 dialog presents the main Quest/objectives against Available/Start/Success/Failure, a sequential template, independent direct-engine triggers and typed conditions, bounded Start/Succeed/Fail follow-up actions, and objective-parent completion. Conditions use the six reviewed lifecycle tests with optional negation and are capped at 8 DNF alternatives x 8 atoms; each transition has at most 8 effects. The closed native validator enforces canonical order, stable active objective slots, drivers, required availability/start and objective terminal edges, valid references, contradiction rules, same-handler terminal conflicts, and same-kind cycles. It accepts no raw AngelScript, dialog, journal, reward, item, or arbitrary effect. Schema revision remains 3: merely reading or deriving the effective plan does not migrate a generator-v2/v3 Quest or add `transition_plan`; an otherwise unchanged Quest keeps its JSON/source bytes, while separate outline/context edits still regenerate their owned fields. V4 retains a canonical plan with stable slots, and its legacy seed regenerates V2/V3 source byte-for-byte. A first native V2/V3 plan write explicitly upgrades the Quest/module to V4 and increments only project/Quest/module revisions; a retained V4 same-plan edit is a no-op. Outline V1 fails closed on V4 rather than losing slots; context V1 preserves the complete V4 plan. The pure transition transaction binds exact head/project/target/Quest revision plus a domain-separated plan seal, proves deterministic module closure, and caps plan/request JSON at 384/512 KiB. `authoring_store_prepare_revision3_quest_transitions_edit_v1` accepts exactly `current_project_json`, `quest_transitions_request_json`, and `root` with no `game_root`, prepares and fully reopens only immutable candidate objects, and never replaces the fixed head. Native status remains `blocked`, `runtime_unqualified`, and publication `not_supported`; the managed session is the only publisher through guarded exact-head byte CAS, repair journal, and full published reopen. An isolated 1.0.3 qualifier compiled the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes twice and produced the same reopened 7,306-module composed cache (123,406,626 bytes, SHA-256 `FB041B3DF1CBD5A0AFC1D87F47BFCA6392AA19CE6475CE9DBD61A6D099D9C41A`). It did not compile one renderer-produced fixture spanning every state-test expression, and it is compiler/cache evidence rather than gameplay. Runtime transition order/effects, dialog selection, journal/rewards/items, persistence/save/reload/uninstall, complete diagnostics/build/deploy, and general graph/transcript workflows remain missing. No managed Quest operation writes the game installation or a save. See [quest authoring](quest-authoring.md). |
 | Voice archive editing | **Compatibility existing-member slice proven; managed revision-3 import, selection, installed-target, and sealed offline-build foundation proven; production workflow missing** | The compatibility line-first editor still resolves installed language archives beside dialog text, validates and previews/removes a chosen Ogg, persists it in the portable project, and includes exact existing-member replacement in Build/Deploy. Managed R3 Home separately exposes four bounded actions. **Add Voice take** uses a configured game root only as a read-only forbidden Store-root boundary, double-reads one safe local Vorbis/Opus Ogg after semantic/capacity preflight, and appends it to an exact existing line/locale while preserving localization text and all alternatives. **Manage Voice takes** needs no game path: it reloads the exact content index, shows ordered friendly candidates, allows only an existing Approved candidate to be selected or the current selection to be explicitly cleared, and changes only `VoiceSlot.selected` plus project/slot revisions through prepare-only full-reopen and guarded managed-session publication. **Resolve Voice target** binds the installed executable generation and authenticated pristine locale archive before/after inspection, records unresolved/resolved/ambiguous evidence, and never picks an ambiguous member. **Build Voice bundle** derives all blockers from the complete exact-current graph and, only when ready, writes a deterministic sealed Vorbis existing-member replacement bundle into a new offline folder; it performs no deployment. Fixed-head races and uncertain publication fail closed. Managed Voice still lacks deploy/undeploy, isolated runtime testing, audible-game qualification, ambiguous-member choice, preview/remove/unlink, recording/transcode/batch/coverage, qualified Opus lowering, and new-member lookup proof. Selection/target preparation never writes the game or a save; offline bundle output is not runtime evidence. See [Voice authoring](voice-authoring.md). |
 | FMOD sound/music replacement | **Proven** | Studio browses samples, previews originals or staged WAVs, and stages replacements for the bundle engine. This is sound-bank replacement, not spoken-dialog voice authoring. |
 | Texture replacement | **Proven subset** | Existing texture assets can be browsed and replaced with additive IoStore output. This is not general cooked-asset creation, visual-media round trip, or an Unreal Editor bridge. |
@@ -196,7 +196,7 @@ proof. It does not widen that evidence to adjacent use cases.
 | Items/world/spawns | **Partial/missing** | Existing item scalar overrides are present. New item identity, placed world actors, spawn points, routines, level edits, and world-partition integration have no semantic Studio workflow or production proof. An optional sealed Unreal handoff is planned only for explicitly supported future operations; no bridge or compatible world writer exists today. |
 | Localization | **Proven** | Multi-language edits and explicit new IDs lower to `BuildSpec.loc_edits`; deploy is backup/restore aware. Referential completeness across quests, dialog, and voices is not yet validated as one graph. |
 | Build/deploy/undeploy | **Proven for represented Legacy domains; one managed-R3 Voice-only offline lowerer proven; managed deployment and project-wide build missing** | Studio drives the same bundle engine as the CLI and can restore its deployment for represented compatibility-project domains. The bounded existing-member spoken-line replacement participates in that portable Save/Reopen and Build/Deploy path. When an R3 project is current, the shell hides Legacy editors and Legacy Build/Deploy instead of reading stale provider state. R3 NPC/Quest Drafts and verified DataAsset stages remain build-blocked. Managed Voice alone has an explicitly labelled all-or-nothing offline builder that reads verified selected Vorbis CAS bytes, requires sealed existing-member targets for every slot, and writes a deterministic format-3 voice-only bundle into a new folder. It neither deploys nor grants general pack/gameplay authority. Project-wide semantic roots, dependency/risk review, managed deploy/undeploy, rollback, and isolated runtime qualification remain missing. |
-| Validation | **Partial** | Scalar field validation, script freshness gates, bounded codecs, native Ogg preflight, offset-free DataAsset inspection, selector proofs, and backend build checks exist. There is no incremental graph validator, reachability analysis, semantic quest validation, or one-click diagnostic system. |
+| Validation | **Partial** | Scalar field validation, script freshness gates, bounded codecs, native Ogg preflight, offset-free DataAsset inspection, selector proofs, backend build checks, and the closed bounded Quest-V4 lifecycle validator exist. There is no project-wide incremental graph validator, general quest/dialog reachability simulator, or one-click diagnostic system. |
 | Undo/redo/history | **Missing as a system** | Individual edits can often be cleared or removed, but there is no shared command log, multi-domain atomic undo/redo, crash journal, or named checkpoints. |
 | Templates/clone/batch/CSV | **Missing** | No dependency-aware templates, clone modes, transactional bulk editor, or CSV round trip exists. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
@@ -324,6 +324,15 @@ unknown states, and dialog choices whose visible paths have no valid result.
 An offline condition/state simulator enumerates or samples authored scenarios
 and previews reachable dialog, objectives, rewards, and terminal paths. It is a
 semantic validator, not evidence that an unqualified runtime effect works.
+
+The landed managed-R3 subset is deliberately smaller than that end state. Its
+**States & transitions** action is one friendly behavior table over the fixed
+root/objective lifecycle edges, with a sequential template and bounded typed
+condition/action dialogs. It shares the exact project/session publication lane
+and generates deterministic V4 AngelScript, but it has no synchronized
+transcript/general graph, journal, reward, item, raw-source, simulation, build,
+deploy, or runtime-test surface. The Studio labels the saved checkpoint
+build-blocked and runtime-unqualified.
 
 ### 4.6 Voice at the line
 
@@ -881,15 +890,24 @@ does not infer quest semantics from arbitrary source strings.
 
 For the currently tested game version, automatic discovery and instantiation of
 two added `UQuest` subclasses is runtime-proven narrowly: both appeared as
-`Available` runtime instances after world/save load. The native scan's internal
-algorithm, other versions, vanilla semantic representation, authored
-transitions, selection-driven effects, rewards, and persistence remain
-unqualified. This evidence is sufficient to move a strict Draft schema and
-offline source generator earlier; it is not sufficient to mark generated quest
-behavior Supported. Before a quest lowerer or effect is marked Supported, its
-generated source and exact target must validate offline and every claimed
-transition/effect/persistence mechanism must pass bounded disposable-save proof.
-Successful AngelScript compilation or class discovery alone is not sufficient.
+`Available` runtime instances after world/save load. Separately, the bounded V4
+model and lowerer now cover the fixed Available/Start/Success/Failure lifecycle,
+typed state predicates, cross-node Start/Succeed/Fail actions, and parent
+completion. A 1.0.3 qualifier compiled, remapped, composed, reopened,
+decompiled, and disassembled the four external-trigger fields and predicate-hook
+shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded
+lifecycle-call shapes in two independent runs with a byte-identical final cache.
+It did not compile one renderer-produced fixture spanning every supported
+state-test expression. That is stronger offline compiler/cache evidence, but
+not evidence that the game polls or orders the hooks as modeled.
+
+The native scan's internal discovery algorithm, other versions, exact runtime
+transition and handler order, selection-driven effects, journal/rewards/items,
+and persistence remain unqualified. Before a quest lowerer or effect is marked
+production-supported, its generated source and exact target must validate
+offline and every claimed transition/effect/persistence mechanism must pass
+bounded disposable-save proof. Successful AngelScript compilation or class
+discovery alone is not sufficient.
 
 ### 6.3 Dialog and voice dependency contract
 
@@ -1095,25 +1113,35 @@ generation/rebase diagnostics, the full three-way rebase workflow, offline
 semantic diff/build-plan inspection, and batch edits for compatible semantic
 fields.
 
-The landed bounded Quest subset already provides ordered Draft creation and
-separate existing-Quest outline and catalog-bound context edits. The context
-operation covers only description, family/parent, and giver under a fresh exact
-catalog mapping and seal; it remains prepare-only at the native boundary,
-build-blocked, runtime-unqualified, and does not complete Phase 3. Phase 4's
-transition/state, conditions/effects, journal/reward, and source-diagnostics
-work is the next semantic Quest expansion.
+The landed bounded Quest subset already provides ordered Draft creation,
+separate existing-Quest outline and catalog-bound context edits, and the first
+fixed-lifecycle V4 **States & transitions** table. The V4 slice persists a
+closed stable-slot plan, validates bounded typed conditions/actions, and lowers
+deterministic source. Reading or deriving a V2/V3 plan is a byte-preserving
+no-op; only an explicit behavior edit upgrades it, while separate outline or
+context edits still regenerate their owned fields. It remains prepare-only at
+the native boundary, publishes only through
+the managed exact-head CAS lane, and is build-blocked/runtime-unqualified.
+General story graphs/transcripts, journal/reward/item semantics, complete source
+diagnostics/build integration, and runtime qualification still prevent Phase 3
+or Phase 4 from being complete.
 
 ### Phase 4: quest/dialog authoring and selection-effect research
 
-Build the synchronized story outline, transcript, graph, state table, preview,
-condition simulator, and reviewed source generators on the Phase-3 Draft model.
-Add reusable graph libraries before authors need to duplicate large quest lines.
-New `UQuest` class discovery/instantiation is already narrowly proven for the
-current game version; qualify generated availability/start/success/failure
-transitions, dialog selection effects, rewards, knowledge changes, and
-persistence separately on disposable saves. Production lowering remains blocked
-for every behavior without a qualified mechanism. Phase 6 upgrades only the
-Draft quest templates whose required mechanisms have passed those gates.
+Extend the landed bounded lifecycle table into the synchronized story outline,
+transcript, general graph, state table, preview, condition simulator, reusable
+condition/effect libraries, journal/reward/item semantics, and complete source
+diagnostics/build workflow. Add reusable graph libraries before authors need to
+duplicate large quest lines. New `UQuest` class discovery/instantiation is
+already narrowly proven for the current game version. The V4 external-field,
+predicate-hook, handler, `bSucceedParent`, typed-getter, and guarded-call shapes
+are compiler/cache-pipeline-qualified on 1.0.3, but the exact full renderer
+output still needs its own compiler gate; qualify actual availability/start/
+success/failure behavior, dialog selection effects, rewards, knowledge changes,
+and persistence separately on disposable saves. Production lowering remains
+blocked for every behavior without a qualified mechanism.
+Phase 6 upgrades only the Draft quest templates whose required mechanisms have
+passed those gates.
 
 ### Phase 5: new NPC vertical slice
 
@@ -1327,13 +1355,18 @@ it:
    package refs, unversioned headers, arrays, maps, and required collection-shape
    changes byte-semantically. Unsupported schema forms produce typed errors
    before output staging; no size or offset is guessed.
-4. A quest fixture compiles every state, transition, condition, effect,
-   localization, dialog link, and reward exactly once and reimports generated
-   semantic metadata to the same graph. For the sealed current-version fixture,
-   the capability registry recognizes the retained narrow class-discovery proof
-   instead of reporting discovery as unknown. Unqualified transition, selection,
-   reward, persistence, or other-version discovery mechanisms remain blocking
-   diagnostics for the profiles that require them.
+4. The landed bounded V4 fixture round-trips stable objective slots/order, all
+   four fixed lifecycle edges, typed DNF conditions, typed cross-node lifecycle
+   effects, and parent completion through canonical project JSON and
+   deterministic source. Frozen-seed tests reproduce V2/V3 source bytes, and
+   the sealed 1.0.3 compiler qualifier reopens/disassembles the exact listed
+   external-field, hook, handler, getter, and guarded-call shapes without
+   writing a game installation or save. One renderer-produced fixture spanning
+   every state-test expression remains an offline gate. The larger
+   acceptance fixture must still add localization, dialog links, journal,
+   rewards/items, semantic reimport/simulation, and complete build diagnostics.
+   Runtime transitions, selection, persistence, and other-version mechanisms
+   remain blocking diagnostics for profiles that require them.
 5. A spawn fixture resolves an NPC and a qualified world anchor, validates
    transform/policy/condition types, emits one deterministic deployment target,
    and rejects unknown anchors or unsupported persistence without output.

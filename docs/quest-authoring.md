@@ -3,8 +3,15 @@
 GORE can compile new `UQuest` subclasses, carry their generated defaults and
 new symbols in an additive mini-cache, and compose them into the game's script
 cache. Automatic discovery of new quest classes is narrowly runtime-proven on
-the current Gothic 1 Remake generation. Quest transitions, authored effects,
-dialog selection, and persistence require separate qualification.
+the current Gothic 1 Remake generation. The managed revision-3 project can now
+persist and edit a bounded semantic lifecycle plan. A separate G1R 1.0.3
+qualifier gives compiler/cache-pipeline evidence for the four external-trigger
+fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`,
+typed cross-node getters, and guarded `StartQuest`/`SucceedQuest`/`FailQuest`
+calls used by the lowerer. It did not compile one exact renderer-produced
+fixture covering every state-test expression. Generated transition behavior,
+dialog selection, and persistence remain runtime-unqualified and production
+build stays blocked.
 
 ## Proven discovery boundary
 
@@ -82,12 +89,13 @@ transition effects. A practical authoring graph therefore needs at least:
 - idempotent reward/effect handlers;
 - typed dialog, NPC, item, and world-condition references.
 
-The current Asghan candidate resolves and disassembles all 23 authored
-functions offline. Its discovery proof upgrades new quest **class discovery**
-from hypothesis to a supported narrow mechanism, but it does not upgrade the
-candidate's transition/effect behavior to production-ready.
+The retained lifecycle compiler qualifier resolves and disassembles 23 authored
+functions offline. The separate Asghan discovery proof upgrades new quest
+**class discovery** from hypothesis to a supported narrow mechanism. Neither
+result proves lifecycle polling order, handler order, transition gameplay,
+dialog selection, save/reload, or clean uninstall.
 
-## Discovery-only Draft generators
+## Draft generators and semantic V4
 
 `gore-authoring` retains the byte-frozen `DraftQuestSkeletonV1` for the smallest
 useful Quest Draft: exactly one `UG1RQuest` root and one objective. The additive
@@ -98,12 +106,33 @@ the final generated objective has `bSucceedParent = true`; the separate V1
 single-objective output remains byte-frozen. This represents author order and
 completion shape; it does not claim that runtime transitions enforce the order.
 
-Both generators are bounded and offline-only. They deliberately contain no
-transition predicate or action, dialog selection, effect, reward, journal
-operation, failure path, filesystem write, compiler invocation, game launch,
-or save operation. Objective titles are canonical, byte-bounded, and unique
-case-insensitively. Every generated class and getter is checked against the
-sealed collision catalog, including all additional objectives.
+Project schema revision remains 3. Existing one-objective Quest entities use
+project generator version 2 and omit both `additional_objective_titles` and
+`transition_plan`; existing multi-objective entities use generator version 3
+and also omit `transition_plan`. Merely reading or deriving their effective
+behavior plan performs no migration: an otherwise unchanged Quest keeps its
+canonical project JSON and generated source byte-for-byte, and no
+`transition_plan` appears until an explicit behavior edit. Separate outline or
+context edits still regenerate the fields they own. Generator version 4
+requires a closed `transition_plan`. Its deterministic legacy seed reproduces
+the complete frozen version-2 and version-3 AngelScript source and source hash
+byte-for-byte, including the first objective's original class/getter
+identities.
+
+V4 separates stable technical objective slots from presentation order. Slot 1
+is the frozen legacy identity, active slots are unique non-zero ascending
+ordinals, `objective_order` is their full permutation, and
+`next_slot_ordinal` is strictly greater than every active slot and never
+regresses during a transition-only edit. Reordering presentation therefore
+does not rename a class or getter.
+
+All three generators are bounded and offline-only. V1/V2 deliberately contain
+no authored predicate, effect, or failure path. V4 can lower the bounded
+lifecycle plan described below, but still contains no dialog selection,
+journal operation, reward, item mutation, arbitrary AngelScript, filesystem
+write, compiler invocation, game launch, or save operation. Objective titles
+are canonical, byte-bounded, and unique case-insensitively. Every generated
+class and getter is checked against the sealed collision catalog.
 
 Generation requires the target game generation plus catalog-layer, generation,
 and source-seal anchors for the giver, parent quest, and collision inventory.
@@ -121,10 +150,11 @@ the tagged, length-prefixed input fingerprint also binds provenance, collision
 inventories, fixed generator semantics, and inputs that may not appear in the
 source text.
 
-The generator always reports `OfflineDraft`, `RuntimeUnqualified`, and
-`TransitionsRuntimeUnqualified`. Caller-supplied seals cannot upgrade those
-statuses. Runtime discovery evidence belongs to the versioned capability
-registry and must match this exact generated operation independently.
+The generators always report `OfflineDraft`, `RuntimeUnqualified`, and
+`TransitionsRuntimeUnqualified`. Caller-supplied seals and successful offline
+compilation cannot upgrade those statuses. Runtime discovery evidence belongs
+to the versioned capability registry and must match the exact generated
+operation independently.
 
 ### Native Quest-intent transaction
 
@@ -300,7 +330,9 @@ success. The operation remains `build_status: blocked`,
 `runtime_status: runtime_unqualified`, and
 `publication_status: not_supported` at the native boundary. It performs no
 compile, package, deployment, game-installation write, game launch, or save-file
-read/write.
+read/write. Outline V1 deliberately rejects a generator-V4 Quest rather than
+reordering titles while losing stable slot semantics. A future slot-aware
+Outline V2 must own that operation.
 
 ### Managed revision-3 existing-Quest context edit V1
 
@@ -348,11 +380,132 @@ The operation remains `build_status: blocked`,
 `publication_status: not_supported`. Native preparation may write only immutable
 candidate objects in the managed working Store; only guarded managed-session
 publication changes the current project head. It performs no game-installation,
-save-file, deployment, package, launch, or runtime mutation. Together, the
-outline and context actions are still not a complete Quest editor:
-transition/state authoring, conditions/effects, journal/reward workflows,
-complete source diagnostics and build lowering, and runtime qualification
-remain future work.
+save-file, deployment, package, launch, or runtime mutation. Context V1 accepts
+a generator-V4 Quest and preserves its generator version and complete retained
+transition plan exactly. It never silently downgrades the Quest.
+
+### Managed revision-3 existing-Quest states and transitions V1
+
+The selected exact-current `QuestDraft` now has a third **Edit Quest** action,
+**States & transitions**. The dialog shows one behavior table with the main
+Quest and each existing objective as rows and **Available**, **Start**,
+**Success**, and **Failure** as columns. Authors can apply a sequential template
+or open one cell to:
+
+- allow the game to trigger that lifecycle edge directly;
+- add optional typed conditions over `Available`, `Running`, `Started`,
+  `Succeeded`, `Failed`, or `Completed`, including explicit negation;
+- add follow-up `Start`, `Succeed`, or `Fail` actions targeting another Quest
+  part on start/success/failure edges; and
+- mark an objective success as also completing its parent Quest.
+
+External triggering and an automatic predicate are independent and may coexist.
+Availability has no handler and therefore cannot carry follow-up actions.
+Success and failure cells are optional and may be removed; availability and
+start are required for every node. The editor does not add/remove objectives,
+edit Quest text or connections, expose IDs/seals/source, accept raw
+AngelScript, or author dialog, journal, rewards, items, or arbitrary gameplay
+effects. Its visible boundary says that Save creates only an offline project
+checkpoint and does not build, run, deploy, or qualify the Quest in game.
+
+The closed plan supports one through eight objectives. Predicates are bounded
+disjunctive normal form: one through eight alternatives, each containing one
+through eight required atoms. Every effect list is bounded to eight entries.
+The validator requires canonical ordering, active-node references, an external
+or predicate driver for every retained transition, availability and start for
+every node, and success or failure for every objective. It rejects direct and
+lifecycle-state contradictions, duplicate terminal effects and conflicting
+success/failure effects on the same target within one handler, self-target
+effects, same-node automatic success/failure predicates that are not provably
+disjoint, misplaced `succeeds_parent`, and same-kind effect cycles. Within its
+objective-success handler, parent completion is treated as an implicit
+root-success effect for duplicate/conflict checks; that implicit edge also
+participates in the plan-wide same-kind cycle graph. The canonical transition-plan
+JSON limit is 384 KiB and the exact edit-request JSON limit is 512 KiB.
+
+The pure
+`apply_revision3_quest_transition_plan_transaction_v1` is bound to the exact
+head, project ID/revision/target, Quest ID/revision, and a domain-separated
+seal of the exact effective transition plan. It first regenerates and proves
+the owned ScriptModule, preserves the active objective slots and technical
+module identity, increments only the project, Quest, and owned module revisions
+once, regenerates source, and requires canonical reopen equality. A retained
+V4 plan that is byte-for-byte unchanged is a no-op. For a version-2 or
+version-3 Quest the effective plan is synthesized from the frozen source shape;
+the first accepted plan is an explicit upgrade to generator version 4. The pure
+native contract even permits a seed-identical explicit upgrade, while the
+current friendly dialog requires at least one visible behavior change before
+Save.
+
+The canonical transaction request contains exactly `expected_head`,
+`expected_project_id`, `expected_revision`, `expected_target`, `quest_id`,
+`expected_quest_revision`, `expected_transition_plan_seal`, and
+`transition_plan`. The plan seal hashes the ASCII domain
+`gore-authoring.revision3-quest-transition-plan-v1\0`, the canonical plan JSON
+length as unsigned 64-bit big-endian, and the canonical plan bytes; its
+`byte_len` is the plan JSON length.
+
+The strict prepare-only FFI command is
+`authoring_store_prepare_revision3_quest_transitions_edit_v1`. Its payload
+contains exactly `current_project_json`, `quest_transitions_request_json`, and
+`root`; there is no `game_root`, compiler, artifact, collision inventory, or
+publication authority. Both nested transports and the outer wire must be exact,
+bounded, duplicate-free canonical JSON. Native code fully opens the published
+Store with asset verification, binds the request, runs the filesystem-free
+transaction, prepares immutable candidate objects, fully reopens the candidate,
+and rechecks the fixed head before and after response construction. A
+successful response returns the two heads, canonical candidate project, exact
+project/Quest/module identities and revisions, prior generator version,
+legacy-upgrade flag, new plan seal, and only these outcome/status claims:
+
+- `outcome: prepared_unpublished`;
+- `build_status: blocked`;
+- `runtime_status: runtime_unqualified`; and
+- `publication_status: not_supported`.
+
+`not_supported` describes the native route's publication authority. The managed
+Studio session may persist the candidate only through the common serialized
+fixed-head byte compare-and-swap, repair journal, and full published reopen. It
+validates the exact Quest/module revisions, legacy-upgrade flag, retained plan
+seal, statuses, and candidate closure before that CAS. Stale checkpoints fail
+without publication; any uncertain publication poisons the session and requires
+a reopen. Neither native preparation nor managed publication writes the game
+installation or a save file.
+
+### V4 source lowering and compiler/cache evidence
+
+The V4 renderer emits only reviewed Quest lifecycle constructs. External flags
+map to `bExternalAvailabilityTrigger`, `bExternalStartTrigger`,
+`bExternalSuccessTrigger`, and `bExternalFailTrigger`; opting out of the game's
+default external availability emits an explicit false override. Predicates map
+to `ShouldBeAvailable_Implementation`, `ShouldStart_Implementation`,
+`ShouldSucceed_Implementation`, and `ShouldFail_Implementation`. Follow-up
+actions map to the three `HandleQuest*` hooks and guarded `StartQuest`,
+`SucceedQuest`, or `FailQuest` calls through typed generated getters.
+
+An isolated G1R 1.0.3 compiler qualifier covered three new `UG1RQuest` classes,
+all four external flags coexisting with all four predicate hooks, all three
+handlers, `bSucceedParent`, typed cross-node getters, and the guarded lifecycle
+calls. Two independent compiler runs against a complete temporary game copy
+were extracted/remapped and spliced into the pristine 7,305-module Shipping
+cache. Both final 7,306-module caches reopened, decompiled, and disassembled to
+the same 23-function construct set and were byte-identical: 123,406,626 bytes,
+SHA-256
+`FB041B3DF1CBD5A0AFC1D87F47BFCA6392AA19CE6475CE9DBD61A6D099D9C41A`.
+
+This qualifies the exact hook, flag, handler, getter, and guarded-call shapes
+listed above in the offline compiler/cache pipeline. Generator tests freeze the
+exact V2/V3-compatible source and cover representative V4 lowering, but no
+single renderer-produced fixture containing every supported state-test
+expression has yet passed through that qualifier. It is not an in-game behavior
+proof. No qualifier module was installed or launched, the real game Script tree
+and all 106 save files retained their preflight seals, and the 36.36-GiB
+sandbox was removed.
+`gore as default-sites` still reports zero sites for the new classes, so generic
+new-class scalar-default editing through that command remains a tooling gap.
+Runtime registration, predicate polling/order, handler order, parent completion,
+dialog selection, journal/reward/item effects, persistence, save/reload, and
+clean uninstall all remain unqualified.
 
 ## Safe qualification order
 
@@ -367,6 +520,11 @@ remain future work.
 7. Compare the disposable save semantically and verify clean undeploy before
    widening the qualified capability.
 
+The retained lifecycle qualifier closes the compiler/cache check only for its
+exact listed construct shapes and G1R 1.0.3 fixture. It does not skip a future
+exact generated-source check or the per-project artifact, deployment,
+disposable-save, observation, persistence, or cleanup gates above.
+
 Never manufacture a conversation with a console command, ability grant, or
 direct activation in order to reach a quest callsite. Dialog selection and
 quest effects must be exercised through a natural conversation on a disposable
@@ -374,13 +532,19 @@ save.
 
 ## Mod Studio boundary
 
-Mod Studio can safely provide a typed Draft quest wizard, outline/transcript/
-graph views, localization, deterministic source generation, and dependency
-checks on top of this generator. The generator itself does not compile or
-compose anything. Offline compile/compose/reopen evidence exists through the
-sealed retained candidate workflow, but a general one-click Studio compile path
-is not qualified until that complete diagnostic and artifact chain is integrated
-for Draft projects.
+Mod Studio now provides the bounded Draft wizard, count-preserving legacy
+outline edit, catalog-bound context edit, and the V4 behavior table described
+above. A synchronized transcript/general graph, journal/reward/item authoring,
+arbitrary source, complete diagnostics, build lowering, deployment, and runtime
+test workflow are not part of this slice. The deterministic generator itself
+does not invoke the compiler or compose a cache.
+
+Offline compiler/compose/reopen evidence now covers the listed lifecycle
+field/hook/handler/getter/call shapes, but not one exact renderer-produced
+fixture spanning every state-test expression. The managed Quest project also
+still has no complete one-click diagnostic, artifact, build, deploy, or cleanup
+chain. Consequently every V4 Quest result remains build-blocked and
+runtime-unqualified even when its plan is valid.
 
 Studio may report new-class discovery as qualified only when the versioned
 capability registry matches the exact proven game generation and class shape;
