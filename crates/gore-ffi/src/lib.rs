@@ -58,6 +58,10 @@
 //!   collision authority, consumes the repeated-Quest transaction, imports its structural
 //!   artifact, and fully reopens a prepared revision-3 checkpoint. It returns only structural,
 //!   build-blocked/runtime-unqualified facts and never publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_quest_outline_edit_v1` edits only one exact-current
+//!   managed Quest's display outline and deterministically regenerates its owned ScriptModule.
+//!   It fully reopens an unpublished candidate, never accepts collision authority from the
+//!   client, and never builds, deploys, touches a game/save, or publishes the fixed head.
 //! - `authoring_store_prepare_revision3_npc_draft_v1` rebuilds the fresh Story catalog, broad NPC
 //!   archetype linkage, and complete base-game-plus-exact-current script collision inventory, then
 //!   prepares one exact-current NPC/ScriptModule checkpoint. It never publishes the fixed head or
@@ -121,6 +125,7 @@ mod authoring_story_catalog;
 mod authoring_story_inventory;
 mod authoring_story_npc_revision3;
 mod authoring_story_quest;
+mod authoring_story_quest_outline_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_voice_build_revision3;
 mod authoring_voice_revision3;
@@ -176,6 +181,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
+    "authoring_store_prepare_revision3_quest_outline_edit_v1",
     "authoring_store_prepare_revision3_voice_take_v1",
     "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
@@ -457,6 +463,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_quest_draft_v3" => {
             Some(authoring_story_quest_revision3::prepare_revision3_quest_draft_v3_raw)
         }
+        "authoring_store_prepare_revision3_quest_outline_edit_v1" => Some(
+            authoring_story_quest_outline_revision3::prepare_revision3_quest_outline_edit_v1_raw,
+        ),
         "authoring_store_prepare_revision3_voice_take_v1" => {
             Some(authoring_voice_revision3::prepare_revision3_voice_take_v1_raw)
         }
@@ -1498,6 +1507,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
+                    "authoring_store_prepare_revision3_quest_outline_edit_v1",
                     "authoring_store_prepare_revision3_voice_take_v1",
                     "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
@@ -1597,6 +1607,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_draft_v3"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_quest_outline_edit_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_v1"));
