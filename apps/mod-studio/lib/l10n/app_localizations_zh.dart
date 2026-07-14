@@ -539,6 +539,170 @@ class AppLocalizationsZh extends AppLocalizations {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return '区域设置“$locale”不是规范形式；请使用“$canonical”。';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => '概览';
+
+  @override
+  String get managedWorkspaceContentLabel => '内容';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
+
+  @override
+  String get managedProjectTechnicalDetails => '项目技术详情';
+
+  @override
+  String get managedProjectRecoveryContentLocked => '请先重新打开托管项目，再读取其内容。';
+
+  @override
+  String get managedDashboardUntitledProject => '未命名项目';
+
+  @override
+  String get managedDashboardDraftStatus => '草稿';
+
+  @override
+  String get managedDashboardProjectVersion => '版本';
+
+  @override
+  String get managedDashboardProjectAuthor => '作者';
+
+  @override
+  String get managedDashboardNotProvided => '未提供';
+
+  @override
+  String get managedDashboardContentCounts => '项目内容';
+
+  @override
+  String get managedDashboardNpcDrafts => 'NPC 草稿';
+
+  @override
+  String get managedDashboardQuestDrafts => '任务草稿';
+
+  @override
+  String get managedDashboardDialogLines => '对话行';
+
+  @override
+  String get managedDashboardVoiceTakes => '语音录音';
+
+  @override
+  String get managedDashboardAssets => '资源';
+
+  @override
+  String get managedDashboardUnresolvedReferences => '未解析的引用';
+
+  @override
+  String get managedDashboardReadiness => '当前可用功能';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle => '离线创作可用';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      '无需改动游戏安装或存档文件，即可创建和编辑受支持的项目内容。';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle => '暂不支持通用模组构建';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      '目前只能构建封装好的离线 Voice 包；尚不能构建完整可玩的模组。';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle => '尚未通过运行时验证';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studio 尚未验证此项目内容可在运行中的游戏内正常工作。';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle => '引用完整性';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      '此计数只检查项目引用，并不表示项目已经可以构建或运行。';
+
+  @override
+  String get managedDashboardMissingGameTitle => '需要设置游戏';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      '请先在设置中配置 Gothic 1 Remake 安装位置，再使用需要已安装游戏验证信息的操作。';
+
+  @override
+  String get managedDashboardCreateHeading => '创建';
+
+  @override
+  String get managedDashboardToolsHeading => '项目工具';
+
+  @override
+  String get managedDashboardLoading => '正在加载项目概览';
+
+  @override
+  String get managedDashboardLoadError => '无法获取项目概览';
+
+  @override
+  String get managedDashboardLoadErrorDescription => '无法加载经过验证的项目概览。项目内容未被更改。';
+
+  @override
+  String get managedDashboardRetry => '重试';
+
+  @override
+  String get managedActionNewNpcTitle => '新建 NPC';
+
+  @override
+  String get managedActionNewNpcDescription => '根据已安装游戏的验证信息创建范围受限的离线 NPC 草稿。';
+
+  @override
+  String get managedActionNewQuestTitle => '新建任务';
+
+  @override
+  String get managedActionNewQuestDescription => '创建带有目标和已验证父级标识的离线任务草稿。';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => '添加语音录音';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      '将 Ogg Vorbis 录音导入此项目，但不进行部署。';
+
+  @override
+  String get managedActionManageVoiceTakesTitle => '管理语音录音';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      '审核录音，并为 Voice 槽位选择已批准的录音。';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => '解析 Voice 目标';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      '在不改动游戏的情况下，将项目 Voice 槽位与已安装归档中的精确条目匹配。';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => '构建 Voice 包';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      '使用现有条目构建封装的离线包；不进行部署。';
+
+  @override
+  String get managedActionDataAssetsTitle => 'DataAsset 编辑';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      '检查已安装的包，并在项目中暂存经过验证的固定宽度值编辑。';
+
+  @override
+  String get managedActionSettingsTitle => '设置';
+
+  @override
+  String get managedActionSettingsDescription =>
+      '配置 Gothic 1 Remake 安装位置和 Mod Studio 偏好设置。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -986,4 +1150,168 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return '区域设置“$locale”不是规范形式；请使用“$canonical”。';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => '概览';
+
+  @override
+  String get managedWorkspaceContentLabel => '内容';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle => '与当前确切版本匹配的离线创作工作区';
+
+  @override
+  String get managedProjectTechnicalDetails => '项目技术详情';
+
+  @override
+  String get managedProjectRecoveryContentLocked => '请先重新打开托管项目，再读取其内容。';
+
+  @override
+  String get managedDashboardUntitledProject => '未命名项目';
+
+  @override
+  String get managedDashboardDraftStatus => '草稿';
+
+  @override
+  String get managedDashboardProjectVersion => '版本';
+
+  @override
+  String get managedDashboardProjectAuthor => '作者';
+
+  @override
+  String get managedDashboardNotProvided => '未提供';
+
+  @override
+  String get managedDashboardContentCounts => '项目内容';
+
+  @override
+  String get managedDashboardNpcDrafts => 'NPC 草稿';
+
+  @override
+  String get managedDashboardQuestDrafts => '任务草稿';
+
+  @override
+  String get managedDashboardDialogLines => '对话行';
+
+  @override
+  String get managedDashboardVoiceTakes => '语音录音';
+
+  @override
+  String get managedDashboardAssets => '资源';
+
+  @override
+  String get managedDashboardUnresolvedReferences => '未解析的引用';
+
+  @override
+  String get managedDashboardReadiness => '当前可用功能';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle => '离线创作可用';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      '无需改动游戏安装或存档文件，即可创建和编辑受支持的项目内容。';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle => '暂不支持通用模组构建';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      '目前只能构建封装好的离线 Voice 包；尚不能构建完整可玩的模组。';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle => '尚未通过运行时验证';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studio 尚未验证此项目内容可在运行中的游戏内正常工作。';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle => '引用完整性';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      '此计数只检查项目引用，并不表示项目已经可以构建或运行。';
+
+  @override
+  String get managedDashboardMissingGameTitle => '需要设置游戏';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      '请先在设置中配置 Gothic 1 Remake 安装位置，再使用需要已安装游戏验证信息的操作。';
+
+  @override
+  String get managedDashboardCreateHeading => '创建';
+
+  @override
+  String get managedDashboardToolsHeading => '项目工具';
+
+  @override
+  String get managedDashboardLoading => '正在加载项目概览';
+
+  @override
+  String get managedDashboardLoadError => '无法获取项目概览';
+
+  @override
+  String get managedDashboardLoadErrorDescription => '无法加载经过验证的项目概览。项目内容未被更改。';
+
+  @override
+  String get managedDashboardRetry => '重试';
+
+  @override
+  String get managedActionNewNpcTitle => '新建 NPC';
+
+  @override
+  String get managedActionNewNpcDescription => '根据已安装游戏的验证信息创建范围受限的离线 NPC 草稿。';
+
+  @override
+  String get managedActionNewQuestTitle => '新建任务';
+
+  @override
+  String get managedActionNewQuestDescription => '创建带有目标和已验证父级标识的离线任务草稿。';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => '添加语音录音';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      '将 Ogg Vorbis 录音导入此项目，但不进行部署。';
+
+  @override
+  String get managedActionManageVoiceTakesTitle => '管理语音录音';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      '审核录音，并为 Voice 槽位选择已批准的录音。';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => '解析 Voice 目标';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      '在不改动游戏的情况下，将项目 Voice 槽位与已安装归档中的精确条目匹配。';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => '构建 Voice 包';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      '使用现有条目构建封装的离线包；不进行部署。';
+
+  @override
+  String get managedActionDataAssetsTitle => 'DataAsset 编辑';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      '检查已安装的包，并在项目中暂存经过验证的固定宽度值编辑。';
+
+  @override
+  String get managedActionSettingsTitle => '设置';
+
+  @override
+  String get managedActionSettingsDescription =>
+      '配置 Gothic 1 Remake 安装位置和 Mod Studio 偏好设置。';
 }

@@ -1057,6 +1057,312 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Locale \"{locale}\" is not canonical; use \"{canonical}\".'**
   String projectCreateLocaleNotCanonical(String locale, String canonical);
+
+  /// No description provided for @managedWorkspaceOverviewLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Overview'**
+  String get managedWorkspaceOverviewLabel;
+
+  /// No description provided for @managedWorkspaceContentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Content'**
+  String get managedWorkspaceContentLabel;
+
+  /// No description provided for @managedWorkspaceDataAssetsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedWorkspaceDataAssetsLabel;
+
+  /// No description provided for @managedProjectSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact-current offline authoring workspace'**
+  String get managedProjectSubtitle;
+
+  /// No description provided for @managedProjectTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical project details'**
+  String get managedProjectTechnicalDetails;
+
+  /// No description provided for @managedProjectRecoveryContentLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen the managed project before reading its content.'**
+  String get managedProjectRecoveryContentLocked;
+
+  /// No description provided for @managedDashboardUntitledProject.
+  ///
+  /// In en, this message translates to:
+  /// **'Untitled project'**
+  String get managedDashboardUntitledProject;
+
+  /// No description provided for @managedDashboardDraftStatus.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft'**
+  String get managedDashboardDraftStatus;
+
+  /// No description provided for @managedDashboardProjectVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Version'**
+  String get managedDashboardProjectVersion;
+
+  /// No description provided for @managedDashboardProjectAuthor.
+  ///
+  /// In en, this message translates to:
+  /// **'Author'**
+  String get managedDashboardProjectAuthor;
+
+  /// No description provided for @managedDashboardNotProvided.
+  ///
+  /// In en, this message translates to:
+  /// **'Not provided'**
+  String get managedDashboardNotProvided;
+
+  /// No description provided for @managedDashboardContentCounts.
+  ///
+  /// In en, this message translates to:
+  /// **'Project content'**
+  String get managedDashboardContentCounts;
+
+  /// No description provided for @managedDashboardNpcDrafts.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC drafts'**
+  String get managedDashboardNpcDrafts;
+
+  /// No description provided for @managedDashboardQuestDrafts.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest drafts'**
+  String get managedDashboardQuestDrafts;
+
+  /// No description provided for @managedDashboardDialogLines.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog lines'**
+  String get managedDashboardDialogLines;
+
+  /// No description provided for @managedDashboardVoiceTakes.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice takes'**
+  String get managedDashboardVoiceTakes;
+
+  /// No description provided for @managedDashboardAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'Assets'**
+  String get managedDashboardAssets;
+
+  /// No description provided for @managedDashboardUnresolvedReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'Unresolved references'**
+  String get managedDashboardUnresolvedReferences;
+
+  /// No description provided for @managedDashboardReadiness.
+  ///
+  /// In en, this message translates to:
+  /// **'What works now'**
+  String get managedDashboardReadiness;
+
+  /// No description provided for @managedDashboardOfflineAuthoringTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline authoring available'**
+  String get managedDashboardOfflineAuthoringTitle;
+
+  /// No description provided for @managedDashboardOfflineAuthoringDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create and edit supported project content without changing the game installation or save files.'**
+  String get managedDashboardOfflineAuthoringDescription;
+
+  /// No description provided for @managedDashboardGeneralBuildBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'General mod build unavailable'**
+  String get managedDashboardGeneralBuildBlockedTitle;
+
+  /// No description provided for @managedDashboardGeneralBuildBlockedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Only sealed offline Voice bundles can be built; a complete playable mod cannot be built yet.'**
+  String get managedDashboardGeneralBuildBlockedDescription;
+
+  /// No description provided for @managedDashboardRuntimeUnqualifiedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime not yet verified'**
+  String get managedDashboardRuntimeUnqualifiedTitle;
+
+  /// No description provided for @managedDashboardRuntimeUnqualifiedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Studio has not proven this project content inside the running game.'**
+  String get managedDashboardRuntimeUnqualifiedDescription;
+
+  /// No description provided for @managedDashboardReferenceIntegrityTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference integrity'**
+  String get managedDashboardReferenceIntegrityTitle;
+
+  /// No description provided for @managedDashboardReferenceIntegrityDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This count checks project references only; it is not build or runtime readiness.'**
+  String get managedDashboardReferenceIntegrityDescription;
+
+  /// No description provided for @managedDashboardMissingGameTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game setup required'**
+  String get managedDashboardMissingGameTitle;
+
+  /// No description provided for @managedDashboardMissingGameDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.'**
+  String get managedDashboardMissingGameDescription;
+
+  /// No description provided for @managedDashboardCreateHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Create'**
+  String get managedDashboardCreateHeading;
+
+  /// No description provided for @managedDashboardToolsHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Project tools'**
+  String get managedDashboardToolsHeading;
+
+  /// No description provided for @managedDashboardLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading project overview'**
+  String get managedDashboardLoading;
+
+  /// No description provided for @managedDashboardLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'Project overview unavailable'**
+  String get managedDashboardLoadError;
+
+  /// No description provided for @managedDashboardLoadErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The verified project overview could not be loaded. Project content was not changed.'**
+  String get managedDashboardLoadErrorDescription;
+
+  /// No description provided for @managedDashboardRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedDashboardRetry;
+
+  /// No description provided for @managedActionNewNpcTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New NPC'**
+  String get managedActionNewNpcTitle;
+
+  /// No description provided for @managedActionNewNpcDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a bounded offline NPC draft from verified installed-game evidence.'**
+  String get managedActionNewNpcDescription;
+
+  /// No description provided for @managedActionNewQuestTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'New Quest'**
+  String get managedActionNewQuestTitle;
+
+  /// No description provided for @managedActionNewQuestDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create an offline Quest draft with objectives and verified parent identities.'**
+  String get managedActionNewQuestDescription;
+
+  /// No description provided for @managedActionAddVoiceTakeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add Voice take'**
+  String get managedActionAddVoiceTakeTitle;
+
+  /// No description provided for @managedActionAddVoiceTakeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Import an Ogg Vorbis recording into this project without deploying it.'**
+  String get managedActionAddVoiceTakeDescription;
+
+  /// No description provided for @managedActionManageVoiceTakesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage Voice takes'**
+  String get managedActionManageVoiceTakesTitle;
+
+  /// No description provided for @managedActionManageVoiceTakesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Review takes and select approved recordings for Voice slots.'**
+  String get managedActionManageVoiceTakesDescription;
+
+  /// No description provided for @managedActionResolveVoiceTargetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve Voice target'**
+  String get managedActionResolveVoiceTargetTitle;
+
+  /// No description provided for @managedActionResolveVoiceTargetDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Match project Voice slots to exact installed archive members without changing the game.'**
+  String get managedActionResolveVoiceTargetDescription;
+
+  /// No description provided for @managedActionBuildVoiceBundleTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build Voice bundle'**
+  String get managedActionBuildVoiceBundleTitle;
+
+  /// No description provided for @managedActionBuildVoiceBundleDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Build a sealed offline existing-member bundle; deployment is not performed.'**
+  String get managedActionBuildVoiceBundleDescription;
+
+  /// No description provided for @managedActionDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits'**
+  String get managedActionDataAssetsTitle;
+
+  /// No description provided for @managedActionDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect installed packages and stage verified fixed-width value edits in the project.'**
+  String get managedActionDataAssetsDescription;
+
+  /// No description provided for @managedActionSettingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Settings'**
+  String get managedActionSettingsTitle;
+
+  /// No description provided for @managedActionSettingsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Configure the Gothic 1 Remake installation and Mod Studio preferences.'**
+  String get managedActionSettingsDescription;
 }
 
 class _AppLocalizationsDelegate

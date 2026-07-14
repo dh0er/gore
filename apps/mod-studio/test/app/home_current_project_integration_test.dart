@@ -219,12 +219,17 @@ void main() {
         find.byKey(const Key('managed-revision3-project-view')),
         findsOneWidget,
       );
+      await _expandManagedTechnicalDetails(tester);
       expect(find.text(managed.root.path), findsOneWidget);
       expect(find.text(managed.projectId), findsOneWidget);
       expect(find.text('${managed.projectRevision}'), findsOneWidget);
       expect(find.text(managed.head.snapshotSha256), findsOneWidget);
       expect(find.text('Build / Deploy'), findsNothing);
-      expect(find.byType(TabBar), findsOneWidget);
+      expect(find.byType(NavigationRail), findsOneWidget);
+      expect(
+        find.byKey(const Key('managed-revision3-overview-tab')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const Key('managed-revision3-library-tab')),
         findsOneWidget,
@@ -233,10 +238,7 @@ void main() {
         find.byKey(const Key('managed-revision3-dataasset-tab')),
         findsOneWidget,
       );
-      await tester.tap(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
-      );
-      await tester.pumpAndSettle();
+      await _navigateManagedDataAssets(tester);
       expect(
         find.byKey(const Key('revision3-dataasset-stage-panel')),
         findsOneWidget,
@@ -333,10 +335,13 @@ void main() {
       final createButton = find.byKey(const Key('managed-create-quest-draft'));
       expect(createButton, findsOneWidget);
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
-      expect(tester.widget<FilledButton>(createButton).onPressed, isNotNull);
+      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
       expect(managed.contentReadCalls, 1);
 
-      await tester.tap(createButton);
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-quest-draft'),
+      );
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
       await tester.enterText(
@@ -359,6 +364,7 @@ void main() {
       expect(managed.contentReadCalls, 2);
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
+      await _expandManagedTechnicalDetails(tester);
       expect(find.byKey(const Key('managed-project-revision')), findsOneWidget);
       expect(find.text('8'), findsWidgets);
       expect(
@@ -416,6 +422,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
       final menu = find.byKey(
         const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
       );
@@ -462,7 +469,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(managed.questOutlinePublishCalls, 1);
-      expect(managed.contentReadCalls, 2);
+      expect(managed.contentReadCalls, 4);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -527,6 +534,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
       final menu = find.byKey(
         const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
       );
@@ -614,6 +622,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
       final library = tester.widget<Revision3ContentLibrary>(
         find.byType(Revision3ContentLibrary),
       );
@@ -730,6 +739,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
       final menu = find.byKey(
         const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
       );
@@ -754,7 +764,7 @@ void main() {
       expect(managed.questContextSeedCalls, 1);
       expect(catalogLoads, 2);
       expect(managed.questContextPublishCalls, 1);
-      expect(managed.contentReadCalls, 2);
+      expect(managed.contentReadCalls, 4);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -833,6 +843,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
       await tester.tap(
         find.byKey(
           const Key(
@@ -860,7 +871,7 @@ void main() {
 
       expect(managed.questTransitionsSeedCalls, 1);
       expect(managed.questTransitionsPublishCalls, 1);
-      expect(managed.contentReadCalls, 2);
+      expect(managed.contentReadCalls, 4);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .projectRevision,
@@ -932,10 +943,13 @@ void main() {
 
       final createButton = find.byKey(const Key('managed-create-npc-draft'));
       expect(createButton, findsOneWidget);
-      expect(tester.widget<FilledButton>(createButton).onPressed, isNotNull);
+      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
       expect(managed.contentReadCalls, 1);
 
-      await tester.tap(createButton);
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-npc-draft'),
+      );
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
       await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
@@ -954,6 +968,7 @@ void main() {
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
+      await _expandManagedTechnicalDetails(tester);
       expect(find.text('8'), findsWidgets);
       expect(
         find.textContaining('NPC draft saved in project revision 8'),
@@ -1017,17 +1032,18 @@ void main() {
 
       final voiceButton = find.byKey(const Key('managed-add-voice-take'));
       expect(voiceButton, findsOneWidget);
-      expect(tester.widget<FilledButton>(voiceButton).onPressed, isNotNull);
+      expect(tester.widget<InkWell>(voiceButton).onTap, isNotNull);
       expect(
         tester
-            .widget<FilledButton>(
-              find.byKey(const Key('managed-create-npc-draft')),
-            )
-            .onPressed,
+            .widget<InkWell>(find.byKey(const Key('managed-create-npc-draft')))
+            .onTap,
         isNotNull,
       );
 
-      await tester.tap(voiceButton);
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-add-voice-take'),
+      );
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
       await tester.enterText(
@@ -1060,6 +1076,7 @@ void main() {
       final state = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
+      await _expandManagedTechnicalDetails(tester);
       expect(find.text('8'), findsWidgets);
       expect(
         find.textContaining('Voice take saved in project revision 8'),
@@ -1126,18 +1143,22 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final manage = find.byKey(const Key('managed-manage-voice-takes'));
-      expect(manage, findsOneWidget);
-      expect(tester.widget<FilledButton>(manage).onPressed, isNotNull);
       expect(
         tester
-            .widget<FilledButton>(
-              find.byKey(const Key('managed-add-voice-take')),
+            .widget<InkWell>(
+              find.byKey(const Key('managed-manage-voice-takes')),
             )
-            .onPressed,
+            .onTap,
+        isNotNull,
+      );
+      expect(
+        tester
+            .widget<InkWell>(find.byKey(const Key('managed-add-voice-take')))
+            .onTap,
         isNull,
         reason: 'Ogg import still needs its separate safety game root',
       );
+      await _navigateManagedContent(tester);
       final libraryLine = find.byKey(
         const Key('revision3-content-entity-$revision3VoiceContentLineId'),
       );
@@ -1146,7 +1167,11 @@ void main() {
       await tester.pump();
       expect(tester.widget<ListTile>(libraryLine).selected, isTrue);
 
-      await tester.tap(manage);
+      await _navigateManagedOverview(tester);
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-manage-voice-takes'),
+      );
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-voice-take-selection-dialog')),
@@ -1169,6 +1194,7 @@ void main() {
             .projectRevision,
         8,
       );
+      await _expandManagedTechnicalDetails(tester);
       expect(find.text('8'), findsWidgets);
       expect(
         find.textContaining(
@@ -1176,13 +1202,17 @@ void main() {
         ),
         findsOneWidget,
       );
+      await _navigateManagedContent(tester);
+      final reloadedLibraryLine = find.byKey(
+        const Key('revision3-content-entity-$revision3VoiceContentLineId'),
+      );
       expect(
-        tester.widget<ListTile>(libraryLine).selected,
+        tester.widget<ListTile>(reloadedLibraryLine).selected,
         isTrue,
         reason:
             'the same visible line remains selected after exact-head reload',
       );
-      expect(managed.contentReadCalls, greaterThanOrEqualTo(4));
+      expect(managed.contentReadCalls, greaterThanOrEqualTo(6));
     },
   );
 
@@ -1256,35 +1286,17 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
 
-      final voiceTools = find.byKey(const Key('managed-voice-tools'));
-      final voiceToolsButton = tester.widget<PopupMenuButton<String>>(
-        voiceTools,
+      final resolveTarget = find.byKey(
+        const Key('managed-resolve-voice-target'),
       );
-      expect(voiceToolsButton.enabled, isTrue);
-      final voiceToolItems = voiceToolsButton
-          .itemBuilder(tester.element(voiceTools))
-          .whereType<PopupMenuItem<String>>()
-          .toList(growable: false);
-      expect(
-        voiceToolItems
-            .singleWhere(
-              (item) => item.key == const Key('managed-resolve-voice-target'),
-            )
-            .enabled,
-        isTrue,
-      );
-      expect(
-        voiceToolItems
-            .singleWhere(
-              (item) => item.key == const Key('managed-build-voice-bundle'),
-            )
-            .enabled,
-        isTrue,
-      );
+      final buildBundle = find.byKey(const Key('managed-build-voice-bundle'));
+      expect(tester.widget<InkWell>(resolveTarget).onTap, isNotNull);
+      expect(tester.widget<InkWell>(buildBundle).onTap, isNotNull);
 
-      await tester.tap(voiceTools);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('managed-resolve-voice-target')));
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-resolve-voice-target'),
+      );
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-voice-target-dialog')),
@@ -1319,9 +1331,10 @@ void main() {
       expect(state.projectRevision, 8);
       expect(state.head.canonicalJson, _head(8).canonicalJson);
 
-      await tester.tap(voiceTools);
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('managed-build-voice-bundle')));
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-build-voice-bundle'),
+      );
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-voice-build-dialog')),
@@ -1378,28 +1391,30 @@ void main() {
     await tester.pumpAndSettle();
 
     final voiceButton = find.byKey(const Key('managed-add-voice-take'));
-    expect(tester.widget<FilledButton>(voiceButton).onPressed, isNull);
+    expect(tester.widget<InkWell>(voiceButton).onTap, isNull);
     expect(
       tester
-          .widget<FilledButton>(
-            find.byKey(const Key('managed-manage-voice-takes')),
-          )
-          .onPressed,
+          .widget<InkWell>(find.byKey(const Key('managed-manage-voice-takes')))
+          .onTap,
       isNotNull,
       reason: 'selection is project-only and intentionally needs no game path',
     );
     expect(
       tester
-          .widget<PopupMenuButton<String>>(
-            find.byKey(const Key('managed-voice-tools')),
+          .widget<InkWell>(
+            find.byKey(const Key('managed-resolve-voice-target')),
           )
-          .enabled,
-      isFalse,
+          .onTap,
+      isNull,
     );
     expect(
-      find.text(
-        'Configure the Gothic 1 Remake installation in Settings to import recordings, resolve targets, or build Voice bundles and to create NPC and Quest drafts.',
-      ),
+      tester
+          .widget<InkWell>(find.byKey(const Key('managed-build-voice-bundle')))
+          .onTap,
+      isNull,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-dashboard-missing-game')),
       findsOneWidget,
     );
     expect(managed.voicePublishCalls, 0);
@@ -1454,10 +1469,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
-      );
-      await tester.pumpAndSettle();
+      await _navigateManagedDataAssets(tester);
 
       final browse = find.byKey(
         const Key('revision3-dataasset-browse-installed'),
@@ -1548,10 +1560,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
-      );
-      await tester.pumpAndSettle();
+      await _navigateManagedDataAssets(tester);
       expect(managed.dataAssetListCalls, 1);
       expect(
         find.byKey(const Key('revision3-dataasset-stage-empty')),
@@ -1666,10 +1675,7 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(const Key('managed-revision3-dataasset-tab')),
-      );
-      await tester.pumpAndSettle();
+      await _navigateManagedDataAssets(tester);
 
       final create = find.byKey(
         const Key('revision3-dataasset-semantic-create'),
@@ -1876,33 +1882,25 @@ void main() {
         find.textContaining('This session now requires recovery'),
         findsOneWidget,
       );
-      expect(
-        find.textContaining('Last owned managed checkpoint'),
-        findsOneWidget,
-      );
-      expect(
-        find.text(
-          'Exact-current managed identity and semantic project content.',
-        ),
-        findsNothing,
-      );
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
       expect(
-        tester
-            .widget<FilledButton>(
-              find.byKey(const Key('managed-create-quest-draft')),
-            )
-            .onPressed,
-        isNull,
+        find.byKey(const Key('revision3-project-workspace')),
+        findsNothing,
       );
       expect(
-        tester
-            .widget<FilledButton>(
-              find.byKey(const Key('managed-manage-voice-takes')),
-            )
-            .onPressed,
-        isNull,
+        find.byKey(const Key('managed-revision3-overview-tab')),
+        findsNothing,
       );
+      expect(
+        find.byKey(const Key('managed-revision3-library-tab')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('managed-revision3-dataasset-tab')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('managed-create-quest-draft')), findsNothing);
+      expect(find.byKey(const Key('managed-manage-voice-takes')), findsNothing);
 
       final menuFinder = find.byKey(const Key('project-menu'));
       final menu = tester.widget<PopupMenuButton<String>>(menuFinder);
@@ -2062,6 +2060,49 @@ Future<void> _pumpApp(WidgetTester tester, ProviderContainer container) async {
   );
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 100));
+}
+
+Future<void> _expandManagedTechnicalDetails(WidgetTester tester) async {
+  if (find.byKey(const Key('managed-project-revision')).evaluate().isNotEmpty) {
+    return;
+  }
+  final details = find.byKey(const Key('managed-project-technical-details'));
+  expect(details, findsOneWidget);
+  await tester.tap(details);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _navigateManagedOverview(WidgetTester tester) =>
+    _navigateManagedWorkspace(
+      tester,
+      const Key('managed-revision3-overview-tab'),
+    );
+
+Future<void> _navigateManagedContent(WidgetTester tester) =>
+    _navigateManagedWorkspace(
+      tester,
+      const Key('managed-revision3-library-tab'),
+    );
+
+Future<void> _navigateManagedDataAssets(WidgetTester tester) =>
+    _navigateManagedWorkspace(
+      tester,
+      const Key('managed-revision3-dataasset-tab'),
+    );
+
+Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
+  final destination = find.byKey(key);
+  expect(destination, findsOneWidget);
+  await tester.tap(destination);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _tapManagedDashboardAction(WidgetTester tester, Key key) async {
+  final action = find.byKey(key);
+  expect(action, findsOneWidget);
+  await tester.ensureVisible(action);
+  await tester.pumpAndSettle();
+  await tester.tap(action);
 }
 
 Future<void> _sendControlS(WidgetTester tester) async {

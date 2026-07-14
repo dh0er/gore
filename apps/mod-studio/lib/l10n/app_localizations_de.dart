@@ -553,4 +553,177 @@ class AppLocalizationsDe extends AppLocalizations {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return 'Das Locale „$locale“ ist nicht kanonisch; verwende „$canonical“.';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => 'Übersicht';
+
+  @override
+  String get managedWorkspaceContentLabel => 'Inhalte';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle =>
+      'Offline-Arbeitsbereich auf exakt aktuellem Stand';
+
+  @override
+  String get managedProjectTechnicalDetails => 'Technische Projektdetails';
+
+  @override
+  String get managedProjectRecoveryContentLocked =>
+      'Öffne das verwaltete Projekt erneut, bevor seine Inhalte gelesen werden.';
+
+  @override
+  String get managedDashboardUntitledProject => 'Unbenanntes Projekt';
+
+  @override
+  String get managedDashboardDraftStatus => 'Entwurf';
+
+  @override
+  String get managedDashboardProjectVersion => 'Version';
+
+  @override
+  String get managedDashboardProjectAuthor => 'Autor';
+
+  @override
+  String get managedDashboardNotProvided => 'Nicht angegeben';
+
+  @override
+  String get managedDashboardContentCounts => 'Projektinhalte';
+
+  @override
+  String get managedDashboardNpcDrafts => 'NPC-Entwürfe';
+
+  @override
+  String get managedDashboardQuestDrafts => 'Quest-Entwürfe';
+
+  @override
+  String get managedDashboardDialogLines => 'Dialogzeilen';
+
+  @override
+  String get managedDashboardVoiceTakes => 'Sprachaufnahmen';
+
+  @override
+  String get managedDashboardAssets => 'Assets';
+
+  @override
+  String get managedDashboardUnresolvedReferences => 'Ungelöste Referenzen';
+
+  @override
+  String get managedDashboardReadiness => 'Was jetzt funktioniert';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle =>
+      'Offline-Bearbeitung verfügbar';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      'Erstelle und bearbeite unterstützte Projektinhalte, ohne die Spielinstallation oder Speicherdateien zu verändern.';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle =>
+      'Allgemeiner Mod-Build nicht verfügbar';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      'Nur versiegelte Offline-Voice-Bundles können gebaut werden; eine vollständige spielbare Mod kann noch nicht gebaut werden.';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle =>
+      'Laufzeit noch nicht verifiziert';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studio hat diese Projektinhalte noch nicht im laufenden Spiel nachgewiesen.';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle => 'Referenzintegrität';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      'Diese Anzahl prüft nur Projektreferenzen; sie bestätigt keine Build- oder Laufzeitbereitschaft.';
+
+  @override
+  String get managedDashboardMissingGameTitle =>
+      'Spieleinrichtung erforderlich';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      'Richte die Gothic-1-Remake-Installation in den Einstellungen ein, bevor du Aktionen verwendest, die Nachweise aus dem installierten Spiel benötigen.';
+
+  @override
+  String get managedDashboardCreateHeading => 'Erstellen';
+
+  @override
+  String get managedDashboardToolsHeading => 'Projektwerkzeuge';
+
+  @override
+  String get managedDashboardLoading => 'Projektübersicht wird geladen';
+
+  @override
+  String get managedDashboardLoadError => 'Projektübersicht nicht verfügbar';
+
+  @override
+  String get managedDashboardLoadErrorDescription =>
+      'Die verifizierte Projektübersicht konnte nicht geladen werden. Projektinhalte wurden nicht verändert.';
+
+  @override
+  String get managedDashboardRetry => 'Erneut versuchen';
+
+  @override
+  String get managedActionNewNpcTitle => 'Neuer NPC';
+
+  @override
+  String get managedActionNewNpcDescription =>
+      'Erstelle anhand verifizierter Nachweise aus dem installierten Spiel einen begrenzten Offline-NPC-Entwurf.';
+
+  @override
+  String get managedActionNewQuestTitle => 'Neue Quest';
+
+  @override
+  String get managedActionNewQuestDescription =>
+      'Erstelle einen Offline-Quest-Entwurf mit Zielen und verifizierten übergeordneten Identitäten.';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => 'Sprachaufnahme hinzufügen';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      'Importiere eine Ogg-Vorbis-Aufnahme in dieses Projekt, ohne sie bereitzustellen.';
+
+  @override
+  String get managedActionManageVoiceTakesTitle => 'Sprachaufnahmen verwalten';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      'Prüfe Aufnahmen und wähle freigegebene Aufnahmen für Voice-Slots aus.';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => 'Voice-Ziel auflösen';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      'Ordne Voice-Slots des Projekts exakten Mitgliedern installierter Archive zu, ohne das Spiel zu verändern.';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => 'Voice-Bundle bauen';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      'Baue ein versiegeltes Offline-Bundle aus vorhandenen Mitgliedern; es wird nicht bereitgestellt.';
+
+  @override
+  String get managedActionDataAssetsTitle => 'DataAsset-Änderungen';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      'Prüfe installierte Pakete und stelle verifizierte Werteänderungen fester Breite im Projekt bereit.';
+
+  @override
+  String get managedActionSettingsTitle => 'Einstellungen';
+
+  @override
+  String get managedActionSettingsDescription =>
+      'Konfiguriere die Gothic-1-Remake-Installation und die Mod-Studio-Einstellungen.';
 }

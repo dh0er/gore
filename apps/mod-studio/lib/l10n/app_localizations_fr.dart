@@ -552,4 +552,179 @@ class AppLocalizationsFr extends AppLocalizations {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return 'La locale « $locale » n’est pas canonique ; utilisez « $canonical ».';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => 'Vue d’ensemble';
+
+  @override
+  String get managedWorkspaceContentLabel => 'Contenu';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle =>
+      'Espace de création hors ligne correspondant exactement à la version actuelle';
+
+  @override
+  String get managedProjectTechnicalDetails => 'Détails techniques du projet';
+
+  @override
+  String get managedProjectRecoveryContentLocked =>
+      'Rouvrez le projet géré avant de lire son contenu.';
+
+  @override
+  String get managedDashboardUntitledProject => 'Projet sans titre';
+
+  @override
+  String get managedDashboardDraftStatus => 'Brouillon';
+
+  @override
+  String get managedDashboardProjectVersion => 'Version';
+
+  @override
+  String get managedDashboardProjectAuthor => 'Auteur';
+
+  @override
+  String get managedDashboardNotProvided => 'Non renseigné';
+
+  @override
+  String get managedDashboardContentCounts => 'Contenu du projet';
+
+  @override
+  String get managedDashboardNpcDrafts => 'Brouillons de PNJ';
+
+  @override
+  String get managedDashboardQuestDrafts => 'Brouillons de quêtes';
+
+  @override
+  String get managedDashboardDialogLines => 'Lignes de dialogue';
+
+  @override
+  String get managedDashboardVoiceTakes => 'Prises de voix';
+
+  @override
+  String get managedDashboardAssets => 'Ressources';
+
+  @override
+  String get managedDashboardUnresolvedReferences => 'Références non résolues';
+
+  @override
+  String get managedDashboardReadiness => 'Fonctionnalités disponibles';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle =>
+      'Création hors ligne disponible';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      'Créez et modifiez les contenus de projet pris en charge sans changer l’installation du jeu ni les fichiers de sauvegarde.';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle =>
+      'Compilation générale du mod indisponible';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      'Seuls les bundles Voice hors ligne scellés peuvent être générés ; il n’est pas encore possible de générer un mod complet et jouable.';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle =>
+      'Exécution pas encore vérifiée';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studio n’a pas encore validé ce contenu de projet dans le jeu en cours d’exécution.';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle =>
+      'Intégrité des références';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      'Ce nombre vérifie uniquement les références du projet ; il ne confirme pas que le projet est prêt à être compilé ou exécuté.';
+
+  @override
+  String get managedDashboardMissingGameTitle => 'Configuration du jeu requise';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      'Configurez l’installation de Gothic 1 Remake dans les paramètres avant d’utiliser les actions nécessitant des preuves issues du jeu installé.';
+
+  @override
+  String get managedDashboardCreateHeading => 'Créer';
+
+  @override
+  String get managedDashboardToolsHeading => 'Outils du projet';
+
+  @override
+  String get managedDashboardLoading =>
+      'Chargement de la vue d’ensemble du projet';
+
+  @override
+  String get managedDashboardLoadError =>
+      'Vue d’ensemble du projet indisponible';
+
+  @override
+  String get managedDashboardLoadErrorDescription =>
+      'La vue d’ensemble vérifiée du projet n’a pas pu être chargée. Le contenu du projet n’a pas été modifié.';
+
+  @override
+  String get managedDashboardRetry => 'Réessayer';
+
+  @override
+  String get managedActionNewNpcTitle => 'Nouveau PNJ';
+
+  @override
+  String get managedActionNewNpcDescription =>
+      'Créez un brouillon de PNJ hors ligne et limité à partir de données vérifiées du jeu installé.';
+
+  @override
+  String get managedActionNewQuestTitle => 'Nouvelle quête';
+
+  @override
+  String get managedActionNewQuestDescription =>
+      'Créez un brouillon de quête hors ligne avec des objectifs et des identités parentes vérifiées.';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => 'Ajouter une prise de voix';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      'Importez un enregistrement Ogg Vorbis dans ce projet sans le déployer.';
+
+  @override
+  String get managedActionManageVoiceTakesTitle => 'Gérer les prises de voix';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      'Examinez les prises et sélectionnez les enregistrements approuvés pour les emplacements Voice.';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => 'Résoudre la cible Voice';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      'Associez les emplacements Voice du projet aux membres exacts des archives installées sans modifier le jeu.';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => 'Générer le bundle Voice';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      'Générez un bundle hors ligne scellé à partir de membres existants ; aucun déploiement n’est effectué.';
+
+  @override
+  String get managedActionDataAssetsTitle => 'Modifications de DataAssets';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      'Inspectez les paquets installés et préparez dans le projet des modifications vérifiées de valeurs à largeur fixe.';
+
+  @override
+  String get managedActionSettingsTitle => 'Paramètres';
+
+  @override
+  String get managedActionSettingsDescription =>
+      'Configurez l’installation de Gothic 1 Remake et les préférences de Mod Studio.';
 }

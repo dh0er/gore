@@ -96,7 +96,7 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 
 | Area | Studio integration now | Offline/backend evidence | Runtime boundary and complete experience |
 |---|---|---|---|
-| Project and content library | The compatibility project remains a legacy format-1 bridge and the separate Story flow remains schema revision 2. The primary Project menu now creates or opens one authoritative managed-R3 project. New asks for friendly metadata and an empty folder, authenticates the configured game, then shows the same searchable content library used by existing R3 projects. Dirty Legacy transitions are confirmed; failed or mismatched candidates never displace the current lease; late published-create failures can recover the exact project; `requiresReopen` and cleanup diagnostics remain visible. R3 hides Legacy Build/Deploy because its NPC/Quest/DataAsset content is not yet generally buildable. | Creation is limited to the exact registered V1 and current Steam-build-`24169431` generation triples, uses a secure project ID and canonical empty revision-3 document, publishes with absent-head CAS, and fully reopens before adoption. Unknown/cross-paired seals, arbitrary nonempty roots, install/project overlap, and candidate-byte drift fail closed. The live current-install proof created, indexed, closed, reopened, and removed a temporary project while EXE/Shipping/Binds length and SHA-256 stayed unchanged. Existing Store safety, semantic indexing, backlinks, and bounded Quest/NPC/Voice/DataAsset transactions are unchanged. General editors, migration/import/clone/Save As, history/recovery UI, global/dependency search, collections, unified transactions, and blob-ownership tools remain. | Project creation itself has no game-runtime claim and writes neither the installation nor a save. End state adds recoverable templates, safe migration/clone/export, global organization, deterministic builds, and isolated test/deploy workflows. |
+| Project and content library | The compatibility project remains a legacy format-1 bridge and the separate Story flow remains schema revision 2. The primary Project menu creates or opens one authoritative managed-R3 project. Managed Studio Shell v1 then opens on a localized responsive Overview with persistent Overview/Content/DataAssets navigation. Overview reads the exact current index and shows friendly name/version/author, Draft status, NPC/Quest/Dialog/Voice/asset and unresolved-reference counts, grouped bounded Create/Project-tools actions, DataAsset navigation, and a missing-game fix path. Root/ID/revision/head are collapsed as technical details; the `requiresReopen` recovery gate stays outside the workspace. Dirty Legacy transitions remain confirmed, and R3 hides Legacy Build/Deploy. This is the first content-first slice, not the complete canonical navigation or unified global browser. | Creation is limited to the exact registered V1 and current Steam-build-`24169431` generation triples, uses a secure project ID and canonical empty revision-3 document, publishes with absent-head CAS, and fully reopens before adoption. Unknown/cross-paired seals, arbitrary nonempty roots, install/project overlap, and candidate-byte drift fail closed. The live current-install proof created, indexed, closed, reopened, and removed a temporary project while EXE/Shipping/Binds length and SHA-256 stayed unchanged. Existing Store safety, semantic indexing, backlinks, and bounded Quest/NPC/Voice/DataAsset transactions are unchanged. General editors, migration/import/clone/Save As, history/recovery UI, global/dependency search, collections, unified transactions, and blob-ownership tools remain. | Project creation and shell navigation write neither the game installation nor a save and grant no deployment or runtime authority. General managed build remains unavailable; only the separately sealed existing-member Voice bundle has a bounded offline build path. End state adds recoverable templates, safe migration/clone/export, global organization, deterministic builds, and isolated test/deploy workflows. |
 | Existing game content | Item scalar, localization/dialog text, FMOD, texture, script, change, and build surfaces are **integrated subsets**. They are separate views/providers rather than one semantic graph. | Bounded scalar/default, localization, archive, script, texture, bundle, and fixed-leaf DataAsset paths have separate offline evidence. Evidence for one field/format does not generalize to another. | Only operations named in the normative matrix may be presented as supported. End state adds visible-name search, semantic references, compare/revert, and reviewed schemas. |
 | Dialog and narrative | Existing text editing and explicit technical topic registration are integrated. The first bounded Quest lifecycle table and typed condition/action dialog are also integrated, but synchronized transcript/outline/general-graph/state views and dialog semantics are **not integrated**. | Compiler, localization, and guarded registration paths have bounded evidence. The deterministic version-3 Viper candidate passes strengthened preflight/forbidden-operation verification and exact sandbox deploy/undeploy closure. For Quest V4, the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes are compiler/cache-pipeline-qualified on G1R 1.0.3; one exact renderer-produced fixture spanning every state-test expression remains an offline gate. | The retained dialog proof is **render-only**: a naturally registered topic appeared, nothing was selected, and no condition, effect, quest state, save, or persistence behavior was proved. The Quest compiler qualifier likewise proves no gameplay ordering or effect. Dialog selection and Quest runtime behavior remain independently **Research-gated**. |
 | Localization and spoken dialog | Localization and the compatibility existing-member replacement editor are integrated. Managed R3 Home now exposes bounded **Add Voice take**, **Manage Voice takes**, **Resolve Voice target**, and **Build Voice bundle** actions. Import searches an exact existing line, locale, and safe local Ogg; target resolution and offline build use a configured installation. Selection management does not: it shows the exact slot's candidates in authored order, labels the current choice, disables non-Approved takes, never picks a default, and lets the author explicitly clear the selection with a build-blocking warning. All surfaces hide technical IDs/paths, recheck a fresh checkpoint, and refresh the visible revision/head after managed publication. This is not yet a complete multilingual Voice production workspace. | Import performs semantic/capacity preflight, double-reads the Ogg before accepted CAS installation, and preserves localization plus alternatives. The separate selection transaction binds the exact head/project/target/line/locale/slot revision/current selection and can change only `VoiceSlot.selected` plus project/slot revisions; its FFI accepts no game/source/build/deploy authority, fully reopens an immutable candidate, and checks the fixed head twice without publishing it. Installed-target resolution seals executable/archive evidence and preserves ambiguity. The all-or-nothing Voice builder derives blockers from the complete graph and lowers only selected Approved Vorbis takes with sealed existing-member targets into a deterministic format-3 bundle in a new offline folder. The managed session alone owns guarded fixed-head CAS, repair, and full published reopen. | Selection, target resolution, and project publication do not write the game or a save. The offline builder performs no deployment and proves no audible runtime behavior. Managed deploy/undeploy, isolated testing, ambiguous-member choice, preview/remove/unlink, recording/normalize/transcode/batch/coverage, qualified Opus output, and new-member runtime proof remain missing. Existing-member and new-member behavior retain separate operation/version gates. End state adds complete multilingual production, history, review, release, and runtime qualification workflows. |
@@ -179,16 +179,26 @@ authority.
 The typed current-project coordinator is now adopted by Home, the Project menu,
 and `Ctrl+S`: a friendly form plus empty-directory picker can create a canonical
 generation-bound R3 project, and existing R3 directories can become the visible
-current project. Their durable identity and exact-current semantic content
-projection are shown, and managed Save verifies the exact head. Creation uses
-the same absent-head publication, full reopen, recovery, and single-owner
+current project. Managed Studio Shell v1 opens that project on a localized,
+responsive Overview with persistent Overview/Content/DataAssets navigation. The
+Overview reads the exact current `Revision3ContentIndex`, shows friendly project
+metadata, Draft and readiness status, domain/reference counts, and groups the
+existing bounded NPC/Quest/Voice actions as Create and Project tools. It links
+to reviewed DataAsset work and gives a direct fix when the game is not
+configured. Durable root/ID/revision/head identity remains available under
+collapsed technical details, and managed Save verifies the exact head. Creation
+uses the same absent-head publication, full reopen, recovery, and single-owner
 adoption rules rather than introducing another project format.
 Dirty transitions, failed candidate preservation, `requiresReopen`, and terminal
-cleanup diagnostics are handled at the shell boundary. Legacy editors,
-Build/Deploy, Save As, and Story actions cannot act on hidden compatibility
-state while R3 is current. Bounded Quest/NPC Draft, Voice import/selection/
-target, and verified DataAsset actions now share that R3 owner; this is a
-managed authoring shell, not yet a unified semantic content-authoring flow.
+cleanup diagnostics are handled outside the workspace at the shell boundary.
+Legacy editors, Build/Deploy, Save As, and Story actions cannot act on hidden
+compatibility state while R3 is current. Bounded Quest/NPC Draft, Voice import/
+selection/target, and verified DataAsset actions now share that R3 owner; this
+is a managed authoring shell, not yet the complete canonical navigation or a
+unified global semantic content-authoring flow. General managed build is
+unavailable; only the sealed existing-member Voice bundle has a bounded offline
+build path. The workspace grants no game/save writes, deployment, or runtime
+qualification.
 
 The remaining managed-authoring limits are:
 
@@ -223,6 +233,12 @@ Validate & Test
 Build & Release
 Settings / Expert mode
 ```
+
+Current implementation note: Managed Studio Shell v1 is a deliberately smaller
+first slice of this architecture. Its localized responsive Overview plus
+persistent Content and DataAssets destinations establish a content-first R3
+landing surface, but do not yet implement the remaining canonical destinations,
+global/dependency browser, command palette, or complete workspace chrome.
 
 These primary destinations are stable and discoverable; they do not appear and
 disappear based on project contents or support level. A section with no authored

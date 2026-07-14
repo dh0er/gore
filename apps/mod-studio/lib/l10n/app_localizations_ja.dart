@@ -540,4 +540,172 @@ class AppLocalizationsJa extends AppLocalizations {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return 'ロケール「$locale」は正規形ではありません。「$canonical」を使用してください。';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => '概要';
+
+  @override
+  String get managedWorkspaceContentLabel => 'コンテンツ';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle => '現在の正確なバージョンに対応するオフライン制作ワークスペース';
+
+  @override
+  String get managedProjectTechnicalDetails => 'プロジェクトの技術的な詳細';
+
+  @override
+  String get managedProjectRecoveryContentLocked =>
+      '内容を読み取る前に、管理対象プロジェクトを開き直してください。';
+
+  @override
+  String get managedDashboardUntitledProject => '無題のプロジェクト';
+
+  @override
+  String get managedDashboardDraftStatus => '下書き';
+
+  @override
+  String get managedDashboardProjectVersion => 'バージョン';
+
+  @override
+  String get managedDashboardProjectAuthor => '作成者';
+
+  @override
+  String get managedDashboardNotProvided => '未指定';
+
+  @override
+  String get managedDashboardContentCounts => 'プロジェクトの内容';
+
+  @override
+  String get managedDashboardNpcDrafts => 'NPCの下書き';
+
+  @override
+  String get managedDashboardQuestDrafts => 'クエストの下書き';
+
+  @override
+  String get managedDashboardDialogLines => 'ダイアログ行';
+
+  @override
+  String get managedDashboardVoiceTakes => 'ボイステイク';
+
+  @override
+  String get managedDashboardAssets => 'アセット';
+
+  @override
+  String get managedDashboardUnresolvedReferences => '未解決の参照';
+
+  @override
+  String get managedDashboardReadiness => '現在利用できる機能';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle => 'オフライン制作が利用可能';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      'ゲームのインストールやセーブファイルを変更せずに、対応しているプロジェクト内容を作成・編集できます。';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle => '一般的なModビルドは利用不可';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      'ビルドできるのは封印済みのオフラインVoiceバンドルのみです。完全にプレイ可能なModはまだビルドできません。';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle => '実行時の検証は未完了';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studioでは、このプロジェクト内容が実行中のゲーム内で動作することをまだ確認していません。';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle => '参照整合性';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      'この件数で確認するのはプロジェクト内の参照だけで、ビルドや実行の準備状況を示すものではありません。';
+
+  @override
+  String get managedDashboardMissingGameTitle => 'ゲームの設定が必要';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      'インストール済みゲームの検証済み情報が必要な操作を行う前に、設定でGothic 1 Remakeのインストール先を指定してください。';
+
+  @override
+  String get managedDashboardCreateHeading => '作成';
+
+  @override
+  String get managedDashboardToolsHeading => 'プロジェクトツール';
+
+  @override
+  String get managedDashboardLoading => 'プロジェクト概要を読み込み中';
+
+  @override
+  String get managedDashboardLoadError => 'プロジェクト概要を利用できません';
+
+  @override
+  String get managedDashboardLoadErrorDescription =>
+      '検証済みのプロジェクト概要を読み込めませんでした。プロジェクト内容は変更されていません。';
+
+  @override
+  String get managedDashboardRetry => '再試行';
+
+  @override
+  String get managedActionNewNpcTitle => '新しいNPC';
+
+  @override
+  String get managedActionNewNpcDescription =>
+      'インストール済みゲームの検証済み情報から、範囲を限定したオフラインNPC下書きを作成します。';
+
+  @override
+  String get managedActionNewQuestTitle => '新しいクエスト';
+
+  @override
+  String get managedActionNewQuestDescription =>
+      '目標と検証済みの親IDを含むオフラインのクエスト下書きを作成します。';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => 'ボイステイクを追加';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      '配布せずにOgg Vorbis録音をこのプロジェクトへインポートします。';
+
+  @override
+  String get managedActionManageVoiceTakesTitle => 'ボイステイクを管理';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      'テイクを確認し、Voiceスロット用に承認済みの録音を選択します。';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => 'Voiceターゲットを特定';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      'ゲームを変更せずに、プロジェクトのVoiceスロットをインストール済みアーカイブの正確なメンバーと照合します。';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => 'Voiceバンドルをビルド';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      '既存メンバーで構成される封印済みオフラインバンドルをビルドします。配布は行いません。';
+
+  @override
+  String get managedActionDataAssetsTitle => 'DataAssetの編集';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      'インストール済みパッケージを調べ、検証済みの固定幅の値編集をプロジェクトに準備します。';
+
+  @override
+  String get managedActionSettingsTitle => '設定';
+
+  @override
+  String get managedActionSettingsDescription =>
+      'Gothic 1 Remakeのインストール先とMod Studioの環境設定を構成します。';
 }

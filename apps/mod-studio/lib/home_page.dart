@@ -48,6 +48,8 @@ import 'project/revision3_quest_transitions_authoring.dart';
 import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_project_create_dialog.dart';
+import 'project/revision3_project_dashboard.dart';
+import 'project/revision3_project_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
@@ -1233,91 +1235,18 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                         const SizedBox(height: 4),
                         Text(
                           project.requiresReopen
-                              ? 'Last owned managed checkpoint. Reopen the project to verify its current content.'
-                              : 'Exact-current managed identity and semantic project content.',
+                              ? l10n.managedProjectRecoveryContentLocked
+                              : l10n.managedProjectSubtitle,
                         ),
                       ],
                     );
-                    final actions = Wrap(
-                      key: const Key('managed-project-actions'),
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton.icon(
-                          key: const Key('managed-open-settings'),
-                          onPressed: () => _openSettings(context),
-                          icon: const Icon(Icons.settings_outlined),
-                          label: const Text('Settings'),
-                        ),
-                        FilledButton.icon(
-                          key: const Key('managed-manage-voice-takes'),
-                          onPressed: project.requiresReopen
-                              ? null
-                              : () => _openVoiceTakeSelection(context),
-                          icon: const Icon(Icons.library_music_outlined),
-                          label: const Text('Manage Voice takes'),
-                        ),
-                        FilledButton.icon(
-                          key: const Key('managed-add-voice-take'),
-                          onPressed: project.requiresReopen || gameRoot == null
-                              ? null
-                              : () => _openVoiceWizard(context),
-                          icon: const Icon(Icons.record_voice_over_outlined),
-                          label: const Text('Voice take'),
-                        ),
-                        PopupMenuButton<String>(
-                          key: const Key('managed-voice-tools'),
-                          enabled: !project.requiresReopen && gameRoot != null,
-                          tooltip: 'Voice target and bundle tools',
-                          icon: const Icon(Icons.graphic_eq_outlined),
-                          onSelected: (value) {
-                            switch (value) {
-                              case 'target':
-                                unawaited(_openVoiceTargetResolver(context));
-                              case 'build':
-                                unawaited(_openVoiceBuild(context));
-                            }
-                          },
-                          itemBuilder: (_) => const [
-                            PopupMenuItem(
-                              key: Key('managed-resolve-voice-target'),
-                              value: 'target',
-                              child: ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.link_outlined),
-                                title: Text('Resolve Voice target'),
-                              ),
-                            ),
-                            PopupMenuItem(
-                              key: Key('managed-build-voice-bundle'),
-                              value: 'build',
-                              child: ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                leading: Icon(Icons.inventory_2_outlined),
-                                title: Text('Build Voice bundle'),
-                              ),
-                            ),
-                          ],
-                        ),
-                        FilledButton.icon(
-                          key: const Key('managed-create-npc-draft'),
-                          onPressed: project.requiresReopen || gameRoot == null
-                              ? null
-                              : () => _openNpcWizard(context),
-                          icon: const Icon(Icons.person_add_alt_1_outlined),
-                          label: const Text('New NPC'),
-                        ),
-                        FilledButton.icon(
-                          key: const Key('managed-create-quest-draft'),
-                          onPressed: project.requiresReopen || gameRoot == null
-                              ? null
-                              : () => _openQuestWizard(context),
-                          icon: const Icon(Icons.assignment_add),
-                          label: const Text('New Quest'),
-                        ),
-                      ],
+                    final settings = OutlinedButton.icon(
+                      key: const Key('managed-open-settings'),
+                      onPressed: () => unawaited(_openSettings(context)),
+                      icon: const Icon(Icons.settings_outlined),
+                      label: Text(l10n.managedActionSettingsTitle),
                     );
-                    if (constraints.maxWidth < 1800) {
+                    if (constraints.maxWidth < 680) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
@@ -1325,7 +1254,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                           const SizedBox(height: 12),
                           Align(
                             alignment: Alignment.centerLeft,
-                            child: actions,
+                            child: settings,
                           ),
                         ],
                       );
@@ -1335,18 +1264,11 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                       children: [
                         Expanded(child: identity),
                         const SizedBox(width: 16),
-                        actions,
+                        settings,
                       ],
                     );
                   },
                 ),
-                if (gameRoot == null && !project.requiresReopen) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Configure the Gothic 1 Remake installation in Settings to import recordings, resolve targets, or build Voice bundles and to create NPC and Quest drafts.',
-                    key: Key('managed-quest-game-required'),
-                  ),
-                ],
                 if (project.requiresReopen) ...[
                   const SizedBox(height: 12),
                   Container(
@@ -1378,49 +1300,59 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                     ),
                   ),
                 ],
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 20,
-                  runSpacing: 2,
+                ExpansionTile(
+                  key: const Key('managed-project-technical-details'),
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(top: 4),
+                  title: Text(l10n.managedProjectTechnicalDetails),
                   children: [
-                    SizedBox(
-                      width: 360,
-                      child: _ProjectFact(
-                        label: l10n.projectRoot,
-                        value: project.root.path,
-                        valueKey: const Key('managed-project-root'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 300,
-                      child: _ProjectFact(
-                        label: l10n.projectId,
-                        value: project.projectId,
-                        valueKey: const Key('managed-project-id'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 160,
-                      child: _ProjectFact(
-                        label: l10n.projectRevision,
-                        value: '${project.projectRevision}',
-                        valueKey: const Key('managed-project-revision'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 460,
-                      child: _ProjectFact(
-                        label: l10n.projectHeadSha256,
-                        value: project.head.snapshotSha256,
-                        valueKey: const Key('managed-project-head'),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 160,
-                      child: _ProjectFact(
-                        label: l10n.projectSnapshotBytes,
-                        value: '${project.head.snapshotByteLength}',
-                        valueKey: const Key('managed-project-head-bytes'),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Wrap(
+                        spacing: 20,
+                        runSpacing: 2,
+                        children: [
+                          SizedBox(
+                            width: 360,
+                            child: _ProjectFact(
+                              label: l10n.projectRoot,
+                              value: project.root.path,
+                              valueKey: const Key('managed-project-root'),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 300,
+                            child: _ProjectFact(
+                              label: l10n.projectId,
+                              value: project.projectId,
+                              valueKey: const Key('managed-project-id'),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 160,
+                            child: _ProjectFact(
+                              label: l10n.projectRevision,
+                              value: '${project.projectRevision}',
+                              valueKey: const Key('managed-project-revision'),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 460,
+                            child: _ProjectFact(
+                              label: l10n.projectHeadSha256,
+                              value: project.head.snapshotSha256,
+                              valueKey: const Key('managed-project-head'),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 160,
+                            child: _ProjectFact(
+                              label: l10n.projectSnapshotBytes,
+                              value: '${project.head.snapshotByteLength}',
+                              valueKey: const Key('managed-project-head-bytes'),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -1439,113 +1371,187 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                       children: [
                         const Icon(Icons.lock_reset_outlined, size: 36),
                         const SizedBox(height: 10),
-                        const Text(
-                          'Reopen the managed project before reading its content.',
+                        Text(
+                          l10n.managedProjectRecoveryContentLocked,
                           textAlign: TextAlign.center,
                         ),
                       ],
                     ),
                   ),
                 )
-              : DefaultTabController(
-                  length: 2,
-                  child: Column(
-                    children: [
-                      const TabBar(
-                        key: Key('managed-revision3-workspace-tabs'),
-                        tabs: [
-                          Tab(
-                            key: Key('managed-revision3-library-tab'),
-                            icon: Icon(Icons.library_books_outlined),
-                            text: 'Library',
-                          ),
-                          Tab(
-                            key: Key('managed-revision3-dataasset-tab'),
-                            icon: Icon(Icons.data_object_outlined),
-                            text: 'DataAsset edits',
-                          ),
-                        ],
-                      ),
-                      Expanded(
-                        child: TabBarView(
-                          children: [
-                            Revision3ContentLibrary(
-                              projectRoot: project.root.path,
-                              projectId: project.projectId,
-                              projectRevision: project.projectRevision,
-                              projectHeadCanonicalJson:
-                                  project.head.canonicalJson,
-                              load: loadContentIndex,
-                              editQuestOutline: project.requiresReopen
-                                  ? null
-                                  : (index, quest) => _openQuestOutlineEditor(
-                                      context,
-                                      index,
-                                      quest,
-                                    ),
-                              editQuestContext:
-                                  project.requiresReopen || gameRoot == null
-                                  ? null
-                                  : (index, quest) => _openQuestContextEditor(
-                                      context,
-                                      index,
-                                      quest,
-                                    ),
-                              editQuestTransitions: project.requiresReopen
-                                  ? null
-                                  : (index, quest) =>
-                                        _openQuestTransitionsEditor(
-                                          context,
-                                          index,
-                                          quest,
-                                        ),
-                              inspectQuestSource:
-                                  project.requiresReopen || gameRoot == null
-                                  ? null
-                                  : (index, quest) =>
-                                        _openQuestSourceInspection(
-                                          context,
-                                          index,
-                                          quest,
-                                        ),
-                              inspectNpcSource: project.requiresReopen
-                                  ? null
-                                  : (index, npc) =>
-                                        _openNpcProfile(context, index, npc),
-                            ),
-                            Revision3DataAssetStagePanel(
-                              projectRoot: project.root.path,
-                              projectId: project.projectId,
-                              projectRevision: project.projectRevision,
-                              projectHead: project.head,
-                              load: loadDataAssetStages,
-                              publish: publishDataAssetStage,
-                              publishSemanticEdit: publishDataAssetSemanticEdit,
-                              remove: removeDataAssetStage,
-                              pickPatchReceipt: pickDataAssetPatchReceipt,
-                              semanticInspector: inspectDataAssetSemanticEdit,
-                              semanticUassetPicker: pickDataAssetSemanticUasset,
-                              semanticUsmapPicker: pickDataAssetSemanticUsmap,
-                              semanticExtractReceiptPicker:
-                                  pickDataAssetExtractReceipt,
-                              semanticExtractReceiptInspector:
-                                  inspectDataAssetExtractReceipt,
-                              browseInstalledPackages:
-                                  project.requiresReopen || gameRoot == null
-                                  ? null
-                                  : () => _openInstalledPackageBrowser(
-                                      context,
-                                      gameRoot!,
-                                    ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+              : Revision3ProjectWorkspace(
+                  projectIdentity: (project.root.path, project.projectId),
+                  overviewLabel: l10n.managedWorkspaceOverviewLabel,
+                  contentLabel: l10n.managedWorkspaceContentLabel,
+                  dataAssetsLabel: l10n.managedWorkspaceDataAssetsLabel,
+                  overview: Builder(
+                    builder: (workspaceContext) =>
+                        _buildDashboard(workspaceContext, l10n),
+                  ),
+                  content: Revision3ContentLibrary(
+                    projectRoot: project.root.path,
+                    projectId: project.projectId,
+                    projectRevision: project.projectRevision,
+                    projectHeadCanonicalJson: project.head.canonicalJson,
+                    load: loadContentIndex,
+                    editQuestOutline: (index, quest) =>
+                        _openQuestOutlineEditor(context, index, quest),
+                    editQuestContext: gameRoot == null
+                        ? null
+                        : (index, quest) =>
+                              _openQuestContextEditor(context, index, quest),
+                    editQuestTransitions: (index, quest) =>
+                        _openQuestTransitionsEditor(context, index, quest),
+                    inspectQuestSource: gameRoot == null
+                        ? null
+                        : (index, quest) =>
+                              _openQuestSourceInspection(context, index, quest),
+                    inspectNpcSource: (index, npc) =>
+                        _openNpcProfile(context, index, npc),
+                  ),
+                  dataAssets: Revision3DataAssetStagePanel(
+                    projectRoot: project.root.path,
+                    projectId: project.projectId,
+                    projectRevision: project.projectRevision,
+                    projectHead: project.head,
+                    load: loadDataAssetStages,
+                    publish: publishDataAssetStage,
+                    publishSemanticEdit: publishDataAssetSemanticEdit,
+                    remove: removeDataAssetStage,
+                    pickPatchReceipt: pickDataAssetPatchReceipt,
+                    semanticInspector: inspectDataAssetSemanticEdit,
+                    semanticUassetPicker: pickDataAssetSemanticUasset,
+                    semanticUsmapPicker: pickDataAssetSemanticUsmap,
+                    semanticExtractReceiptPicker: pickDataAssetExtractReceipt,
+                    semanticExtractReceiptInspector:
+                        inspectDataAssetExtractReceipt,
+                    browseInstalledPackages: gameRoot == null
+                        ? null
+                        : () =>
+                              _openInstalledPackageBrowser(context, gameRoot!),
                   ),
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _buildDashboard(BuildContext context, AppLocalizations l10n) {
+    final gameConfigured = gameRoot != null;
+    VoidCallback? requiresGame(Future<void> Function(BuildContext) action) =>
+        gameConfigured ? () => unawaited(action(context)) : null;
+
+    return Revision3ProjectDashboard(
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      load: loadContentIndex,
+      gameConfigured: gameConfigured,
+      copy: Revision3ProjectDashboardCopy(
+        untitledProjectLabel: l10n.managedDashboardUntitledProject,
+        draftStatusLabel: l10n.managedDashboardDraftStatus,
+        projectVersionLabel: l10n.managedDashboardProjectVersion,
+        projectAuthorLabel: l10n.managedDashboardProjectAuthor,
+        notProvidedLabel: l10n.managedDashboardNotProvided,
+        contentCountsHeading: l10n.managedDashboardContentCounts,
+        npcDraftCountLabel: l10n.managedDashboardNpcDrafts,
+        questDraftCountLabel: l10n.managedDashboardQuestDrafts,
+        dialogLineCountLabel: l10n.managedDashboardDialogLines,
+        voiceTakeCountLabel: l10n.managedDashboardVoiceTakes,
+        assetCountLabel: l10n.managedDashboardAssets,
+        unresolvedReferenceCountLabel:
+            l10n.managedDashboardUnresolvedReferences,
+        readinessHeading: l10n.managedDashboardReadiness,
+        offlineAuthoringTitle: l10n.managedDashboardOfflineAuthoringTitle,
+        offlineAuthoringDescription:
+            l10n.managedDashboardOfflineAuthoringDescription,
+        generalBuildBlockedTitle: l10n.managedDashboardGeneralBuildBlockedTitle,
+        generalBuildBlockedDescription:
+            l10n.managedDashboardGeneralBuildBlockedDescription,
+        runtimeUnqualifiedTitle: l10n.managedDashboardRuntimeUnqualifiedTitle,
+        runtimeUnqualifiedDescription:
+            l10n.managedDashboardRuntimeUnqualifiedDescription,
+        referenceIntegrityTitle: l10n.managedDashboardReferenceIntegrityTitle,
+        referenceIntegrityDescription:
+            l10n.managedDashboardReferenceIntegrityDescription,
+        missingGameTitle: l10n.managedDashboardMissingGameTitle,
+        missingGameDescription: l10n.managedDashboardMissingGameDescription,
+        createHeading: l10n.managedDashboardCreateHeading,
+        toolsHeading: l10n.managedDashboardToolsHeading,
+        loadingSemanticsLabel: l10n.managedDashboardLoading,
+        loadErrorSemanticsLabel: l10n.managedDashboardLoadError,
+        loadErrorTitle: l10n.managedDashboardLoadError,
+        loadErrorDescription: l10n.managedDashboardLoadErrorDescription,
+        retryLabel: l10n.managedDashboardRetry,
+      ),
+      createActions: [
+        Revision3ProjectDashboardAction(
+          id: 'create-npc-draft',
+          controlKey: const Key('managed-create-npc-draft'),
+          icon: Icons.person_add_alt_1_outlined,
+          title: l10n.managedActionNewNpcTitle,
+          description: l10n.managedActionNewNpcDescription,
+          onPressed: requiresGame(_openNpcWizard),
+        ),
+        Revision3ProjectDashboardAction(
+          id: 'create-quest-draft',
+          controlKey: const Key('managed-create-quest-draft'),
+          icon: Icons.assignment_add,
+          title: l10n.managedActionNewQuestTitle,
+          description: l10n.managedActionNewQuestDescription,
+          onPressed: requiresGame(_openQuestWizard),
+        ),
+        Revision3ProjectDashboardAction(
+          id: 'add-voice-take',
+          controlKey: const Key('managed-add-voice-take'),
+          icon: Icons.record_voice_over_outlined,
+          title: l10n.managedActionAddVoiceTakeTitle,
+          description: l10n.managedActionAddVoiceTakeDescription,
+          onPressed: requiresGame(_openVoiceWizard),
+        ),
+      ],
+      toolActions: [
+        Revision3ProjectDashboardAction(
+          id: 'manage-voice-takes',
+          controlKey: const Key('managed-manage-voice-takes'),
+          icon: Icons.library_music_outlined,
+          title: l10n.managedActionManageVoiceTakesTitle,
+          description: l10n.managedActionManageVoiceTakesDescription,
+          onPressed: () => unawaited(_openVoiceTakeSelection(context)),
+        ),
+        Revision3ProjectDashboardAction(
+          id: 'resolve-voice-target',
+          controlKey: const Key('managed-resolve-voice-target'),
+          icon: Icons.link_outlined,
+          title: l10n.managedActionResolveVoiceTargetTitle,
+          description: l10n.managedActionResolveVoiceTargetDescription,
+          onPressed: requiresGame(_openVoiceTargetResolver),
+        ),
+        Revision3ProjectDashboardAction(
+          id: 'build-voice-bundle',
+          controlKey: const Key('managed-build-voice-bundle'),
+          icon: Icons.inventory_2_outlined,
+          title: l10n.managedActionBuildVoiceBundleTitle,
+          description: l10n.managedActionBuildVoiceBundleDescription,
+          onPressed: requiresGame(_openVoiceBuild),
+        ),
+        Revision3ProjectDashboardAction(
+          id: 'verified-dataasset-edits',
+          icon: Icons.data_object_outlined,
+          title: l10n.managedActionDataAssetsTitle,
+          description: l10n.managedActionDataAssetsDescription,
+          onPressed: () => Revision3ProjectWorkspace.navigate(
+            context,
+            Revision3ProjectWorkspaceSection.dataAssets,
+          ),
+        ),
+      ],
+      settingsAction: Revision3ProjectDashboardAction(
+        id: 'open-settings',
+        icon: Icons.settings_outlined,
+        title: l10n.managedActionSettingsTitle,
+        description: l10n.managedActionSettingsDescription,
+        onPressed: () => unawaited(_openSettings(context)),
+      ),
     );
   }
 
@@ -1833,14 +1839,16 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                   const Icon(Icons.settings_outlined),
                   const SizedBox(width: 10),
                   Text(
-                    'Settings',
+                    AppLocalizations.of(
+                      dialogContext,
+                    ).managedActionSettingsTitle,
                     style: Theme.of(dialogContext).textTheme.titleLarge,
                   ),
                   const Spacer(),
                   IconButton(
                     key: const Key('managed-settings-close'),
                     onPressed: () => Navigator.of(dialogContext).pop(),
-                    tooltip: 'Close Settings',
+                    tooltip: AppLocalizations.of(dialogContext).close,
                     icon: const Icon(Icons.close),
                   ),
                 ],

@@ -550,4 +550,177 @@ class AppLocalizationsRu extends AppLocalizations {
   String projectCreateLocaleNotCanonical(String locale, String canonical) {
     return 'Локаль «$locale» не каноническая; используйте «$canonical».';
   }
+
+  @override
+  String get managedWorkspaceOverviewLabel => 'Обзор';
+
+  @override
+  String get managedWorkspaceContentLabel => 'Содержимое';
+
+  @override
+  String get managedWorkspaceDataAssetsLabel => 'DataAssets';
+
+  @override
+  String get managedProjectSubtitle =>
+      'Рабочая область для автономного редактирования, точно соответствующая текущей версии';
+
+  @override
+  String get managedProjectTechnicalDetails => 'Технические сведения о проекте';
+
+  @override
+  String get managedProjectRecoveryContentLocked =>
+      'Снова откройте управляемый проект, прежде чем читать его содержимое.';
+
+  @override
+  String get managedDashboardUntitledProject => 'Проект без названия';
+
+  @override
+  String get managedDashboardDraftStatus => 'Черновик';
+
+  @override
+  String get managedDashboardProjectVersion => 'Версия';
+
+  @override
+  String get managedDashboardProjectAuthor => 'Автор';
+
+  @override
+  String get managedDashboardNotProvided => 'Не указано';
+
+  @override
+  String get managedDashboardContentCounts => 'Содержимое проекта';
+
+  @override
+  String get managedDashboardNpcDrafts => 'Черновики NPC';
+
+  @override
+  String get managedDashboardQuestDrafts => 'Черновики заданий';
+
+  @override
+  String get managedDashboardDialogLines => 'Реплики диалогов';
+
+  @override
+  String get managedDashboardVoiceTakes => 'Записи озвучки';
+
+  @override
+  String get managedDashboardAssets => 'Ресурсы';
+
+  @override
+  String get managedDashboardUnresolvedReferences => 'Неразрешённые ссылки';
+
+  @override
+  String get managedDashboardReadiness => 'Что уже работает';
+
+  @override
+  String get managedDashboardOfflineAuthoringTitle =>
+      'Автономное редактирование доступно';
+
+  @override
+  String get managedDashboardOfflineAuthoringDescription =>
+      'Создавайте и редактируйте поддерживаемое содержимое проекта, не изменяя установку игры и файлы сохранений.';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedTitle =>
+      'Общая сборка мода недоступна';
+
+  @override
+  String get managedDashboardGeneralBuildBlockedDescription =>
+      'Можно собирать только запечатанные автономные пакеты Voice; полную играбельную модификацию пока собрать нельзя.';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedTitle =>
+      'Работа в игре ещё не проверена';
+
+  @override
+  String get managedDashboardRuntimeUnqualifiedDescription =>
+      'Mod Studio пока не подтвердил работу этого содержимого проекта в запущенной игре.';
+
+  @override
+  String get managedDashboardReferenceIntegrityTitle => 'Целостность ссылок';
+
+  @override
+  String get managedDashboardReferenceIntegrityDescription =>
+      'Это число проверяет только ссылки проекта; оно не означает готовность к сборке или запуску.';
+
+  @override
+  String get managedDashboardMissingGameTitle => 'Требуется настроить игру';
+
+  @override
+  String get managedDashboardMissingGameDescription =>
+      'Укажите установку Gothic 1 Remake в настройках перед использованием действий, которым нужны подтверждённые данные установленной игры.';
+
+  @override
+  String get managedDashboardCreateHeading => 'Создать';
+
+  @override
+  String get managedDashboardToolsHeading => 'Инструменты проекта';
+
+  @override
+  String get managedDashboardLoading => 'Загрузка обзора проекта';
+
+  @override
+  String get managedDashboardLoadError => 'Обзор проекта недоступен';
+
+  @override
+  String get managedDashboardLoadErrorDescription =>
+      'Не удалось загрузить проверенный обзор проекта. Содержимое проекта не изменено.';
+
+  @override
+  String get managedDashboardRetry => 'Повторить';
+
+  @override
+  String get managedActionNewNpcTitle => 'Новый NPC';
+
+  @override
+  String get managedActionNewNpcDescription =>
+      'Создать ограниченный автономный черновик NPC на основе подтверждённых данных установленной игры.';
+
+  @override
+  String get managedActionNewQuestTitle => 'Новое задание';
+
+  @override
+  String get managedActionNewQuestDescription =>
+      'Создать автономный черновик задания с целями и проверенными родительскими идентификаторами.';
+
+  @override
+  String get managedActionAddVoiceTakeTitle => 'Добавить запись озвучки';
+
+  @override
+  String get managedActionAddVoiceTakeDescription =>
+      'Импортировать запись Ogg Vorbis в этот проект без её развёртывания.';
+
+  @override
+  String get managedActionManageVoiceTakesTitle =>
+      'Управление записями озвучки';
+
+  @override
+  String get managedActionManageVoiceTakesDescription =>
+      'Просмотреть записи и выбрать одобренные варианты для слотов Voice.';
+
+  @override
+  String get managedActionResolveVoiceTargetTitle => 'Определить цель Voice';
+
+  @override
+  String get managedActionResolveVoiceTargetDescription =>
+      'Сопоставить слоты Voice проекта с точными элементами установленных архивов, не изменяя игру.';
+
+  @override
+  String get managedActionBuildVoiceBundleTitle => 'Собрать пакет Voice';
+
+  @override
+  String get managedActionBuildVoiceBundleDescription =>
+      'Собрать запечатанный автономный пакет из существующих элементов; развёртывание не выполняется.';
+
+  @override
+  String get managedActionDataAssetsTitle => 'Изменения DataAssets';
+
+  @override
+  String get managedActionDataAssetsDescription =>
+      'Проверить установленные пакеты и подготовить в проекте проверенные изменения значений фиксированной ширины.';
+
+  @override
+  String get managedActionSettingsTitle => 'Настройки';
+
+  @override
+  String get managedActionSettingsDescription =>
+      'Настроить установку Gothic 1 Remake и параметры Mod Studio.';
 }
