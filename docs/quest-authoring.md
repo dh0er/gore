@@ -265,6 +265,41 @@ fully reopens the published result. The result remains `blocked`,
 `runtime_unqualified`, `not_granted`, `fresh_capability_required`, and
 `not_supported`. No compile, pack, deploy, game write, or runtime claim is added.
 
+### Managed revision-3 existing-Quest outline edit V1
+
+The managed R3 Content Library now exposes **Edit quest outline** for one
+selected, exact-current `QuestDraft`. This count-preserving editor may change
+only the Quest's name in the project library, its player-facing title, and the
+text/order of its existing one through eight objectives. The objective count
+cannot change in this operation. Description, Quest family/parent, giver,
+technical identities, stable Quest and ScriptModule IDs, ownership, provenance,
+and the retained `QuestCollisionArtifactRef` remain byte-for-byte unchanged.
+The project, Quest entity, and owned ScriptModule revisions each advance exactly
+once only when at least one editable value changes.
+
+The pure
+`apply_revision3_quest_outline_edit_transaction_v1` first proves the existing
+Quest/owned-module closure by deterministic regeneration, preserves its
+technical module identity, regenerates source from the edited outline, and
+requires exact canonical candidate reopen. The strict native prepare-only
+`authoring_store_prepare_revision3_quest_outline_edit_v1` payload contains
+exactly `root`, `current_project_json`, and
+`quest_outline_request_json`; there is no `game_root`. Native code fully opens
+and binds the fixed head/project/target/Quest, performs the exact-current Quest
+source/asset preflight without accepting client collision authority, prepares
+immutable Store objects, fully reopens the candidate, and rechecks the fixed
+head before returning. It never replaces `gore-project.json`.
+
+The Studio validates the complete candidate and publishes it only through the
+managed session's guarded exact-head byte-CAS, repair journal, and full
+published reopen. A stale project, changed Quest revision, no-op, unsafe Store
+alias/link, preparation failure, or late head race returns no publishable
+success. The operation remains `build_status: blocked`,
+`runtime_status: runtime_unqualified`, and
+`publication_status: not_supported` at the native boundary. It performs no
+compile, package, deployment, game-installation write, game launch, or save-file
+read/write.
+
 ## Safe qualification order
 
 1. Build the new module offline and reopen the mini-cache.
