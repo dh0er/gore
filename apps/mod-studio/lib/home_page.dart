@@ -36,6 +36,8 @@ import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_npc_authoring.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
+import 'project/revision3_quest_context_authoring.dart';
+import 'project/revision3_quest_context_dialog.dart';
 import 'project/revision3_quest_outline_authoring.dart';
 import 'project/revision3_quest_outline_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
@@ -763,6 +765,39 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedHead: currentProject.head,
                 input: input,
               ),
+          loadQuestContextSeed:
+              ({
+                required questId,
+                required expectedQuestRevision,
+                required expectedModuleId,
+                required expectedModuleRevision,
+                required expectedParentRuntimeClass,
+                required expectedGiverRuntimeUniqueName,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .readCurrentRevision3QuestContextSeed(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    questId: questId,
+                    expectedQuestRevision: expectedQuestRevision,
+                    expectedModuleId: expectedModuleId,
+                    expectedModuleRevision: expectedModuleRevision,
+                    expectedParentRuntimeClass: expectedParentRuntimeClass,
+                    expectedGiverRuntimeUniqueName:
+                        expectedGiverRuntimeUniqueName,
+                  ),
+          editQuestContext: ({required gameRoot, required plan}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .editCurrentRevision3QuestContext(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                gameRoot: gameRoot,
+                plan: plan,
+              ),
         ),
         NoCurrentProjectState() => const _NoCurrentProjectView(),
         LegacyCurrentProjectState() => DefaultTabController(
@@ -909,6 +944,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.loadQuestCatalog,
     required this.publishQuestDraft,
     required this.editQuestOutline,
+    required this.loadQuestContextSeed,
+    required this.editQuestContext,
   });
 
   final ManagedRevision3CurrentProjectState project;
@@ -935,6 +972,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3QuestCatalogLoader loadQuestCatalog;
   final Revision3QuestDraftPublisher publishQuestDraft;
   final Revision3QuestOutlineEditPublisher editQuestOutline;
+  final Revision3QuestContextSeedLoader loadQuestContextSeed;
+  final Revision3QuestContextTechnicalPublisher editQuestContext;
 
   @override
   Widget build(BuildContext context) {
@@ -1211,6 +1250,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                                       index,
                                       quest,
                                     ),
+                              editQuestContext:
+                                  project.requiresReopen || gameRoot == null
+                                  ? null
+                                  : (index, quest) => _openQuestContextEditor(
+                                      context,
+                                      index,
+                                      quest,
+                                    ),
                             ),
                             Revision3DataAssetStagePanel(
                               projectRoot: project.root.path,
@@ -1374,6 +1421,37 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       SnackBar(
         content: Text(
           'Quest outline saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openQuestContextEditor(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity quest,
+  ) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null || project.requiresReopen) return;
+    final publication = await showDialog<Revision3QuestContextEditPublication>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Revision3QuestContextEditDialog(
+        index: index,
+        quest: quest,
+        gameRoot: configuredGameRoot,
+        service: Revision3QuestContextAuthoringService(
+          loadSeed: loadQuestContextSeed,
+          loadCatalog: loadQuestCatalog,
+          publishTechnicalPlan: editQuestContext,
+        ),
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Quest description and connections saved in project revision ${publication.projectRevision}. Build remains blocked; runtime remains unqualified.',
         ),
       ),
     );

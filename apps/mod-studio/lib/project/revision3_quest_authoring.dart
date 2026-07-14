@@ -16,6 +16,13 @@ const _maxQuestObjectives = 8;
 const _maxQuestObjectiveTitlesBytes =
     _maxQuestObjectives * _maxQuestObjectiveBytes;
 
+final _unavailableQuestCatalogSeal =
+    AuthoringDraftContentSeal.fromJson(<String, Object?>{
+      'byte_len': 1,
+      'sha256':
+          '0000000000000000000000000000000000000000000000000000000000000000',
+    });
+
 final _projectIdPattern = RegExp(r'^[0-9a-f]{32}$');
 
 typedef Revision3QuestCatalogLoader =
@@ -27,63 +34,222 @@ typedef Revision3QuestDraftPublisher =
       required Revision3QuestDraftAuthoringInput input,
     });
 
-/// One safe picker row projected from a freshly verified Story catalog.
-///
-/// The technical catalog identity is retained for the native selector, but UI
-/// surfaces should present only [displayName].
-final class Revision3QuestCatalogChoice {
-  Revision3QuestCatalogChoice({
+/// One safe Quest-family picker row projected from a fresh Story catalog.
+/// Catalog/runtime identities are transaction-only; UI renders [displayLabel].
+final class Revision3QuestParentChoice {
+  Revision3QuestParentChoice({
     required String catalogId,
     required String displayName,
+    required String runtimeClass,
+    String catalogLayer = 'unavailable',
+    String authoringSelector = 'unavailable',
+    AuthoringDraftContentSeal? sourceSeal,
+    String? displayLabel,
   }) : catalogId = _boundedCatalogText(
          catalogId,
          _maxCatalogIdBytes,
-         'catalog choice identity',
+         'Quest family identity',
        ),
        displayName = _boundedCatalogText(
          displayName,
          _maxChoiceDisplayNameBytes,
-         'catalog choice name',
+         'Quest family name',
+       ),
+       runtimeClass = _boundedCatalogText(
+         runtimeClass,
+         1024,
+         'Quest family runtime binding',
+       ),
+       catalogLayer = _boundedCatalogText(
+         catalogLayer,
+         1024,
+         'Quest family catalog layer',
+       ),
+       authoringSelector = _boundedCatalogText(
+         authoringSelector,
+         1024,
+         'Quest family selector',
+       ),
+       sourceSeal = sourceSeal ?? _unavailableQuestCatalogSeal,
+       displayLabel = _boundedCatalogText(
+         displayLabel ?? displayName,
+         _maxChoiceDisplayNameBytes + 32,
+         'Quest family label',
        );
 
   final String catalogId;
   final String displayName;
+  final String runtimeClass;
+  final String catalogLayer;
+  final String authoringSelector;
+  final AuthoringDraftContentSeal sourceSeal;
+  final String displayLabel;
+
+  Revision3QuestParentChoice _withDisplayLabel(String value) =>
+      Revision3QuestParentChoice(
+        catalogId: catalogId,
+        displayName: displayName,
+        runtimeClass: runtimeClass,
+        catalogLayer: catalogLayer,
+        authoringSelector: authoringSelector,
+        sourceSeal: sourceSeal,
+        displayLabel: value,
+      );
+}
+
+/// One safe Quest-giver picker row projected from a fresh Story catalog.
+/// Catalog/runtime identities are transaction-only; UI renders [displayLabel].
+final class Revision3QuestGiverChoice {
+  Revision3QuestGiverChoice({
+    required String catalogId,
+    required String displayName,
+    required String runtimeUniqueName,
+    String catalogLayer = 'unavailable',
+    String authoringSelector = 'unavailable',
+    AuthoringDraftContentSeal? sourceSeal,
+    String? displayLabel,
+  }) : catalogId = _boundedCatalogText(
+         catalogId,
+         _maxCatalogIdBytes,
+         'Quest giver identity',
+       ),
+       displayName = _boundedCatalogText(
+         displayName,
+         _maxChoiceDisplayNameBytes,
+         'Quest giver name',
+       ),
+       runtimeUniqueName = _boundedCatalogText(
+         runtimeUniqueName,
+         1024,
+         'Quest giver runtime binding',
+       ),
+       catalogLayer = _boundedCatalogText(
+         catalogLayer,
+         1024,
+         'Quest giver catalog layer',
+       ),
+       authoringSelector = _boundedCatalogText(
+         authoringSelector,
+         1024,
+         'Quest giver selector',
+       ),
+       sourceSeal = sourceSeal ?? _unavailableQuestCatalogSeal,
+       displayLabel = _boundedCatalogText(
+         displayLabel ?? displayName,
+         _maxChoiceDisplayNameBytes + 32,
+         'Quest giver label',
+       );
+
+  final String catalogId;
+  final String displayName;
+  final String runtimeUniqueName;
+  final String catalogLayer;
+  final String authoringSelector;
+  final AuthoringDraftContentSeal sourceSeal;
+  final String displayLabel;
+
+  Revision3QuestGiverChoice _withDisplayLabel(String value) =>
+      Revision3QuestGiverChoice(
+        catalogId: catalogId,
+        displayName: displayName,
+        runtimeUniqueName: runtimeUniqueName,
+        catalogLayer: catalogLayer,
+        authoringSelector: authoringSelector,
+        sourceSeal: sourceSeal,
+        displayLabel: value,
+      );
 }
 
 /// Closed, display-safe picker projection for the R3 Quest wizard.
 final class Revision3QuestCatalog {
   Revision3QuestCatalog({
-    required Iterable<Revision3QuestCatalogChoice> parents,
-    required Iterable<Revision3QuestCatalogChoice> givers,
-  }) : parents = _closedChoices(parents, 'Quest family'),
-       givers = _closedChoices(givers, 'Quest giver');
+    required Iterable<Revision3QuestParentChoice> parents,
+    required Iterable<Revision3QuestGiverChoice> givers,
+    this.catalogSeal,
+    this.generationExecutableSeal,
+  }) : parents = _closedParentChoices(parents),
+       givers = _closedGiverChoices(givers);
 
-  factory Revision3QuestCatalog.fromStoryCatalog(StoryCatalogAdapter adapter) {
+  factory Revision3QuestCatalog.fromStoryCatalog(
+    StoryCatalogAdapter adapter, {
+    required AuthoringDraftContentSeal catalogSeal,
+    required AuthoringDraftContentSeal generationExecutableSeal,
+  }) {
     final availability = adapter.questAvailability;
     return Revision3QuestCatalog(
       parents: availability.parents.map(
-        (choice) => Revision3QuestCatalogChoice(
+        (choice) => Revision3QuestParentChoice(
           catalogId: choice.catalogId,
           displayName: choice.displayName,
+          runtimeClass: choice.runtimeClass,
+          catalogLayer: choice.catalogLayer,
+          authoringSelector: choice.authoringSelector,
+          sourceSeal: AuthoringDraftContentSeal.fromJson(<String, Object?>{
+            'byte_len': choice.sourceSeal.byteLength,
+            'sha256': choice.sourceSeal.sha256,
+          }),
         ),
       ),
       givers: availability.givers.map(
-        (choice) => Revision3QuestCatalogChoice(
+        (choice) => Revision3QuestGiverChoice(
           catalogId: choice.catalogId,
           displayName: choice.displayName,
+          runtimeUniqueName: choice.runtimeUniqueName,
+          catalogLayer: choice.catalogLayer,
+          authoringSelector: choice.authoringSelector,
+          sourceSeal: AuthoringDraftContentSeal.fromJson(<String, Object?>{
+            'byte_len': choice.sourceSeal.byteLength,
+            'sha256': choice.sourceSeal.sha256,
+          }),
         ),
       ),
+      catalogSeal: catalogSeal,
+      generationExecutableSeal: generationExecutableSeal,
     );
   }
 
-  final List<Revision3QuestCatalogChoice> parents;
-  final List<Revision3QuestCatalogChoice> givers;
+  final List<Revision3QuestParentChoice> parents;
+  final List<Revision3QuestGiverChoice> givers;
+  final AuthoringDraftContentSeal? catalogSeal;
+  final AuthoringDraftContentSeal? generationExecutableSeal;
 
   bool containsParent(String catalogId) =>
       parents.any((choice) => choice.catalogId == catalogId);
 
   bool containsGiver(String catalogId) =>
       givers.any((choice) => choice.catalogId == catalogId);
+
+  Revision3QuestParentChoice? parent(String catalogId) =>
+      parents.where((choice) => choice.catalogId == catalogId).firstOrNull;
+
+  Revision3QuestGiverChoice? giver(String catalogId) =>
+      givers.where((choice) => choice.catalogId == catalogId).firstOrNull;
+
+  Revision3QuestParentChoice? parentForRuntimeClass(String runtimeClass) =>
+      parents
+          .where((choice) => choice.runtimeClass == runtimeClass)
+          .firstOrNull;
+
+  Revision3QuestGiverChoice? giverForRuntimeUniqueName(
+    String runtimeUniqueName,
+  ) => givers
+      .where((choice) => choice.runtimeUniqueName == runtimeUniqueName)
+      .firstOrNull;
+
+  bool sameSeal(Revision3QuestCatalog other) {
+    final left = catalogSeal;
+    final right = other.catalogSeal;
+    final leftGeneration = generationExecutableSeal;
+    final rightGeneration = other.generationExecutableSeal;
+    return left != null &&
+        right != null &&
+        leftGeneration != null &&
+        rightGeneration != null &&
+        left.byteLength == right.byteLength &&
+        left.sha256 == right.sha256 &&
+        leftGeneration.byteLength == rightGeneration.byteLength &&
+        leftGeneration.sha256 == rightGeneration.sha256;
+  }
 }
 
 /// Rebuilds the read-only Story catalog for the configured game generation.
@@ -107,6 +273,8 @@ final class Revision3QuestCatalogService {
         .authoringStoryCatalogV1BuildAndReadForGameRoot(gameRoot: gameRoot);
     return Revision3QuestCatalog.fromStoryCatalog(
       StoryCatalogAdapter.fromSelections(selections),
+      catalogSeal: selections.catalogSeal,
+      generationExecutableSeal: selections.generation.executable,
     );
   }
 }
@@ -318,21 +486,70 @@ final class Revision3QuestDraftStaleCheckpointException implements Exception {
       'The Quest wizard must be reopened for the current managed checkpoint.';
 }
 
-List<Revision3QuestCatalogChoice> _closedChoices(
-  Iterable<Revision3QuestCatalogChoice> source,
-  String context,
+List<Revision3QuestParentChoice> _closedParentChoices(
+  Iterable<Revision3QuestParentChoice> source,
 ) {
   final choices = source.toList(growable: false);
   if (choices.isEmpty || choices.length > 100000) {
-    throw FormatException('$context choices are unavailable.');
+    throw const FormatException('Quest family choices are unavailable.');
   }
   final ids = <String>{};
+  final runtimes = <String>{};
   for (final choice in choices) {
-    if (!ids.add(choice.catalogId)) {
-      throw FormatException('$context choices contain a duplicate identity.');
+    if (!ids.add(choice.catalogId) || !runtimes.add(choice.runtimeClass)) {
+      throw const FormatException(
+        'Quest family choices contain an ambiguous identity.',
+      );
     }
   }
-  return List<Revision3QuestCatalogChoice>.unmodifiable(choices);
+  final labels = _friendlyDuplicateLabels(
+    choices.map((choice) => choice.displayName).toList(growable: false),
+  );
+  return List<Revision3QuestParentChoice>.unmodifiable([
+    for (var index = 0; index < choices.length; index++)
+      choices[index]._withDisplayLabel(labels[index]),
+  ]);
+}
+
+List<Revision3QuestGiverChoice> _closedGiverChoices(
+  Iterable<Revision3QuestGiverChoice> source,
+) {
+  final choices = source.toList(growable: false);
+  if (choices.isEmpty || choices.length > 100000) {
+    throw const FormatException('Quest giver choices are unavailable.');
+  }
+  final ids = <String>{};
+  final runtimes = <String>{};
+  for (final choice in choices) {
+    if (!ids.add(choice.catalogId) || !runtimes.add(choice.runtimeUniqueName)) {
+      throw const FormatException(
+        'Quest giver choices contain an ambiguous identity.',
+      );
+    }
+  }
+  final labels = _friendlyDuplicateLabels(
+    choices.map((choice) => choice.displayName).toList(growable: false),
+  );
+  return List<Revision3QuestGiverChoice>.unmodifiable([
+    for (var index = 0; index < choices.length; index++)
+      choices[index]._withDisplayLabel(labels[index]),
+  ]);
+}
+
+List<String> _friendlyDuplicateLabels(List<String> names) {
+  final totals = <String, int>{};
+  for (final name in names) {
+    final folded = name.toLowerCase();
+    totals[folded] = (totals[folded] ?? 0) + 1;
+  }
+  final ordinals = <String, int>{};
+  return <String>[
+    for (final name in names)
+      if (totals[name.toLowerCase()] == 1)
+        name
+      else
+        '$name · ${ordinals.update(name.toLowerCase(), (value) => value + 1, ifAbsent: () => 1)} of ${totals[name.toLowerCase()]}',
+  ];
 }
 
 String _boundedCatalogText(String value, int maxBytes, String context) {

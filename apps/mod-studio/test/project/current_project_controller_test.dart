@@ -11,6 +11,7 @@ import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -845,6 +846,156 @@ void main() {
         throwsA(isA<Revision3QuestOutlineRequiresReopenException>()),
       );
       expect(managed.questOutlinePublishCalls, 1);
+    },
+  );
+
+  test(
+    'Quest context seed and publication are exact-checkpoint guarded',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final seed = _questContextSeed(fixture);
+      final plan = await _questContextPlan(fixture);
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-context'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        onQuestContextSeed:
+            (
+              lease,
+              questId,
+              questRevision,
+              moduleId,
+              moduleRevision,
+              parentRuntime,
+              giverRuntime,
+            ) {
+              expect(questId, revision3QuestOutlineQuestId);
+              expect(questRevision, fixture.questRevision);
+              expect(moduleId, revision3QuestOutlineModuleId);
+              expect(moduleRevision, fixture.moduleRevision);
+              expect(parentRuntime, 'UQuest_SwampCamp_SCChapter2');
+              expect(giverRuntime, 'OM_GRD_Asghan_263');
+              return seed;
+            },
+        onQuestContextPublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          expect(received, same(plan));
+          lease.projectRevision = fixture.projectRevision + 1;
+          lease.head = _head(fixture.projectRevision + 1);
+          return Revision3QuestContextEditPublication(
+            projectId: revision3QuestOutlineProjectId,
+            projectRevision: fixture.projectRevision + 1,
+            questId: revision3QuestOutlineQuestId,
+            moduleId: revision3QuestOutlineModuleId,
+            questRevision: fixture.questRevision + 1,
+            moduleRevision: fixture.moduleRevision + 1,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final loaded = await coordinator.readCurrentRevision3QuestContextSeed(
+        expectedRoot: managed.root.path,
+        expectedProjectId: revision3QuestOutlineProjectId,
+        expectedProjectRevision: fixture.projectRevision,
+        expectedHead: _head(fixture.projectRevision),
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+        expectedParentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
+        expectedGiverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+      );
+      expect(loaded.description, seed.description);
+      expect(managed.questContextSeedCalls, 1);
+
+      final publication = await coordinator.editCurrentRevision3QuestContext(
+        expectedRoot: managed.root.path,
+        expectedProjectId: revision3QuestOutlineProjectId,
+        expectedProjectRevision: fixture.projectRevision,
+        expectedHead: _head(fixture.projectRevision),
+        gameRoot: r'C:\Games\Gothic Remake',
+        plan: plan,
+      );
+      expect(publication.projectRevision, fixture.projectRevision + 1);
+      expect(managed.questContextPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        fixture.projectRevision + 1,
+      );
+    },
+  );
+
+  test(
+    'Quest context stale and reopen guards make no extra lease calls',
+    () async {
+      final fixture = Revision3QuestOutlineFixture();
+      final plan = await _questContextPlan(fixture);
+      final managed = _FakeManagedLease(
+        root: Directory('managed-quest-context-guards'),
+        projectIdValue: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        onQuestContextPublish: (lease, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected context verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.editCurrentRevision3QuestContext(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: fixture.projectRevision,
+          expectedHead: _head(fixture.projectRevision - 1),
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3QuestContextStaleCheckpointException>()),
+      );
+      expect(managed.questContextPublishCalls, 0);
+
+      await expectLater(
+        coordinator.editCurrentRevision3QuestContext(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: fixture.projectRevision,
+          expectedHead: _head(fixture.projectRevision),
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3QuestContextRequiresReopenException>()),
+      );
+      expect(managed.questContextPublishCalls, 1);
+      await expectLater(
+        coordinator.editCurrentRevision3QuestContext(
+          expectedRoot: managed.root.path,
+          expectedProjectId: revision3QuestOutlineProjectId,
+          expectedProjectRevision: fixture.projectRevision,
+          expectedHead: _head(fixture.projectRevision),
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3QuestContextRequiresReopenException>()),
+      );
+      expect(managed.questContextPublishCalls, 1);
     },
   );
 
@@ -1793,6 +1944,111 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
   }
 }
 
+AuthoringRevision3QuestContextSeed _questContextSeed(
+  Revision3QuestOutlineFixture fixture,
+) => AuthoringRevision3QuestContextSeed.forProject(
+  currentProjectJson: fixture.projectJson,
+  questId: revision3QuestOutlineQuestId,
+  expectedQuestRevision: fixture.questRevision,
+  expectedModuleId: revision3QuestOutlineModuleId,
+  expectedModuleRevision: fixture.moduleRevision,
+  expectedParentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
+  expectedGiverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+);
+
+Future<Revision3QuestContextEditTechnicalPlan> _questContextPlan(
+  Revision3QuestOutlineFixture fixture,
+) async {
+  final index = fixture.contentIndex();
+  final catalog = _controllerQuestContextCatalog(fixture);
+  Revision3QuestContextEditTechnicalPlan? result;
+  final service = Revision3QuestContextAuthoringService(
+    loadSeed:
+        ({
+          required questId,
+          required expectedQuestRevision,
+          required expectedModuleId,
+          required expectedModuleRevision,
+          required expectedParentRuntimeClass,
+          required expectedGiverRuntimeUniqueName,
+        }) async => _questContextSeed(fixture),
+    loadCatalog: (_) async => catalog,
+    publishTechnicalPlan: ({required gameRoot, required plan}) async {
+      result = plan;
+      return Revision3QuestContextEditPublication(
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision + 1,
+        questId: revision3QuestOutlineQuestId,
+        moduleId: revision3QuestOutlineModuleId,
+        questRevision: fixture.questRevision + 1,
+        moduleRevision: fixture.moduleRevision + 1,
+      );
+    },
+  );
+  final checkpoint = await service.load(
+    index: index,
+    quest: index.entityById(revision3QuestOutlineQuestId)!,
+    gameRoot: r'C:\Games\Gothic Remake',
+  );
+  await service.publish(
+    checkpoint: checkpoint,
+    gameRoot: r'C:\Games\Gothic Remake',
+    description: 'Find Homer and report back safely.',
+    parent: checkpoint.catalog.parent(revision3QuestContextParentCatalogId)!,
+    giver: checkpoint.catalog.giver(revision3QuestContextGiverCatalogId)!,
+  );
+  return result!;
+}
+
+Revision3QuestCatalog _controllerQuestContextCatalog(
+  Revision3QuestOutlineFixture fixture,
+) => Revision3QuestCatalog(
+  parents: [
+    Revision3QuestParentChoice(
+      catalogId: 'current-parent',
+      displayName: 'Chapter Two',
+      runtimeClass: 'UQuest_SwampCamp_SCChapter2',
+      catalogLayer: 'base-game.quest-parent.v1',
+      authoringSelector: 'SwampCamp_SCChapter2',
+      sourceSeal: _controllerSeal(11, '1'),
+    ),
+    Revision3QuestParentChoice(
+      catalogId: revision3QuestContextParentCatalogId,
+      displayName: 'Chapter Three',
+      runtimeClass: revision3QuestContextParentRuntimeClass,
+      catalogLayer: 'base-game.quest-parent.v1',
+      authoringSelector: 'SwampCamp_SCChapter3',
+      sourceSeal: _controllerSeal(11, '1'),
+    ),
+  ],
+  givers: [
+    Revision3QuestGiverChoice(
+      catalogId: 'current-giver',
+      displayName: 'Asghan',
+      runtimeUniqueName: 'OM_GRD_Asghan_263',
+      catalogLayer: 'base-game.npc.v1',
+      authoringSelector: 'OM_GRD_Asghan_263',
+      sourceSeal: _controllerSeal(12, '2'),
+    ),
+    Revision3QuestGiverChoice(
+      catalogId: revision3QuestContextGiverCatalogId,
+      displayName: 'Viper',
+      runtimeUniqueName: revision3QuestContextGiverRuntimeUniqueName,
+      catalogLayer: 'base-game.npc.v1',
+      authoringSelector: revision3QuestContextGiverRuntimeUniqueName,
+      sourceSeal: _controllerSeal(12, '2'),
+    ),
+  ],
+  catalogSeal: fixture.storyCatalogSeal,
+  generationExecutableSeal: _controllerSeal(171698176, 'a'),
+);
+
+AuthoringDraftContentSeal _controllerSeal(int bytes, String digit) =>
+    AuthoringDraftContentSeal.fromJson(<String, Object?>{
+      'byte_len': bytes,
+      'sha256': List<String>.filled(64, digit).join(),
+    });
+
 typedef _VerifyHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _ContentReadHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _QuestPublishHook =
@@ -1805,6 +2061,22 @@ typedef _QuestOutlinePublishHook =
     FutureOr<Revision3QuestOutlineEditPublication> Function(
       _FakeManagedLease lease,
       Revision3QuestOutlineEditInput input,
+    );
+typedef _QuestContextSeedHook =
+    FutureOr<AuthoringRevision3QuestContextSeed> Function(
+      _FakeManagedLease lease,
+      String questId,
+      int questRevision,
+      String moduleId,
+      int moduleRevision,
+      String parentRuntimeClass,
+      String giverRuntimeUniqueName,
+    );
+typedef _QuestContextPublishHook =
+    FutureOr<Revision3QuestContextEditPublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      Revision3QuestContextEditTechnicalPlan plan,
     );
 typedef _NpcPublishHook =
     FutureOr<Revision3NpcDraftPublication> Function(
@@ -1862,6 +2134,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
+    this.onQuestContextSeed,
+    this.onQuestContextPublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
@@ -1886,6 +2160,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _NpcPublishHook? onNpcPublish;
   final _QuestPublishHook? onQuestPublish;
   final _QuestOutlinePublishHook? onQuestOutlinePublish;
+  final _QuestContextSeedHook? onQuestContextSeed;
+  final _QuestContextPublishHook? onQuestContextPublish;
   final _VoicePublishHook? onVoicePublish;
   final _VoiceSelectionPublishHook? onVoiceSelectionPublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
@@ -1903,6 +2179,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
+  int questContextSeedCalls = 0;
+  int questContextPublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
@@ -1961,6 +2239,45 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest outline publisher');
     }
     return publish(this, input);
+  }
+
+  @override
+  Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  }) async {
+    questContextSeedCalls++;
+    final read = onQuestContextSeed;
+    if (read == null) {
+      throw StateError('fake managed lease has no Quest context seed');
+    }
+    return read(
+      this,
+      questId,
+      expectedQuestRevision,
+      expectedModuleId,
+      expectedModuleRevision,
+      expectedParentRuntimeClass,
+      expectedGiverRuntimeUniqueName,
+    );
+  }
+
+  @override
+  Future<Revision3QuestContextEditPublication>
+  prepareAndPublishQuestContextEditV1({
+    required String gameRoot,
+    required Revision3QuestContextEditTechnicalPlan plan,
+  }) async {
+    questContextPublishCalls++;
+    final publish = onQuestContextPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest context publisher');
+    }
+    return publish(this, gameRoot, plan);
   }
 
   @override

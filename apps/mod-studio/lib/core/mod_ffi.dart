@@ -13,6 +13,7 @@ export '../dataasset/domain/dataasset_semantic_edit.dart';
 
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
@@ -736,6 +737,47 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3QuestOutlineEditPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one fresh-Story-catalog-backed context edit for an exact-current
+  /// managed revision-3 Quest and its already-owned generated ScriptModule.
+  ///
+  /// Catalog IDs are the only catalog selections crossing the intent wire.
+  /// Native code owns game/catalog authority and cannot publish the fixed head.
+  Future<AuthoringRevision3QuestContextEditPreparation>
+  authoringStorePrepareRevision3QuestContextEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestContextEditRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_quest_context_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'quest_context_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3QuestContextEditPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

@@ -51,19 +51,79 @@ void main() {
     expect(find.text('GORE_GATE_GUARD'), findsWidgets);
   });
 
-  testWidgets('hides Quest outline editing without an edit lease', (
-    tester,
-  ) async {
+  testWidgets('disables Edit Quest without an edit lease', (tester) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
     await _pumpLoadedLibrary(tester);
 
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
 
+    final editQuest = find.byKey(Key('revision3-content-edit-quest-$_questId'));
+    expect(editQuest, findsOneWidget);
+    await tester.tap(editQuest);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Name & objectives'), findsNothing);
+    expect(find.text('Description & connections'), findsNothing);
     expect(
       find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
       findsNothing,
     );
+    expect(
+      find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('Edit Quest keeps outline usable when context has no game root', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var outlineCalls = 0;
+    await _pumpLoadedLibrary(
+      tester,
+      editQuestOutline: (index, quest) async => outlineCalls++,
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+
+    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Name & objectives'), findsOneWidget);
+    expect(find.text('Description & connections'), findsOneWidget);
+    expect(find.text('Configure the game installation first'), findsOneWidget);
+    expect(
+      tester
+          .widget<PopupMenuItem<Object?>>(
+            find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
+          )
+          .enabled,
+      isFalse,
+    );
+    await tester.tap(find.text('Name & objectives'));
+    await tester.pumpAndSettle();
+    expect(outlineCalls, 1);
+  });
+
+  testWidgets('Edit Quest routes description and connections separately', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var contextCalls = 0;
+    await _pumpLoadedLibrary(
+      tester,
+      editQuestOutline: (index, quest) async {},
+      editQuestContext: (index, quest) async => contextCalls++,
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Description & connections'));
+    await tester.pumpAndSettle();
+    expect(contextCalls, 1);
   });
 
   testWidgets('searches content and filters by semantic kind', (tester) async {
@@ -154,6 +214,11 @@ void main() {
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
 
+    await tester.drag(
+      find.byKey(const Key('revision3-content-entity-details')),
+      const Offset(0, -250),
+    );
+    await tester.pump();
     await tester.tap(find.text('draft script module'));
     await tester.pump();
     expect(
@@ -387,8 +452,17 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
   addTearDown(() => tester.binding.setSurfaceSize(null));
 }
 
-Future<void> _pumpLoadedLibrary(WidgetTester tester) async {
-  await _pumpLibrary(tester, load: () async => _fixture());
+Future<void> _pumpLoadedLibrary(
+  WidgetTester tester, {
+  Revision3QuestOutlineEditor? editQuestOutline,
+  Revision3QuestContextEditor? editQuestContext,
+}) async {
+  await _pumpLibrary(
+    tester,
+    load: () async => _fixture(),
+    editQuestOutline: editQuestOutline,
+    editQuestContext: editQuestContext,
+  );
   await tester.pumpAndSettle();
 }
 
@@ -396,6 +470,8 @@ Future<void> _pumpLibrary(
   WidgetTester tester, {
   required Revision3ContentIndexLoader load,
   int projectRevision = 7,
+  Revision3QuestOutlineEditor? editQuestOutline,
+  Revision3QuestContextEditor? editQuestContext,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -405,6 +481,8 @@ Future<void> _pumpLibrary(
         projectRevision: projectRevision,
         projectHeadCanonicalJson: 'canonical-head-$projectRevision',
         load: load,
+        editQuestOutline: editQuestOutline,
+        editQuestContext: editQuestContext,
       ),
     ),
   ),

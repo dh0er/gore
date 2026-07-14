@@ -142,6 +142,35 @@ final class ManagedRevision3QuestOutlineEditCheckpoint {
   final int moduleRevision;
 }
 
+/// One existing Quest context/module pair returned only after fresh-catalog
+/// native preparation, full candidate reopen, fixed-head CAS publication and
+/// full published reopen.
+final class ManagedRevision3QuestContextEditCheckpoint {
+  const ManagedRevision3QuestContextEditCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.questId,
+    required this.moduleId,
+    required this.questRevision,
+    required this.moduleRevision,
+    required this.parentRuntimeClass,
+    required this.giverRuntimeUniqueName,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String questId;
+  final String moduleId;
+  final int questRevision;
+  final int moduleRevision;
+  final String parentRuntimeClass;
+  final String giverRuntimeUniqueName;
+}
+
 /// One NPC Draft/module pair returned only after its native candidate was fully reopened,
 /// fixed-head CAS published, and fully reopened again. It grants no build, runtime, catalog,
 /// collision, source-inspection, spawn, deployment, or native-publication authority.
@@ -419,6 +448,14 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   });
 
+  Future<AuthoringRevision3QuestContextEditPreparation>
+  prepareQuestContextEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestContextEditRequestV1 request,
+  });
+
   Future<AuthoringRevision3NpcDraftPreparation> prepareNpcDraftV1({
     required String root,
     required String gameRoot,
@@ -541,6 +578,20 @@ final class ModFfiManagedRevision3AuthoringStore
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV1(
     root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3QuestContextEditPreparation>
+  prepareQuestContextEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestContextEditRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3QuestContextEditV1(
+    root: root,
+    gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     request: request,
   );
@@ -1098,6 +1149,126 @@ class ManagedRevision3AuthoringProjectSession {
         },
       );
 
+  /// Edit the description/family/giver context of one exact-current Quest.
+  /// Fresh catalog authority remains native; this session constructs the
+  /// request only inside its serialized basis and publishes through the common
+  /// full-reopen, repair and exact byte-CAS lane.
+  Future<ManagedRevision3QuestContextEditCheckpoint>
+  prepareAndPublishQuestContextEditV1({
+    required String gameRoot,
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringDraftContentSeal expectedStoryCatalogSeal,
+    required String description,
+    required String parentCatalogId,
+    required String giverCatalogId,
+    required String expectedParentRuntimeClass,
+    required String expectedParentCatalogLayer,
+    required String expectedParentAuthoringSelector,
+    required AuthoringDraftContentSeal expectedParentSourceSeal,
+    required String expectedGiverRuntimeUniqueName,
+    required String expectedGiverCatalogLayer,
+    required String expectedGiverAuthoringSelector,
+    required AuthoringDraftContentSeal expectedGiverSourceSeal,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3QuestContextEditCheckpoint
+      >(
+        operation: 'prepareAndPublishQuestContextEditV1',
+        handlePrepareError: _core._throwRevision3QuestContextPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest context edit has no exact project identity',
+            );
+          }
+          final request =
+              AuthoringRevision3QuestContextEditRequestV1.forProject(
+                expectedHead: basis.head,
+                currentProjectJson: basis.projectJson,
+                expectedStoryCatalogSeal: expectedStoryCatalogSeal,
+                questId: questId,
+                expectedQuestRevision: expectedQuestRevision,
+                description: description,
+                parentCatalogId: parentCatalogId,
+                giverCatalogId: giverCatalogId,
+                expectedParentRuntimeClass: expectedParentRuntimeClass,
+                expectedParentCatalogLayer: expectedParentCatalogLayer,
+                expectedParentAuthoringSelector:
+                    expectedParentAuthoringSelector,
+                expectedParentSourceSeal: expectedParentSourceSeal,
+                expectedGiverRuntimeUniqueName: expectedGiverRuntimeUniqueName,
+                expectedGiverCatalogLayer: expectedGiverCatalogLayer,
+                expectedGiverAuthoringSelector: expectedGiverAuthoringSelector,
+                expectedGiverSourceSeal: expectedGiverSourceSeal,
+              );
+          if (request.moduleId != expectedModuleId ||
+              request.expectedModuleRevision != expectedModuleRevision) {
+            throw const FormatException(
+              'revision-3 Quest context edit does not bind the selected Quest module',
+            );
+          }
+          final prepared = await _store.prepareQuestContextEditV1(
+            root: root.path,
+            gameRoot: gameRoot,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.questId != request.questId ||
+              prepared.moduleId != request.moduleId ||
+              prepared.questRevision != request.expectedQuestRevision + 1 ||
+              prepared.moduleRevision != request.expectedModuleRevision + 1 ||
+              prepared.parentCatalogId != request.parentCatalogId ||
+              prepared.giverCatalogId != request.giverCatalogId ||
+              prepared.parentRuntimeClass != expectedParentRuntimeClass ||
+              prepared.parentCatalogLayer != expectedParentCatalogLayer ||
+              prepared.parentAuthoringSelector !=
+                  expectedParentAuthoringSelector ||
+              !_sameDraftContentSeal(
+                prepared.parentSourceSeal,
+                expectedParentSourceSeal,
+              ) ||
+              prepared.giverRuntimeUniqueName !=
+                  expectedGiverRuntimeUniqueName ||
+              prepared.giverCatalogLayer != expectedGiverCatalogLayer ||
+              prepared.giverAuthoringSelector !=
+                  expectedGiverAuthoringSelector ||
+              !_sameDraftContentSeal(
+                prepared.giverSourceSeal,
+                expectedGiverSourceSeal,
+              )) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest context preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3QuestContextEditCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3QuestContextEditCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              questId: prepared.questId,
+              moduleId: prepared.moduleId,
+              questRevision: prepared.questRevision,
+              moduleRevision: prepared.moduleRevision,
+              parentRuntimeClass: prepared.parentRuntimeClass,
+              giverRuntimeUniqueName: prepared.giverRuntimeUniqueName,
+            ),
+          );
+        },
+      );
+
   /// Prepare and publish one offline-only revision-3 NPC Draft/module pair.
   ///
   /// The request's project ID, revision, target, and head are derived only after entering the
@@ -1601,6 +1772,29 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Read one private existing-Quest context seed directly from this session's
+  /// exact canonical project. The project transport never leaves the session.
+  Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  }) => _core.readExact<AuthoringRevision3QuestContextSeed>(
+    (basis) async => AuthoringRevision3QuestContextSeed.forProject(
+      currentProjectJson: basis.projectJson,
+      questId: questId,
+      expectedQuestRevision: expectedQuestRevision,
+      expectedModuleId: expectedModuleId,
+      expectedModuleRevision: expectedModuleRevision,
+      expectedParentRuntimeClass: expectedParentRuntimeClass,
+      expectedGiverRuntimeUniqueName: expectedGiverRuntimeUniqueName,
+    ),
+    operation: 'readQuestContextSeedV1',
+    handleReadError: _core._throwRevision3QuestContextSeedReadError,
+  );
 
   /// Read the semantic content projection bound to the exact checkpoint owned by this session.
   ///
@@ -2124,6 +2318,64 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3QuestContextPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_CONTEXT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3QuestContextPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest context preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3QuestContextSeedReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    // A selected ContentIndex entity can be stale without making the already
+    // reopened project uncertain. The coordinator maps this local mismatch to
+    // a close-and-reopen-editor result.
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Quest context seed could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3NpcPrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_NPC_HEAD_CONFLICT') {
@@ -2616,6 +2868,11 @@ bool _prepareErrorRequiresReopen(String code) => const {
   'AUTHORING_STORE_ROOT_MISSING',
 }.contains(code);
 
+bool _sameDraftContentSeal(
+  AuthoringDraftContentSeal left,
+  AuthoringDraftContentSeal right,
+) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
+
 bool _revision3QuestPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_ARTIFACT_FAILED',
   'AUTHORING_REVISION3_QUEST_CAPABILITY_FAILED',
@@ -2651,6 +2908,36 @@ bool _revision3QuestOutlinePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_OUTLINE_SHAPE_CONFLICT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_SIGNED_WIRE_LIMIT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3QuestContextPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_QUEST_CONTEXT_ARTIFACT_FAILED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_CAPABILITY_FAILED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_COLLISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_CHANGED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_MISSING',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_INVENTORY_FAILED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_NO_CHANGES',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_PRISTINE_UNAVAILABLE',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_PROJECT_INVALID',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_QUEST_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_REVISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_STORE_GAME_ALIAS',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_STORE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_CONTEXT_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3NpcPrepareErrorIsRetryable(String code) => const {

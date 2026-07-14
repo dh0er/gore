@@ -8,8 +8,15 @@ typedef Revision3QuestOutlineEditor =
       Revision3ContentIndex index,
       Revision3ContentEntity quest,
     );
+typedef Revision3QuestContextEditor =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity quest,
+    );
 
 enum _ContentMode { entities, assets }
+
+enum _QuestEditAction { outline, context }
 
 /// First real managed-R3 content surface.
 ///
@@ -25,6 +32,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     required this.projectHeadCanonicalJson,
     required this.load,
     this.editQuestOutline,
+    this.editQuestContext,
     super.key,
   });
 
@@ -34,6 +42,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final String projectHeadCanonicalJson;
   final Revision3ContentIndexLoader load;
   final Revision3QuestOutlineEditor? editQuestOutline;
+  final Revision3QuestContextEditor? editQuestContext;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -238,6 +247,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                   onEditQuestOutline: widget.editQuestOutline == null
                       ? null
                       : () => widget.editQuestOutline!(index, entity),
+                  onEditQuestContext: widget.editQuestContext == null
+                      ? null
+                      : () => widget.editQuestContext!(index, entity),
                 ),
               );
             }
@@ -263,6 +275,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                       onEditQuestOutline: widget.editQuestOutline == null
                           ? null
                           : () => widget.editQuestOutline!(index, selected),
+                      onEditQuestContext: widget.editQuestContext == null
+                          ? null
+                          : () => widget.editQuestContext!(index, selected),
                     ),
             ),
           ],
@@ -661,6 +676,7 @@ class _EntityDetails extends StatelessWidget {
     required this.onOpenEntity,
     required this.onOpenAsset,
     required this.onEditQuestOutline,
+    required this.onEditQuestContext,
   });
 
   final Revision3ContentIndex index;
@@ -668,6 +684,7 @@ class _EntityDetails extends StatelessWidget {
   final ValueChanged<String> onOpenEntity;
   final ValueChanged<String> onOpenAsset;
   final Future<void> Function()? onEditQuestOutline;
+  final Future<void> Function()? onEditQuestContext;
 
   @override
   Widget build(BuildContext context) {
@@ -689,16 +706,66 @@ class _EntityDetails extends StatelessWidget {
           ),
           Text(entity.kind.displayName),
           if (entity.kind == Revision3ContentEntityKind.questDraft &&
-              entity.summary.questDraft != null &&
-              onEditQuestOutline != null) ...[
+              entity.summary.questDraft != null) ...[
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerLeft,
-              child: FilledButton.tonalIcon(
-                key: Key('revision3-content-edit-quest-outline-${entity.id}'),
-                onPressed: onEditQuestOutline,
-                icon: const Icon(Icons.edit_note_outlined),
-                label: const Text('Edit quest outline'),
+              child: PopupMenuButton<_QuestEditAction>(
+                key: Key('revision3-content-edit-quest-${entity.id}'),
+                enabled:
+                    onEditQuestOutline != null || onEditQuestContext != null,
+                tooltip: 'Edit Quest',
+                onSelected: (action) async {
+                  switch (action) {
+                    case _QuestEditAction.outline:
+                      await onEditQuestOutline?.call();
+                    case _QuestEditAction.context:
+                      await onEditQuestContext?.call();
+                  }
+                },
+                itemBuilder: (context) => [
+                  PopupMenuItem(
+                    key: Key(
+                      'revision3-content-edit-quest-outline-${entity.id}',
+                    ),
+                    value: _QuestEditAction.outline,
+                    enabled: onEditQuestOutline != null,
+                    child: const ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(Icons.format_list_bulleted_outlined),
+                      title: Text('Name & objectives'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    key: Key(
+                      'revision3-content-edit-quest-context-${entity.id}',
+                    ),
+                    value: _QuestEditAction.context,
+                    enabled: onEditQuestContext != null,
+                    child: ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.account_tree_outlined),
+                      title: const Text('Description & connections'),
+                      subtitle: onEditQuestContext == null
+                          ? const Text('Configure the game installation first')
+                          : null,
+                    ),
+                  ),
+                ],
+                child: const Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.edit_note_outlined),
+                        SizedBox(width: 8),
+                        Text('Edit Quest'),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           ],

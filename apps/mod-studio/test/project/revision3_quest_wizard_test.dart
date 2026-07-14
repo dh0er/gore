@@ -43,6 +43,8 @@ void main() {
       expect(find.text('Asghan'), findsOneWidget);
       expect(find.text('parent-one'), findsNothing);
       expect(find.text('giver-asghan'), findsNothing);
+      expect(find.text('UQuest_ChapterOne'), findsNothing);
+      expect(find.text('OM_GRD_Asghan_263'), findsNothing);
       expect(find.textContaining('module namespace'), findsNothing);
 
       await _fillForm(tester);
@@ -348,12 +350,19 @@ Revision3QuestCatalog _catalog({
   String parentName = 'Chapter One',
 }) => Revision3QuestCatalog(
   parents: [
-    Revision3QuestCatalogChoice(catalogId: parentId, displayName: parentName),
+    Revision3QuestParentChoice(
+      catalogId: parentId,
+      displayName: parentName,
+      runtimeClass: parentId == 'parent-one'
+          ? 'UQuest_ChapterOne'
+          : 'UQuest_ChapterTwo',
+    ),
   ],
   givers: [
-    Revision3QuestCatalogChoice(
+    Revision3QuestGiverChoice(
       catalogId: 'giver-asghan',
       displayName: 'Asghan',
+      runtimeUniqueName: 'OM_GRD_Asghan_263',
     ),
   ],
 );

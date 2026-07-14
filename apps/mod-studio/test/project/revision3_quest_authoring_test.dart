@@ -155,18 +155,30 @@ void main() {
   );
 
   test('catalog projection requires nonempty unique picker identities', () {
-    final parent = Revision3QuestCatalogChoice(
+    final parent = Revision3QuestParentChoice(
       catalogId: 'parent-one',
       displayName: 'Chapter One',
+      runtimeClass: 'UQuest_ChapterOne',
     );
-    final giver = Revision3QuestCatalogChoice(
+    final giver = Revision3QuestGiverChoice(
       catalogId: 'giver-one',
       displayName: 'Asghan',
+      runtimeUniqueName: 'OM_GRD_Asghan_263',
     );
     final catalog = Revision3QuestCatalog(parents: [parent], givers: [giver]);
 
     expect(catalog.containsParent('parent-one'), isTrue);
     expect(catalog.containsGiver('giver-one'), isTrue);
+    expect(
+      catalog.parentForRuntimeClass('UQuest_ChapterOne')?.catalogId,
+      'parent-one',
+    );
+    expect(
+      catalog.giverForRuntimeUniqueName('OM_GRD_Asghan_263')?.catalogId,
+      'giver-one',
+    );
+    expect(catalog.parents.single.displayLabel, 'Chapter One');
+    expect(catalog.givers.single.displayLabel, 'Asghan');
     expect(
       () => Revision3QuestCatalog(parents: const [], givers: [giver]),
       throwsFormatException,
@@ -176,6 +188,55 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test(
+    'catalog disambiguates duplicate friendly names without exposing IDs',
+    () {
+      final catalog = Revision3QuestCatalog(
+        parents: [
+          Revision3QuestParentChoice(
+            catalogId: 'parent-one',
+            displayName: 'Chapter One',
+            runtimeClass: 'UQuest_ChapterOne_A',
+          ),
+          Revision3QuestParentChoice(
+            catalogId: 'parent-two',
+            displayName: 'Chapter One',
+            runtimeClass: 'UQuest_ChapterOne_B',
+          ),
+        ],
+        givers: [
+          Revision3QuestGiverChoice(
+            catalogId: 'giver-one',
+            displayName: 'Asghan',
+            runtimeUniqueName: 'OM_GRD_Asghan_263',
+          ),
+          Revision3QuestGiverChoice(
+            catalogId: 'giver-two',
+            displayName: 'Asghan',
+            runtimeUniqueName: 'OM_GRD_Asghan_264',
+          ),
+        ],
+      );
+
+      expect(catalog.parents.map((choice) => choice.displayLabel), [
+        'Chapter One · 1 of 2',
+        'Chapter One · 2 of 2',
+      ]);
+      expect(catalog.givers.map((choice) => choice.displayLabel), [
+        'Asghan · 1 of 2',
+        'Asghan · 2 of 2',
+      ]);
+      expect(
+        catalog.parents.map((choice) => choice.displayLabel).join(' '),
+        isNot(contains('parent-one')),
+      );
+      expect(
+        catalog.givers.map((choice) => choice.displayLabel).join(' '),
+        isNot(contains('OM_GRD_Asghan')),
+      );
+    },
+  );
 }
 
 Revision3QuestDraftAuthoringInput _input() => Revision3QuestDraftAuthoringInput(

@@ -13,6 +13,11 @@ const revision3QuestOutlineArtifactSha =
     'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const revision3QuestOutlineTargetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const revision3QuestContextParentCatalogId =
+    'g1r:quest-parent:swampcamp_scchapter3';
+const revision3QuestContextGiverCatalogId = 'g1r:npc:om_grd_viper_270';
+const revision3QuestContextParentRuntimeClass = 'UQuest_SwampCamp_SCChapter3';
+const revision3QuestContextGiverRuntimeUniqueName = 'OM_GRD_Viper_270';
 
 final class Revision3QuestOutlineFixture {
   Revision3QuestOutlineFixture({
@@ -98,6 +103,34 @@ final class Revision3QuestOutlineFixture {
     objectiveTitles: objectiveTitles,
   );
 
+  AuthoringDraftContentSeal get storyCatalogSeal =>
+      AuthoringDraftContentSeal.fromJson(_seal(2048, '9'));
+
+  AuthoringRevision3QuestContextEditRequestV1 contextRequest({
+    String description = 'Find Homer and report back safely.',
+    String parentCatalogId = revision3QuestContextParentCatalogId,
+    String giverCatalogId = revision3QuestContextGiverCatalogId,
+  }) => AuthoringRevision3QuestContextEditRequestV1.forProject(
+    expectedHead: head,
+    currentProjectJson: projectJson,
+    expectedStoryCatalogSeal: storyCatalogSeal,
+    questId: revision3QuestOutlineQuestId,
+    expectedQuestRevision: questRevision,
+    description: description,
+    parentCatalogId: parentCatalogId,
+    giverCatalogId: giverCatalogId,
+    expectedParentRuntimeClass: revision3QuestContextParentRuntimeClass,
+    expectedParentCatalogLayer: 'base-game.quest-parent.v1',
+    expectedParentAuthoringSelector: 'SwampCamp_SCChapter3',
+    expectedParentSourceSeal: AuthoringDraftContentSeal.fromJson(
+      _seal(11, '1'),
+    ),
+    expectedGiverRuntimeUniqueName: revision3QuestContextGiverRuntimeUniqueName,
+    expectedGiverCatalogLayer: 'base-game.npc.v1',
+    expectedGiverAuthoringSelector: revision3QuestContextGiverRuntimeUniqueName,
+    expectedGiverSourceSeal: AuthoringDraftContentSeal.fromJson(_seal(12, '2')),
+  );
+
   String candidateProjectJson({
     String displayName = 'Find Homer safely',
     String title = 'Find Homer safely',
@@ -156,6 +189,88 @@ final class Revision3QuestOutlineFixture {
       'publication_status': 'not_supported',
     };
   }
+
+  String contextCandidateProjectJson({
+    String description = 'Find Homer and report back safely.',
+    String parentRuntimeClass = revision3QuestContextParentRuntimeClass,
+    String giverRuntimeUniqueName = revision3QuestContextGiverRuntimeUniqueName,
+    String parentCatalogLayer = 'base-game.quest-parent.v1',
+    String? parentAuthoringSelector,
+    Map<String, Object?>? parentSourceSeal,
+    String giverCatalogLayer = 'base-game.npc.v1',
+    String? giverAuthoringSelector,
+    Map<String, Object?>? giverSourceSeal,
+  }) {
+    final project = projectObject();
+    project['revision'] = projectRevision + 1;
+    final entities = (project['entities']! as Map).cast<String, Object?>();
+    final input = _questInput(
+      title: title,
+      objectiveTitles: objectiveTitles,
+      description: description,
+      parentRuntimeClass: parentRuntimeClass,
+      giverRuntimeUniqueName: giverRuntimeUniqueName,
+      parentCatalogLayer: parentCatalogLayer,
+      parentAuthoringSelector: parentAuthoringSelector,
+      parentSourceSeal: parentSourceSeal,
+      giverCatalogLayer: giverCatalogLayer,
+      giverAuthoringSelector: giverAuthoringSelector,
+      giverSourceSeal: giverSourceSeal,
+    );
+    entities[revision3QuestOutlineQuestId] = _questEntity(
+      input: input,
+      revision: questRevision + 1,
+      displayName: displayName,
+    );
+    entities[revision3QuestOutlineModuleId] = _moduleEntity(
+      input: input,
+      revision: moduleRevision + 1,
+      displayName: '$displayName Script',
+    );
+    return jsonEncode(project);
+  }
+
+  Map<String, Object?> contextResponse({
+    String description = 'Find Homer and report back safely.',
+    String parentCatalogId = revision3QuestContextParentCatalogId,
+    String giverCatalogId = revision3QuestContextGiverCatalogId,
+    String parentRuntimeClass = revision3QuestContextParentRuntimeClass,
+    String giverRuntimeUniqueName = revision3QuestContextGiverRuntimeUniqueName,
+    String parentCatalogLayer = 'base-game.quest-parent.v1',
+    String? parentAuthoringSelector,
+    Map<String, Object?>? parentSourceSeal,
+    String giverCatalogLayer = 'base-game.npc.v1',
+    String? giverAuthoringSelector,
+    Map<String, Object?>? giverSourceSeal,
+  }) => <String, Object?>{
+    'ok': true,
+    'outcome': 'prepared_unpublished',
+    'basis_head_json': head.canonicalJson,
+    'head_json': manifestHead(4101, 'd').canonicalJson,
+    'project_json': contextCandidateProjectJson(
+      description: description,
+      parentRuntimeClass: parentRuntimeClass,
+      giverRuntimeUniqueName: giverRuntimeUniqueName,
+      parentCatalogLayer: parentCatalogLayer,
+      parentAuthoringSelector: parentAuthoringSelector,
+      parentSourceSeal: parentSourceSeal,
+      giverCatalogLayer: giverCatalogLayer,
+      giverAuthoringSelector: giverAuthoringSelector,
+      giverSourceSeal: giverSourceSeal,
+    ),
+    'project_id': revision3QuestOutlineProjectId,
+    'revision': projectRevision + 1,
+    'quest_id': revision3QuestOutlineQuestId,
+    'module_id': revision3QuestOutlineModuleId,
+    'quest_revision': questRevision + 1,
+    'module_revision': moduleRevision + 1,
+    'story_catalog_seal': _seal(2048, '9'),
+    'parent_catalog_id': parentCatalogId,
+    'giver_catalog_id': giverCatalogId,
+    'build_status': 'blocked',
+    'runtime_status': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+  };
 
   Revision3ContentIndex
   contentIndex() => Revision3ContentIndex.fromJsonObject(<String, Object?>{
@@ -261,6 +376,16 @@ final class Revision3QuestOutlineFixture {
   Map<String, Object?> _questInput({
     required String title,
     required List<String> objectiveTitles,
+    String description =
+        'Find the missing worker without changing runtime logic.',
+    String parentRuntimeClass = 'UQuest_SwampCamp_SCChapter2',
+    String giverRuntimeUniqueName = 'OM_GRD_Asghan_263',
+    String parentCatalogLayer = 'base-game.quest-parent.v1',
+    String? parentAuthoringSelector,
+    Map<String, Object?>? parentSourceSeal,
+    String giverCatalogLayer = 'base-game.npc.v1',
+    String? giverAuthoringSelector,
+    Map<String, Object?>? giverSourceSeal,
   }) => <String, Object?>{
     'target': _target(),
     'quest_id': revision3QuestOutlineQuestId,
@@ -269,20 +394,22 @@ final class Revision3QuestOutlineFixture {
     'text_helper': 'GoreFindHomerText',
     'parent_quest': <String, Object?>{
       'generation': _target(),
-      'source_seal': _seal(11, '1'),
-      'catalog_layer': 'base-game.quest-parent.v1',
-      'canonical_selector': 'SwampCamp_SCChapter2',
-      'runtime_class': 'UQuest_SwampCamp_SCChapter2',
+      'source_seal': parentSourceSeal ?? _seal(11, '1'),
+      'catalog_layer': parentCatalogLayer,
+      'canonical_selector':
+          parentAuthoringSelector ??
+          parentRuntimeClass.substring('UQuest_'.length),
+      'runtime_class': parentRuntimeClass,
     },
     'giver': <String, Object?>{
       'generation': _target(),
-      'source_seal': _seal(12, '2'),
-      'catalog_layer': 'base-game.npc.v1',
-      'canonical_selector': 'OM_GRD_Asghan_263',
-      'runtime_unique_name': 'OM_GRD_Asghan_263',
+      'source_seal': giverSourceSeal ?? _seal(12, '2'),
+      'catalog_layer': giverCatalogLayer,
+      'canonical_selector': giverAuthoringSelector ?? giverRuntimeUniqueName,
+      'runtime_unique_name': giverRuntimeUniqueName,
     },
     'title': title,
-    'description': 'Find the missing worker without changing runtime logic.',
+    'description': description,
     'objective_title': objectiveTitles.first,
     'additional_objective_titles': objectiveTitles.skip(1).toList(),
     'collision_catalog': <String, Object?>{
@@ -330,8 +457,10 @@ final class Revision3QuestOutlineFixture {
     final source = revision3QuestGeneratedSource(
       technicalId: 'GORE_FIND_HOMER',
       textHelper: 'GoreFindHomerText',
-      parentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
-      giverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+      parentRuntimeClass:
+          ((input['parent_quest']! as Map)['runtime_class']! as String),
+      giverRuntimeUniqueName:
+          ((input['giver']! as Map)['runtime_unique_name']! as String),
       title: input['title']! as String,
       description: input['description']! as String,
       objectiveTitle: input['objective_title']! as String,

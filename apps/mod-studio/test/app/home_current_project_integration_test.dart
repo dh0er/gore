@@ -21,6 +21,7 @@ import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
+import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -272,19 +273,17 @@ void main() {
 
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
-      final edit = find.byKey(
-        const Key(
-          'revision3-content-edit-quest-outline-$revision3QuestOutlineQuestId',
-        ),
+      final menu = find.byKey(
+        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
       );
-      if (edit.evaluate().isEmpty) {
+      if (menu.evaluate().isEmpty) {
         await tester.tap(
           find.byKey(
             const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
           ),
         );
         await tester.pumpAndSettle();
-        if (edit.evaluate().isEmpty) {
+        if (menu.evaluate().isEmpty) {
           await tester.drag(
             find.byKey(const Key('revision3-content-entity-details')),
             const Offset(0, -300),
@@ -292,6 +291,14 @@ void main() {
           await tester.pump();
         }
       }
+      expect(menu, findsOneWidget);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      final edit = find.byKey(
+        const Key(
+          'revision3-content-edit-quest-outline-$revision3QuestOutlineQuestId',
+        ),
+      );
       expect(edit, findsOneWidget);
       await tester.tap(edit);
       await tester.pumpAndSettle();
@@ -332,6 +339,129 @@ void main() {
           'Build remains blocked; runtime remains unqualified',
         ),
         findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'selected Library Quest context edit reloads catalog and refreshes revision',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_quest_context_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final fixture = Revision3QuestOutlineFixture();
+      var catalogLoads = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\quest-context-authoring'),
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: fixture.projectRevision,
+        head: _head(fixture.projectRevision),
+        contentIndexBuilder: (lease) => Revision3QuestOutlineFixture(
+          projectRevision: lease.projectRevision,
+          questRevision: lease.projectRevision == fixture.projectRevision
+              ? fixture.questRevision
+              : fixture.questRevision + 1,
+          moduleRevision: lease.projectRevision == fixture.projectRevision
+              ? fixture.moduleRevision
+              : fixture.moduleRevision + 1,
+        ).contentIndex(),
+        onQuestContextSeed:
+            (
+              lease,
+              questId,
+              questRevision,
+              moduleId,
+              moduleRevision,
+              parentRuntime,
+              giverRuntime,
+            ) => AuthoringRevision3QuestContextSeed.forProject(
+              currentProjectJson: fixture.projectJson,
+              questId: questId,
+              expectedQuestRevision: questRevision,
+              expectedModuleId: moduleId,
+              expectedModuleRevision: moduleRevision,
+              expectedParentRuntimeClass: parentRuntime,
+              expectedGiverRuntimeUniqueName: giverRuntime,
+            ),
+        onQuestContextPublish: (lease, requestedGameRoot, plan) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(plan.description, 'Find Homer and report back safely.');
+          expect(plan.parentCatalogId, 'context-parent-current');
+          expect(plan.giverCatalogId, 'context-giver-current');
+          expect(plan.expectedParentAuthoringSelector, 'SwampCamp_SCChapter2');
+          expect(plan.expectedGiverAuthoringSelector, 'OM_GRD_Asghan_263');
+          lease.projectRevision = fixture.projectRevision + 1;
+          lease.head = _head(fixture.projectRevision + 1);
+          return Revision3QuestContextEditPublication(
+            projectId: revision3QuestOutlineProjectId,
+            projectRevision: fixture.projectRevision + 1,
+            questId: revision3QuestOutlineQuestId,
+            moduleId: revision3QuestOutlineModuleId,
+            questRevision: fixture.questRevision + 1,
+            moduleRevision: fixture.moduleRevision + 1,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadQuestCatalog: (requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          catalogLoads++;
+          return _questContextCatalog(fixture);
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final menu = find.byKey(
+        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
+      );
+      expect(menu, findsOneWidget);
+      await tester.tap(menu);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Description & connections'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-context-dialog')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('OM_GRD_'), findsNothing);
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-context-description')),
+        'Find Homer and report back safely.',
+      );
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('revision3-quest-context-save')));
+      await tester.pumpAndSettle();
+
+      expect(managed.questContextSeedCalls, 1);
+      expect(catalogLoads, 2);
+      expect(managed.questContextPublishCalls, 1);
+      expect(managed.contentReadCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        fixture.projectRevision + 1,
+      );
+      expect(
+        find.textContaining('Quest description and connections saved'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-context-dialog')),
+        findsNothing,
       );
     },
   );
@@ -1495,6 +1625,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
+    this.onQuestContextSeed,
+    this.onQuestContextPublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
@@ -1532,6 +1664,22 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestOutlineEditInput input,
   )?
   onQuestOutlinePublish;
+  final AuthoringRevision3QuestContextSeed Function(
+    _FakeManagedLease lease,
+    String questId,
+    int questRevision,
+    String moduleId,
+    int moduleRevision,
+    String parentRuntimeClass,
+    String giverRuntimeUniqueName,
+  )?
+  onQuestContextSeed;
+  final Revision3QuestContextEditPublication Function(
+    _FakeManagedLease lease,
+    String gameRoot,
+    Revision3QuestContextEditTechnicalPlan plan,
+  )?
+  onQuestContextPublish;
   final Revision3VoiceTakePublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -1582,6 +1730,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int npcPublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
+  int questContextSeedCalls = 0;
+  int questContextPublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
@@ -1629,6 +1779,45 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no Quest outline publisher');
     }
     return publish(this, input);
+  }
+
+  @override
+  Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  }) async {
+    questContextSeedCalls++;
+    final read = onQuestContextSeed;
+    if (read == null) {
+      throw StateError('fake managed lease has no Quest context seed reader');
+    }
+    return read(
+      this,
+      questId,
+      expectedQuestRevision,
+      expectedModuleId,
+      expectedModuleRevision,
+      expectedParentRuntimeClass,
+      expectedGiverRuntimeUniqueName,
+    );
+  }
+
+  @override
+  Future<Revision3QuestContextEditPublication>
+  prepareAndPublishQuestContextEditV1({
+    required String gameRoot,
+    required Revision3QuestContextEditTechnicalPlan plan,
+  }) async {
+    questContextPublishCalls++;
+    final publish = onQuestContextPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Quest context publisher');
+    }
+    return publish(this, gameRoot, plan);
   }
 
   @override
@@ -1818,18 +2007,53 @@ Revision3ContentIndex _voiceSelectionIndex({
 
 Revision3QuestCatalog _questCatalog() => Revision3QuestCatalog(
   parents: [
-    Revision3QuestCatalogChoice(
+    Revision3QuestParentChoice(
       catalogId: 'parent-one',
       displayName: 'Chapter One',
+      runtimeClass: 'UQuest_ChapterOne',
     ),
   ],
   givers: [
-    Revision3QuestCatalogChoice(
+    Revision3QuestGiverChoice(
       catalogId: 'giver-asghan',
       displayName: 'Asghan',
+      runtimeUniqueName: 'OM_GRD_Asghan_263',
     ),
   ],
 );
+
+Revision3QuestCatalog _questContextCatalog(
+  Revision3QuestOutlineFixture fixture,
+) => Revision3QuestCatalog(
+  parents: [
+    Revision3QuestParentChoice(
+      catalogId: 'context-parent-current',
+      displayName: 'Chapter Two',
+      runtimeClass: 'UQuest_SwampCamp_SCChapter2',
+      catalogLayer: 'base-game.quest-parent.v1',
+      authoringSelector: 'SwampCamp_SCChapter2',
+      sourceSeal: _homeSeal(11, '1'),
+    ),
+  ],
+  givers: [
+    Revision3QuestGiverChoice(
+      catalogId: 'context-giver-current',
+      displayName: 'Asghan',
+      runtimeUniqueName: 'OM_GRD_Asghan_263',
+      catalogLayer: 'base-game.npc.v1',
+      authoringSelector: 'OM_GRD_Asghan_263',
+      sourceSeal: _homeSeal(12, '2'),
+    ),
+  ],
+  catalogSeal: fixture.storyCatalogSeal,
+  generationExecutableSeal: _homeSeal(171698176, 'a'),
+);
+
+AuthoringDraftContentSeal _homeSeal(int bytes, String digit) =>
+    AuthoringDraftContentSeal.fromJson(<String, Object?>{
+      'byte_len': bytes,
+      'sha256': List<String>.filled(64, digit).join(),
+    });
 
 Revision3NpcCatalog _npcCatalog() => Revision3NpcCatalog(
   choices: [

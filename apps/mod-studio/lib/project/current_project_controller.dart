@@ -12,6 +12,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
+import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
@@ -142,6 +143,19 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   Future<Revision3QuestOutlineEditPublication>
   prepareAndPublishQuestOutlineEditV1({
     required Revision3QuestOutlineEditInput input,
+  });
+  Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  });
+  Future<Revision3QuestContextEditPublication>
+  prepareAndPublishQuestContextEditV1({
+    required String gameRoot,
+    required Revision3QuestContextEditTechnicalPlan plan,
   });
   Future<Revision3NpcDraftPublication> prepareAndPublishNpcDraftV1({
     required String gameRoot,
@@ -310,6 +324,58 @@ final class _ManagedRevision3SessionLease
       objectiveTitles: input.objectiveTitles,
     );
     return Revision3QuestOutlineEditPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      questId: checkpoint.questId,
+      moduleId: checkpoint.moduleId,
+      questRevision: checkpoint.questRevision,
+      moduleRevision: checkpoint.moduleRevision,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestContextSeed> readQuestContextSeedV1({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  }) => _session.readQuestContextSeedV1(
+    questId: questId,
+    expectedQuestRevision: expectedQuestRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+    expectedParentRuntimeClass: expectedParentRuntimeClass,
+    expectedGiverRuntimeUniqueName: expectedGiverRuntimeUniqueName,
+  );
+
+  @override
+  Future<Revision3QuestContextEditPublication>
+  prepareAndPublishQuestContextEditV1({
+    required String gameRoot,
+    required Revision3QuestContextEditTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishQuestContextEditV1(
+      gameRoot: gameRoot,
+      questId: plan.questId,
+      expectedQuestRevision: plan.expectedQuestRevision,
+      expectedModuleId: plan.moduleId,
+      expectedModuleRevision: plan.expectedModuleRevision,
+      expectedStoryCatalogSeal: plan.expectedStoryCatalogSeal,
+      description: plan.description,
+      parentCatalogId: plan.parentCatalogId,
+      giverCatalogId: plan.giverCatalogId,
+      expectedParentRuntimeClass: plan.expectedParentRuntimeClass,
+      expectedParentCatalogLayer: plan.expectedParentCatalogLayer,
+      expectedParentAuthoringSelector: plan.expectedParentAuthoringSelector,
+      expectedParentSourceSeal: plan.expectedParentSourceSeal,
+      expectedGiverRuntimeUniqueName: plan.expectedGiverRuntimeUniqueName,
+      expectedGiverCatalogLayer: plan.expectedGiverCatalogLayer,
+      expectedGiverAuthoringSelector: plan.expectedGiverAuthoringSelector,
+      expectedGiverSourceSeal: plan.expectedGiverSourceSeal,
+    );
+    return Revision3QuestContextEditPublication(
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       questId: checkpoint.questId,
@@ -849,6 +915,137 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3QuestOutlineRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read the private description and catalog join keys for one selected
+  /// exact-current Quest. Canonical project JSON remains inside the lease.
+  Future<AuthoringRevision3QuestContextSeed>
+  readCurrentRevision3QuestContextSeed({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String expectedParentRuntimeClass,
+    required String expectedGiverRuntimeUniqueName,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest context editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestContextRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestContextStaleCheckpointException();
+    }
+    try {
+      final seed = await lease.readQuestContextSeedV1(
+        questId: questId,
+        expectedQuestRevision: expectedQuestRevision,
+        expectedModuleId: expectedModuleId,
+        expectedModuleRevision: expectedModuleRevision,
+        expectedParentRuntimeClass: expectedParentRuntimeClass,
+        expectedGiverRuntimeUniqueName: expectedGiverRuntimeUniqueName,
+      );
+      if (seed.projectId != expectedProjectId ||
+          seed.projectRevision != expectedProjectRevision ||
+          seed.questId != questId ||
+          seed.questRevision != expectedQuestRevision ||
+          seed.moduleId != expectedModuleId ||
+          seed.moduleRevision != expectedModuleRevision) {
+        throw const Revision3QuestContextStaleCheckpointException();
+      }
+      return seed;
+    } on FormatException catch (_, stackTrace) {
+      Error.throwWithStackTrace(
+        const Revision3QuestContextStaleCheckpointException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestContextRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one separately reviewed Quest description/family/giver edit.
+  Future<Revision3QuestContextEditPublication>
+  editCurrentRevision3QuestContext({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required Revision3QuestContextEditTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Quest context editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3QuestContextRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for Quest context editing',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3QuestContextStaleCheckpointException();
+    }
+    try {
+      final publication = await lease.prepareAndPublishQuestContextEditV1(
+        gameRoot: gameRoot,
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.questId != plan.questId ||
+          publication.moduleId != plan.moduleId ||
+          publication.questRevision != plan.expectedQuestRevision + 1 ||
+          publication.moduleRevision != plan.expectedModuleRevision + 1) {
+        throw const CurrentProjectCoordinatorException(
+          'published Quest context disagrees with the selected managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3QuestContextRequiresReopenException(),
           stackTrace,
         );
       }

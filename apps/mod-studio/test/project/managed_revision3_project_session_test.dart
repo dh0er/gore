@@ -1256,6 +1256,164 @@ void main() {
   );
 
   test(
+    'Quest context seed stays private and edit publishes through full reopen CAS',
+    () async {
+      final context = Revision3QuestOutlineFixture();
+      final root = await _projectRoot(fixture, suffix: 'quest_context');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: context.projectJson,
+      );
+
+      final seed = await session.readQuestContextSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: context.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: context.moduleRevision,
+        expectedParentRuntimeClass: 'UQuest_SwampCamp_SCChapter2',
+        expectedGiverRuntimeUniqueName: 'OM_GRD_Asghan_263',
+      );
+      expect(seed.projectRevision, context.projectRevision);
+      expect(seed.description, contains('missing worker'));
+      expect(store.questContextPrepareCalls, 0);
+
+      final published = await session.prepareAndPublishQuestContextEditV1(
+        gameRoot: r'D:\Games\Gothic Remake',
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: context.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: context.moduleRevision,
+        expectedStoryCatalogSeal: context.storyCatalogSeal,
+        description: 'Find Homer and report back safely.',
+        parentCatalogId: revision3QuestContextParentCatalogId,
+        giverCatalogId: revision3QuestContextGiverCatalogId,
+        expectedParentRuntimeClass: revision3QuestContextParentRuntimeClass,
+        expectedParentCatalogLayer: 'base-game.quest-parent.v1',
+        expectedParentAuthoringSelector: 'SwampCamp_SCChapter3',
+        expectedParentSourceSeal: _contextSourceSeal(11, '1'),
+        expectedGiverRuntimeUniqueName:
+            revision3QuestContextGiverRuntimeUniqueName,
+        expectedGiverCatalogLayer: 'base-game.npc.v1',
+        expectedGiverAuthoringSelector:
+            revision3QuestContextGiverRuntimeUniqueName,
+        expectedGiverSourceSeal: _contextSourceSeal(12, '2'),
+      );
+
+      expect(store.questContextPrepareCalls, 1);
+      expect(published.projectRevision, context.projectRevision + 1);
+      expect(published.questRevision, context.questRevision + 1);
+      expect(published.moduleRevision, context.moduleRevision + 1);
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectJson, published.projectJson);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'Quest context external failures remain usable while head conflict poisons',
+    () async {
+      final context = Revision3QuestOutlineFixture();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: context.projectJson,
+      );
+      for (final code in <String>[
+        'AUTHORING_REVISION3_QUEST_CONTEXT_CATALOG_CONFLICT',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_INPUT_MISSING',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_UNSUPPORTED_GENERATION',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_COLLISION_LIMIT',
+        'AUTHORING_REVISION3_QUEST_CONTEXT_STORE_GAME_ALIAS',
+      ]) {
+        retryStore.nextQuestContextError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+          code: code,
+          message: 'fake external context failure',
+        );
+        await expectLater(
+          _publishQuestContext(retrySession, context),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(retrySession.requiresReopen, isFalse, reason: code);
+      }
+      await _publishQuestContext(retrySession, context);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: context.projectJson,
+          );
+      poisonStore.nextQuestContextError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_CONTEXT_HEAD_CONFLICT',
+        message: 'fake exact head conflict',
+      );
+      await expectLater(
+        _publishQuestContext(poisonSession, context),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.questContextPrepareCalls;
+      await expectLater(
+        _publishQuestContext(poisonSession, context),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.questContextPrepareCalls, calls);
+      await poisonSession.close();
+
+      final provenanceRoot = await _projectRoot(
+        fixture,
+        suffix: 'quest_context_provenance_poison',
+      );
+      final provenanceStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextQuestContextProvenanceMismatch = 'selector';
+      final provenanceSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: provenanceRoot,
+            store: provenanceStore,
+            projectJson: context.projectJson,
+          );
+      await expectLater(
+        _publishQuestContext(provenanceSession, context),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(provenanceSession.requiresReopen, isTrue);
+      expect(provenanceSession.projectRevision, context.projectRevision);
+      await provenanceSession.close();
+    },
+  );
+
+  test(
     'NPC local input and semantic collisions retry while integrity uncertainty poisons',
     () async {
       final retryRoot = await _projectRoot(fixture, suffix: 'npc_retry');
@@ -2725,6 +2883,35 @@ void main() {
   });
 }
 
+Future<ManagedRevision3QuestContextEditCheckpoint> _publishQuestContext(
+  ManagedRevision3AuthoringProjectSession session,
+  Revision3QuestOutlineFixture fixture,
+) => session.prepareAndPublishQuestContextEditV1(
+  gameRoot: r'D:\Games\Gothic Remake',
+  questId: revision3QuestOutlineQuestId,
+  expectedQuestRevision: fixture.questRevision,
+  expectedModuleId: revision3QuestOutlineModuleId,
+  expectedModuleRevision: fixture.moduleRevision,
+  expectedStoryCatalogSeal: fixture.storyCatalogSeal,
+  description: 'Find Homer and report back safely.',
+  parentCatalogId: revision3QuestContextParentCatalogId,
+  giverCatalogId: revision3QuestContextGiverCatalogId,
+  expectedParentRuntimeClass: revision3QuestContextParentRuntimeClass,
+  expectedParentCatalogLayer: 'base-game.quest-parent.v1',
+  expectedParentAuthoringSelector: 'SwampCamp_SCChapter3',
+  expectedParentSourceSeal: _contextSourceSeal(11, '1'),
+  expectedGiverRuntimeUniqueName: revision3QuestContextGiverRuntimeUniqueName,
+  expectedGiverCatalogLayer: 'base-game.npc.v1',
+  expectedGiverAuthoringSelector: revision3QuestContextGiverRuntimeUniqueName,
+  expectedGiverSourceSeal: _contextSourceSeal(12, '2'),
+);
+
+AuthoringDraftContentSeal _contextSourceSeal(int bytes, String digit) =>
+    AuthoringDraftContentSeal.fromJson(<String, Object?>{
+      'byte_len': bytes,
+      'sha256': List<String>.filled(64, digit).join(),
+    });
+
 typedef _AfterPrepare =
     FutureOr<void> Function(
       String root,
@@ -2801,6 +2988,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int prepareCalls = 0;
   int questPrepareCalls = 0;
   int questOutlinePrepareCalls = 0;
+  int questContextPrepareCalls = 0;
   int npcPrepareCalls = 0;
   int voicePrepareCalls = 0;
   int voiceSelectionPrepareCalls = 0;
@@ -2840,6 +3028,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   String? nextQuestResponseMismatch;
   ModFfiException? nextQuestError;
   ModFfiException? nextQuestOutlineError;
+  ModFfiException? nextQuestContextError;
+  String? nextQuestContextProvenanceMismatch;
   Object? nextNpcError;
   Object? nextVoiceError;
   Object? nextVoiceSelectionError;
@@ -3106,6 +3296,69 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       currentProjectJson: currentProjectJson,
       request: request,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestContextEditPreparation>
+  prepareQuestContextEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestContextEditRequestV1 request,
+  }) async {
+    questContextPrepareCalls++;
+    final injected = nextQuestContextError;
+    nextQuestContextError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: 'AUTHORING_REVISION3_QUEST_CONTEXT_HEAD_CONFLICT',
+        message: 'fake native Quest context basis CAS rejected',
+      );
+    }
+    final fixture = Revision3QuestOutlineFixture();
+    if (currentProjectJson != fixture.projectJson) {
+      throw StateError('fake context fixture received an unexpected basis');
+    }
+    final mismatch = nextQuestContextProvenanceMismatch;
+    nextQuestContextProvenanceMismatch = null;
+    final response = fixture.contextResponse(
+      description: request.description,
+      parentCatalogId: request.parentCatalogId,
+      giverCatalogId: request.giverCatalogId,
+      parentCatalogLayer: mismatch == 'layer'
+          ? 'base-game.quest-parent.wrong'
+          : 'base-game.quest-parent.v1',
+      parentAuthoringSelector: mismatch == 'selector'
+          ? 'WrongSameRuntimeSelector'
+          : 'SwampCamp_SCChapter3',
+      parentSourceSeal: mismatch == 'seal'
+          ? <String, Object?>{
+              'byte_len': 99,
+              'sha256': List<String>.filled(64, '8').join(),
+            }
+          : null,
+    );
+    response['basis_head_json'] = request.expectedHead.canonicalJson;
+    final candidateProject = response['project_json']! as String;
+    final candidateHead = register(candidateProject);
+    response['head_json'] = candidateHead.canonicalJson;
+    try {
+      return AuthoringRevision3QuestContextEditPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_context_edit_v1',
+        code: ModFfiException.malformedNativeResponseCode,
+        message: error.message.toString(),
+      );
+    }
   }
 
   @override
