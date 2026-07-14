@@ -631,8 +631,12 @@ impl ChunkInfo<'_> {
     pub fn size(&self) -> u64 {
         self.size
     }
+    /// Borrow the absolute path components without allocating a joined path.
+    pub fn path_ref(&self) -> Option<ChunkPathRef<'_>> {
+        self.container.chunk_path_ref(self.id)
+    }
     pub fn path(&self) -> Option<String> {
-        self.container.chunk_path(self.id)
+        self.path_ref().map(ChunkPathRef::materialize)
     }
     fn toc_index(&self) -> u32 {
         *self.container.toc.chunk_id_map.get(&self.id).unwrap()
@@ -644,6 +648,57 @@ impl ChunkInfo<'_> {
         self.container.read(self.id)
     }
 }
+
+/// Borrowed Directory Index path components for a chunk.
+///
+/// [`joined_byte_len`](Self::joined_byte_len) does not allocate, so callers can enforce a byte
+/// budget before calling [`materialize`](Self::materialize).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChunkPathRef<'a> {
+    mount_point: &'a str,
+    relative_path: &'a str,
+}
+
+impl ChunkPathRef<'_> {
+    /// Exact byte length of the path produced by [`materialize`](Self::materialize).
+    pub fn joined_byte_len(self) -> Option<usize> {
+        if self.relative_path.is_empty() {
+            return Some(self.mount_point.len());
+        }
+        if self.relative_path.starts_with('/') {
+            return Some(self.relative_path.len());
+        }
+
+        self.mount_point
+            .len()
+            .checked_add(usize::from(
+                !self.mount_point.is_empty() && !self.mount_point.ends_with('/'),
+            ))?
+            .checked_add(self.relative_path.len())
+    }
+
+    /// Materialize the same Unix path as [`ChunkInfo::path`] in one allocation.
+    pub fn materialize(self) -> String {
+        if self.relative_path.is_empty() {
+            return self.mount_point.to_owned();
+        }
+        if self.relative_path.starts_with('/') {
+            return self.relative_path.to_owned();
+        }
+
+        let mut path = String::with_capacity(
+            self.joined_byte_len()
+                .expect("borrowed path components cannot exceed address space"),
+        );
+        path.push_str(self.mount_point);
+        if !self.mount_point.is_empty() && !self.mount_point.ends_with('/') {
+            path.push('/');
+        }
+        path.push_str(self.relative_path);
+        path
+    }
+}
+
 impl std::cmp::Eq for ChunkInfo<'_> {}
 impl std::cmp::PartialEq for ChunkInfo<'_> {
     fn eq(&self, other: &Self) -> bool {
@@ -941,6 +996,17 @@ impl IoStoreContainer {
     pub fn container_path(&self) -> &Path {
         self.path.as_ref()
     }
+
+    fn chunk_path_ref(&self, chunk_id: FIoChunkId) -> Option<ChunkPathRef<'_>> {
+        self.toc
+            .chunk_id_map
+            .get(&chunk_id.with_version(self.toc.version))
+            .and_then(|index| self.toc.file_map_rev.get(index))
+            .map(|relative_path| ChunkPathRef {
+                mount_point: self.toc.directory_index.mount_point.as_str(),
+                relative_path,
+            })
+    }
 }
 impl IoStoreTrait for IoStoreContainer {
     fn container_name(&self) -> &str {
@@ -1019,6 +1085,27 @@ impl IoStoreTrait for IoStoreContainer {
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn borrowed_chunk_path_length_and_materialization_match_unix_join() {
+        for (mount_point, relative_path) in [
+            ("../../../", "G1R/Content/Asset.uasset"),
+            ("../../../", ""),
+            ("../../../", "/absolute/Asset.uasset"),
+            ("../../../", "relative/Asset.uasset"),
+            ("", "relative/Asset.uasset"),
+        ] {
+            let path_ref = ChunkPathRef {
+                mount_point,
+                relative_path,
+            };
+            let expected = crate::UEPath::new(mount_point)
+                .join(relative_path)
+                .to_string();
+            assert_eq!(path_ref.joined_byte_len(), Some(expected.len()));
+            assert_eq!(path_ref.materialize(), expected);
+        }
+    }
 
     #[test]
     fn test_sort_container() {
