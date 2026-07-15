@@ -217,6 +217,32 @@ discovery, spawn support, or runtime qualification. The retained live FFI test
 remains environment-gated by `GORE_STORY_GAME_ROOT`; offline core and FFI
 fixtures do not substitute for that pinned-game proof.
 
+## Mod Studio Story Workbench V1
+
+Selecting an exact-current managed `NpcDraft` in **Content → This mod** now
+opens one responsive workbench. Entity areas at least 900 logical pixels wide
+and 430 logical pixels high keep the content list and detail side by side;
+falling below either bound opens the same detail in a scrollable 78%-height
+sheet. Its tabs are **Profile**, **Story**, **Routine**, **Inventory**, **Dialog
+& Voice**,
+**References**, and **Problems & Checks**.
+
+Only authority that already exists is connected. **Profile** and **Problems &
+Checks** can open the exact-current profile/source inspection described below.
+The Story, Routine, Inventory, and Dialog & Voice tabs explicitly say that
+those relationships are not yet modeled for NPC Drafts; they do not stage
+placeholder data or generate source. References shows current-index outgoing
+entity/asset links and derived same-project incoming links. Its problem count
+means unresolved projected references only, not build, spawn, runtime, or save
+readiness. The workbench therefore shows **Draft only**, **Build blocked**, and
+**Runtime not verified** as three separate states.
+
+The selected NPC and its last supported tab survive an exact same-project
+revision refresh only while the entity still exists. Switching projects clears
+them, and removal of the entity removes its remembered tab state. The workbench
+adds no new project mutation, game/save access, build, deployment, spawn, or
+runtime authority.
+
 ## Managed source/readiness profile
 
 `build_revision3_npc_source_inspection_plan_v1` is the pure, read-only native
@@ -240,13 +266,14 @@ serialized exact-read lane and checks the published head on both sides.
 Local/content errors are retryable only while that head remains exact; Store or
 response integrity uncertainty requires reopen.
 
-Mod Studio exposes the result under **NPC tools -> Profile & checks** for an
-already-authored managed NPC Draft. The normal view shows saved-source,
-persisted-parent, and exact-project checks plus the four remaining blockers.
-Advanced disclosure shows the generated AngelScript, module and entity IDs,
-parent classes, runtime name, and seals. The action works without a configured
-game installation because it verifies only persisted project evidence; it does
-not freshly qualify those parents against installed game files.
+For an already-authored managed NPC Draft, Mod Studio exposes the result from
+the workbench's **Profile** or **Problems & Checks** tab through **Open profile
+& compiler checks**. The normal view shows saved-source, persisted-parent, and
+exact-project checks plus the four remaining blockers. Advanced disclosure
+shows the generated AngelScript, module and entity IDs, parent classes, runtime
+name, and seals. The inspection works without a configured game installation
+because it verifies only persisted project evidence; it does not freshly
+qualify those parents against installed game files.
 
 The plan reports `compiler_status: not_run`, `build_status: blocked`,
 `runtime_qualification: runtime_unqualified`, and unsupported spawn/publication
@@ -260,8 +287,8 @@ residence, discovery, spawning, distinct runtime state, or save safety.
 
 ## Exact-current compiler check
 
-When a configured installation is available, the same **Profile & checks**
-dialog now offers a separate evidence-only compiler action. The app submits
+When a configured installation is available, the opened **Profile & checks**
+dialog offers a separate evidence-only compiler action. The app submits
 only the managed Store root, configured game root, exact working head, selected
 NPC ID. It cannot submit source text, module identity, compiler policy, a work
 directory, or an output path.

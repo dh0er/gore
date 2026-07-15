@@ -302,10 +302,37 @@ fully reopens the published result. The result remains `blocked`,
 `runtime_unqualified`, `not_granted`, `fresh_capability_required`, and
 `not_supported`. No compile, pack, deploy, game write, or runtime claim is added.
 
+### Mod Studio Story Workbench V1
+
+Selecting an exact-current managed `QuestDraft` in **Content → This mod** now
+opens one responsive workbench. Entity areas at least 900 logical pixels wide
+and 430 logical pixels high keep the entity list and detail side by side;
+falling below either bound opens the same tabbed detail in a scrollable
+78%-height sheet. The Quest tabs are **Overview**, **Story**, **Logic**,
+**Dialog & Voice**,
+**References**, and **Problems & Checks**.
+
+The workbench does not introduce a parallel editor model. **Overview** invokes
+the existing atomic **Edit name & objectives** operation, **Story** invokes
+**Edit description & connections**, **Logic** invokes **Edit states &
+transitions**, and **Problems & Checks** can open the existing exact-current
+source/compiler inspection. **Dialog & Voice** remains visibly unavailable
+because the current Quest Draft schema does not model those relationships.
+References shows only outgoing entity/asset links and derived incoming links in
+the exact current index. Its unresolved count is reference status, not a
+project-wide validator or evidence of build/runtime readiness.
+
+The workbench keeps **Draft only**, **Build blocked**, and **Runtime not
+verified** separate. Entity/tab selection survives an exact revision refresh of
+the same project only while the selected Quest still exists; a project switch
+clears it, and a removed Quest cannot retain stale tab state. This UI adds no
+new mutation beyond the reused atomic callbacks and grants no game/save, build,
+deploy, runtime, or publication authority.
+
 ### Managed revision-3 existing-Quest outline edit V1
 
-The managed R3 Content Library now exposes **Edit Quest** -> **Name &
-objectives** for one selected, exact-current `QuestDraft`. This
+The managed R3 Story Workbench exposes **Edit name & objectives** from the
+**Overview** tab for one selected, exact-current `QuestDraft`. This
 count-preserving editor may change
 only the Quest's name in the project library, its player-facing title, and the
 text/order of its existing one through eight objectives. In this outline
@@ -366,10 +393,10 @@ of V2.
 
 ### Managed revision-3 existing-Quest context edit V1
 
-The same selected exact-current `QuestDraft` now has a separate **Description &
-connections** action beside **Name & objectives**. This transaction may change
-only the player-facing description, Quest family/parent, and giver. It preserves
-the library name, title, objective count/text/order, stable Quest and
+The same selected exact-current `QuestDraft` has a separate **Edit description
+& connections** action in the Workbench's **Story** tab. This transaction may
+change only the player-facing description, Quest family/parent, and giver. It
+preserves the library name, title, objective count/text/order, stable Quest and
 ScriptModule IDs, technical module identity, ownership, origin/provenance, and
 the retained `QuestCollisionArtifactRef`. The project, Quest, and owned module
 revisions advance exactly once only when at least one of the three editable
@@ -416,9 +443,9 @@ transition plan exactly. It never silently downgrades the Quest.
 
 ### Managed revision-3 existing-Quest states and transitions V1
 
-The selected exact-current `QuestDraft` now has a third **Edit Quest** action,
-**States & transitions**. The dialog shows one behavior table with the main
-Quest and each existing objective as rows and **Available**, **Start**,
+The selected exact-current `QuestDraft` exposes **Edit states & transitions**
+in the Workbench's **Logic** tab. The dialog shows one behavior table with the
+main Quest and each existing objective as rows and **Available**, **Start**,
 **Success**, and **Failure** as columns. Authors can apply a sequential template
 or open one cell to:
 
@@ -607,9 +634,10 @@ The route performs no Store, game, or save write. A retained real-install test
 uses a temporary Store and proves that the Store tree is byte-identical before
 and after inspection.
 
-Mod Studio exposes this as **Source & checks** on an existing managed Quest. The
-default view explains the successful source/input/head checks and keeps the
-negative boundaries visible. Advanced disclosure shows the generated
+Mod Studio opens this from the selected Quest Workbench's **Problems & Checks**
+tab through **Open source & compiler checks**. The resulting **Source & checks**
+view explains the successful source/input/head checks and keeps the negative
+boundaries visible. Advanced disclosure shows the generated
 AngelScript, module path, IDs, and seals. This is not a compiler invocation:
 `build_status` remains `blocked`, runtime remains `runtime_unqualified`, and
 publication remains `not_supported`. The inspection grants no artifact,
@@ -649,10 +677,11 @@ remain unqualified.
 
 ## Mod Studio boundary
 
-Mod Studio now provides the bounded Draft wizard, count-preserving legacy
-outline edit, stable-slot-aware V4 outline edit, catalog-bound context edit, the
-V4 behavior table, and the read-only generated-source inspection described
-above. A synchronized
+Mod Studio now presents the bounded outline, context, logic, and inspection
+actions as atomic projections of the selected Quest's Story Workbench. It also
+provides the Draft wizard, count-preserving legacy outline edit, stable-slot-
+aware V4 outline edit, catalog-bound context edit, V4 behavior table, and read-
+only generated-source inspection described above. A synchronized
 transcript/general graph, journal/reward/item authoring, arbitrary source,
 complete diagnostics, build lowering, deployment, and runtime test workflow are
 not part of this slice. The deterministic generator itself does not invoke the
