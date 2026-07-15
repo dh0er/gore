@@ -18,6 +18,7 @@ import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_library.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
@@ -142,6 +143,268 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('Created managed mod project'), findsOneWidget);
+  });
+
+  testWidgets(
+    'NPC starter creates empty revision zero before guided revision one',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_starter_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      final destination = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_starter_project',
+      );
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+        if (destination.existsSync()) destination.deleteSync(recursive: true);
+      });
+
+      final managed = _FakeManagedLease(
+        root: destination,
+        projectId: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+        projectRevision: 0,
+        head: _head(0),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(lease.projectRevision, 0);
+          expect(lease.head.canonicalJson, _head(0).canonicalJson);
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.parentCatalogId, 'g1r:npc:om_grd_asghan_263');
+          expect(input.displayName, 'Starter Guard');
+          lease.projectRevision = 1;
+          lease.head = _head(1);
+          return Revision3NpcDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: 1,
+            npcId: '10101010101010101010101010101010',
+            scriptModuleId: '20202020202020202020202020202020',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        createManagedRevision3: (_) async => managed,
+        openManagedRevision3: (_) async => throw UnimplementedError(),
+      );
+      final container = _container(
+        coordinator: coordinator,
+        gamePath: gameRoot.path,
+        pickManaged: (_) async => destination.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.tap(find.byKey(const Key('managed-project-entry-create')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-starter-npc-draft')),
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-name')),
+        'Guard starter',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-author')),
+        'Gore Team',
+      );
+      final create = find.byKey(const Key('revision3-project-create-submit'));
+      await tester.ensureVisible(create);
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        0,
+      );
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Starter Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+
+      expect(managed.npcPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        1,
+      );
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+      expect(
+        find.textContaining('NPC starter saved in project revision 1'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'uncertain NPC starter publication requires reopen instead of claiming empty',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_uncertain_npc_starter_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      final destination = Directory.systemTemp.createTempSync(
+        'gore_r3_uncertain_npc_starter_project',
+      );
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+        if (destination.existsSync()) destination.deleteSync(recursive: true);
+      });
+
+      final managed = _FakeManagedLease(
+        root: destination,
+        projectId: 'dededededededededededededededede',
+        projectRevision: 0,
+        head: _head(0),
+        onNpcPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          lease.requiresReopenValue = true;
+          throw StateError('fixture publication outcome is uncertain');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        createManagedRevision3: (_) async => managed,
+        openManagedRevision3: (_) async => throw UnimplementedError(),
+      );
+      final container = _container(
+        coordinator: coordinator,
+        gamePath: gameRoot.path,
+        pickManaged: (_) async => destination.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        chooseNpcArchetype: (_, _) async => 'g1r:npc:om_grd_asghan_263',
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.tap(find.byKey(const Key('managed-project-entry-create')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-starter-npc-draft')),
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-name')),
+        'Uncertain NPC starter',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-author')),
+        'Gore Team',
+      );
+      final create = find.byKey(const Key('revision3-project-create-submit'));
+      await tester.ensureVisible(create);
+      await tester.tap(create);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-npc-display-name')),
+        'Uncertain Guard',
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+      await tester.pumpAndSettle();
+
+      final poisoned = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(poisoned.requiresReopen, isTrue);
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+      expect(
+        find.textContaining('cannot verify the starter outcome'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('valid empty project remains current'),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('cancelled Quest starter keeps the valid empty project', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final gameRoot = Directory.systemTemp.createTempSync(
+      'gore_r3_quest_starter_game',
+    );
+    Directory(p.join(gameRoot.path, 'G1R')).createSync();
+    final destination = Directory.systemTemp.createTempSync(
+      'gore_r3_quest_starter_project',
+    );
+    addTearDown(() {
+      if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      if (destination.existsSync()) destination.deleteSync(recursive: true);
+    });
+
+    final managed = _FakeManagedLease(
+      root: destination,
+      projectId: 'efefefefefefefefefefefefefefefef',
+      projectRevision: 0,
+      head: _head(0),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      createManagedRevision3: (_) async => managed,
+      openManagedRevision3: (_) async => throw UnimplementedError(),
+    );
+    final container = _container(
+      coordinator: coordinator,
+      gamePath: gameRoot.path,
+      pickManaged: (_) async => destination.path,
+      loadQuestCatalog: (_) async => _questCatalog(),
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.tap(find.byKey(const Key('managed-project-entry-create')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('revision3-project-starter-quest-draft')),
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-project-create-name')),
+      'Quest starter',
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-project-create-author')),
+      'Gore Team',
+    );
+    final create = find.byKey(const Key('revision3-project-create-submit'));
+    await tester.ensureVisible(create);
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState)
+          .projectRevision,
+      0,
+    );
+    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
+    await tester.pumpAndSettle();
+
+    expect(managed.questPublishCalls, 0);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState)
+          .projectRevision,
+      0,
+    );
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    expect(
+      find.textContaining('valid empty project remains current'),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -372,6 +635,177 @@ void main() {
       expect(verified.head.canonicalJson, managed.head.canonicalJson);
     },
   );
+
+  testWidgets(
+    'managed content scopes stay lazy and show setup without game evidence',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      var baseCatalogCalls = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\scoped-content-no-game'),
+        projectId: '41414141414141414141414141414141',
+        projectRevision: 4,
+        head: _head(4),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        loadBaseGameCatalog: (_) async {
+          baseCatalogCalls++;
+          return _baseGameCatalog();
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await _navigateManagedBaseGameContent(tester);
+      expect(
+        find.byKey(
+          const Key('revision3-base-game-content-browser-missing-game'),
+        ),
+        findsOneWidget,
+      );
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await _navigateManagedInstalledContent(tester);
+      expect(
+        find.byKey(const Key('revision3-installed-content-browser-setup')),
+        findsOneWidget,
+      );
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-installed-content-browser-setup-action'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-settings-expert-page')),
+        findsOneWidget,
+      );
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+    },
+  );
+
+  testWidgets('Base game and Installed scopes expose exact bounded workflows', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final gameRoot = Directory.systemTemp.createTempSync(
+      'gore_r3_scoped_content_game',
+    );
+    Directory(p.join(gameRoot.path, 'G1R')).createSync();
+    addTearDown(() {
+      if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+    });
+    var baseCatalogCalls = 0;
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\scoped-content'),
+      projectId: '42424242424242424242424242424242',
+      projectRevision: 5,
+      head: _head(5),
+      contentIndexBuilder: (lease) => _contentIndex(
+        projectId: lease.projectId,
+        revision: lease.projectRevision,
+      ),
+      onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+        expect(requestedGameRoot, gameRoot.path);
+        return _homeDataAssetPackageIndexResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+      gamePath: gameRoot.path,
+      loadBaseGameCatalog: (_) async {
+        baseCatalogCalls++;
+        return _baseGameCatalog();
+      },
+      loadNpcCatalog: (_) async => _npcCatalog(),
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    expect(baseCatalogCalls, 0);
+    expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+    await _navigateManagedBaseGameContent(tester);
+    expect(baseCatalogCalls, 1);
+    expect(managed.dataAssetPackageIndexReadCalls, 0);
+    expect(find.text('Asghan guard'), findsOneWidget);
+    expect(find.text('Chapter One'), findsOneWidget);
+    final npcStart = find.byKey(
+      const ValueKey((
+        'revision3-base-game-create-npc',
+        'g1r:npc:om_grd_asghan_263',
+      )),
+    );
+    await tester.ensureVisible(npcStart);
+    await tester.tap(npcStart);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-npc-selected-archetype-label')),
+      findsOneWidget,
+    );
+    expect(find.text('Asghan guard'), findsWidgets);
+    await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+    await tester.pumpAndSettle();
+
+    await _navigateManagedInstalledContent(tester);
+    expect(baseCatalogCalls, 1);
+    expect(managed.dataAssetPackageIndexReadCalls, 1);
+    await tester.enterText(
+      find.byKey(const Key('revision3-installed-content-browser-search')),
+      'asghan',
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('revision3-installed-content-browser-row-0')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('revision3-installed-content-browser-open-0')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('installed-package-browser-dialog')),
+      findsOneWidget,
+    );
+    final dialogSearch = tester.widget<TextField>(
+      find.byKey(const Key('installed-package-browser-search')),
+    );
+    expect(dialogSearch.controller?.text, '/Game/Characters/DA_Asghan');
+    expect(managed.dataAssetPackageIndexReadCalls, 2);
+    expect(find.text('DA_Asghan'), findsWidgets);
+    expect(find.text('DA_Viper'), findsNothing);
+  });
 
   testWidgets(
     'canonical managed workspace hosts real tools with honest availability',
@@ -2285,6 +2719,7 @@ ProviderContainer _container({
   DataAssetExtractReceiptPicker? pickDataAssetExtractReceipt,
   DataAssetExtractReceiptInspector? inspectDataAssetExtractReceipt,
   Revision3QuestCatalogLoader? loadQuestCatalog,
+  Revision3BaseGameContentCatalogLoader? loadBaseGameCatalog,
 }) => ProviderContainer(
   overrides: [
     sharedConfigProvider.overrideWithValue(_testSharedConfig(gamePath)),
@@ -2329,6 +2764,10 @@ ProviderContainer _container({
           .overrideWithValue(inspectDataAssetExtractReceipt),
     if (loadQuestCatalog != null)
       revision3QuestCatalogLoaderProvider.overrideWithValue(loadQuestCatalog),
+    if (loadBaseGameCatalog != null)
+      revision3BaseGameContentCatalogLoaderProvider.overrideWithValue(
+        loadBaseGameCatalog,
+      ),
   ],
 );
 
@@ -2399,8 +2838,50 @@ Future<void> _navigateManagedContent(WidgetTester tester) async {
     tester,
     const Key('revision3-content-workspace-nav-library'),
   );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-scoped-content-browser-nav-this-mod'),
+  );
   expect(
-    find.byKey(const Key('revision3-content-workspace-page-library')),
+    find.byKey(const Key('revision3-scoped-content-browser-page-this-mod')),
+    findsOneWidget,
+  );
+}
+
+Future<void> _navigateManagedBaseGameContent(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-nav-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-library'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-scoped-content-browser-nav-base-game'),
+  );
+  expect(
+    find.byKey(const Key('revision3-scoped-content-browser-page-base-game')),
+    findsOneWidget,
+  );
+}
+
+Future<void> _navigateManagedInstalledContent(WidgetTester tester) async {
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-project-workspace-nav-content'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-content-workspace-nav-library'),
+  );
+  await _navigateManagedWorkspace(
+    tester,
+    const Key('revision3-scoped-content-browser-nav-installed'),
+  );
+  expect(
+    find.byKey(const Key('revision3-scoped-content-browser-page-installed')),
     findsOneWidget,
   );
 }
@@ -3210,6 +3691,12 @@ Revision3NpcCatalog _npcCatalog() => Revision3NpcCatalog(
     ),
   ],
 );
+
+Revision3BaseGameContentCatalog _baseGameCatalog() =>
+    Revision3BaseGameContentCatalog(
+      npcs: _npcCatalog(),
+      quests: _questCatalog(),
+    );
 
 AuthoringRevision3VoiceBuildResult _builtVoiceResult({
   required _FakeManagedLease lease,

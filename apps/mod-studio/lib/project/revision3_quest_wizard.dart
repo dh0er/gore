@@ -12,12 +12,16 @@ class Revision3QuestWizardDialog extends StatefulWidget {
     required this.gameRoot,
     required this.loadCatalog,
     required this.publish,
+    this.initialParentCatalogId,
+    this.initialGiverCatalogId,
     super.key,
   });
 
   final String gameRoot;
   final Revision3QuestCatalogLoader loadCatalog;
   final Revision3QuestDraftPublisher publish;
+  final String? initialParentCatalogId;
+  final String? initialGiverCatalogId;
 
   @override
   State<Revision3QuestWizardDialog> createState() =>
@@ -100,13 +104,15 @@ class _Revision3QuestWizardDialogState
     final oldGiver = _giverCatalogId;
     _catalog = catalog;
     _catalogEpoch += 1;
-    _parentCatalogId = catalog.containsParent(oldParent ?? '')
-        ? oldParent
+    final preferredParent = oldParent ?? widget.initialParentCatalogId;
+    final preferredGiver = oldGiver ?? widget.initialGiverCatalogId;
+    _parentCatalogId = catalog.containsParent(preferredParent ?? '')
+        ? preferredParent
         : chooseDefaults
         ? catalog.parents.first.catalogId
         : null;
-    _giverCatalogId = catalog.containsGiver(oldGiver ?? '')
-        ? oldGiver
+    _giverCatalogId = catalog.containsGiver(preferredGiver ?? '')
+        ? preferredGiver
         : chooseDefaults
         ? catalog.givers.first.catalogId
         : null;

@@ -1513,6 +1513,360 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Configure the Gothic 1 Remake installation and Mod Studio preferences.'**
   String get managedActionSettingsDescription;
+
+  /// No description provided for @projectStarterSetupOpenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created safely, but the starter setup did not open. The valid empty project remains current.'**
+  String projectStarterSetupOpenFailed(String projectId);
+
+  /// No description provided for @projectStarterOutcomeUnverified.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created, but Mod Studio cannot verify the starter outcome. Reopen the managed project before continuing; the game and save files were not changed.'**
+  String projectStarterOutcomeUnverified(String projectId);
+
+  /// No description provided for @projectStarterNpcCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created. The NPC starter was not added, so the valid empty project remains current.'**
+  String projectStarterNpcCancelled(String projectId);
+
+  /// No description provided for @projectStarterNpcSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starter saved in project revision {projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.'**
+  String projectStarterNpcSaved(int projectRevision);
+
+  /// No description provided for @projectStarterQuestCancelled.
+  ///
+  /// In en, this message translates to:
+  /// **'Project {projectId} was created. The Quest starter was not added, so the valid empty project remains current.'**
+  String projectStarterQuestCancelled(String projectId);
+
+  /// No description provided for @projectStarterQuestSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starter saved in project revision {projectRevision}. It remains build-blocked and runtime-unqualified.'**
+  String projectStarterQuestSaved(int projectRevision);
+
+  /// No description provided for @projectStarterSemanticsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project starter'**
+  String get projectStarterSemanticsLabel;
+
+  /// No description provided for @projectStarterPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'How would you like to start?'**
+  String get projectStarterPrompt;
+
+  /// No description provided for @projectStarterWriteBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Choosing a starter performs no writes. The project is created only after you submit this form and choose an empty folder.'**
+  String get projectStarterWriteBoundary;
+
+  /// No description provided for @projectStarterEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Empty project'**
+  String get projectStarterEmptyTitle;
+
+  /// No description provided for @projectStarterEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create only the managed project. Add content whenever you are ready.'**
+  String get projectStarterEmptyDescription;
+
+  /// No description provided for @projectStarterNpcDraftTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC Draft'**
+  String get projectStarterNpcDraftTitle;
+
+  /// No description provided for @projectStarterNpcDraftDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create the empty project first, then open the existing guided NPC Draft setup.'**
+  String get projectStarterNpcDraftDescription;
+
+  /// No description provided for @projectStarterQuestDraftTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest Draft'**
+  String get projectStarterQuestDraftTitle;
+
+  /// No description provided for @projectStarterQuestDraftDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create the empty project first, then open the existing guided Quest Draft setup.'**
+  String get projectStarterQuestDraftDescription;
+
+  /// No description provided for @projectStarterPartialOutcome.
+  ///
+  /// In en, this message translates to:
+  /// **'For an NPC or Quest starter, canceling the guided setup or a Draft failure leaves a valid empty project. No starter selection writes to the game or a save.'**
+  String get projectStarterPartialOutcome;
+
+  /// No description provided for @managedContentWorkspaceBrowseLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse'**
+  String get managedContentWorkspaceBrowseLabel;
+
+  /// No description provided for @managedContentWorkspaceVerifiedEditsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Verified edits'**
+  String get managedContentWorkspaceVerifiedEditsLabel;
+
+  /// No description provided for @managedContentScopeBaseGameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Base game'**
+  String get managedContentScopeBaseGameLabel;
+
+  /// No description provided for @managedContentScopeInstalledLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed'**
+  String get managedContentScopeInstalledLabel;
+
+  /// No description provided for @managedBaseGameBrowserTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Supported Base game starting points'**
+  String get managedBaseGameBrowserTitle;
+
+  /// No description provided for @managedBaseGameBrowserDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Browse exact installed-game evidence that Mod Studio can currently inspect or use as a safe Draft starting point. This is not a complete vanilla-content catalog.'**
+  String get managedBaseGameBrowserDescription;
+
+  /// No description provided for @managedBaseGameBrowserLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact Base game evidence…'**
+  String get managedBaseGameBrowserLoading;
+
+  /// No description provided for @managedBaseGameBrowserRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Read a fresh exact catalog'**
+  String get managedBaseGameBrowserRefresh;
+
+  /// No description provided for @managedBaseGameBrowserSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search supported Base game content'**
+  String get managedBaseGameBrowserSearchLabel;
+
+  /// No description provided for @managedBaseGameBrowserFilterNpcs.
+  ///
+  /// In en, this message translates to:
+  /// **'NPCs'**
+  String get managedBaseGameBrowserFilterNpcs;
+
+  /// No description provided for @managedBaseGameBrowserFilterQuests.
+  ///
+  /// In en, this message translates to:
+  /// **'Quests'**
+  String get managedBaseGameBrowserFilterQuests;
+
+  /// No description provided for @managedBaseGameBrowserNpcSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starting points'**
+  String get managedBaseGameBrowserNpcSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserQuestSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starting points'**
+  String get managedBaseGameBrowserQuestSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserExperimentalNpcSectionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect-only NPC archetypes'**
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle;
+
+  /// No description provided for @managedBaseGameBrowserSearchForExperimental.
+  ///
+  /// In en, this message translates to:
+  /// **'Search to include broader static-linkage NPC evidence. Those rows cannot create a Draft.'**
+  String get managedBaseGameBrowserSearchForExperimental;
+
+  /// No description provided for @managedBaseGameBrowserEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No supported Base game result matches this search.'**
+  String get managedBaseGameBrowserEmpty;
+
+  /// No description provided for @managedBaseGameBrowserLoadErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Base game evidence unavailable'**
+  String get managedBaseGameBrowserLoadErrorTitle;
+
+  /// No description provided for @managedBaseGameBrowserLoadErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact supported catalog could not be read. No project, game, or save files were changed.'**
+  String get managedBaseGameBrowserLoadErrorDescription;
+
+  /// No description provided for @managedBaseGameBrowserOfflineDraftBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline Draft supported'**
+  String get managedBaseGameBrowserOfflineDraftBadge;
+
+  /// No description provided for @managedBaseGameBrowserInspectOnlyBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect only'**
+  String get managedBaseGameBrowserInspectOnlyBadge;
+
+  /// No description provided for @managedBaseGameBrowserCreateNpcDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as NPC starting point'**
+  String get managedBaseGameBrowserCreateNpcDraft;
+
+  /// No description provided for @managedBaseGameBrowserCreateQuestDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Use as Quest starting point'**
+  String get managedBaseGameBrowserCreateQuestDraft;
+
+  /// No description provided for @managedBaseGameBrowserSpawnClass.
+  ///
+  /// In en, this message translates to:
+  /// **'Spawn definition'**
+  String get managedBaseGameBrowserSpawnClass;
+
+  /// No description provided for @managedBaseGameBrowserActorBlueprint.
+  ///
+  /// In en, this message translates to:
+  /// **'Actor Blueprint'**
+  String get managedBaseGameBrowserActorBlueprint;
+
+  /// No description provided for @managedBaseGameBrowserExperimentalResultsCapped.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 inspect-only matches. Refine the search for more specific results.'**
+  String get managedBaseGameBrowserExperimentalResultsCapped;
+
+  /// No description provided for @managedInstalledBrowserLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading the exact installed package inventory…'**
+  String get managedInstalledBrowserLoading;
+
+  /// No description provided for @managedInstalledBrowserCompleteSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed package candidates'**
+  String managedInstalledBrowserCompleteSummary(int count);
+
+  /// No description provided for @managedInstalledBrowserPartialSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} installed package candidates — partial result'**
+  String managedInstalledBrowserPartialSummary(int count);
+
+  /// No description provided for @managedInstalledBrowserCompleteDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Directory metadata was read and the installed snapshot stayed exact.'**
+  String get managedInstalledBrowserCompleteDescription;
+
+  /// No description provided for @managedInstalledBrowserPartialDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Some package metadata was missing or noncanonical, so results are useful for discovery but not complete.'**
+  String get managedInstalledBrowserPartialDescription;
+
+  /// No description provided for @managedInstalledBrowserAuthorityNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'This scope exposes installed DataAsset package metadata only. Inspecting or copying a path grants no build, deployment, runtime, or game-write authority.'**
+  String get managedInstalledBrowserAuthorityNotice;
+
+  /// No description provided for @managedInstalledBrowserRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Read a fresh exact snapshot'**
+  String get managedInstalledBrowserRefresh;
+
+  /// No description provided for @managedInstalledBrowserSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search installed DataAssets'**
+  String get managedInstalledBrowserSearchLabel;
+
+  /// No description provided for @managedInstalledBrowserSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Asset name or /Game path'**
+  String get managedInstalledBrowserSearchHint;
+
+  /// No description provided for @managedInstalledBrowserSearchPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Type an asset name or /Game path to search.'**
+  String get managedInstalledBrowserSearchPrompt;
+
+  /// No description provided for @managedInstalledBrowserNoMatchesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching installed DataAsset'**
+  String get managedInstalledBrowserNoMatchesTitle;
+
+  /// No description provided for @managedInstalledBrowserNoMatchesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Try another asset name or a broader /Game path.'**
+  String get managedInstalledBrowserNoMatchesDescription;
+
+  /// No description provided for @managedInstalledBrowserResultLimitDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 matches. Refine the search to narrow the exact snapshot.'**
+  String get managedInstalledBrowserResultLimitDescription;
+
+  /// No description provided for @managedInstalledBrowserKindBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset package'**
+  String get managedInstalledBrowserKindBadge;
+
+  /// No description provided for @managedInstalledBrowserMetadataOnlyBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Metadata only'**
+  String get managedInstalledBrowserMetadataOnlyBadge;
+
+  /// No description provided for @managedInstalledBrowserOpenInspector.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect exact package'**
+  String get managedInstalledBrowserOpenInspector;
+
+  /// No description provided for @managedInstalledBrowserErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Installed package inventory unavailable'**
+  String get managedInstalledBrowserErrorTitle;
+
+  /// No description provided for @managedInstalledBrowserErrorDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact installed snapshot could not be read. No project, game, or save files were changed.'**
+  String get managedInstalledBrowserErrorDescription;
 }
 
 class _AppLocalizationsDelegate

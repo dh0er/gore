@@ -818,4 +818,229 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get managedActionSettingsDescription =>
       'Configura l’installazione di Gothic 1 Remake e le preferenze di Mod Studio.';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return 'Il progetto $projectId è stato creato in sicurezza, ma la configurazione iniziale non si è aperta. Il progetto vuoto valido resta attivo.';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return 'Il progetto $projectId è stato creato, ma Mod Studio non può verificare l’esito dell’avvio. Riapri il progetto gestito prima di continuare; il gioco e i salvataggi non sono stati modificati.';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return 'Il progetto $projectId è stato creato. L’avvio NPC non è stato aggiunto, quindi il progetto vuoto valido resta attivo.';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'Avvio NPC salvato nella revisione $projectRevision. Resta bloccato per la compilazione, non qualificato in esecuzione e non viene generato.';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return 'Il progetto $projectId è stato creato. L’avvio missione non è stato aggiunto, quindi il progetto vuoto valido resta attivo.';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return 'Avvio missione salvato nella revisione $projectRevision. Resta bloccato per la compilazione e non qualificato in esecuzione.';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => 'Avvio del progetto';
+
+  @override
+  String get projectStarterPrompt => 'Come vuoi iniziare?';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      'La scelta di un avvio non scrive nulla. Il progetto viene creato solo dopo l’invio del modulo e la scelta di una cartella vuota.';
+
+  @override
+  String get projectStarterEmptyTitle => 'Progetto vuoto';
+
+  @override
+  String get projectStarterEmptyDescription =>
+      'Crea solo il progetto gestito. Aggiungi contenuti quando vuoi.';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'Bozza NPC';
+
+  @override
+  String get projectStarterNpcDraftDescription =>
+      'Crea prima il progetto vuoto, quindi apri la configurazione guidata della bozza NPC.';
+
+  @override
+  String get projectStarterQuestDraftTitle => 'Bozza missione';
+
+  @override
+  String get projectStarterQuestDraftDescription =>
+      'Crea prima il progetto vuoto, quindi apri la configurazione guidata della bozza missione.';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      'Se annulli la configurazione guidata di NPC o missione, oppure la bozza non riesce, resta un progetto vuoto valido. La scelta non scrive nel gioco o in un salvataggio.';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => 'Esplora';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel =>
+      'Modifiche verificate';
+
+  @override
+  String get managedContentScopeBaseGameLabel => 'Gioco base';
+
+  @override
+  String get managedContentScopeInstalledLabel => 'Installato';
+
+  @override
+  String get managedBaseGameBrowserTitle =>
+      'Punti di partenza supportati del gioco base';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      'Esplora le prove esatte del gioco installato che Mod Studio può ispezionare o usare come punto di partenza sicuro per una bozza. Non è un catalogo completo dei contenuti originali.';
+
+  @override
+  String get managedBaseGameBrowserLoading =>
+      'Lettura delle prove esatte del gioco base…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => 'Leggi un nuovo catalogo esatto';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel =>
+      'Cerca nei contenuti supportati del gioco base';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => 'Missioni';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'Punti di partenza NPC';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle =>
+      'Punti di partenza missione';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      'Archetipi NPC solo da ispezionare';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      'Cerca per includere altre prove NPC con collegamento statico. Queste righe non possono creare una bozza.';
+
+  @override
+  String get managedBaseGameBrowserEmpty =>
+      'Nessun risultato supportato del gioco base corrisponde alla ricerca.';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle =>
+      'Prove del gioco base non disponibili';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      'Impossibile leggere il catalogo esatto supportato. Nessun file di progetto, gioco o salvataggio è stato modificato.';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge =>
+      'Bozza offline supportata';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => 'Solo ispezione';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft => 'Usa come avvio NPC';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft =>
+      'Usa come avvio missione';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => 'Definizione di generazione';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => 'Blueprint attore';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      'Sono mostrati i primi 100 risultati solo da ispezionare. Affina la ricerca per risultati più specifici.';
+
+  @override
+  String get managedInstalledBrowserLoading =>
+      'Lettura dell’inventario esatto dei pacchetti installati…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return '$count pacchetti installati candidati';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return '$count pacchetti installati candidati — risultato parziale';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      'I metadati della directory sono stati letti e l’istantanea installata è rimasta esatta.';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      'Alcuni metadati dei pacchetti mancavano o non erano canonici; i risultati aiutano la ricerca ma non sono completi.';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      'Questo ambito mostra solo i metadati dei pacchetti DataAsset installati. Ispezionare o copiare un percorso non concede autorità di compilazione, distribuzione, esecuzione o scrittura nel gioco.';
+
+  @override
+  String get managedInstalledBrowserRefresh =>
+      'Leggi una nuova istantanea esatta';
+
+  @override
+  String get managedInstalledBrowserSearchLabel => 'Cerca DataAsset installati';
+
+  @override
+  String get managedInstalledBrowserSearchHint =>
+      'Nome risorsa o percorso /Game';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt =>
+      'Digita un nome risorsa o un percorso /Game da cercare.';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle =>
+      'Nessun DataAsset installato corrispondente';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      'Prova un altro nome risorsa o un percorso /Game più ampio.';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      'Sono mostrati i primi 100 risultati. Affina la ricerca per restringere l’istantanea esatta.';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'Pacchetto DataAsset';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => 'Solo metadati';
+
+  @override
+  String get managedInstalledBrowserOpenInspector =>
+      'Ispeziona pacchetto esatto';
+
+  @override
+  String get managedInstalledBrowserErrorTitle =>
+      'Inventario dei pacchetti installati non disponibile';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      'Impossibile leggere l’istantanea installata esatta. Nessun file di progetto, gioco o salvataggio è stato modificato.';
 }

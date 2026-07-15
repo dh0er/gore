@@ -15,6 +15,7 @@ void main() {
 
     sourceLocales.add('fr');
     expect(result.authoringLocales, const <String>['de', 'en-US']);
+    expect(result.starter, Revision3ProjectStarter.empty);
     expect(() => result.authoringLocales.add('fr'), throwsUnsupportedError);
   });
 
@@ -35,6 +36,38 @@ void main() {
       expect(find.textContaining('empty managed offline project'), findsOne);
       expect(find.textContaining('does not build'), findsOne);
       expect(find.textContaining('game files or save files'), findsOne);
+      expect(
+        find.byKey(const Key('revision3-project-starter-selector')),
+        findsOne,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-starter-empty')),
+        findsOne,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-starter-npc-draft')),
+        findsOne,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-starter-quest-draft')),
+        findsOne,
+      );
+      expect(_selectedStarter(tester), Revision3ProjectStarter.empty);
+      expect(
+        find.textContaining('Choosing a starter performs no writes'),
+        findsOne,
+      );
+      expect(
+        find.textContaining('opens the existing guided Draft setup'),
+        findsNothing,
+      );
+      expect(find.textContaining('existing guided NPC Draft setup'), findsOne);
+      expect(
+        find.textContaining('existing guided Quest Draft setup'),
+        findsOne,
+      );
+      expect(find.textContaining('leaves a valid empty project'), findsOne);
+      expect(find.textContaining('writes to the game or a save'), findsOne);
       expect(_fieldText(tester, 'revision3-project-create-name'), isEmpty);
       expect(_fieldText(tester, 'revision3-project-create-version'), '0.1.0');
       expect(_fieldText(tester, 'revision3-project-create-author'), isEmpty);
@@ -84,6 +117,7 @@ void main() {
       expect(result.name, 'My Story Mod');
       expect(result.version, '0.1.0');
       expect(result.author, 'Gore Team');
+      expect(result.starter, Revision3ProjectStarter.empty);
       expect(result.authoringLocales, const <String>[
         'de',
         'en-US',
@@ -93,6 +127,83 @@ void main() {
       expect(() => result.authoringLocales.add('fr'), throwsUnsupportedError);
     },
   );
+
+  for (final entry in <(String, Revision3ProjectStarter)>[
+    ('revision3-project-starter-npc-draft', Revision3ProjectStarter.npcDraft),
+    (
+      'revision3-project-starter-quest-draft',
+      Revision3ProjectStarter.questDraft,
+    ),
+  ]) {
+    testWidgets('returns selected ${entry.$2.name} starter intent', (
+      tester,
+    ) async {
+      final capture = _DialogCapture();
+      await _openDialog(tester, capture);
+
+      await tester.ensureVisible(find.byKey(Key(entry.$1)));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key(entry.$1)));
+      await tester.pump();
+      expect(_selectedStarter(tester), entry.$2);
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-name')),
+        'Starter project',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-project-create-author')),
+        'Author',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-create-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(capture.result?.starter, entry.$2);
+    });
+  }
+
+  testWidgets('starter cards stack on a narrow dialog without overflow', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(420, 700);
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final capture = _DialogCapture();
+
+    await _openDialog(tester, capture);
+
+    expect(
+      find.byKey(const Key('revision3-project-starter-options-column')),
+      findsOne,
+    );
+    expect(
+      find.byKey(const Key('revision3-project-starter-options-row')),
+      findsNothing,
+    );
+    for (final key in const <String>[
+      'revision3-project-starter-empty',
+      'revision3-project-starter-npc-draft',
+      'revision3-project-starter-quest-draft',
+    ]) {
+      expect(find.byKey(Key(key)), findsOne);
+    }
+    expect(tester.takeException(), isNull);
+
+    await tester.ensureVisible(
+      find.byKey(const Key('revision3-project-starter-quest-draft')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('revision3-project-starter-quest-draft')),
+    );
+    await tester.pump();
+    expect(_selectedStarter(tester), Revision3ProjectStarter.questDraft);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('metadata validators mirror bootstrap UTF-8 and trim bounds', (
     tester,
@@ -271,6 +382,12 @@ TextFormField _field(WidgetTester tester, String key) =>
 
 String _fieldText(WidgetTester tester, String key) =>
     _field(tester, key).controller!.text;
+
+Revision3ProjectStarter? _selectedStarter(WidgetTester tester) => tester
+    .widget<RadioGroup<Revision3ProjectStarter>>(
+      find.byType(RadioGroup<Revision3ProjectStarter>),
+    )
+    .groupValue;
 
 String _repeat(String value, int count) =>
     List<String>.filled(count, value).join();

@@ -31,6 +31,7 @@ import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
 import 'project/project_controller.dart';
+import 'project/revision3_base_game_content_browser.dart';
 import 'project/revision3_content_index.dart';
 import 'project/revision3_content_library.dart';
 import 'project/revision3_content_workspace.dart';
@@ -52,7 +53,9 @@ import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_project_dashboard.dart';
 import 'project/revision3_project_section_page.dart';
 import 'project/revision3_project_workspace.dart';
+import 'project/revision3_scoped_content_browser.dart';
 import 'project/revision3_settings_expert_page.dart';
+import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
@@ -376,18 +379,27 @@ class _HomePageState extends ConsumerState<HomePage>
       _snack(l10n.projectCreateGamePathRequired);
       return;
     }
+    final Revision3ProjectCreateFormResult? form;
+    final String? path;
     try {
-      final form = await ref.read(managedRevision3ProjectCreatePromptProvider)(
+      form = await ref.read(managedRevision3ProjectCreatePromptProvider)(
         context,
       );
       if (form == null || !mounted) return;
-      final path = await ref.read(managedRevision3DirectoryPickerProvider)(
+      path = await ref.read(managedRevision3DirectoryPickerProvider)(
         l10n.projectCreateDirectoryPickerTitle,
       );
       if (path == null || !mounted) return;
-      final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
-      final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
-      final created = await coordinator.createManagedRevision3(
+    } catch (e) {
+      _snack(l10n.projectManagedRevision3CreateFailed('$e'));
+      return;
+    }
+
+    final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+    final cleanupFailuresBefore = coordinator.terminalCleanupFailures.length;
+    final ManagedRevision3CurrentProjectState created;
+    try {
+      created = await coordinator.createManagedRevision3(
         ManagedRevision3ProjectCreateRequest(
           root: Directory(path),
           gameRoot: gameRoot,
@@ -397,16 +409,140 @@ class _HomePageState extends ConsumerState<HomePage>
           authoringLocales: form.authoringLocales,
         ),
       );
-      if (!_showTransitionCleanupWarningIfAdded(
-        coordinator,
-        cleanupFailuresBefore,
-      )) {
-        _snack(l10n.projectManagedRevision3Created(created.projectId));
-      }
     } catch (e) {
       _snack(l10n.projectManagedRevision3CreateFailed('$e'));
+      return;
+    }
+
+    if (_showTransitionCleanupWarningIfAdded(
+      coordinator,
+      cleanupFailuresBefore,
+    )) {
+      return;
+    }
+    if (form.starter == Revision3ProjectStarter.empty) {
+      _snack(l10n.projectManagedRevision3Created(created.projectId));
+      return;
+    }
+    try {
+      await _openManagedProjectStarter(
+        starter: form.starter,
+        created: created,
+        gameRoot: gameRoot,
+      );
+    } catch (_) {
+      if (mounted) {
+        final outcomeIsExactCreated = _starterOutcomeIsExactCreated(created);
+        _snack(
+          outcomeIsExactCreated
+              ? AppLocalizations.of(
+                  context,
+                ).projectStarterSetupOpenFailed(created.projectId)
+              : AppLocalizations.of(
+                  context,
+                ).projectStarterOutcomeUnverified(created.projectId),
+        );
+      }
     }
   });
+
+  Future<void> _openManagedProjectStarter({
+    required Revision3ProjectStarter starter,
+    required ManagedRevision3CurrentProjectState created,
+    required String gameRoot,
+  }) async {
+    final coordinator = ref.read(currentProjectCoordinatorProvider.notifier);
+    switch (starter) {
+      case Revision3ProjectStarter.empty:
+        _snack(
+          AppLocalizations.of(
+            context,
+          ).projectManagedRevision3Created(created.projectId),
+        );
+        return;
+      case Revision3ProjectStarter.npcDraft:
+        final publication = await showDialog<Revision3NpcDraftPublication>(
+          context: context,
+          builder: (dialogContext) => Revision3NpcWizardDialog(
+            gameRoot: gameRoot,
+            loadCatalog: ref.read(revision3NpcCatalogLoaderProvider),
+            chooseArchetype: ref.read(
+              managedRevision3NpcArchetypeChooserProvider,
+            ),
+            publish: ({required gameRoot, required input}) =>
+                coordinator.createCurrentRevision3NpcDraft(
+                  expectedRoot: created.root.path,
+                  expectedHead: created.head,
+                  expectedProjectId: created.projectId,
+                  expectedProjectRevision: created.projectRevision,
+                  gameRoot: gameRoot,
+                  input: input,
+                ),
+          ),
+        );
+        if (!mounted) return;
+        final outcomeIsExactCreated = _starterOutcomeIsExactCreated(created);
+        _snack(
+          publication == null
+              ? outcomeIsExactCreated
+                    ? AppLocalizations.of(
+                        context,
+                      ).projectStarterNpcCancelled(created.projectId)
+                    : AppLocalizations.of(
+                        context,
+                      ).projectStarterOutcomeUnverified(created.projectId)
+              : AppLocalizations.of(
+                  context,
+                ).projectStarterNpcSaved(publication.projectRevision),
+        );
+        return;
+      case Revision3ProjectStarter.questDraft:
+        final publication = await showDialog<Revision3QuestDraftPublication>(
+          context: context,
+          builder: (dialogContext) => Revision3QuestWizardDialog(
+            gameRoot: gameRoot,
+            loadCatalog: ref.read(revision3QuestCatalogLoaderProvider),
+            publish: ({required gameRoot, required input}) =>
+                coordinator.createCurrentRevision3QuestDraft(
+                  expectedRoot: created.root.path,
+                  expectedProjectId: created.projectId,
+                  expectedProjectRevision: created.projectRevision,
+                  expectedHead: created.head,
+                  gameRoot: gameRoot,
+                  input: input,
+                ),
+          ),
+        );
+        if (!mounted) return;
+        final outcomeIsExactCreated = _starterOutcomeIsExactCreated(created);
+        _snack(
+          publication == null
+              ? outcomeIsExactCreated
+                    ? AppLocalizations.of(
+                        context,
+                      ).projectStarterQuestCancelled(created.projectId)
+                    : AppLocalizations.of(
+                        context,
+                      ).projectStarterOutcomeUnverified(created.projectId)
+              : AppLocalizations.of(
+                  context,
+                ).projectStarterQuestSaved(publication.projectRevision),
+        );
+        return;
+    }
+  }
+
+  bool _starterOutcomeIsExactCreated(
+    ManagedRevision3CurrentProjectState created,
+  ) {
+    final current = ref.read(currentProjectCoordinatorProvider);
+    return current is ManagedRevision3CurrentProjectState &&
+        !current.requiresReopen &&
+        current.root.path == created.root.path &&
+        current.projectId == created.projectId &&
+        current.projectRevision == created.projectRevision &&
+        current.head.canonicalJson == created.head.canonicalJson;
+  }
 
   Future<void> _openProject() => _runProjectAction(() async {
     if (!await _confirmDiscardIfDirty()) return;
@@ -690,6 +826,9 @@ class _HomePageState extends ConsumerState<HomePage>
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          loadBaseGameCatalog: ref.read(
+            revision3BaseGameContentCatalogLoaderProvider,
+          ),
           publishVoiceTake:
               ({
                 required expectedProjectId,
@@ -1202,6 +1341,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.gameRoot,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
+    required this.loadBaseGameCatalog,
     required this.publishVoiceTake,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTarget,
@@ -1239,6 +1379,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final String? gameRoot;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
@@ -1536,25 +1677,136 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     AppLocalizations l10n,
   ) => Revision3ContentWorkspace(
     location: location,
-    libraryLabel: l10n.managedContentWorkspaceLibraryLabel,
-    dataAssetsLabel: l10n.managedWorkspaceDataAssetsLabel,
-    library: Revision3ContentLibrary(
-      projectRoot: project.root.path,
-      projectId: project.projectId,
-      projectRevision: project.projectRevision,
-      projectHeadCanonicalJson: project.head.canonicalJson,
-      load: loadContentIndex,
-      editQuestOutline: (index, quest) =>
-          _openQuestOutlineEditor(context, index, quest),
-      editQuestContext: gameRoot == null
-          ? null
-          : (index, quest) => _openQuestContextEditor(context, index, quest),
-      editQuestTransitions: (index, quest) =>
-          _openQuestTransitionsEditor(context, index, quest),
-      inspectQuestSource: gameRoot == null
-          ? null
-          : (index, quest) => _openQuestSourceInspection(context, index, quest),
-      inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
+    libraryLabel: l10n.managedContentWorkspaceBrowseLabel,
+    dataAssetsLabel: l10n.managedContentWorkspaceVerifiedEditsLabel,
+    library: Revision3ScopedContentBrowser(
+      projectIdentity: (project.root.path, project.projectId),
+      thisModLabel: l10n.managedContentWorkspaceLibraryLabel,
+      baseGameLabel: l10n.managedContentScopeBaseGameLabel,
+      installedLabel: l10n.managedContentScopeInstalledLabel,
+      thisMod: Revision3ContentLibrary(
+        projectRoot: project.root.path,
+        projectId: project.projectId,
+        projectRevision: project.projectRevision,
+        projectHeadCanonicalJson: project.head.canonicalJson,
+        load: loadContentIndex,
+        editQuestOutline: (index, quest) =>
+            _openQuestOutlineEditor(context, index, quest),
+        editQuestContext: gameRoot == null
+            ? null
+            : (index, quest) => _openQuestContextEditor(context, index, quest),
+        editQuestTransitions: (index, quest) =>
+            _openQuestTransitionsEditor(context, index, quest),
+        inspectQuestSource: gameRoot == null
+            ? null
+            : (index, quest) =>
+                  _openQuestSourceInspection(context, index, quest),
+        inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
+      ),
+      baseGame: Revision3BaseGameContentBrowser(
+        gameRoot: gameRoot,
+        sourceIdentity: (project.root.path, project.projectId, gameRoot),
+        loader: loadBaseGameCatalog,
+        copy: Revision3BaseGameContentBrowserCopy(
+          title: l10n.managedBaseGameBrowserTitle,
+          description: l10n.managedBaseGameBrowserDescription,
+          missingGameTitle: l10n.managedDashboardMissingGameTitle,
+          missingGameDescription: l10n.managedDashboardMissingGameDescription,
+          configureGame: l10n.managedActionSettingsTitle,
+          loading: l10n.managedBaseGameBrowserLoading,
+          refresh: l10n.managedBaseGameBrowserRefresh,
+          searchLabel: l10n.managedBaseGameBrowserSearchLabel,
+          filterAll: l10n.changesAll,
+          filterNpcs: l10n.managedBaseGameBrowserFilterNpcs,
+          filterQuests: l10n.managedBaseGameBrowserFilterQuests,
+          npcSectionTitle: l10n.managedBaseGameBrowserNpcSectionTitle,
+          questSectionTitle: l10n.managedBaseGameBrowserQuestSectionTitle,
+          experimentalNpcSectionTitle:
+              l10n.managedBaseGameBrowserExperimentalNpcSectionTitle,
+          searchForExperimental:
+              l10n.managedBaseGameBrowserSearchForExperimental,
+          empty: l10n.managedBaseGameBrowserEmpty,
+          loadErrorTitle: l10n.managedBaseGameBrowserLoadErrorTitle,
+          loadErrorDescription: l10n.managedBaseGameBrowserLoadErrorDescription,
+          retry: l10n.managedDashboardRetry,
+          baseGameSourceBadge: l10n.managedContentScopeBaseGameLabel,
+          offlineDraftBadge: l10n.managedBaseGameBrowserOfflineDraftBadge,
+          runtimeUnqualifiedBadge: l10n.managedDashboardRuntimeUnqualifiedTitle,
+          inspectOnlyBadge: l10n.managedBaseGameBrowserInspectOnlyBadge,
+          createNpcDraft: l10n.managedBaseGameBrowserCreateNpcDraft,
+          createQuestDraft: l10n.managedBaseGameBrowserCreateQuestDraft,
+          spawnClass: l10n.managedBaseGameBrowserSpawnClass,
+          actorBlueprint: l10n.managedBaseGameBrowserActorBlueprint,
+          experimentalResultsCapped:
+              l10n.managedBaseGameBrowserExperimentalResultsCapped,
+        ),
+        openSettings: () => Revision3ProjectWorkspace.navigate(
+          context,
+          const Revision3ProjectWorkspaceLocation(
+            Revision3ProjectWorkspaceSection.settingsExpert,
+          ),
+        ),
+        createNpcDraft: (catalogId) =>
+            unawaited(_openNpcWizard(context, initialCatalogId: catalogId)),
+        createQuestDraft: (parentCatalogId) => unawaited(
+          _openQuestWizard(context, initialParentCatalogId: parentCatalogId),
+        ),
+      ),
+      installed: Revision3InstalledContentBrowser(
+        gameRoot: gameRoot,
+        sourceIdentity: gameRoot == null
+            ? null
+            : (
+                project.root.path,
+                project.projectId,
+                project.projectRevision,
+                project.head.canonicalJson,
+                gameRoot,
+              ),
+        loader: loadInstalledPackageIndex,
+        copy: Revision3InstalledContentBrowserCopy(
+          setupTitle: l10n.managedDashboardMissingGameTitle,
+          setupDescription: l10n.managedDashboardMissingGameDescription,
+          setupActionLabel: l10n.managedActionSettingsTitle,
+          loadingLabel: l10n.managedInstalledBrowserLoading,
+          completeSummary: l10n.managedInstalledBrowserCompleteSummary,
+          partialSummary: l10n.managedInstalledBrowserPartialSummary,
+          completeDescription: l10n.managedInstalledBrowserCompleteDescription,
+          partialDescription: l10n.managedInstalledBrowserPartialDescription,
+          authorityNotice: l10n.managedInstalledBrowserAuthorityNotice,
+          refreshTooltip: l10n.managedInstalledBrowserRefresh,
+          searchLabel: l10n.managedInstalledBrowserSearchLabel,
+          searchHint: l10n.managedInstalledBrowserSearchHint,
+          searchPrompt: l10n.managedInstalledBrowserSearchPrompt,
+          noMatchesTitle: l10n.managedInstalledBrowserNoMatchesTitle,
+          noMatchesDescription:
+              l10n.managedInstalledBrowserNoMatchesDescription,
+          resultLimitDescription:
+              l10n.managedInstalledBrowserResultLimitDescription,
+          kindBadgeLabel: l10n.managedInstalledBrowserKindBadge,
+          sourceBadgeLabel: l10n.managedContentScopeInstalledLabel,
+          readinessBadgeLabel: l10n.managedInstalledBrowserMetadataOnlyBadge,
+          openInspectorLabel: l10n.managedInstalledBrowserOpenInspector,
+          errorTitle: l10n.managedInstalledBrowserErrorTitle,
+          errorDescription: l10n.managedInstalledBrowserErrorDescription,
+          retryLabel: l10n.managedDashboardRetry,
+        ),
+        openSettings: () => Revision3ProjectWorkspace.navigate(
+          context,
+          const Revision3ProjectWorkspaceLocation(
+            Revision3ProjectWorkspaceSection.settingsExpert,
+          ),
+        ),
+        openInspector: gameRoot == null
+            ? null
+            : (targetPath) => unawaited(
+                _openInstalledPackageBrowser(
+                  context,
+                  gameRoot!,
+                  initialQuery: targetPath,
+                ),
+              ),
+      ),
     ),
     dataAssets: Revision3DataAssetStagePanel(
       projectRoot: project.root.path,
@@ -2017,7 +2269,11 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     ).showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _openQuestWizard(BuildContext context) async {
+  Future<void> _openQuestWizard(
+    BuildContext context, {
+    String? initialParentCatalogId,
+    String? initialGiverCatalogId,
+  }) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3QuestDraftPublication>(
@@ -2026,6 +2282,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
         gameRoot: configuredGameRoot,
         loadCatalog: loadQuestCatalog,
         publish: publishQuestDraft,
+        initialParentCatalogId: initialParentCatalogId,
+        initialGiverCatalogId: initialGiverCatalogId,
       ),
     );
     if (!context.mounted || publication == null) return;
@@ -2158,8 +2416,9 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
 
   Future<void> _openInstalledPackageBrowser(
     BuildContext context,
-    String configuredGameRoot,
-  ) => showDialog<void>(
+    String configuredGameRoot, {
+    String initialQuery = '',
+  }) => showDialog<void>(
     context: context,
     builder: (context) => InstalledPackageBrowserDialog(
       gameRoot: configuredGameRoot,
@@ -2167,10 +2426,14 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       inspect: inspectInstalledDataAsset,
       publish: publishInstalledDataAssetSemanticEdit,
       publishReviewed: publishReviewedInstalledDataAssetEdit,
+      initialQuery: initialQuery,
     ),
   );
 
-  Future<void> _openNpcWizard(BuildContext context) async {
+  Future<void> _openNpcWizard(
+    BuildContext context, {
+    String? initialCatalogId,
+  }) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3NpcDraftPublication>(
@@ -2180,6 +2443,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
         loadCatalog: loadNpcCatalog,
         publish: publishNpcDraft,
         chooseArchetype: chooseNpcArchetype,
+        initialCatalogId: initialCatalogId,
       ),
     );
     if (!context.mounted || publication == null) return;

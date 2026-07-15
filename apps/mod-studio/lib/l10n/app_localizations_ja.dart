@@ -790,4 +790,215 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get managedActionSettingsDescription =>
       'Gothic 1 Remakeのインストール先とMod Studioの環境設定を構成します。';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return 'プロジェクト$projectIdは安全に作成されましたが、スターター設定を開けませんでした。有効な空のプロジェクトが現在のままです。';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return 'プロジェクト$projectIdは作成されましたが、Mod Studioはスターターの結果を検証できません。続行前に管理対象プロジェクトを開き直してください。ゲームとセーブデータは変更されていません。';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return 'プロジェクト$projectIdを作成しました。NPCスターターは追加されず、有効な空のプロジェクトが現在のままです。';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'NPCスターターをプロジェクトリビジョン$projectRevisionに保存しました。ビルドはブロックされ、実行時未検証で、スポーンされません。';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return 'プロジェクト$projectIdを作成しました。クエストスターターは追加されず、有効な空のプロジェクトが現在のままです。';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return 'クエストスターターをプロジェクトリビジョン$projectRevisionに保存しました。ビルドはブロックされ、実行時未検証です。';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => 'プロジェクトスターター';
+
+  @override
+  String get projectStarterPrompt => 'どのように開始しますか？';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      'スターターを選んでも書き込みは行われません。このフォームを送信して空のフォルダーを選んだ後にのみプロジェクトが作成されます。';
+
+  @override
+  String get projectStarterEmptyTitle => '空のプロジェクト';
+
+  @override
+  String get projectStarterEmptyDescription =>
+      '管理対象プロジェクトだけを作成します。準備ができたら内容を追加できます。';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'NPC下書き';
+
+  @override
+  String get projectStarterNpcDraftDescription =>
+      '先に空のプロジェクトを作成し、既存のNPC下書きガイド設定を開きます。';
+
+  @override
+  String get projectStarterQuestDraftTitle => 'クエスト下書き';
+
+  @override
+  String get projectStarterQuestDraftDescription =>
+      '先に空のプロジェクトを作成し、既存のクエスト下書きガイド設定を開きます。';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      'NPCまたはクエストのガイド設定をキャンセルした場合や下書きに失敗した場合も、有効な空のプロジェクトが残ります。選択によってゲームやセーブへ書き込まれることはありません。';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => '参照';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel => '検証済み編集';
+
+  @override
+  String get managedContentScopeBaseGameLabel => 'ベースゲーム';
+
+  @override
+  String get managedContentScopeInstalledLabel => 'インストール済み';
+
+  @override
+  String get managedBaseGameBrowserTitle => '対応するベースゲームの開始点';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      'Mod Studioが現在検査できる、または安全な下書きの開始点として使える、インストール済みゲームの正確な証拠を参照します。オリジナル内容の完全なカタログではありません。';
+
+  @override
+  String get managedBaseGameBrowserLoading => 'ベースゲームの正確な証拠を読み取り中…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => '新しい正確なカタログを読み取る';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel => '対応するベースゲーム内容を検索';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => 'クエスト';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'NPCの開始点';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle => 'クエストの開始点';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      '検査専用NPCアーキタイプ';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      '検索すると、より広い静的リンクのNPC証拠も含まれます。これらの行から下書きは作成できません。';
+
+  @override
+  String get managedBaseGameBrowserEmpty => 'この検索に一致する対応済みベースゲーム結果はありません。';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle => 'ベースゲームの証拠を利用できません';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      '対応する正確なカタログを読み取れませんでした。プロジェクト、ゲーム、セーブのファイルは変更されていません。';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge => 'オフライン下書き対応';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => '検査のみ';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft => 'NPCの開始点として使用';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft => 'クエストの開始点として使用';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => 'スポーン定義';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => 'アクターBlueprint';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      '検査専用の一致を先頭100件表示しています。より具体的な結果には検索を絞り込んでください。';
+
+  @override
+  String get managedInstalledBrowserLoading => 'インストール済みパッケージの正確な一覧を読み取り中…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return 'インストール済みパッケージ候補：$count件';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return 'インストール済みパッケージ候補：$count件 — 部分結果';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      'ディレクトリのメタデータを読み取り、インストール済みスナップショットの正確性を維持しました。';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      '一部のパッケージメタデータが欠落または非正規形式のため、結果は探索には使えますが完全ではありません。';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      'この範囲ではインストール済みDataAssetパッケージのメタデータだけを表示します。パスの検査やコピーによって、ビルド、配布、実行、ゲームへの書き込み権限が与えられることはありません。';
+
+  @override
+  String get managedInstalledBrowserRefresh => '新しい正確なスナップショットを読み取る';
+
+  @override
+  String get managedInstalledBrowserSearchLabel => 'インストール済みDataAssetを検索';
+
+  @override
+  String get managedInstalledBrowserSearchHint => 'アセット名または/Gameパス';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt =>
+      '検索するアセット名または/Gameパスを入力してください。';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle =>
+      '一致するインストール済みDataAssetはありません';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      '別のアセット名またはより広い/Gameパスを試してください。';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      '先頭100件を表示しています。検索を絞り込み、正確なスナップショットを限定してください。';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'DataAssetパッケージ';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => 'メタデータのみ';
+
+  @override
+  String get managedInstalledBrowserOpenInspector => '正確なパッケージを検査';
+
+  @override
+  String get managedInstalledBrowserErrorTitle => 'インストール済みパッケージ一覧を利用できません';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      'インストール済みの正確なスナップショットを読み取れませんでした。プロジェクト、ゲーム、セーブのファイルは変更されていません。';
 }

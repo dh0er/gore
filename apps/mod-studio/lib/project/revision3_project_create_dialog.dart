@@ -2,25 +2,35 @@ import 'package:flutter/material.dart';
 
 import '../l10n/app_localizations.dart';
 
+/// Safe starting point selected for a new managed revision-3 project.
+///
+/// A starter is product intent only. Selecting one performs no filesystem or
+/// game operation; the caller remains responsible for creating the empty
+/// project and, for Draft starters, opening the existing guided setup after
+/// that project has been created.
+enum Revision3ProjectStarter { empty, npcDraft, questDraft }
+
 /// Canonical, immutable input collected by [Revision3ProjectCreateDialog].
 ///
-/// This value contains metadata only. Producing it performs no filesystem,
-/// game, save, build, deployment, or runtime operation.
+/// This value contains metadata and one starter choice only. Producing it
+/// performs no filesystem, game, save, build, deployment, or runtime operation.
 final class Revision3ProjectCreateFormResult {
   Revision3ProjectCreateFormResult({
     required this.name,
     required this.version,
     required this.author,
     required List<String> authoringLocales,
+    this.starter = Revision3ProjectStarter.empty,
   }) : authoringLocales = List<String>.unmodifiable(authoringLocales);
 
   final String name;
   final String version;
   final String author;
   final List<String> authoringLocales;
+  final Revision3ProjectStarter starter;
 }
 
-/// Opens the friendly empty-project form and returns its canonical metadata.
+/// Opens the friendly project form and returns metadata plus starter intent.
 Future<Revision3ProjectCreateFormResult?> showRevision3ProjectCreateDialog(
   BuildContext context,
 ) => showDialog<Revision3ProjectCreateFormResult>(
@@ -28,7 +38,7 @@ Future<Revision3ProjectCreateFormResult?> showRevision3ProjectCreateDialog(
   builder: (_) => const Revision3ProjectCreateDialog(),
 );
 
-/// Metadata-only form for creating one empty managed offline project.
+/// Write-free form for creating one managed offline project.
 class Revision3ProjectCreateDialog extends StatefulWidget {
   const Revision3ProjectCreateDialog({super.key});
 
@@ -49,6 +59,7 @@ class _Revision3ProjectCreateDialogState
   final _version = TextEditingController(text: '0.1.0');
   final _author = TextEditingController();
   final _locales = TextEditingController(text: 'en');
+  Revision3ProjectStarter _starter = Revision3ProjectStarter.empty;
 
   @override
   void dispose() {
@@ -69,6 +80,7 @@ class _Revision3ProjectCreateDialogState
         version: _version.text,
         author: _author.text,
         authoringLocales: _parseCanonicalLocales(_locales.text, l10n),
+        starter: _starter,
       ),
     );
   }
@@ -95,6 +107,11 @@ class _Revision3ProjectCreateDialogState
               mainAxisSize: MainAxisSize.min,
               children: [
                 const _ProjectCreationBoundary(),
+                const SizedBox(height: 18),
+                _ProjectStarterSelector(
+                  starter: _starter,
+                  onChanged: (value) => setState(() => _starter = value),
+                ),
                 const SizedBox(height: 18),
                 TextFormField(
                   key: const Key('revision3-project-create-name'),
@@ -215,6 +232,157 @@ class _Revision3ProjectCreateDialogState
     final result = unique.toList()..sort();
     return List<String>.unmodifiable(result);
   }
+}
+
+class _ProjectStarterSelector extends StatelessWidget {
+  const _ProjectStarterSelector({
+    required this.starter,
+    required this.onChanged,
+  });
+
+  final Revision3ProjectStarter starter;
+  final ValueChanged<Revision3ProjectStarter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
+    final options = <_ProjectStarterOptionData>[
+      _ProjectStarterOptionData(
+        starter: Revision3ProjectStarter.empty,
+        keyName: 'empty',
+        icon: Icons.note_add_outlined,
+        title: l10n.projectStarterEmptyTitle,
+        description: l10n.projectStarterEmptyDescription,
+      ),
+      _ProjectStarterOptionData(
+        starter: Revision3ProjectStarter.npcDraft,
+        keyName: 'npc-draft',
+        icon: Icons.person_add_alt_1_outlined,
+        title: l10n.projectStarterNpcDraftTitle,
+        description: l10n.projectStarterNpcDraftDescription,
+      ),
+      _ProjectStarterOptionData(
+        starter: Revision3ProjectStarter.questDraft,
+        keyName: 'quest-draft',
+        icon: Icons.assignment_add,
+        title: l10n.projectStarterQuestDraftTitle,
+        description: l10n.projectStarterQuestDraftDescription,
+      ),
+    ];
+    return Semantics(
+      container: true,
+      label: l10n.projectStarterSemanticsLabel,
+      child: Column(
+        key: const Key('revision3-project-starter-selector'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            l10n.projectStarterPrompt,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            l10n.projectStarterWriteBoundary,
+            key: const Key('revision3-project-starter-write-boundary'),
+          ),
+          const SizedBox(height: 10),
+          RadioGroup<Revision3ProjectStarter>(
+            groupValue: starter,
+            onChanged: (value) {
+              if (value != null) onChanged(value);
+            },
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final optionWidgets = <Widget>[
+                  for (final option in options)
+                    _ProjectStarterOption(option: option),
+                ];
+                if (constraints.maxWidth < 480) {
+                  return Column(
+                    key: const Key('revision3-project-starter-options-column'),
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (var index = 0; index < optionWidgets.length; index++)
+                        Padding(
+                          padding: EdgeInsets.only(
+                            bottom: index + 1 == optionWidgets.length ? 0 : 8,
+                          ),
+                          child: optionWidgets[index],
+                        ),
+                    ],
+                  );
+                }
+                return Row(
+                  key: const Key('revision3-project-starter-options-row'),
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (
+                      var index = 0;
+                      index < optionWidgets.length;
+                      index++
+                    ) ...[
+                      Expanded(child: optionWidgets[index]),
+                      if (index + 1 != optionWidgets.length)
+                        const SizedBox(width: 8),
+                    ],
+                  ],
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            l10n.projectStarterPartialOutcome,
+            key: const Key('revision3-project-starter-partial-outcome'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProjectStarterOption extends StatelessWidget {
+  const _ProjectStarterOption({required this.option});
+
+  final _ProjectStarterOptionData option;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    child: RadioListTile<Revision3ProjectStarter>(
+      key: Key('revision3-project-starter-${option.keyName}'),
+      value: option.starter,
+      contentPadding: const EdgeInsets.fromLTRB(10, 4, 10, 8),
+      title: Row(
+        children: [
+          Icon(option.icon, size: 20),
+          const SizedBox(width: 8),
+          Expanded(child: Text(option.title)),
+        ],
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(option.description),
+      ),
+    ),
+  );
+}
+
+final class _ProjectStarterOptionData {
+  const _ProjectStarterOptionData({
+    required this.starter,
+    required this.keyName,
+    required this.icon,
+    required this.title,
+    required this.description,
+  });
+
+  final Revision3ProjectStarter starter;
+  final String keyName;
+  final IconData icon;
+  final String title;
+  final String description;
 }
 
 class _ProjectCreationBoundary extends StatelessWidget {

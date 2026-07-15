@@ -61,6 +61,28 @@ void main() {
     },
   );
 
+  testWidgets('accepts an exact initial query from the unified browser', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _BrowserHost(
+        initialQuery: '/Game/Characters/DA_Viper',
+        load: ({required gameRoot}) async => _packageIndexResult(),
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('open-browser')));
+    await tester.pumpAndSettle();
+
+    final search = tester.widget<TextField>(
+      find.byKey(const Key('installed-package-browser-search')),
+    );
+    expect(search.controller?.text, '/Game/Characters/DA_Viper');
+    expect(find.text('DA_Viper'), findsOneWidget);
+    expect(find.text('DA_Asghan'), findsNothing);
+    expect(find.text('1 match'), findsOneWidget);
+  });
+
   testWidgets('shows partial evidence and validates the manual path fallback', (
     tester,
   ) async {
@@ -914,6 +936,7 @@ class _BrowserHost extends StatelessWidget {
     this.inspect,
     this.publish,
     this.publishReviewed,
+    this.initialQuery = '',
     this.textScale,
   });
 
@@ -921,6 +944,7 @@ class _BrowserHost extends StatelessWidget {
   final Revision3InstalledDataAssetInspector? inspect;
   final InstalledDataAssetSemanticStagePublisher? publish;
   final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
+  final String initialQuery;
   final double? textScale;
 
   @override
@@ -945,6 +969,7 @@ class _BrowserHost extends StatelessWidget {
               inspect: inspect,
               publish: publish,
               publishReviewed: publishReviewed,
+              initialQuery: initialQuery,
             ),
           ),
           child: const Text('Open'),

@@ -11,6 +11,123 @@ const _asghanCatalogId = 'g1r:npc:om_grd_asghan_263';
 const _viperCatalogId = 'g1r:npc:oc_grd_viper_253';
 
 void main() {
+  testWidgets('valid initial archetype can publish without opening picker', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var loadCalls = 0;
+    var chooserCalls = 0;
+    Revision3NpcDraftAuthoringInput? publishedInput;
+
+    await _openWizard(
+      tester,
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) async {
+        loadCalls += 1;
+        return _catalog();
+      },
+      chooseArchetype: (_, _) async {
+        chooserCalls += 1;
+        return _viperCatalogId;
+      },
+      publish: ({required gameRoot, required input}) async {
+        publishedInput = input;
+        return _publication();
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('revision3-npc-selected-archetype')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('revision3-npc-selected-archetype-label')),
+      findsOneWidget,
+    );
+    expect(find.text('Asghan'), findsOneWidget);
+    expect(find.text(_asghanCatalogId), findsNothing);
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-npc-display-name')),
+      'North Gate Guard',
+    );
+    await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+    await tester.pumpAndSettle();
+
+    expect(loadCalls, 2);
+    expect(chooserCalls, 0);
+    expect(publishedInput?.parentCatalogId, _asghanCatalogId);
+  });
+
+  testWidgets('unknown initial archetype still requires a trusted choice', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var publishCalls = 0;
+
+    await _openWizard(
+      tester,
+      initialCatalogId: 'g1r:npc:not-in-the-exact-catalog',
+      loadCatalog: (_) async => _catalog(),
+      chooseArchetype: (_, _) async => _asghanCatalogId,
+      publish: ({required gameRoot, required input}) async {
+        publishCalls += 1;
+        return _publication();
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('No archetype selected'), findsOneWidget);
+    expect(find.text('g1r:npc:not-in-the-exact-catalog'), findsNothing);
+    await tester.enterText(
+      find.byKey(const Key('revision3-npc-display-name')),
+      'North Gate Guard',
+    );
+    await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Choose a character archetype.'), findsOneWidget);
+    expect(publishCalls, 0);
+  });
+
+  testWidgets('fresh catalog recheck retains explicit user selection', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var loadCalls = 0;
+
+    await _openWizard(
+      tester,
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) async {
+        loadCalls += 1;
+        return _catalog();
+      },
+      chooseArchetype: (_, _) async => _viperCatalogId,
+      publish: ({required gameRoot, required input}) async {
+        throw StateError('keep the wizard open');
+      },
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Asghan'), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('revision3-npc-display-name')),
+      'North Gate Guard',
+    );
+    await tester.tap(find.byKey(const Key('revision3-npc-choose-archetype')));
+    await tester.pumpAndSettle();
+    expect(find.text('Viper'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+    await tester.pumpAndSettle();
+
+    expect(loadCalls, 2);
+    expect(find.text('Viper'), findsOneWidget);
+    expect(find.text('Asghan'), findsNothing);
+  });
+
   testWidgets('publishes friendly input after a fresh catalog recheck', (
     tester,
   ) async {
@@ -196,6 +313,7 @@ Future<void> _openWizard(
   required Revision3NpcCatalogLoader loadCatalog,
   required Revision3NpcDraftPublisher publish,
   required Revision3NpcArchetypeChooser chooseArchetype,
+  String? initialCatalogId,
   ValueChanged<Revision3NpcDraftPublication?>? onResult,
 }) async {
   await tester.pumpWidget(
@@ -212,6 +330,7 @@ Future<void> _openWizard(
                     loadCatalog: loadCatalog,
                     publish: publish,
                     chooseArchetype: chooseArchetype,
+                    initialCatalogId: initialCatalogId,
                   ),
                 );
                 onResult?.call(result);

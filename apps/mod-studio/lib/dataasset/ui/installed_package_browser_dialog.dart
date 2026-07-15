@@ -38,6 +38,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
     this.inspect,
     this.publish,
     this.publishReviewed,
+    this.initialQuery = '',
     super.key,
   });
 
@@ -46,6 +47,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
   final Revision3InstalledDataAssetInspector? inspect;
   final InstalledDataAssetSemanticStagePublisher? publish;
   final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
+  final String initialQuery;
 
   @override
   State<InstalledPackageBrowserDialog> createState() =>
@@ -54,7 +56,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
 
 class _InstalledPackageBrowserDialogState
     extends State<InstalledPackageBrowserDialog> {
-  final _search = TextEditingController();
+  late final TextEditingController _search;
   final _manual = TextEditingController();
   Timer? _debounce;
   String _query = '';
@@ -66,6 +68,9 @@ class _InstalledPackageBrowserDialogState
   @override
   void initState() {
     super.initState();
+    final initialQuery = widget.initialQuery.trim();
+    _search = TextEditingController(text: initialQuery);
+    _query = initialQuery.toLowerCase();
     _snapshot = _load();
     _search.addListener(_searchChanged);
   }

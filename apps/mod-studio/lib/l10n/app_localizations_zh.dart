@@ -783,6 +783,212 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get managedActionSettingsDescription =>
       '配置 Gothic 1 Remake 安装位置和 Mod Studio 偏好设置。';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return '项目 $projectId 已安全创建，但未能打开起始设置。有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return '项目 $projectId 已创建，但 Mod Studio 无法验证起始设置的结果。请先重新打开托管项目再继续；游戏和存档未被更改。';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return '项目 $projectId 已创建。未添加 NPC 起始内容，因此有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'NPC 起始内容已保存到项目修订版 $projectRevision。它仍无法构建、尚未通过运行时验证，也不会生成。';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return '项目 $projectId 已创建。未添加任务起始内容，因此有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return '任务起始内容已保存到项目修订版 $projectRevision。它仍无法构建，且尚未通过运行时验证。';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => '项目起始方式';
+
+  @override
+  String get projectStarterPrompt => '你想如何开始？';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      '选择起始方式不会写入任何内容。只有提交此表单并选择空文件夹后，项目才会创建。';
+
+  @override
+  String get projectStarterEmptyTitle => '空项目';
+
+  @override
+  String get projectStarterEmptyDescription => '仅创建托管项目，准备好后再添加内容。';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'NPC 草稿';
+
+  @override
+  String get projectStarterNpcDraftDescription => '先创建空项目，然后打开现有的 NPC 草稿引导设置。';
+
+  @override
+  String get projectStarterQuestDraftTitle => '任务草稿';
+
+  @override
+  String get projectStarterQuestDraftDescription => '先创建空项目，然后打开现有的任务草稿引导设置。';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      '取消 NPC 或任务引导设置，或草稿失败时，仍会保留有效的空项目。选择起始方式不会写入游戏或存档。';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => '浏览';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel => '已验证编辑';
+
+  @override
+  String get managedContentScopeBaseGameLabel => '基础游戏';
+
+  @override
+  String get managedContentScopeInstalledLabel => '已安装';
+
+  @override
+  String get managedBaseGameBrowserTitle => '支持的基础游戏起始内容';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      '浏览已安装游戏中的精确证据，Mod Studio 目前可检查这些内容，或将其用作安全的草稿起点。这不是完整的原版内容目录。';
+
+  @override
+  String get managedBaseGameBrowserLoading => '正在读取基础游戏的精确证据…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => '读取新的精确目录';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel => '搜索支持的基础游戏内容';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => '任务';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'NPC 起始内容';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle => '任务起始内容';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      '仅供检查的 NPC 原型';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      '搜索可包含更多静态链接的 NPC 证据。这些条目不能创建草稿。';
+
+  @override
+  String get managedBaseGameBrowserEmpty => '没有支持的基础游戏结果符合此搜索。';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle => '基础游戏证据不可用';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      '无法读取精确的支持目录。项目、游戏和存档文件均未更改。';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge => '支持离线草稿';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => '仅检查';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft => '用作 NPC 起点';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft => '用作任务起点';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => '生成定义';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => '角色蓝图';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      '正在显示前 100 个仅供检查的匹配项。请细化搜索以获得更具体的结果。';
+
+  @override
+  String get managedInstalledBrowserLoading => '正在读取已安装包的精确清单…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return '$count 个已安装包候选项';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return '$count 个已安装包候选项 — 部分结果';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      '已读取目录元数据，并保持了已安装快照的精确性。';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      '部分包元数据缺失或不是规范格式；结果可用于发现内容，但并不完整。';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      '此范围仅显示已安装 DataAsset 包的元数据。检查或复制路径不会授予构建、部署、运行或写入游戏的权限。';
+
+  @override
+  String get managedInstalledBrowserRefresh => '读取新的精确快照';
+
+  @override
+  String get managedInstalledBrowserSearchLabel => '搜索已安装的 DataAsset';
+
+  @override
+  String get managedInstalledBrowserSearchHint => '资源名称或 /Game 路径';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt => '输入资源名称或 /Game 路径进行搜索。';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle => '没有匹配的已安装 DataAsset';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      '请尝试其他资源名称或范围更大的 /Game 路径。';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      '正在显示前 100 个匹配项。请细化搜索以缩小精确快照的范围。';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'DataAsset 包';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => '仅元数据';
+
+  @override
+  String get managedInstalledBrowserOpenInspector => '检查精确包';
+
+  @override
+  String get managedInstalledBrowserErrorTitle => '已安装包清单不可用';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      '无法读取精确的已安装快照。项目、游戏和存档文件均未更改。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1474,4 +1680,210 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get managedActionSettingsDescription =>
       '配置 Gothic 1 Remake 安装位置和 Mod Studio 偏好设置。';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return '项目 $projectId 已安全创建，但未能打开起始设置。有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return '项目 $projectId 已创建，但 Mod Studio 无法验证起始设置的结果。请先重新打开托管项目再继续；游戏和存档未被更改。';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return '项目 $projectId 已创建。未添加 NPC 起始内容，因此有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'NPC 起始内容已保存到项目修订版 $projectRevision。它仍无法构建、尚未通过运行时验证，也不会生成。';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return '项目 $projectId 已创建。未添加任务起始内容，因此有效的空项目仍为当前项目。';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return '任务起始内容已保存到项目修订版 $projectRevision。它仍无法构建，且尚未通过运行时验证。';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => '项目起始方式';
+
+  @override
+  String get projectStarterPrompt => '你想如何开始？';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      '选择起始方式不会写入任何内容。只有提交此表单并选择空文件夹后，项目才会创建。';
+
+  @override
+  String get projectStarterEmptyTitle => '空项目';
+
+  @override
+  String get projectStarterEmptyDescription => '仅创建托管项目，准备好后再添加内容。';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'NPC 草稿';
+
+  @override
+  String get projectStarterNpcDraftDescription => '先创建空项目，然后打开现有的 NPC 草稿引导设置。';
+
+  @override
+  String get projectStarterQuestDraftTitle => '任务草稿';
+
+  @override
+  String get projectStarterQuestDraftDescription => '先创建空项目，然后打开现有的任务草稿引导设置。';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      '取消 NPC 或任务引导设置，或草稿失败时，仍会保留有效的空项目。选择起始方式不会写入游戏或存档。';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => '浏览';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel => '已验证编辑';
+
+  @override
+  String get managedContentScopeBaseGameLabel => '基础游戏';
+
+  @override
+  String get managedContentScopeInstalledLabel => '已安装';
+
+  @override
+  String get managedBaseGameBrowserTitle => '支持的基础游戏起始内容';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      '浏览已安装游戏中的精确证据，Mod Studio 目前可检查这些内容，或将其用作安全的草稿起点。这不是完整的原版内容目录。';
+
+  @override
+  String get managedBaseGameBrowserLoading => '正在读取基础游戏的精确证据…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => '读取新的精确目录';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel => '搜索支持的基础游戏内容';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => '任务';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'NPC 起始内容';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle => '任务起始内容';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      '仅供检查的 NPC 原型';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      '搜索可包含更多静态链接的 NPC 证据。这些条目不能创建草稿。';
+
+  @override
+  String get managedBaseGameBrowserEmpty => '没有支持的基础游戏结果符合此搜索。';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle => '基础游戏证据不可用';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      '无法读取精确的支持目录。项目、游戏和存档文件均未更改。';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge => '支持离线草稿';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => '仅检查';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft => '用作 NPC 起点';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft => '用作任务起点';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => '生成定义';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => '角色蓝图';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      '正在显示前 100 个仅供检查的匹配项。请细化搜索以获得更具体的结果。';
+
+  @override
+  String get managedInstalledBrowserLoading => '正在读取已安装包的精确清单…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return '$count 个已安装包候选项';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return '$count 个已安装包候选项 — 部分结果';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      '已读取目录元数据，并保持了已安装快照的精确性。';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      '部分包元数据缺失或不是规范格式；结果可用于发现内容，但并不完整。';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      '此范围仅显示已安装 DataAsset 包的元数据。检查或复制路径不会授予构建、部署、运行或写入游戏的权限。';
+
+  @override
+  String get managedInstalledBrowserRefresh => '读取新的精确快照';
+
+  @override
+  String get managedInstalledBrowserSearchLabel => '搜索已安装的 DataAsset';
+
+  @override
+  String get managedInstalledBrowserSearchHint => '资源名称或 /Game 路径';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt => '输入资源名称或 /Game 路径进行搜索。';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle => '没有匹配的已安装 DataAsset';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      '请尝试其他资源名称或范围更大的 /Game 路径。';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      '正在显示前 100 个匹配项。请细化搜索以缩小精确快照的范围。';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'DataAsset 包';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => '仅元数据';
+
+  @override
+  String get managedInstalledBrowserOpenInspector => '检查精确包';
+
+  @override
+  String get managedInstalledBrowserErrorTitle => '已安装包清单不可用';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      '无法读取精确的已安装快照。项目、游戏和存档文件均未更改。';
 }

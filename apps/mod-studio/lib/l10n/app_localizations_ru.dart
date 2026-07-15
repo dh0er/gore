@@ -809,4 +809,227 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedActionSettingsDescription =>
       'Настроить установку Gothic 1 Remake и параметры Mod Studio.';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return 'Проект $projectId безопасно создан, но мастер начальной настройки не открылся. Текущим остаётся корректный пустой проект.';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return 'Проект $projectId создан, но Mod Studio не может проверить результат начальной настройки. Перед продолжением заново откройте управляемый проект; игра и сохранения не изменены.';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return 'Проект $projectId создан. Заготовка NPC не добавлена, поэтому текущим остаётся корректный пустой проект.';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'Заготовка NPC сохранена в ревизии $projectRevision. Сборка по-прежнему заблокирована, работа в игре не подтверждена, NPC не создаётся.';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return 'Проект $projectId создан. Заготовка задания не добавлена, поэтому текущим остаётся корректный пустой проект.';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return 'Заготовка задания сохранена в ревизии $projectRevision. Сборка по-прежнему заблокирована, работа в игре не подтверждена.';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => 'Начало проекта';
+
+  @override
+  String get projectStarterPrompt => 'С чего вы хотите начать?';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      'Выбор варианта ничего не записывает. Проект создаётся только после отправки формы и выбора пустой папки.';
+
+  @override
+  String get projectStarterEmptyTitle => 'Пустой проект';
+
+  @override
+  String get projectStarterEmptyDescription =>
+      'Создать только управляемый проект. Содержимое можно добавить позже.';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'Черновик NPC';
+
+  @override
+  String get projectStarterNpcDraftDescription =>
+      'Сначала создать пустой проект, затем открыть пошаговую настройку черновика NPC.';
+
+  @override
+  String get projectStarterQuestDraftTitle => 'Черновик задания';
+
+  @override
+  String get projectStarterQuestDraftDescription =>
+      'Сначала создать пустой проект, затем открыть пошаговую настройку черновика задания.';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      'Отмена пошаговой настройки NPC или задания либо ошибка черновика оставляет корректный пустой проект. Выбор не записывает данные в игру или сохранение.';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => 'Обзор';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel =>
+      'Проверенные изменения';
+
+  @override
+  String get managedContentScopeBaseGameLabel => 'Основная игра';
+
+  @override
+  String get managedContentScopeInstalledLabel => 'Установлено';
+
+  @override
+  String get managedBaseGameBrowserTitle =>
+      'Поддерживаемые исходные объекты основной игры';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      'Просматривайте точные данные установленной игры, которые Mod Studio может проверить или использовать как безопасную основу черновика. Это не полный каталог исходного содержимого.';
+
+  @override
+  String get managedBaseGameBrowserLoading =>
+      'Чтение точных данных основной игры…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => 'Прочитать новый точный каталог';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel =>
+      'Поиск поддерживаемого содержимого основной игры';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => 'Задания';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'Исходные NPC';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle => 'Исходные задания';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      'Архетипы NPC только для просмотра';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      'Поиск включает дополнительные статически связанные данные NPC. Из этих строк нельзя создать черновик.';
+
+  @override
+  String get managedBaseGameBrowserEmpty =>
+      'Поддерживаемых результатов основной игры для этого поиска нет.';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle =>
+      'Данные основной игры недоступны';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      'Не удалось прочитать точный поддерживаемый каталог. Файлы проекта, игры и сохранений не изменены.';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge =>
+      'Черновик офлайн поддерживается';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => 'Только просмотр';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft =>
+      'Использовать как основу NPC';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft =>
+      'Использовать как основу задания';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => 'Определение создания';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => 'Blueprint актора';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      'Показаны первые 100 совпадений только для просмотра. Уточните поиск для более точных результатов.';
+
+  @override
+  String get managedInstalledBrowserLoading =>
+      'Чтение точного списка установленных пакетов…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return 'Кандидатов среди установленных пакетов: $count';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return 'Кандидатов среди установленных пакетов: $count — частичный результат';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      'Метаданные каталога прочитаны, точность установленного снимка сохранена.';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      'Часть метаданных пакетов отсутствовала или имела неканонический вид; результаты полезны для поиска, но неполны.';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      'Здесь показаны только метаданные установленных пакетов DataAsset. Просмотр или копирование пути не даёт разрешения на сборку, развёртывание, выполнение или запись в игру.';
+
+  @override
+  String get managedInstalledBrowserRefresh => 'Прочитать новый точный снимок';
+
+  @override
+  String get managedInstalledBrowserSearchLabel =>
+      'Поиск установленных DataAssets';
+
+  @override
+  String get managedInstalledBrowserSearchHint => 'Имя ресурса или путь /Game';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt =>
+      'Введите имя ресурса или путь /Game для поиска.';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle =>
+      'Подходящих установленных DataAsset нет';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      'Попробуйте другое имя ресурса или более общий путь /Game.';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      'Показаны первые 100 совпадений. Уточните поиск, чтобы сузить точный снимок.';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'Пакет DataAsset';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => 'Только метаданные';
+
+  @override
+  String get managedInstalledBrowserOpenInspector => 'Проверить точный пакет';
+
+  @override
+  String get managedInstalledBrowserErrorTitle =>
+      'Список установленных пакетов недоступен';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      'Не удалось прочитать точный снимок установленных пакетов. Файлы проекта, игры и сохранений не изменены.';
 }

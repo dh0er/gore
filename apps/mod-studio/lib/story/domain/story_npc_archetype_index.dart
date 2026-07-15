@@ -152,16 +152,37 @@ final class StoryNpcArchetypeIndex {
   List<StoryNpcArchetypeRow> search(
     String query, {
     bool includeExperimental = false,
+    int? limit,
+  }) => _searchRows(
+    query,
+    include: (row) => includeExperimental || row.selectable,
+    limit: limit,
+  );
+
+  /// Searches only inspect-only linkage evidence with bounded allocation.
+  List<StoryNpcArchetypeRow> searchExperimental(String query, {int? limit}) =>
+      _searchRows(query, include: (row) => row.experimental, limit: limit);
+
+  List<StoryNpcArchetypeRow> _searchRows(
+    String query, {
+    required bool Function(StoryNpcArchetypeRow row) include,
+    int? limit,
   }) {
+    if (limit != null && limit < 0) {
+      throw RangeError.range(limit, 0, null, 'limit');
+    }
+    if (limit == 0) return const <StoryNpcArchetypeRow>[];
     final normalized = _normalize(query).trim();
     final terms = normalized.isEmpty
         ? const <String>[]
         : normalized.split(RegExp(r'\s+'));
-    return List<StoryNpcArchetypeRow>.unmodifiable(
-      rows.where(
-        (row) => (includeExperimental || row.selectable) && row._matches(terms),
-      ),
-    );
+    final matches = <StoryNpcArchetypeRow>[];
+    for (final row in rows) {
+      if (!include(row) || !row._matches(terms)) continue;
+      matches.add(row);
+      if (matches.length == limit) break;
+    }
+    return List<StoryNpcArchetypeRow>.unmodifiable(matches);
   }
 }
 

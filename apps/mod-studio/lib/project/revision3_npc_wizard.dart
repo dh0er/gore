@@ -19,6 +19,7 @@ class Revision3NpcWizardDialog extends StatefulWidget {
     required this.loadCatalog,
     required this.publish,
     this.chooseArchetype,
+    this.initialCatalogId,
     super.key,
   });
 
@@ -26,6 +27,7 @@ class Revision3NpcWizardDialog extends StatefulWidget {
   final Revision3NpcCatalogLoader loadCatalog;
   final Revision3NpcDraftPublisher publish;
   final Revision3NpcArchetypeChooser? chooseArchetype;
+  final String? initialCatalogId;
 
   @override
   State<Revision3NpcWizardDialog> createState() =>
@@ -45,6 +47,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
   bool _publicationStarted = false;
   bool _requiresReopen = false;
   bool _staleCheckpoint = false;
+  bool _mayApplyInitialCatalogId = true;
   int _loadGeneration = 0;
 
   @override
@@ -74,13 +77,18 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       if (clear) {
         _catalog = null;
         _catalogId = null;
+        _mayApplyInitialCatalogId = true;
       }
     });
     try {
       final catalog = await widget.loadCatalog(widget.gameRoot);
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
-        _adoptCatalog(catalog);
+        _adoptCatalog(
+          catalog,
+          allowInitialCatalogId: _mayApplyInitialCatalogId,
+        );
+        _mayApplyInitialCatalogId = false;
         _catalogLoading = false;
       });
     } catch (_) {
@@ -93,11 +101,19 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     }
   }
 
-  void _adoptCatalog(Revision3NpcCatalog catalog) {
+  void _adoptCatalog(
+    Revision3NpcCatalog catalog, {
+    bool allowInitialCatalogId = false,
+  }) {
     final oldSelection = _catalogId;
+    final initialCatalogId = widget.initialCatalogId;
     _catalog = catalog;
     _catalogId = oldSelection != null && catalog.contains(oldSelection)
         ? oldSelection
+        : allowInitialCatalogId &&
+              initialCatalogId != null &&
+              catalog.contains(initialCatalogId)
+        ? initialCatalogId
         : null;
   }
 
@@ -375,6 +391,9 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
                     children: [
                       Text(
                         selected?.displayName ?? 'No archetype selected',
+                        key: const Key(
+                          'revision3-npc-selected-archetype-label',
+                        ),
                         style: Theme.of(context).textTheme.titleSmall,
                       ),
                       const SizedBox(height: 2),

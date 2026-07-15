@@ -9,8 +9,120 @@ const _gameRoot = r'C:\Games\Gothic Remake';
 const _projectId = '11111111111111111111111111111111';
 const _questId = '22222222222222222222222222222222';
 const _moduleId = '33333333333333333333333333333333';
+const _parentOne = 'parent-one';
+const _parentTwo = 'parent-two';
+const _giverAsghan = 'giver-asghan';
+const _giverViper = 'giver-viper';
 
 void main() {
+  testWidgets('valid requested choices preselect and publish when not first', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var loadCalls = 0;
+    Revision3QuestDraftAuthoringInput? published;
+
+    await _openWizard(
+      tester,
+      initialParentCatalogId: _parentTwo,
+      initialGiverCatalogId: _giverViper,
+      loadCatalog: (_) async {
+        loadCalls += 1;
+        return _catalog(includeAlternates: true);
+      },
+      publish: ({required gameRoot, required input}) async {
+        published = input;
+        return _publication();
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chapter Two'), findsOneWidget);
+    expect(find.text('Viper'), findsOneWidget);
+    expect(find.text(_parentTwo), findsNothing);
+    expect(find.text(_giverViper), findsNothing);
+
+    await _fillForm(tester);
+    await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+    await tester.pumpAndSettle();
+
+    expect(loadCalls, 2);
+    expect(published?.parentCatalogId, _parentTwo);
+    expect(published?.giverCatalogId, _giverViper);
+  });
+
+  testWidgets('unknown requested choices safely use trusted defaults', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    Revision3QuestDraftAuthoringInput? published;
+    const unknownParent = 'parent-not-in-exact-catalog';
+    const unknownGiver = 'giver-not-in-exact-catalog';
+
+    await _openWizard(
+      tester,
+      initialParentCatalogId: unknownParent,
+      initialGiverCatalogId: unknownGiver,
+      loadCatalog: (_) async => _catalog(includeAlternates: true),
+      publish: ({required gameRoot, required input}) async {
+        published = input;
+        return _publication();
+      },
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Chapter One'), findsOneWidget);
+    expect(find.text('Asghan'), findsOneWidget);
+    expect(find.text(unknownParent), findsNothing);
+    expect(find.text(unknownGiver), findsNothing);
+
+    await _fillForm(tester);
+    await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+    await tester.pumpAndSettle();
+
+    expect(published?.parentCatalogId, _parentOne);
+    expect(published?.giverCatalogId, _giverAsghan);
+    expect(published?.parentCatalogId, isNot(unknownParent));
+    expect(published?.giverCatalogId, isNot(unknownGiver));
+  });
+
+  testWidgets('fresh catalog reload retains explicit user choices', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var loadCalls = 0;
+    Revision3QuestDraftAuthoringInput? published;
+
+    await _openWizard(
+      tester,
+      initialParentCatalogId: _parentTwo,
+      initialGiverCatalogId: _giverViper,
+      loadCatalog: (_) async {
+        loadCalls += 1;
+        return _catalog(includeAlternates: true);
+      },
+      publish: ({required gameRoot, required input}) async {
+        published = input;
+        throw StateError('keep the wizard open');
+      },
+    );
+    await tester.pumpAndSettle();
+
+    await _chooseDropdown(tester, index: 0, label: 'Chapter One');
+    await _chooseDropdown(tester, index: 1, label: 'Asghan');
+    await _fillForm(tester);
+    await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+    await tester.pumpAndSettle();
+
+    expect(loadCalls, 2);
+    expect(published?.parentCatalogId, _parentOne);
+    expect(published?.giverCatalogId, _giverAsghan);
+    expect(find.text('Chapter One'), findsOneWidget);
+    expect(find.text('Asghan'), findsOneWidget);
+    expect(find.text('Chapter Two'), findsNothing);
+    expect(find.text('Viper'), findsNothing);
+  });
+
   testWidgets(
     'shows only friendly fields and publishes after a fresh recheck',
     (tester) async {
@@ -299,6 +411,8 @@ Future<void> _openWizard(
   WidgetTester tester, {
   required Revision3QuestCatalogLoader loadCatalog,
   required Revision3QuestDraftPublisher publish,
+  String? initialParentCatalogId,
+  String? initialGiverCatalogId,
   ValueChanged<Revision3QuestDraftPublication?>? onResult,
 }) async {
   await tester.pumpWidget(
@@ -315,6 +429,8 @@ Future<void> _openWizard(
                     gameRoot: _gameRoot,
                     loadCatalog: loadCatalog,
                     publish: publish,
+                    initialParentCatalogId: initialParentCatalogId,
+                    initialGiverCatalogId: initialGiverCatalogId,
                   ),
                 );
                 onResult?.call(result);
@@ -345,9 +461,23 @@ Future<void> _fillForm(WidgetTester tester) async {
   );
 }
 
+Future<void> _chooseDropdown(
+  WidgetTester tester, {
+  required int index,
+  required String label,
+}) async {
+  final picker = find.byType(DropdownButtonFormField<String>).at(index);
+  await tester.ensureVisible(picker);
+  await tester.tap(picker);
+  await tester.pumpAndSettle();
+  await tester.tap(find.text(label).last);
+  await tester.pumpAndSettle();
+}
+
 Revision3QuestCatalog _catalog({
-  String parentId = 'parent-one',
+  String parentId = _parentOne,
   String parentName = 'Chapter One',
+  bool includeAlternates = false,
 }) => Revision3QuestCatalog(
   parents: [
     Revision3QuestParentChoice(
@@ -357,13 +487,25 @@ Revision3QuestCatalog _catalog({
           ? 'UQuest_ChapterOne'
           : 'UQuest_ChapterTwo',
     ),
+    if (includeAlternates)
+      Revision3QuestParentChoice(
+        catalogId: _parentTwo,
+        displayName: 'Chapter Two',
+        runtimeClass: 'UQuest_ChapterTwo',
+      ),
   ],
   givers: [
     Revision3QuestGiverChoice(
-      catalogId: 'giver-asghan',
+      catalogId: _giverAsghan,
       displayName: 'Asghan',
       runtimeUniqueName: 'OM_GRD_Asghan_263',
     ),
+    if (includeAlternates)
+      Revision3QuestGiverChoice(
+        catalogId: _giverViper,
+        displayName: 'Viper',
+        runtimeUniqueName: 'OC_GRD_Viper_253',
+      ),
   ],
 );
 

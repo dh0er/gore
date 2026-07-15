@@ -806,4 +806,227 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get managedActionSettingsDescription =>
       'Skonfiguruj instalację Gothic 1 Remake i preferencje Mod Studio.';
+
+  @override
+  String projectStarterSetupOpenFailed(String projectId) {
+    return 'Projekt $projectId został bezpiecznie utworzony, ale konfiguracja startowa nie otworzyła się. Prawidłowy pusty projekt pozostaje aktywny.';
+  }
+
+  @override
+  String projectStarterOutcomeUnverified(String projectId) {
+    return 'Projekt $projectId został utworzony, ale Mod Studio nie może potwierdzić wyniku konfiguracji startowej. Przed kontynuowaniem otwórz ponownie zarządzany projekt; gra i zapisy nie zostały zmienione.';
+  }
+
+  @override
+  String projectStarterNpcCancelled(String projectId) {
+    return 'Projekt $projectId został utworzony. Start NPC nie został dodany, więc prawidłowy pusty projekt pozostaje aktywny.';
+  }
+
+  @override
+  String projectStarterNpcSaved(int projectRevision) {
+    return 'Start NPC zapisano w rewizji $projectRevision. Nadal jest zablokowany dla kompilacji, niezweryfikowany w czasie działania i nie zostaje utworzony w świecie.';
+  }
+
+  @override
+  String projectStarterQuestCancelled(String projectId) {
+    return 'Projekt $projectId został utworzony. Start zadania nie został dodany, więc prawidłowy pusty projekt pozostaje aktywny.';
+  }
+
+  @override
+  String projectStarterQuestSaved(int projectRevision) {
+    return 'Start zadania zapisano w rewizji $projectRevision. Nadal jest zablokowany dla kompilacji i niezweryfikowany w czasie działania.';
+  }
+
+  @override
+  String get projectStarterSemanticsLabel => 'Początek projektu';
+
+  @override
+  String get projectStarterPrompt => 'Jak chcesz zacząć?';
+
+  @override
+  String get projectStarterWriteBoundary =>
+      'Wybór wariantu startowego niczego nie zapisuje. Projekt powstaje dopiero po wysłaniu formularza i wybraniu pustego folderu.';
+
+  @override
+  String get projectStarterEmptyTitle => 'Pusty projekt';
+
+  @override
+  String get projectStarterEmptyDescription =>
+      'Utwórz tylko zarządzany projekt. Zawartość możesz dodać później.';
+
+  @override
+  String get projectStarterNpcDraftTitle => 'Szkic NPC';
+
+  @override
+  String get projectStarterNpcDraftDescription =>
+      'Najpierw utwórz pusty projekt, a następnie otwórz prowadzoną konfigurację szkicu NPC.';
+
+  @override
+  String get projectStarterQuestDraftTitle => 'Szkic zadania';
+
+  @override
+  String get projectStarterQuestDraftDescription =>
+      'Najpierw utwórz pusty projekt, a następnie otwórz prowadzoną konfigurację szkicu zadania.';
+
+  @override
+  String get projectStarterPartialOutcome =>
+      'Anulowanie prowadzonej konfiguracji NPC lub zadania albo błąd szkicu pozostawia prawidłowy pusty projekt. Wybór nie zapisuje niczego w grze ani w zapisie.';
+
+  @override
+  String get managedContentWorkspaceBrowseLabel => 'Przeglądaj';
+
+  @override
+  String get managedContentWorkspaceVerifiedEditsLabel =>
+      'Zweryfikowane zmiany';
+
+  @override
+  String get managedContentScopeBaseGameLabel => 'Gra podstawowa';
+
+  @override
+  String get managedContentScopeInstalledLabel => 'Zainstalowane';
+
+  @override
+  String get managedBaseGameBrowserTitle =>
+      'Obsługiwane punkty startowe gry podstawowej';
+
+  @override
+  String get managedBaseGameBrowserDescription =>
+      'Przeglądaj dokładne dane zainstalowanej gry, które Mod Studio może sprawdzić lub użyć jako bezpiecznego początku szkicu. Nie jest to pełny katalog oryginalnej zawartości.';
+
+  @override
+  String get managedBaseGameBrowserLoading =>
+      'Odczytywanie dokładnych danych gry podstawowej…';
+
+  @override
+  String get managedBaseGameBrowserRefresh => 'Odczytaj nowy dokładny katalog';
+
+  @override
+  String get managedBaseGameBrowserSearchLabel =>
+      'Szukaj obsługiwanej zawartości gry podstawowej';
+
+  @override
+  String get managedBaseGameBrowserFilterNpcs => 'NPC';
+
+  @override
+  String get managedBaseGameBrowserFilterQuests => 'Zadania';
+
+  @override
+  String get managedBaseGameBrowserNpcSectionTitle => 'Punkty startowe NPC';
+
+  @override
+  String get managedBaseGameBrowserQuestSectionTitle => 'Punkty startowe zadań';
+
+  @override
+  String get managedBaseGameBrowserExperimentalNpcSectionTitle =>
+      'Archetypy NPC tylko do inspekcji';
+
+  @override
+  String get managedBaseGameBrowserSearchForExperimental =>
+      'Wyszukaj, aby uwzględnić szersze statycznie powiązane dane NPC. Te wiersze nie umożliwiają utworzenia szkicu.';
+
+  @override
+  String get managedBaseGameBrowserEmpty =>
+      'Brak obsługiwanego wyniku gry podstawowej pasującego do wyszukiwania.';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorTitle =>
+      'Dane gry podstawowej są niedostępne';
+
+  @override
+  String get managedBaseGameBrowserLoadErrorDescription =>
+      'Nie udało się odczytać dokładnego obsługiwanego katalogu. Nie zmieniono plików projektu, gry ani zapisów.';
+
+  @override
+  String get managedBaseGameBrowserOfflineDraftBadge =>
+      'Obsługa szkicu offline';
+
+  @override
+  String get managedBaseGameBrowserInspectOnlyBadge => 'Tylko inspekcja';
+
+  @override
+  String get managedBaseGameBrowserCreateNpcDraft => 'Użyj jako początku NPC';
+
+  @override
+  String get managedBaseGameBrowserCreateQuestDraft =>
+      'Użyj jako początku zadania';
+
+  @override
+  String get managedBaseGameBrowserSpawnClass => 'Definicja tworzenia';
+
+  @override
+  String get managedBaseGameBrowserActorBlueprint => 'Blueprint aktora';
+
+  @override
+  String get managedBaseGameBrowserExperimentalResultsCapped =>
+      'Wyświetlono pierwsze 100 wyników tylko do inspekcji. Zawęź wyszukiwanie, aby uzyskać dokładniejsze wyniki.';
+
+  @override
+  String get managedInstalledBrowserLoading =>
+      'Odczytywanie dokładnego spisu zainstalowanych pakietów…';
+
+  @override
+  String managedInstalledBrowserCompleteSummary(int count) {
+    return 'Zainstalowane pakiety kandydujące: $count';
+  }
+
+  @override
+  String managedInstalledBrowserPartialSummary(int count) {
+    return 'Zainstalowane pakiety kandydujące: $count — wynik częściowy';
+  }
+
+  @override
+  String get managedInstalledBrowserCompleteDescription =>
+      'Odczytano metadane katalogu, a zainstalowana migawka pozostała dokładna.';
+
+  @override
+  String get managedInstalledBrowserPartialDescription =>
+      'Brakowało części metadanych pakietów lub nie były kanoniczne; wyniki pomagają w odkrywaniu, ale nie są kompletne.';
+
+  @override
+  String get managedInstalledBrowserAuthorityNotice =>
+      'Ten zakres pokazuje wyłącznie metadane zainstalowanych pakietów DataAsset. Inspekcja lub kopiowanie ścieżki nie daje uprawnień do kompilacji, wdrażania, działania ani zapisu w grze.';
+
+  @override
+  String get managedInstalledBrowserRefresh => 'Odczytaj nową dokładną migawkę';
+
+  @override
+  String get managedInstalledBrowserSearchLabel =>
+      'Szukaj zainstalowanych DataAssets';
+
+  @override
+  String get managedInstalledBrowserSearchHint =>
+      'Nazwa zasobu lub ścieżka /Game';
+
+  @override
+  String get managedInstalledBrowserSearchPrompt =>
+      'Wpisz nazwę zasobu lub ścieżkę /Game do wyszukania.';
+
+  @override
+  String get managedInstalledBrowserNoMatchesTitle =>
+      'Brak pasującego zainstalowanego DataAsset';
+
+  @override
+  String get managedInstalledBrowserNoMatchesDescription =>
+      'Spróbuj innej nazwy zasobu lub szerszej ścieżki /Game.';
+
+  @override
+  String get managedInstalledBrowserResultLimitDescription =>
+      'Wyświetlono pierwsze 100 wyników. Zawęź wyszukiwanie, aby ograniczyć dokładną migawkę.';
+
+  @override
+  String get managedInstalledBrowserKindBadge => 'Pakiet DataAsset';
+
+  @override
+  String get managedInstalledBrowserMetadataOnlyBadge => 'Tylko metadane';
+
+  @override
+  String get managedInstalledBrowserOpenInspector => 'Sprawdź dokładny pakiet';
+
+  @override
+  String get managedInstalledBrowserErrorTitle =>
+      'Spis zainstalowanych pakietów jest niedostępny';
+
+  @override
+  String get managedInstalledBrowserErrorDescription =>
+      'Nie udało się odczytać dokładnej zainstalowanej migawki. Nie zmieniono plików projektu, gry ani zapisów.';
 }

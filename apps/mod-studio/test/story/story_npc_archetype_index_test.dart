@@ -160,6 +160,13 @@ void main() {
         index.search('asghan uai').single.curatedCatalogId,
         _storyCatalogIdAsghan,
       );
+      expect(
+        index.searchExperimental('').map((row) => row.spawnClass),
+        <String>[_genericSpawn],
+      );
+      expect(index.search('', includeExperimental: true, limit: 2).length, 2);
+      expect(index.search('', includeExperimental: true, limit: 0), isEmpty);
+      expect(() => index.search('', limit: -1), throwsA(isA<RangeError>()));
     },
   );
 
