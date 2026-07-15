@@ -1,4 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/l10n/app_localizations_de.dart';
+import 'package:goresave/l10n/app_localizations_ja.dart';
+import 'package:goresave/l10n/app_localizations_zh.dart';
 import 'package:goresave/loc/attribute_loc.dart';
 import 'package:goresave/loc/game_lang.dart';
 
@@ -59,6 +62,51 @@ void main() {
     );
     expect(readableAttributeName('Resistance_Fire'), 'Resistance fire');
     expect(readableAttributeName('SkillPoints'), 'Skill points (LP)');
+  });
+
+  test('localizes manual fallbacks absent from the game catalog', () {
+    expect(
+      localizedAttributeName(
+        const {},
+        gameLangByCode('de'),
+        'DamageMultiplier',
+        l10n: AppLocalizationsDe(),
+      ),
+      'Schadensmultiplikator',
+    );
+    expect(
+      readableAttributeName('OxygenRecoveryRate', AppLocalizationsJa()),
+      '酸素回復速度',
+    );
+    expect(
+      readableAttributeName('MaxSwampweed', AppLocalizationsZh()),
+      '最大沼泽草量',
+    );
+  });
+
+  test('manual localization keeps the readable fallback for unknown ids', () {
+    expect(
+      readableAttributeName('FutureUnknownValue', AppLocalizationsDe()),
+      'Future unknown value',
+    );
+  });
+
+  test('an exact game catalog value takes priority over a manual fallback', () {
+    final gameValue = <String, Map<String, String>>{
+      'attributeset_combat_damagemultiplier': {
+        'german': 'Schadensfaktor aus dem Spiel',
+      },
+    };
+    expect(
+      localizedAttributeName(
+        gameValue,
+        gameLangByCode('de'),
+        'DamageMultiplier',
+        setClass: '/Script/G1R.AttributeSet_Combat',
+        l10n: AppLocalizationsDe(),
+      ),
+      'Schadensfaktor aus dem Spiel',
+    );
   });
 
   test('does not guess when future suffix matches are ambiguous', () {

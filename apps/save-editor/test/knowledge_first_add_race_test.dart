@@ -70,6 +70,49 @@ void main() {
     expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
     expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
   });
+
+  testWidgets('knowledge rows show a badge for every entry type', (
+    tester,
+  ) async {
+    final core = _FirstAddKnowledgeCoreService(
+      knowledgeEntries: const [
+        'ChoiceDiegoHello',
+        'Info_Diego_Hello',
+        'Voiceline_info_diego',
+        'Topic_Diego_209799',
+        'UnclassifiedKnowledge',
+      ],
+    );
+    await pumpApp(tester, core);
+
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Dialog Knowledge'));
+    await tester.pumpAndSettle();
+
+    final badges = <String, String>{
+      'knowledge-type-choice-ChoiceDiegoHello': 'Choice',
+      'knowledge-type-info-Info_Diego_Hello': 'Information',
+      'knowledge-type-voiceLine-Voiceline_info_diego': 'Voice line',
+      'knowledge-type-topic-Topic_Diego_209799': 'Topic',
+      'knowledge-type-other-UnclassifiedKnowledge': 'Other',
+    };
+    final badgeWidths = <double>[];
+    for (final badge in badges.entries) {
+      final finder = find.byKey(ValueKey(badge.key));
+      expect(finder, findsOneWidget);
+      badgeWidths.add(tester.getSize(finder).width);
+      expect(
+        find.descendant(of: finder, matching: find.text(badge.value)),
+        findsOneWidget,
+      );
+    }
+    expect(
+      badgeWidths.toSet(),
+      hasLength(1),
+      reason: 'Every dialog-knowledge type badge must have the same width.',
+    );
+  });
 }
 
 class _RecordedRequest {
@@ -80,7 +123,10 @@ class _RecordedRequest {
 
 /// Fake core for one save whose Hero has no knowledge-map entry yet.
 class _FirstAddKnowledgeCoreService implements GoresaveCoreService {
+  _FirstAddKnowledgeCoreService({this.knowledgeEntries});
+
   final requests = <_RecordedRequest>[];
+  final List<String>? knowledgeEntries;
 
   @override
   String get description => 'first-add-knowledge-fake-core';
@@ -218,6 +264,26 @@ class _FirstAddKnowledgeCoreService implements GoresaveCoreService {
       case 'query_progression':
         if (payload['section'] == 'knowledge' &&
             payload['character'] == 'Hero') {
+          final entries = knowledgeEntries;
+          if (entries != null) {
+            return {
+              'ok': true,
+              'data': {
+                'section': 'knowledge',
+                'character': 'Hero',
+                'total': entries.length,
+                'offset': 0,
+                'limit': 50,
+                'count': entries.length,
+                'entries': entries,
+                'setPath': const [
+                  'CharacterKnowledgeByUniqueName',
+                  '{Hero}',
+                  'Knowledge',
+                ],
+              },
+            };
+          }
           return {
             'ok': false,
             'error': {'message': "Character 'Hero' has no knowledge entry"},

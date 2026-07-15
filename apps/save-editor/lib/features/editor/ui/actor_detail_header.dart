@@ -9,9 +9,9 @@ import 'package:goresave/loc/game_lang.dart';
 /// the Attribute and Inventory tab detail areas so both tabs make the selection
 /// obvious above the sidebar/content.
 ///
-/// - NPC selected → the localized display name (prominent). When
-///   [showObjectIds] is enabled, the FULL GlobalId is selectable and wraps so
-///   the user can copy/read the whole id — never ellipsized.
+/// - NPC selected → the localized display name (prominent) and the FULL
+///   GlobalId. The id is always selectable and wraps so the user can copy/read
+///   the whole value — never ellipsized and independent of [showObjectIds].
 /// - Player selected → the localized "Player" label, no GlobalId (the player
 ///   has none).
 /// - Orphan selected (knowledge-only, `orphan:<uniqueName>` id sentinel) → the
@@ -41,9 +41,10 @@ class ActorDetailHeader extends StatelessWidget {
   /// The current game language, driving which loc set the name resolves from.
   final GameLang lang;
 
-  /// Whether the actor's technical save identifier is rendered below its
-  /// player-facing name. Knowledge-only orphans expose their real
-  /// [Actor.uniqueName], never the synthetic `orphan:` selection sentinel.
+  /// Whether a knowledge-only orphan's technical key is rendered below its
+  /// player-facing name. Regular NPC GlobalIds are always shown. Orphans expose
+  /// their real [Actor.uniqueName], never the synthetic `orphan:` selection
+  /// sentinel.
   final bool showObjectIds;
 
   @override
@@ -56,6 +57,11 @@ class ActorDetailHeader extends StatelessWidget {
     final isOrphan = actor.isOrphan;
     final id = actor.id;
     final technicalId = isOrphan ? actor.uniqueName : id;
+    final showTechnicalId =
+        !isPlayer &&
+        technicalId != null &&
+        technicalId.isNotEmpty &&
+        (!isOrphan || showObjectIds);
     // Orphans resolve by uniqueName (their loc-catalog key — the `orphan:` id
     // sentinel would prettify into nonsense); NPCs resolve by GlobalId.
     final name = isPlayer
@@ -89,13 +95,10 @@ class ActorDetailHeader extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
-                // Technical ids are opt-in. NPC GlobalIds wrap in full;
-                // orphans expose the real knowledge key, not the synthetic
+                // NPC GlobalIds are always visible and wrap in full. Optional
+                // orphan ids expose the real knowledge key, not the synthetic
                 // `orphan:` selection sentinel.
-                if (showObjectIds &&
-                    !isPlayer &&
-                    technicalId != null &&
-                    technicalId.isNotEmpty)
+                if (showTechnicalId)
                   Padding(
                     padding: const EdgeInsets.only(top: 2),
                     child: SelectableText(

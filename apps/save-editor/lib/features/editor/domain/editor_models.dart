@@ -355,6 +355,11 @@ class SaveSlot {
   /// scanned folder's PersistentDataList.sav.
   final bool isExternal;
 
+  /// PersistentDataList still references this slot, but its expected `.sav`
+  /// file is absent. Missing rows remain visible for cleanup and are never
+  /// inspectable as save files.
+  bool get isMissing => status == 'missing';
+
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;
     return name == null || name.isEmpty ? slot : name;

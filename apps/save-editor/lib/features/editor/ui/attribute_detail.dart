@@ -77,6 +77,7 @@ class AttributeDetail extends ConsumerWidget {
     required this.notifier,
     required this.editable,
     required this.actor,
+    this.showActorHeader = true,
   });
 
   final SaveInspection inspection;
@@ -87,6 +88,10 @@ class AttributeDetail extends ConsumerWidget {
   /// so this is only ever the player or a spawned NPC.
   final Actor actor;
 
+  /// Standalone detail views may keep their own actor label. CharactersTab
+  /// disables it because its persistent header now sits above the sub-tab bar.
+  final bool showActorHeader;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
@@ -96,9 +101,26 @@ class AttributeDetail extends ConsumerWidget {
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final showObjectIds = ref.watch(showObjectIdsProvider);
     String attributeLabel(String id, String? setClass) =>
-        localizedAttributeName(locCatalog, lang, id, setClass: setClass);
+        localizedAttributeName(
+          locCatalog,
+          lang,
+          id,
+          setClass: setClass,
+          l10n: l10n,
+        );
 
     if (selected.isPlayer) {
+      final body = _PrivatePanel(
+        icon: Icons.person_outline,
+        title: l10n.tabPlayer,
+        isPlayer: true,
+        inspection: inspection,
+        notifier: notifier,
+        editable: editable,
+        lockedBody: l10n.playerLockedBody,
+        attributeLabel: attributeLabel,
+      );
+      if (!showActorHeader) return body;
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
       // player attribute view, unchanged below.
       return Column(
@@ -110,18 +132,7 @@ class AttributeDetail extends ConsumerWidget {
             lang: lang,
             showObjectIds: showObjectIds,
           ),
-          Expanded(
-            child: _PrivatePanel(
-              icon: Icons.person_outline,
-              title: l10n.tabPlayer,
-              isPlayer: true,
-              inspection: inspection,
-              notifier: notifier,
-              editable: editable,
-              lockedBody: l10n.playerLockedBody,
-              attributeLabel: attributeLabel,
-            ),
-          ),
+          Expanded(child: body),
         ],
       );
     }
@@ -161,6 +172,59 @@ class AttributeDetail extends ConsumerWidget {
       onRevive: () => notifier.setPendingNpcRevive(npcId),
       revivePending: revivePending,
     );
+    final body = Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: NpcAttributesPanel(
+            // Reload when the inspected save OR the selected NPC changes, so
+            // the list re-seeds from this NPC's saved values.
+            reloadKey: (inspection, npcId),
+            load: () => notifier.loadNpcAttributes(npcId),
+            editable: editable,
+            // Status row lives at the top of the core ("Hauptwerte") group.
+            status: statusConfig,
+            skillsSection: SkillsSection(
+              notifier: notifier,
+              editable: editable,
+              reloadKey: (inspection, npcId),
+              actor: npcId,
+              pendingKey: 'skills:$npcId',
+              showRoster: false,
+            ),
+            attributeLabel: attributeLabel,
+            initialPending: () => _npcAttributeDraftsFromPending(
+              notifier.pendingEditFor(pendingKey),
+            ),
+            onPendingChanged: (edits, validationError) {
+              if (validationError != null) {
+                notifier.setNpcEditInvalid(pendingKey);
+                return;
+              }
+              notifier.setNpcEditInvalid(null);
+              if (edits.isEmpty) {
+                notifier.clearPendingEdit(pendingKey);
+              } else {
+                notifier.setPendingEdit(
+                  pendingKey,
+                  PendingSaveEdit(
+                    edits: [
+                      for (final edit in edits)
+                        {
+                          'path': 'private.typed.setValue',
+                          'value': {'path': edit.path, 'value': edit.value},
+                        },
+                    ],
+                  ),
+                );
+              }
+            },
+          ),
+        ),
+      ),
+    );
+    if (!showActorHeader) return body;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -170,80 +234,7 @@ class AttributeDetail extends ConsumerWidget {
           lang: lang,
           showObjectIds: showObjectIds,
         ),
-        Expanded(
-          // Shared sub-tab layout (see CharactersTab): outer 20/top 8 →
-          // one Card → inner 16 around the whole attribute editor.
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: NpcAttributesPanel(
-                  // Reload when the inspected save OR the selected NPC
-                  // changes, so the list re-seeds from this NPC's saved
-                  // values.
-                  reloadKey: (inspection, npcId),
-                  load: () => notifier.loadNpcAttributes(npcId),
-                  editable: editable,
-                  // Status row lives at the top of the core ("Hauptwerte") group.
-                  status: statusConfig,
-                  // This NPC's learned skills, in a "Talente" group. Own
-                  // per-NPC pending key so they never collide with the hero's
-                  // or another NPC's skill edits; roster hidden (only the NPC's
-                  // actual skills matter).
-                  skillsSection: SkillsSection(
-                    notifier: notifier,
-                    editable: editable,
-                    reloadKey: (inspection, npcId),
-                    actor: npcId,
-                    pendingKey: 'skills:$npcId',
-                    showRoster: false,
-                  ),
-                  attributeLabel: attributeLabel,
-                  // Resume from this NPC's queued attribute drafts on revisit:
-                  // reverse the stored typed.setValue edits back into the panel's
-                  // NpcTypedEdit drafts. Without this, returning to a previously
-                  // edited NPC and editing another attribute would replace the
-                  // stored entry with only the newly-dirty field, dropping the rest.
-                  initialPending: () => _npcAttributeDraftsFromPending(
-                    notifier.pendingEditFor(pendingKey),
-                  ),
-                  onPendingChanged: (edits, validationError) {
-                    if (validationError != null) {
-                      // Transient invalid/empty input in one field must NOT discard
-                      // the NPC's already-stored valid drafts (switching actors
-                      // disposes this panel and loses its local _pending). Keep the
-                      // stored drafts but BLOCK global Save while invalid, so the
-                      // now-stale stored value is never written behind the bad field.
-                      notifier.setNpcEditInvalid(pendingKey);
-                      return;
-                    }
-                    notifier.setNpcEditInvalid(null);
-                    if (edits.isEmpty) {
-                      notifier.clearPendingEdit(pendingKey);
-                    } else {
-                      notifier.setPendingEdit(
-                        pendingKey,
-                        PendingSaveEdit(
-                          edits: [
-                            for (final edit in edits)
-                              {
-                                'path': 'private.typed.setValue',
-                                'value': {
-                                  'path': edit.path,
-                                  'value': edit.value,
-                                },
-                              },
-                          ],
-                        ),
-                      );
-                    }
-                  },
-                ),
-              ),
-            ),
-          ),
-        ),
+        Expanded(child: body),
       ],
     );
   }

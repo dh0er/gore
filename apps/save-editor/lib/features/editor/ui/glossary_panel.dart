@@ -290,14 +290,17 @@ class _GlossaryDetailState extends ConsumerState<GlossaryDetail> {
       });
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
+      final message = AppLocalizations.of(
+        context,
+      ).glossaryLoadFailed(error.toString());
       setState(() {
         _loading = false;
         _documents = const [];
         _tutorials = const [];
         _characterStatusAvailable = false;
         _npcStatusAvailable = false;
-        _error = error.toString();
-        _tutorialError = error.toString();
+        _error = message;
+        _tutorialError = message;
       });
     }
   }
@@ -1495,6 +1498,7 @@ class _GlossaryDocument {
         _GlossarySegment(
           id: segment.id,
           label: segment.label,
+          usesNpcCatalogLabel: true,
           documentClass: entry.documentClass,
           segmentClass: segment.segmentClass,
           unlocked:
@@ -1581,6 +1585,7 @@ class _GlossarySegment {
     required this.segmentClass,
     required this.unlocked,
     required this.writable,
+    this.usesNpcCatalogLabel = false,
     this.questStatePath = const [],
     this.roles = const {},
     this.textIds = const [],
@@ -1592,6 +1597,7 @@ class _GlossarySegment {
   final String segmentClass;
   final bool unlocked;
   final bool writable;
+  final bool usesNpcCatalogLabel;
   final List<String> questStatePath;
   final Set<NpcGlossaryRole> roles;
   final List<String> textIds;
@@ -1813,7 +1819,6 @@ String _segmentLabel(AppLocalizations l10n, _GlossarySegment segment) {
   if (exact == 'armor' || exact == 'armorer') {
     return l10n.glossaryFilterArmorers;
   }
-  if (exact == 'dead') return l10n.glossaryFilterDead;
   if (segment.roles.length > 1 &&
       segment.roles.contains(NpcGlossaryRole.portrait)) {
     return segment.roles.map((role) => _roleLabel(l10n, role)).join(' · ');
@@ -1826,7 +1831,9 @@ String _segmentLabel(AppLocalizations l10n, _GlossarySegment segment) {
   if (entryMatch != null) {
     return l10n.glossarySegmentEntry(int.parse(entryMatch.group(1)!));
   }
-  return _humanize(raw);
+  return segment.usesNpcCatalogLabel
+      ? l10n.glossaryCatalogSegmentLabel(segment.id, _humanize(raw))
+      : _humanize(raw);
 }
 
 String _humanize(String value) {

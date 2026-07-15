@@ -41,15 +41,16 @@ void main() {
     expect(find.text('Public save name'), findsOneWidget);
     // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
-    expect(find.text('1h 56m'), findsOneWidget);
+    expect(find.text('1 hr 56 min'), findsOneWidget);
     expect(find.text('Profile 0'), findsWidgets);
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
-    // The profile menu is available even with one profile and always ends in
-    // the detached-save file action.
+    // The profile menu contains only real profiles and the dedicated Other
+    // saves view; file opening is offered inside that view, not in this menu.
     await tester.tap(find.byTooltip('Switch profile'));
     await tester.pumpAndSettle();
-    expect(find.text('Open file'), findsOneWidget);
+    expect(find.text('Other saves'), findsOneWidget);
+    expect(find.text('Open file'), findsNothing);
     await tester.tapAt(const Offset(900, 500));
     await tester.pumpAndSettle();
 
@@ -57,6 +58,10 @@ void main() {
     // Overview (the fake fixture has profile 0 selected).
     expect(find.text('Save profile'), findsOneWidget);
     expect(find.byType(DropdownButtonFormField<int>), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('remove-selected-save-profile')),
+      findsOneWidget,
+    );
 
     // The header shows the save's screenshot on the Overview tab.
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
@@ -419,15 +424,15 @@ void main() {
     // collapsed until explicitly opened.
     expect(find.text('Codec ready'), findsOneWidget);
     expect(find.text('Inspection JSON'), findsOneWidget);
-    expect(find.text('Show object IDs'), findsOneWidget);
+    expect(find.text('Show additional technical IDs'), findsOneWidget);
     expect(find.textContaining('"format"'), findsNothing);
     final objectIdsToggle = find.ancestor(
-      of: find.text('Show object IDs'),
+      of: find.text('Show additional technical IDs'),
       matching: find.byType(SwitchListTile),
     );
     expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isFalse);
 
-    await tester.tap(find.text('Show object IDs'));
+    await tester.tap(find.text('Show additional technical IDs'));
     await tester.pumpAndSettle();
 
     expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isTrue);
@@ -639,6 +644,128 @@ void main() {
     );
     expect(oreDelete.onPressed, isNotNull);
   });
+
+  testWidgets('profile menu opens a dedicated persistent Other saves list', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1400, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _UnassignedProfileCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Neither detached save leaks into profile 0's sidebar.
+    expect(find.text('Older unassigned'), findsNothing);
+    expect(find.text('Newest unassigned'), findsNothing);
+    expect(find.text('Assigned save'), findsAtLeastNWidgets(1));
+
+    await tester.tap(find.byTooltip('Switch profile'));
+    await tester.pumpAndSettle();
+
+    final otherSavesRow = find.byKey(
+      const ValueKey('profile-menu-other-saves'),
+    );
+    expect(otherSavesRow, findsOneWidget);
+    expect(find.text('Other saves'), findsOneWidget);
+    expect(find.text('Open file'), findsNothing);
+    expect(find.text('Newest unassigned'), findsNothing);
+    expect(find.text('Older unassigned'), findsNothing);
+
+    await tester.tap(otherSavesRow);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('other-saves-open-file')), findsOneWidget);
+    expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
+    expect(find.text('Older unassigned'), findsOneWidget);
+    expect(find.text('Assigned save'), findsNothing);
+    expect(find.byTooltip('Remove entry'), findsNWidgets(2));
+
+    await tester.tap(
+      find.byKey(const ValueKey(r'remove-other-save-C:\tmp\saves\G1R-002.sav')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Older unassigned'), findsNothing);
+    expect(find.text('Newest unassigned'), findsAtLeastNWidgets(1));
+  });
+
+  testWidgets(
+    'missing profile save is marked, not inspectable, and removable after confirmation',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final core = _MissingProfileCoreService();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(core),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+            uiSettingsStoreProvider.overrideWithValue(TestUiSettingsStore()),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Lost save'), findsOneWidget);
+      expect(
+        find.text(
+          'File missing: G1R-009.sav is missing. It may have been deleted, moved, or renamed; '
+          'the profile still references it.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      // Tapping the disabled row cannot turn its expected path into a failed
+      // inspection. Cleanup remains available via its separate unlink action.
+      await tester.tap(find.text('Lost save'));
+      await tester.pump();
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      await tester.tap(
+        find.byKey(const ValueKey('remove-save-profile-0-G1R-009')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Remove save from profile?'), findsOneWidget);
+      expect(
+        core.requests.where(
+          (request) => request.command == 'remove_save_from_profile',
+        ),
+        isEmpty,
+      );
+
+      await tester.tap(
+        find.widgetWithText(FilledButton, 'Remove from profile'),
+      );
+      await tester.pumpAndSettle();
+
+      final remove = core.requests.singleWhere(
+        (request) => request.command == 'remove_save_from_profile',
+      );
+      expect(remove.payload['slot'], 'G1R-009');
+      expect(remove.payload['profileId'], 0);
+      expect(find.text('Lost save'), findsNothing);
+    },
+  );
 }
 
 class _RecordedRequest {
@@ -1009,6 +1136,130 @@ class _FakeCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled fake command $command'},
         };
     }
+  }
+}
+
+class _MissingProfileCoreService extends _FakeCoreService {
+  var _removed = false;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': _removed
+              ? <Object?>[]
+              : [
+                  {
+                    'path': r'C:\tmp\saves\G1R-009.sav',
+                    'slot': 'G1R-009',
+                    'format': 'MISSING',
+                    'fileSize': 0,
+                    'sha1': '',
+                    'status': 'missing',
+                    'persistentPlayerSaveName': 'Lost save',
+                    'persistentProfileId': 0,
+                  },
+                ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': _removed ? <String>[] : ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+    if (command == 'remove_save_from_profile') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      _removed = true;
+      return {
+        'ok': true,
+        'data': {
+          'slot': payload['slot'],
+          'profileId': payload['profileId'],
+          'bytesChanged': true,
+          'backupPath': null,
+          'persistentBackupPath':
+              r'C:\tmp\saves\goresave_backups\PersistentDataList.sav.bak.1',
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _UnassignedProfileCoreService extends _FakeCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'saveRoot': r'C:\tmp\saves',
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'assigned',
+              'status': 'ok',
+              'playerSaveName': 'Assigned save',
+              'timePlayedSeconds': 100.0,
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'old',
+              'status': 'ok',
+              'playerSaveName': 'Older unassigned',
+              'timePlayedSeconds': 10.0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-003.sav',
+              'slot': 'G1R-003',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'new',
+              'status': 'ok',
+              'playerSaveName': 'Newest unassigned',
+              'timePlayedSeconds': 20.0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      };
+    }
+    return super.execute(command, payload: payload);
   }
 }
 

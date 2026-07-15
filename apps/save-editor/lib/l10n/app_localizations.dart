@@ -131,13 +131,13 @@ abstract class AppLocalizations {
   /// No description provided for @showObjectIdsTitle.
   ///
   /// In en, this message translates to:
-  /// **'Show object IDs'**
+  /// **'Show additional technical IDs'**
   String get showObjectIdsTitle;
 
   /// No description provided for @showObjectIdsSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.'**
+  /// **'Show technical item, dialogue knowledge, quest, and orphan actor IDs in the editor. NPC IDs are always shown.'**
   String get showObjectIdsSubtitle;
 
   /// No description provided for @appTitle.
@@ -697,6 +697,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Profile'**
   String get profile;
+
+  /// No description provided for @otherSaves.
+  ///
+  /// In en, this message translates to:
+  /// **'Other saves'**
+  String get otherSaves;
 
   /// No description provided for @profileWithSaves.
   ///
@@ -2917,6 +2923,634 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Trading'**
   String get tutorialGateTrading;
+
+  /// No description provided for @windowMinimizeTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Minimize'**
+  String get windowMinimizeTooltip;
+
+  /// No description provided for @windowMaximizeTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Maximize'**
+  String get windowMaximizeTooltip;
+
+  /// No description provided for @windowRestoreTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore'**
+  String get windowRestoreTooltip;
+
+  /// No description provided for @fallbackDialogEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog entry'**
+  String get fallbackDialogEntry;
+
+  /// No description provided for @fallbackDialogChoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog choice'**
+  String get fallbackDialogChoice;
+
+  /// No description provided for @fallbackDialogTopic.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog topic'**
+  String get fallbackDialogTopic;
+
+  /// No description provided for @fallbackDialogInformation.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog information'**
+  String get fallbackDialogInformation;
+
+  /// No description provided for @fallbackQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest'**
+  String get fallbackQuest;
+
+  /// No description provided for @fallbackObjective.
+  ///
+  /// In en, this message translates to:
+  /// **'Objective'**
+  String get fallbackObjective;
+
+  /// No description provided for @fallbackItem.
+  ///
+  /// In en, this message translates to:
+  /// **'Item'**
+  String get fallbackItem;
+
+  /// No description provided for @attributeSkillPointsFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'Skill points (LP)'**
+  String get attributeSkillPointsFallback;
+
+  /// No description provided for @attributeManualFallbackLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{attributeId, select, Alcohol{Alcohol} AlcoholDepletionRate{Alcohol depletion rate} MaxAlcohol{Maximum alcohol} MaxSuperArmor{Maximum super armor} SuperArmor{Super armor} Fatigue{Fatigue} FillRatio{Fill ratio} FillRatioPeriod{Fill ratio period} MaxFatigue{Maximum fatigue} MaxThresholdIndex{Maximum threshold index} RecoveryRatePerHourOfSleep{Recovery per hour of sleep} DamageMultiplier{Damage multiplier} Toughness{Toughness} ToughnessA{Toughness A} ToughnessB{Toughness B} ToughnessC{Toughness C} XPExecutedBounty{Execution XP reward} XPKillOrDefeatBounty{Kill or defeat XP reward} SpeedModifier{Speed modifier} CriticalLevelPercent{Critical level (%)} MaxOxygen{Maximum oxygen} Oxygen{Oxygen} OxygenDepletionRate{Oxygen depletion rate} OxygenRecoveryRate{Oxygen recovery rate} MaxRestTime{Maximum rest time} MaxSleepTime{Maximum sleep time} SleepTime{Sleep time} SleepTimeRecoveryAmount{Sleep recovery amount} SleepTimeRecoveryPeriod{Sleep recovery period} MaxSwampweed{Maximum swampweed} Swampweed{Swampweed} SwampweedDepletionRate{Swampweed depletion rate} other{{fallback}}}'**
+  String attributeManualFallbackLabel(String attributeId, String fallback);
+
+  /// No description provided for @knowledgeTypeVoiceLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice line'**
+  String get knowledgeTypeVoiceLine;
+
+  /// No description provided for @knowledgeTypeOther.
+  ///
+  /// In en, this message translates to:
+  /// **'Other'**
+  String get knowledgeTypeOther;
+
+  /// No description provided for @armorUpgradeUpper.
+  ///
+  /// In en, this message translates to:
+  /// **'Upper'**
+  String get armorUpgradeUpper;
+
+  /// No description provided for @armorUpgradeMiddle.
+  ///
+  /// In en, this message translates to:
+  /// **'Middle'**
+  String get armorUpgradeMiddle;
+
+  /// No description provided for @armorUpgradeLower.
+  ///
+  /// In en, this message translates to:
+  /// **'Lower'**
+  String get armorUpgradeLower;
+
+  /// No description provided for @knowledgeCategoryTopic.
+  ///
+  /// In en, this message translates to:
+  /// **'Topic'**
+  String get knowledgeCategoryTopic;
+
+  /// No description provided for @knowledgeCategoryChoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Choice'**
+  String get knowledgeCategoryChoice;
+
+  /// No description provided for @knowledgeCategoryInfo.
+  ///
+  /// In en, this message translates to:
+  /// **'Information'**
+  String get knowledgeCategoryInfo;
+
+  /// No description provided for @statusOk.
+  ///
+  /// In en, this message translates to:
+  /// **'OK'**
+  String get statusOk;
+
+  /// No description provided for @statusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed'**
+  String get statusFailed;
+
+  /// No description provided for @missingSaveReference.
+  ///
+  /// In en, this message translates to:
+  /// **'File missing'**
+  String get missingSaveReference;
+
+  /// No description provided for @missingSaveReferenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'{slot}.sav is missing. It may have been deleted, moved, or renamed; the profile still references it.'**
+  String missingSaveReferenceDescription(String slot);
+
+  /// No description provided for @removeFromProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from profile'**
+  String get removeFromProfile;
+
+  /// No description provided for @removeSaveFromProfileTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove save from profile?'**
+  String get removeSaveFromProfileTitle;
+
+  /// No description provided for @removeSaveFromProfileBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove {save} from {profile}? The save file itself will be kept if it still exists.'**
+  String removeSaveFromProfileBody(String save, String profile);
+
+  /// No description provided for @unassignedSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Not assigned to a profile'**
+  String get unassignedSave;
+
+  /// No description provided for @armorUpgradeLight.
+  ///
+  /// In en, this message translates to:
+  /// **'Light'**
+  String get armorUpgradeLight;
+
+  /// No description provided for @armorUpgradeMedium.
+  ///
+  /// In en, this message translates to:
+  /// **'Medium'**
+  String get armorUpgradeMedium;
+
+  /// No description provided for @armorUpgradeHeavy.
+  ///
+  /// In en, this message translates to:
+  /// **'Heavy'**
+  String get armorUpgradeHeavy;
+
+  /// No description provided for @knowledgeCaptionForcedConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'Forced conversation'**
+  String get knowledgeCaptionForcedConversation;
+
+  /// No description provided for @knowledgeCaptionFollowupTopic.
+  ///
+  /// In en, this message translates to:
+  /// **'Follow-up topic'**
+  String get knowledgeCaptionFollowupTopic;
+
+  /// No description provided for @knowledgeCaptionFallbackTopic.
+  ///
+  /// In en, this message translates to:
+  /// **'Fallback topic'**
+  String get knowledgeCaptionFallbackTopic;
+
+  /// No description provided for @durationMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{minutes} min'**
+  String durationMinutes(int minutes);
+
+  /// No description provided for @durationHours.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours} hr'**
+  String durationHours(int hours);
+
+  /// No description provided for @durationHoursMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{hours} hr {minutes} min'**
+  String durationHoursMinutes(int hours, int minutes);
+
+  /// No description provided for @backupStatusInvalidProfileStructure.
+  ///
+  /// In en, this message translates to:
+  /// **'Invalid profile data'**
+  String get backupStatusInvalidProfileStructure;
+
+  /// No description provided for @backupStatusSlotMetadataMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'Selected save metadata is missing'**
+  String get backupStatusSlotMetadataMissing;
+
+  /// No description provided for @defaultProfileName.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile {id}'**
+  String defaultProfileName(int id);
+
+  /// No description provided for @statusUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get statusUnknown;
+
+  /// No description provided for @editorUnexpectedError.
+  ///
+  /// In en, this message translates to:
+  /// **'Unexpected error: {details}'**
+  String editorUnexpectedError(String details);
+
+  /// No description provided for @editorOperationInProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Another operation is in progress. Try again in a moment.'**
+  String get editorOperationInProgress;
+
+  /// No description provided for @editorUnsavedBeforeDifficulty.
+  ///
+  /// In en, this message translates to:
+  /// **'You have unsaved save edits. Save or reset them before changing the profile difficulty.'**
+  String get editorUnsavedBeforeDifficulty;
+
+  /// No description provided for @editorNoSaveFolderSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'No save folder selected.'**
+  String get editorNoSaveFolderSelected;
+
+  /// No description provided for @editorNoSaveSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'No save selected.'**
+  String get editorNoSaveSelected;
+
+  /// No description provided for @coreUnknownError.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown core error'**
+  String get coreUnknownError;
+
+  /// No description provided for @editorUnsavedBeforeSwitchProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or reset your unsaved changes first — switching profiles would move away from the current save.'**
+  String get editorUnsavedBeforeSwitchProfile;
+
+  /// No description provided for @editorUnsavedBeforeOpenFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or reset your unsaved changes before opening another file.'**
+  String get editorUnsavedBeforeOpenFile;
+
+  /// No description provided for @editorSelectSavFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a .sav savegame file.'**
+  String get editorSelectSavFile;
+
+  /// No description provided for @editorNotGothicGsav.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected file is not a Gothic GSAV savegame.'**
+  String get editorNotGothicGsav;
+
+  /// No description provided for @editorUnsavedBeforeChangeSaveProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or reset your unsaved changes before changing the save profile.'**
+  String get editorUnsavedBeforeChangeSaveProfile;
+
+  /// No description provided for @editorUnsavedBeforeRemoveProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or reset your unsaved changes before removing a save from its profile.'**
+  String get editorUnsavedBeforeRemoveProfile;
+
+  /// No description provided for @editorUnsavedBeforeRestoreProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'You have unsaved save edits. Save or reset them before restoring a profile backup.'**
+  String get editorUnsavedBeforeRestoreProfile;
+
+  /// No description provided for @editorConflictingPropertyEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'Conflicting unsaved edits target the same property ({path}) from two tabs. Reset or revert one of them, then save again.'**
+  String editorConflictingPropertyEdits(String path);
+
+  /// No description provided for @editorGlossaryMemoryConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A glossary segment change and another unsaved All-data edit both target the Hero MemorizedEvents array ({path}). Glossary changes add or remove entries in that array, so the edits cannot be saved together — reset or revert one of them, then save again.'**
+  String editorGlossaryMemoryConflict(String path);
+
+  /// No description provided for @editorGlossaryQuestConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A glossary segment change and another unsaved edit target the same quest CurrentState property ({path}). The glossary change updates that state itself — reset or revert one of them, then save again.'**
+  String editorGlossaryQuestConflict(String path);
+
+  /// No description provided for @editorRelationshipConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A relationship override and another unsaved All-data edit both target the same NPC relationship entry ({path}). The structured relationship change can replace modifiers in that entry, so the edits cannot be saved together — reset or revert one of them, then save again.'**
+  String editorRelationshipConflict(String path);
+
+  /// No description provided for @editorMultipleStructuralArrayEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'More than one unsaved structural edit targets the same array ({path}). Save or reset the first change before queuing another.'**
+  String editorMultipleStructuralArrayEdits(String path);
+
+  /// No description provided for @editorStructuralArrayConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A structural event change and another unsaved All-data edit both target {path}. Save or reset one of them before continuing.'**
+  String editorStructuralArrayConflict(String path);
+
+  /// No description provided for @editorSkillsEffectConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'A Skills change and an All-data edit to the same actor’s effect (ActiveEffects › EffectSpec › Def) are both queued. They cannot be saved together — reset or revert one of them, then save again.'**
+  String get editorSkillsEffectConflict;
+
+  /// No description provided for @editorInventoryResetConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'An inventory reset and another edit to the same inventory are both queued. The reset replaces the entire inventory and would discard the other edit — reset or revert one of them, then save again.'**
+  String get editorInventoryResetConflict;
+
+  /// No description provided for @editorUseFolder.
+  ///
+  /// In en, this message translates to:
+  /// **'Use folder'**
+  String get editorUseFolder;
+
+  /// No description provided for @editorGothicSavegameFileType.
+  ///
+  /// In en, this message translates to:
+  /// **'Gothic savegame'**
+  String get editorGothicSavegameFileType;
+
+  /// No description provided for @editorNoDifficultyChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'No difficulty changes to write'**
+  String get editorNoDifficultyChanges;
+
+  /// No description provided for @editorDifficultyWritten.
+  ///
+  /// In en, this message translates to:
+  /// **'Difficulty written to the profile (backup created)'**
+  String get editorDifficultyWritten;
+
+  /// No description provided for @editorChangesSavedWithBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 change saved with backup} other{{count} changes saved with backup}}'**
+  String editorChangesSavedWithBackup(int count);
+
+  /// No description provided for @editorProfileNotFound.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile {profileId} was not found.'**
+  String editorProfileNotFound(int profileId);
+
+  /// No description provided for @editorNoFreeSaveSlot.
+  ///
+  /// In en, this message translates to:
+  /// **'No free save slot is available in the game save folder (G1R-001 through G1R-999).'**
+  String get editorNoFreeSaveSlot;
+
+  /// No description provided for @editorSaveImportedAssigned.
+  ///
+  /// In en, this message translates to:
+  /// **'Save imported and assigned to profile {profileId}'**
+  String editorSaveImportedAssigned(int profileId);
+
+  /// No description provided for @editorSaveAssigned.
+  ///
+  /// In en, this message translates to:
+  /// **'Save assigned to profile {profileId} (paired backups created)'**
+  String editorSaveAssigned(int profileId);
+
+  /// No description provided for @editorSaveSlotNotAssigned.
+  ///
+  /// In en, this message translates to:
+  /// **'Save slot {slot} is not assigned to profile {profileId}.'**
+  String editorSaveSlotNotAssigned(String slot, int profileId);
+
+  /// No description provided for @editorSaveRemovedFromProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Save removed from profile'**
+  String get editorSaveRemovedFromProfile;
+
+  /// No description provided for @editorRestoredBackup.
+  ///
+  /// In en, this message translates to:
+  /// **'Restored backup: {path}'**
+  String editorRestoredBackup(String path);
+
+  /// No description provided for @editorRestoredBackupWithoutCompanion.
+  ///
+  /// In en, this message translates to:
+  /// **'Restored backup: {path} (PersistentDataList.sav left unchanged — no matching companion backup; slot metadata may differ)'**
+  String editorRestoredBackupWithoutCompanion(String path);
+
+  /// No description provided for @editorCodecRoundtripPassed.
+  ///
+  /// In en, this message translates to:
+  /// **'Codec roundtrip passed: chunk {chunkIndex} recompressed to {bytes} bytes'**
+  String editorCodecRoundtripPassed(int chunkIndex, int bytes);
+
+  /// No description provided for @editorDifficultyWriteFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not write the profile difficulty: {details}'**
+  String editorDifficultyWriteFailed(String details);
+
+  /// No description provided for @editorProfileAssignmentFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not assign the save to the profile: {details}'**
+  String editorProfileAssignmentFailed(String details);
+
+  /// No description provided for @editorProfileRemovalFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not remove the save from the profile: {details}'**
+  String editorProfileRemovalFailed(String details);
+
+  /// No description provided for @editorSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not save the changes: {details}'**
+  String editorSaveFailed(String details);
+
+  /// No description provided for @editorScanSavesFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed to scan saves: {details}'**
+  String editorScanSavesFailed(String details);
+
+  /// No description provided for @editorInspectSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed to inspect save: {details}'**
+  String editorInspectSaveFailed(String details);
+
+  /// No description provided for @editorLoadBackupsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed to load backups: {details}'**
+  String editorLoadBackupsFailed(String details);
+
+  /// No description provided for @editorRestoreFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not restore the backup: {details}'**
+  String editorRestoreFailed(String details);
+
+  /// No description provided for @editorRestoreReloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Restored backup: {path}, but reloading the save failed: {details}'**
+  String editorRestoreReloadFailed(String path, String details);
+
+  /// No description provided for @editorCodecCheckFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Codec check failed: {details}'**
+  String editorCodecCheckFailed(String details);
+
+  /// No description provided for @editorCodecValidationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Codec roundtrip failed: {details}'**
+  String editorCodecValidationFailed(String details);
+
+  /// No description provided for @editorPropertySearchFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Property search failed: {details}'**
+  String editorPropertySearchFailed(String details);
+
+  /// No description provided for @editorSelectionChangedWhileLoadingHeroAttributes.
+  ///
+  /// In en, this message translates to:
+  /// **'Save selection changed while loading hero attributes.'**
+  String get editorSelectionChangedWhileLoadingHeroAttributes;
+
+  /// No description provided for @editorSkillsLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Skills load failed: {details}'**
+  String editorSkillsLoadFailed(String details);
+
+  /// No description provided for @editorProgressionQueryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Progression query failed: {details}'**
+  String editorProgressionQueryFailed(String details);
+
+  /// No description provided for @editorNpcListFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC list failed: {details}'**
+  String editorNpcListFailed(String details);
+
+  /// No description provided for @editorCharacterListFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Character list failed: {details}'**
+  String editorCharacterListFailed(String details);
+
+  /// No description provided for @editorNpcAttributesFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC attributes failed: {details}'**
+  String editorNpcAttributesFailed(String details);
+
+  /// No description provided for @editorNpcInventoryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC inventory failed: {details}'**
+  String editorNpcInventoryFailed(String details);
+
+  /// No description provided for @editorFactionListFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Faction list failed: {details}'**
+  String editorFactionListFailed(String details);
+
+  /// No description provided for @editorNoBackupPath.
+  ///
+  /// In en, this message translates to:
+  /// **'none'**
+  String get editorNoBackupPath;
+
+  /// No description provided for @editorBackupMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'{prefix}: {backupPath}'**
+  String editorBackupMessage(String prefix, String backupPath);
+
+  /// No description provided for @editorBackupMessageWithPersistent.
+  ///
+  /// In en, this message translates to:
+  /// **'{prefix}: {backupPath}; PersistentDataList backup: {persistentPath}'**
+  String editorBackupMessageWithPersistent(
+    String prefix,
+    String backupPath,
+    String persistentPath,
+  );
+
+  /// No description provided for @localizationStatusFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Localization status failed: {details}'**
+  String localizationStatusFailed(String details);
+
+  /// No description provided for @localizationExtractionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Extraction failed: {details}'**
+  String localizationExtractionFailed(String details);
+
+  /// No description provided for @glossaryLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Glossary load failed: {details}'**
+  String glossaryLoadFailed(String details);
+
+  /// No description provided for @backupStatusError.
+  ///
+  /// In en, this message translates to:
+  /// **'Backup error: {details}'**
+  String backupStatusError(String details);
+
+  /// No description provided for @glossaryCatalogSegmentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{segmentId, select, Access{Access} AccessDenied{Access Denied} AccesToTemple{Access to Temple} Advice{Advice} AfterFight{After Fight} AfterFireMages{After Fire Mages} AfterNek{After Nek} AfterQuest{After Quest} Alone{Alone} Amulet{Amulet} Annoying{Annoying} Armor{Armor} Avoid{Avoid} Backstory{Backstory} BackStory{Back Story} BasicMagic{Basic Magic} Beated{Beaten} BecomeMercenary{Become Mercenary} Beer{Beer} Bestiary{Bestiary} Blessing{Blessing} Boss{Boss} Bully{Bully} BullyAdvice{Bully Advice} Camp{Camp} CampDivided{Camp Divided} CareOfMessengers{Care of Messengers} ChangeOpinion{Change Opinion} ChargeUriziel{Charge Uriziel} Chosen{Chosen} Contact{Contact} Courier{Courier} CraftBows{Craft Bows} Crazy{Crazy} DailyMeal{Daily Meal} DailyRation_Trader{Daily Ration Trader} DAM{Dam} Dead{Dead} Deal{Deal} Dealer{Dealer} Deceived{Deceived} Dementia{Dementia} DenyAccess{Deny Access} DifferentOpinion{Different Opinion} Discussion{Discussion} DontTalk{Don’t Talk} Duel{Duel} Entrance{Entrance} Escape{Escape} Extended{Extended} Extra{Extra} ExtraInfo{Extra Info} Fanatic{Fanatic} Fight{Fight} FindUlumulu{Find Ulu-Mulu} FireMages{Fire Mages} FireMagesEscape{Fire Mages Escape} FiskNewDealer{New Fence for Fisk} FiskNewDealerCompleted{New Fence for Fisk — Completed} FogTower{Fog Tower} Food{Food} Forgave{Forgave} Forgive{Forgive} Forgiven{Forgiven} FourFriends{Four Friends} FreeHut{Free Hut} FreeMine{Free Mine} Fury{Fury} GoodTeacher{Good Teacher} Gossip{Gossip} GotScavenger{Got Scavenger} GrantedAccess{Granted Access} GRDArmor{Guard Armor} Guide{Guide} HateMages{Hate Mages} HateMagesExplanation{Hate Mages Explanation} HateRiceLord{Hate Rice Lord} Heal{Heal} Healing{Healing} Help{Help} Helper{Helper} HelpKagan{Help Kagan} HutStory{Hut Story} Ignore{Ignore} Impress{Impress} ImpressAlchemy{Impress Alchemy} ImpressInscription{Impress Inscription} Info{Info} Interested{Interested} Introduction{Introduction} Introduction_2{Introduction 2} Introduction_Armor{Introduction – Armor} Introduction_Teacher{Introduction – Teacher} Introduction_Trader{Introduction – Trader} Invocation{Invocation} JoinSC{Join Swamp Camp} Joint{Joint} KalomCamp{Kalom Camp} Leader{Leader} Learning{Learning} LearnOrcish{Learn Orcish} LeftParty{Left Party} Library{Library} Lie{Lie} Lock{Lock} Lockpick{Lockpick} Mad{Mad} Mandibles{Minecrawler Mandibles} MapMaker{Map Maker} Monastery{Monastery} MordragKO{Mordrag KO} Nek{Nek} NewCamp{New Camp} NewCamper{New Camper} NewLeader{New Leader} NightPatrol{Night Patrol} NotInterested{Not Interested} OldCamp{Old Camp} OrcEnclaveEntrance{Orc Enclave Entrance} OrcGraveyard{Orc Graveyard} OreArmor{Ore Armor} Party{Party} Pay{Pay} PayMoney{Pay Money} Permission{Permission} Pet{Pet} PreparingInvocation{Preparing Invocation} Quest{Quest} RankUpFireMages{Fire Mage Promotion} RankUpGuard{Guard Promotion} RanUpFireMagesCompleted{Fire Mage Promotion Completed} Realocated{Relocated} Reason{Reason} Respect{Respect} ReturnToSC{Return to Swamp Camp} RicelordForeman{Rice Lord’s Foreman} RideScavenger{Ride Scavenger} Robe{Robe} Safe{Safe} Scraper{Scraper} SecondChance{Second Chance} SecretLocation{Secret Location} SecretPassage{Secret Passage} SecretPath{Secret Path} SleeperFollower{Sleeper Follower} SleeperTemple{Sleeper Temple} SmallInfo{Small Info} Stonehenge{Stonehenge} StopFollowing{Stop Following} SwampCamp{Swamp Camp} Talkative{Talkative} Teach{Teach} TeachBow{Teach Bow} Teacher{Teacher} Teacher2{Teacher 2} TeacherInscription{Teacher Inscription} TeacherMana{Teacher Mana} TeachIchor{Teach Minecrawler Ichor Extraction} TeachMagic{Teach Magic} TeachOrcish{Teach Orcish} TeachStats{Teach Stats} TeachWeapon{Teach Weapon} Teleport{Teleport} TheMysteriousOrc{The Mysterious Orc} ThroneRoom{Throne Room} TradeBow{Trade Bow} Trader{Trader} TradeSkins_Trader{Skin Trader} Traitor{Traitor} Trial{Trial} TrollCanyon{Troll Canyon} Trust{Trust} Ulumulu{Ulu-Mulu} Unexperienced{Inexperienced} Uriziel{Uriziel} UrizielRune{Uriziel Rune} Useful{Useful} Velaya{Velaya} Vibrations{Vibrations} WaitFreeMine{Wait at Free Mine} WaitInTrainingArea{Wait In Training Area} Warning{Warning} WarningTooLate{Warning Came Too Late} WaterMessenger{Messenger for the Water Mages} Weapon{Weapon} Who{Who} Women{Women} other{{fallback}}}'**
+  String glossaryCatalogSegmentLabel(String segmentId, String fallback);
 }
 
 class _AppLocalizationsDelegate

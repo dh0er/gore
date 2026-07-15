@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
@@ -9,8 +11,50 @@ import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/l10n/app_localizations_de.dart';
+import 'package:goresave/l10n/app_localizations_en.dart';
+import 'package:goresave/providers/data_providers.dart';
+
+bool _sameTestPath(String a, String b) =>
+    a.replaceAll('/', '\\').toLowerCase() ==
+    b.replaceAll('/', '\\').toLowerCase();
 
 void main() {
+  test(
+    'direct notifier construction defaults domain messages to English',
+    () async {
+      final notifier = EditorNotifier(_RecordingCoreService());
+
+      await pumpEventQueue();
+
+      final result = await notifier.loadSkills();
+      expect(result.error, AppLocalizationsEn().editorNoSaveSelected);
+    },
+  );
+
+  test(
+    'provider notifier reads a changed locale without being recreated',
+    () async {
+      final container = ProviderContainer(
+        overrides: [
+          coreServiceProvider.overrideWithValue(_RecordingCoreService()),
+          uiSettingsStoreProvider.overrideWithValue(
+            const NoopUiSettingsStore(),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(editorProvider.notifier);
+
+      await pumpEventQueue();
+      container.read(localeProvider.notifier).setLocale('de');
+
+      expect(container.read(editorProvider.notifier), same(notifier));
+      final result = await notifier.loadSkills();
+      expect(result.error, AppLocalizationsDe().editorNoSaveSelected);
+    },
+  );
+
   test('uses persisted save dir before defaults', () {
     final core = _RecordingCoreService();
     final store = _MemoryEditorSettingsStore(
@@ -81,7 +125,12 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
 
       await pumpEventQueue();
 
@@ -2714,6 +2763,63 @@ void main() {
   );
 
   test(
+    'selectProfile selects a real save after a missing-only profile',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Save B',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'quickSaveSlots': <String>[],
+              'autoSaveSlots': <String>[],
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(notifier.state.selectedPath, isNull);
+
+      await notifier.selectProfile(1);
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.inspection, isNotNull);
+    },
+  );
+
+  test(
     'selectProfile with pending edits is blocked and sets an error',
     () async {
       final core = _RecordingCoreService(
@@ -2844,7 +2950,7 @@ void main() {
   );
 
   test(
-    'loadExternalSave keeps a detached save through refresh and resolves no profile',
+    'external saves accumulate, persist, and survive refresh without a profile',
     () async {
       final core = _RecordingCoreService(
         scanData: {
@@ -2871,7 +2977,13 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (_) => true,
+      );
       await pumpEventQueue();
 
       const externalPath = r'D:\archive\My-Gothic-Save.sav';
@@ -2880,19 +2992,415 @@ void main() {
       expect(notifier.state.selectedPath, externalPath);
       expect(notifier.state.selectedSave?.isExternal, isTrue);
       expect(notifier.state.selectedSave?.persistentProfileId, isNull);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(notifier.state.otherSaves.map((save) => save.path), [
+        externalPath,
+      ]);
+      expect(notifier.state.visibleSaves.map((save) => save.path), [
+        externalPath,
+      ]);
+      expect(store.settings.externalSavePaths, [externalPath]);
       expect(
         notifier.state.activeProfile,
         isNull,
         reason: 'detached saves must not borrow the folder profile difficulty',
       );
 
-      await notifier.refresh();
+      // Reopening that same detached file through a differently-cased,
+      // normalizable Windows path must retain the SaveSlot's canonical path.
+      // Otherwise exact state accessors can no longer find the selected offer.
+      await notifier.loadExternalSave(r'd:/ARCHIVE/./my-gothic-save.SAV');
       expect(notifier.state.selectedPath, externalPath);
       expect(notifier.state.selectedSave?.isExternal, isTrue);
       expect(
         notifier.state.saves.where((save) => save.isExternal),
         hasLength(1),
       );
+
+      const secondExternalPath = r'E:\archive\Second.sav';
+      await notifier.loadExternalSave(secondExternalPath);
+      expect(
+        notifier.state.otherSaves.map((save) => save.path),
+        containsAll([externalPath, secondExternalPath]),
+      );
+      expect(store.settings.externalSavePaths, [
+        externalPath,
+        secondExternalPath,
+      ]);
+
+      await notifier.refresh();
+      expect(notifier.state.selectedPath, secondExternalPath);
+      expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal),
+        hasLength(2),
+      );
+    },
+  );
+
+  test(
+    'refresh restores persisted external saves and prunes missing files',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _RecordingCoreService(),
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(
+        notifier.state.saves.where((save) => save.isExternal).single.path,
+        existingPath,
+      );
+
+      await notifier.selectOtherSaves();
+      expect(notifier.state.selectedPath, existingPath);
+      expect(notifier.state.visibleSaves.single.path, existingPath);
+
+      expect(await notifier.removeOtherSave(existingPath), isTrue);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [existingPath]);
+    },
+  );
+
+  test(
+    'failed folder scan still restores external saves and prunes missing paths',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _FailingScanCoreService(),
+        saveDir: r'C:\missing\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(notifier.state.otherSaves.single.path, existingPath);
+      expect(notifier.state.selectedSave?.path, existingPath);
+      expect(notifier.state.error, isNotNull);
+    },
+  );
+
+  test(
+    'thrown folder scan still restores external saves and prunes missing paths',
+    () async {
+      const existingPath = r'D:\archive\Existing.sav';
+      const missingPath = r'D:\archive\Missing.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [existingPath, missingPath]),
+      );
+      final notifier = EditorNotifier(
+        _ThrowingScanCoreService(),
+        saveDir: r'C:\missing\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, existingPath),
+      );
+      await pumpEventQueue();
+
+      expect(notifier.state.externalSavePaths, [existingPath]);
+      expect(store.settings.externalSavePaths, [existingPath]);
+      expect(notifier.state.otherSaves.single.path, existingPath);
+      expect(notifier.state.selectedSave?.path, existingPath);
+      expect(notifier.state.error, contains('native scan failed'));
+    },
+  );
+
+  test('refresh canonicalizes a retained Windows save selection', () async {
+    const openedPath = r'c:\archive\loose.sav';
+    const scannedPath = r'C:\ARCHIVE\Loose.sav';
+    final core = _RecordingCoreService();
+    final store = _MemoryEditorSettingsStore();
+    final notifier = EditorNotifier(
+      core,
+      saveDir: r'C:\tmp\saves',
+      settingsStore: store,
+      fileExists: (_) => true,
+    );
+    await pumpEventQueue();
+
+    await notifier.loadExternalSave(openedPath);
+    expect(notifier.state.selectedPath, openedPath);
+
+    core.scanData
+      ..['saves'] = [
+        {
+          'path': scannedPath,
+          'slot': 'Loose',
+          'format': 'GSAV',
+          'fileSize': 100,
+          'sha1': 'canonical',
+          'status': 'ok',
+        },
+      ]
+      ..['profiles'] = <Object?>[];
+    await notifier.refresh();
+
+    expect(notifier.state.selectedPath, scannedPath);
+    expect(notifier.state.selectedSave?.path, scannedPath);
+    expect(notifier.state.selectedSave?.isExternal, isFalse);
+    expect(notifier.state.externalSavePaths, isEmpty);
+    expect(store.settings.externalSavePaths, isEmpty);
+  });
+
+  test(
+    'removed external save stays hidden when a later scan discovers it',
+    () async {
+      const path = r'D:\archive\Loose.sav';
+      final core = _RecordingCoreService();
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (_) => true,
+      );
+      await pumpEventQueue();
+
+      await notifier.loadExternalSave(path);
+      expect(await notifier.removeOtherSave(path), isTrue);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      core.scanData['saves'] = [
+        {
+          'path': path,
+          'slot': 'Loose',
+          'format': 'GSAV',
+          'fileSize': 100,
+          'sha1': 'now-scanned',
+          'status': 'ok',
+        },
+      ];
+      await notifier.refresh();
+
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      // Explicitly opening it again is the user's opt-in to re-add it.
+      await notifier.loadExternalSave(path);
+      expect(notifier.state.otherSaves.single.path, path);
+      expect(store.settings.hiddenOtherSavePaths, isEmpty);
+    },
+  );
+
+  test(
+    'external save with a local slot basename remains profileless',
+    () async {
+      const externalPath = r'D:\archive\G1R-001.sav';
+      final store = _MemoryEditorSettingsStore(
+        const EditorSettings(externalSavePaths: [externalPath]),
+      );
+      final notifier = EditorNotifier(
+        _RecordingCoreService(
+          scanData: {
+            'saves': [
+              {
+                'path': r'C:\tmp\saves\G1R-001.sav',
+                'slot': 'G1R-001',
+                'format': 'GSAV',
+                'fileSize': 100,
+                'sha1': 'local',
+                'status': 'ok',
+                'persistentProfileId': 0,
+              },
+            ],
+            'profiles': [
+              {
+                'profileId': 0,
+                'profileName': '0',
+                'savedSlots': ['G1R-001'],
+              },
+            ],
+            'activeProfileId': 0,
+          },
+        ),
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+        fileExists: (path) => _sameTestPath(path, externalPath),
+      );
+      await pumpEventQueue();
+
+      final external = notifier.state.saves.singleWhere(
+        (save) => save.isExternal,
+      );
+      expect(notifier.state.profileIdForSave(external), isNull);
+      expect(notifier.state.otherSaves, contains(external));
+    },
+  );
+
+  test(
+    'removing a scanned Other save persists a tombstone across refresh',
+    () async {
+      const path = r'C:\tmp\saves\G1R-007.sav';
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': path,
+              'slot': 'G1R-007',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'other',
+              'status': 'ok',
+              'playerSaveName': 'Loose save',
+            },
+          ],
+          'profiles': <Object?>[],
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      await notifier.selectOtherSaves();
+      expect(notifier.state.visibleSaves.single.path, path);
+
+      expect(await notifier.removeOtherSave(path), isTrue);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      await notifier.refresh();
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(store.settings.hiddenOtherSavePaths, [path]);
+
+      final restarted = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      expect(restarted.state.otherSaves, isEmpty);
+
+      // Choosing the still-existing file through Open file explicitly re-adds
+      // it and clears the persisted tombstone.
+      await restarted.loadExternalSave(path);
+      expect(restarted.state.otherSaves.single.path, path);
+      expect(store.settings.hiddenOtherSavePaths, isEmpty);
+    },
+  );
+
+  test(
+    'opening a scanned path normalizes Windows casing and selects its profile',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'savedSlots': ['G1R-002'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      await notifier.loadExternalSave(r'c:/TMP/saves/./g1r-002.SAV');
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
+      expect(notifier.state.selectedProfileId, 1);
+      expect(notifier.state.activeProfile?.profileId, 1);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-002']),
+      );
+      expect(notifier.state.saves.where((save) => save.isExternal), isEmpty);
+    },
+  );
+
+  test(
+    'failed external open restores the previous save and inspection',
+    () async {
+      final core = _RejectExternalInspectCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
+      await pumpEventQueue();
+      final previousInspection = notifier.state.inspection;
+      final previousBackups = notifier.state.backups;
+
+      await notifier.loadExternalSave(r'D:\archive\invalid.sav');
+
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-001.sav');
+      expect(notifier.state.inspection, same(previousInspection));
+      expect(notifier.state.backups, same(previousBackups));
+      expect(notifier.state.activeProfile?.profileId, 0);
+      expect(notifier.state.otherSaves, isEmpty);
+      expect(notifier.state.otherSavesSelected, isFalse);
+      expect(notifier.state.saves.where((save) => save.isExternal), isEmpty);
+      expect(store.settings.externalSavePaths, isEmpty);
+      expect(notifier.state.error, contains('invalid external file'));
     },
   );
 
@@ -2946,6 +3454,254 @@ void main() {
   );
 
   test(
+    'missing profile reference stays visible but is never inspected or selected',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-009.sav',
+              'slot': 'G1R-009',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentPlayerSaveName': 'Lost save',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(notifier.state.visibleSaves.single.isMissing, isTrue);
+      expect(notifier.state.selectedPath, isNull);
+      expect(notifier.state.inspection, isNull);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+
+      await notifier.inspect(r'C:\tmp\saves\G1R-009.sav');
+      expect(notifier.state.selectedPath, isNull);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test(
+    'removeSaveFromProfile cleans a missing reference and sends no inspect',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-009.sav',
+              'slot': 'G1R-009',
+              'format': 'MISSING',
+              'fileSize': 0,
+              'sha1': '',
+              'status': 'missing',
+              'persistentProfileId': 0,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'quickSaveSlots': ['G1R-009'],
+              'autoSaveSlots': ['G1R-009'],
+              'savedSlots': ['G1R-009'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      final ok = await notifier.removeSaveFromProfile(
+        slot: 'G1R-009',
+        profileId: 0,
+      );
+
+      expect(ok, isTrue);
+      final request = core.requests.lastWhere(
+        (request) => request.command == 'remove_save_from_profile',
+      );
+      expect(
+        request.payload['persistentPath'],
+        r'C:\tmp\saves\PersistentDataList.sav',
+      );
+      expect(request.payload['slot'], 'G1R-009');
+      expect(request.payload['profileId'], 0);
+      expect(request.payload['backup'], isTrue);
+      expect(notifier.state.saves, isEmpty);
+      expect(notifier.state.profiles.single.savedSlots, isEmpty);
+      expect(
+        core.requests.where((request) => request.command == 'inspect_save'),
+        isEmpty,
+      );
+    },
+  );
+
+  test('removeSaveFromProfile keeps an existing save as unassigned', () async {
+    final core = _RecordingCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-006.sav',
+            'slot': 'G1R-006',
+            'format': 'GSAV',
+            'fileSize': 100,
+            'sha1': 'a',
+            'status': 'ok',
+            'playerSaveName': 'Keep me',
+            'persistentProfileId': 0,
+          },
+        ],
+        'profiles': [
+          {
+            'profileId': 0,
+            'profileName': '0',
+            'savedSlots': ['G1R-006'],
+          },
+        ],
+        'activeProfileId': 0,
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await pumpEventQueue();
+
+    final ok = await notifier.removeSaveFromProfile(
+      slot: 'G1R-006',
+      profileId: 0,
+    );
+
+    expect(ok, isTrue);
+    expect(notifier.state.saves, hasLength(1));
+    expect(notifier.state.selectedSave, isNull);
+    expect(notifier.state.otherSaves.map((save) => save.slot), ['G1R-006']);
+    expect(notifier.state.visibleSaves, isEmpty);
+    expect(notifier.state.profiles.single.savedSlots, isEmpty);
+  });
+
+  test(
+    'all unassigned saves stay out of profiles and collect in Other saves',
+    () async {
+      final core = _RecordingCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'a',
+              'status': 'ok',
+              'playerSaveName': 'First detached',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-002.sav',
+              'slot': 'G1R-002',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'b',
+              'status': 'ok',
+              'playerSaveName': 'Second detached',
+              'persistentProfileId': 0,
+            },
+            {
+              'path': r'C:\tmp\saves\G1R-003.sav',
+              'slot': 'G1R-003',
+              'format': 'GSAV',
+              'fileSize': 100,
+              'sha1': 'c',
+              'status': 'ok',
+              'playerSaveName': 'Other profile',
+              'persistentProfileId': 1,
+            },
+          ],
+          'profiles': [
+            {
+              'profileId': 0,
+              'profileName': '0',
+              'savedSlots': ['G1R-001', 'G1R-002'],
+            },
+            {
+              'profileId': 1,
+              'profileName': '1',
+              'savedSlots': ['G1R-003'],
+            },
+          ],
+          'activeProfileId': 0,
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await pumpEventQueue();
+
+      expect(
+        await notifier.removeSaveFromProfile(slot: 'G1R-001', profileId: 0),
+        isTrue,
+      );
+      expect(notifier.state.otherSaves.map((save) => save.slot), ['G1R-001']);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-002']),
+      );
+
+      await notifier.selectProfile(1);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        orderedEquals(['G1R-003']),
+      );
+      expect(
+        notifier.state.visibleSaves.any(
+          (save) => save.persistentProfileId == null,
+        ),
+        isFalse,
+      );
+
+      await notifier.selectProfile(0);
+      expect(
+        await notifier.removeSaveFromProfile(slot: 'G1R-002', profileId: 0),
+        isTrue,
+      );
+      expect(
+        notifier.state.otherSaves.map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+      expect(
+        notifier.state.saves
+            .where((save) => save.persistentProfileId == null)
+            .map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+
+      await notifier.selectOtherSaves();
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(
+        notifier.state.visibleSaves.map((save) => save.slot),
+        containsAll(['G1R-001', 'G1R-002']),
+      );
+      expect(notifier.state.selectedSave?.slot, anyOf('G1R-001', 'G1R-002'));
+      expect(notifier.state.activeProfile, isNull);
+    },
+  );
+
+  test(
     'assignSelectedSaveToProfile imports detached file into first free slot',
     () async {
       final core = _RecordingCoreService(
@@ -2967,7 +3723,12 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
       await pumpEventQueue();
       await notifier.loadExternalSave(r'D:\archive\Detached.sav');
 
@@ -2982,6 +3743,8 @@ void main() {
       expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-002.sav');
       expect(notifier.state.selectedSave?.isExternal, isFalse);
       expect(notifier.state.selectedSave?.persistentProfileId, 0);
+      expect(notifier.state.otherSavesSelected, isFalse);
+      expect(store.settings.externalSavePaths, isEmpty);
       expect(
         notifier.state.saves.any(
           (save) => save.path == r'D:\archive\Detached.sav',
@@ -3030,7 +3793,12 @@ void main() {
           'activeProfileId': 0,
         },
       );
-      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      final store = _MemoryEditorSettingsStore();
+      final notifier = EditorNotifier(
+        core,
+        saveDir: r'C:\tmp\saves',
+        settingsStore: store,
+      );
       await pumpEventQueue();
       const externalPath = r'D:\archive\Detached.sav';
       await notifier.loadExternalSave(externalPath);
@@ -3041,6 +3809,8 @@ void main() {
       expect(notifier.state.error, contains('import failed'));
       expect(notifier.state.selectedPath, externalPath);
       expect(notifier.state.selectedSave?.isExternal, isTrue);
+      expect(notifier.state.otherSavesSelected, isTrue);
+      expect(store.settings.externalSavePaths, [externalPath]);
       expect(
         notifier.state.saves.where((save) => save.isExternal),
         hasLength(1),
@@ -3501,6 +4271,36 @@ class _RecordingCoreService implements GoresaveCoreService {
                 r'C:\tmp\saves\PersistentDataList.sav.bak.1',
           },
         };
+      case 'remove_save_from_profile':
+        final profileId = (payload['profileId'] as num).toInt();
+        final slot = payload['slot'] as String;
+        final saves = (scanData['saves'] as List?) ?? <Object?>[];
+        saves.removeWhere(
+          (raw) =>
+              raw is Map && raw['slot'] == slot && raw['status'] == 'missing',
+        );
+        for (final raw in saves.whereType<Map>()) {
+          if (raw['slot'] == slot) raw.remove('persistentProfileId');
+        }
+        for (final raw
+            in ((scanData['profiles'] as List?) ?? <Object?>[])
+                .whereType<Map>()) {
+          for (final key in ['savedSlots', 'quickSaveSlots', 'autoSaveSlots']) {
+            (raw[key] as List?)?.removeWhere((value) => value == slot);
+          }
+        }
+        return {
+          'ok': true,
+          'data': {
+            'slot': slot,
+            'persistentPath': payload['persistentPath'],
+            'profileId': profileId,
+            'bytesChanged': true,
+            'backupPath': null,
+            'persistentBackupPath':
+                r'C:\tmp\saves\PersistentDataList.sav.bak.2',
+          },
+        };
       case 'search_typed_properties':
         final pages = typedSearchPages;
         if (pages != null && pages.isNotEmpty) {
@@ -3565,6 +4365,28 @@ class _RecordingCoreService implements GoresaveCoreService {
           'error': {'message': 'Unhandled command $command'},
         };
     }
+  }
+}
+
+class _RejectExternalInspectCoreService extends _RecordingCoreService {
+  _RejectExternalInspectCoreService({super.scanData});
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'inspect_save' &&
+        (payload['path'] as String?)?.startsWith(r'D:\archive') == true) {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'invalid external file'},
+      };
+    }
+    return super.execute(command, payload: payload);
   }
 }
 
@@ -3636,6 +4458,38 @@ class _FailSecondWriteCoreService extends _RecordingCoreService {
           'error': {'message': 'second write failed'},
         };
       }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _FailingScanCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': false,
+        'error': {'message': 'save folder is unavailable'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+class _ThrowingScanCoreService extends _RecordingCoreService {
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') {
+      throw Exception('native scan failed');
     }
     return super.execute(command, payload: payload);
   }

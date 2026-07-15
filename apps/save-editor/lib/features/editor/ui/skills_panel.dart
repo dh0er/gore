@@ -213,9 +213,10 @@ class _SkillsSectionState extends ConsumerState<SkillsSection> {
     // by base name; the user reads them by display name). Case-insensitive.
     for (final list in byCategory.values) {
       list.sort(
-        (a, b) => _skillName(l10n, a)
-            .toLowerCase()
-            .compareTo(_skillName(l10n, b).toLowerCase()),
+        (a, b) => _skillName(
+          l10n,
+          a,
+        ).toLowerCase().compareTo(_skillName(l10n, b).toLowerCase()),
       );
     }
     final categories = byCategory.entries.toList();
@@ -269,7 +270,10 @@ class _SkillRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context);
-    final label = Text(_skillName(l10n, skill), style: theme.textTheme.labelLarge);
+    final label = Text(
+      _skillName(l10n, skill),
+      style: theme.textTheme.labelLarge,
+    );
 
     final dropdown = InputDecorator(
       decoration: const InputDecoration(
@@ -302,11 +306,7 @@ class _SkillRow extends StatelessWidget {
           if (compact) {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                label,
-                const SizedBox(height: 6),
-                dropdown,
-              ],
+              children: [label, const SizedBox(height: 6), dropdown],
             );
           }
           return Row(
@@ -458,10 +458,10 @@ String _optionLabel(AppLocalizations l10n, Skill skill, int index) {
     case 'Learned':
       // Binary/hunting skills learn into the sentinel `Learned` → Trained. For a
       // ladder/circle skill, `Learned` only appears as the raw fallback the core
-      // inserts for a class stored without its tier suffix; keep it raw so it
+      // inserts for a class stored without its tier suffix; keep it distinct so it
       // stays distinct from the real Trained tier in the dropdown.
       return (skill.kind == 'ladder' || skill.kind == 'circle')
-          ? value
+          ? l10n.skillTierLearned
           : l10n.skillTierTrained;
     case 'Untrained':
       return l10n.skillTierUntrained;

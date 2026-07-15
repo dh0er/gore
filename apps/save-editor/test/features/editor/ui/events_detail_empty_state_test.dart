@@ -6,6 +6,7 @@ import 'package:goresave/features/editor/domain/editor_notifier.dart';
 import 'package:goresave/features/editor/ui/progression_panel.dart'
     show EventsDetail;
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/l10n/app_localizations_en.dart';
 
 import '../../../support/l10n_test_app.dart';
 
@@ -208,13 +209,16 @@ void main() {
 
     await _pumpDetail(tester, notifier, globalId: 'Lizard-WP_A');
 
-    // The genuine failure surfaces verbatim in the error color; the neutral
-    // empty state must NOT swallow it.
-    expect(find.text(coreError), findsOneWidget);
+    // The genuine failure retains the core detail inside its localized error
+    // envelope; the neutral empty state must NOT swallow it.
+    final localizedError = AppLocalizationsEn().editorProgressionQueryFailed(
+      coreError,
+    );
+    expect(find.text(localizedError), findsOneWidget);
     expect(find.text(emptyStateText), findsNothing);
-    final context = tester.element(find.text(coreError));
+    final context = tester.element(find.text(localizedError));
     final scheme = Theme.of(context).colorScheme;
-    final text = tester.widget<Text>(find.text(coreError));
+    final text = tester.widget<Text>(find.text(localizedError));
     expect(text.style?.color, scheme.error);
   });
 }

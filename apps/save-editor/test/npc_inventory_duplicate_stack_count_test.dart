@@ -105,6 +105,76 @@ void main() {
     expect(find.text('×7'), findsOneWidget);
     expect(find.widgetWithText(TextField, 'Count'), findsNothing);
   });
+
+  testWidgets(
+    'inventory count rows stay compact and keep values beside item names',
+    (tester) async {
+      final core = _DuplicateStackNpcInventoryCoreService();
+      await pumpApp(tester, core);
+
+      // Explicit selection also makes this geometry regression independent of
+      // whether startup auto-opens the active profile's first save.
+      if (find.widgetWithText(Tab, 'Characters').evaluate().isEmpty) {
+        await tester.tap(find.text('Save').first);
+        await tester.pumpAndSettle();
+      }
+      await tester.tap(find.widgetWithText(Tab, 'Characters'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(Tab, 'Inventory'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lizard-A'));
+      await tester.pumpAndSettle();
+
+      Finder countFields() => find.widgetWithText(TextField, 'Count');
+      Finder rows() =>
+          find.ancestor(of: countFields(), matching: find.byType(ListTile));
+      final countTargets = find.byKey(
+        const ValueKey('inventory-count-editor-touch-target'),
+      );
+
+      expect(countFields(), findsNWidgets(2));
+      expect(rows(), findsNWidgets(2));
+      expect(countTargets, findsNWidgets(2));
+
+      final firstRow = tester.getRect(rows().at(0));
+      final secondRow = tester.getRect(rows().at(1));
+      final firstField = tester.getRect(countFields().at(0));
+      final firstName = tester.getRect(find.text('Cheese').first);
+
+      // On a wide detail pane the value column must not drift all the way to
+      // the card's far edge. Rows stay left-aligned and deliberately bounded.
+      expect(firstRow.width, lessThanOrEqualTo(560));
+      expect(firstField.left - firstName.right, lessThan(360));
+
+      // Dense here means no decorative inter-row whitespace, not undersized
+      // controls: the labeled input keeps a 48 px touch target.
+      expect(secondRow.top - firstRow.bottom, lessThanOrEqualTo(0.01));
+      expect(
+        tester.getSize(countTargets.first).height,
+        greaterThanOrEqualTo(48),
+      );
+
+      // The intermediate width used to leave too little title space beside the
+      // trailing count/delete controls, especially with an equipped badge.
+      // It now switches to the stacked row before that breakpoint gap.
+      await tester.binding.setSurfaceSize(const Size(1100, 800));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final mediumRow = tester.getRect(rows().first);
+      final mediumField = tester.getRect(countFields().first);
+      expect(mediumField.right, lessThanOrEqualTo(mediumRow.right));
+
+      // The same row remains bounded by its available pane at the minimum
+      // desktop width; neither the labeled field nor its delete target spills
+      // beyond the row.
+      await tester.binding.setSurfaceSize(const Size(960, 800));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      final narrowRow = tester.getRect(rows().first);
+      final narrowField = tester.getRect(countFields().first);
+      expect(narrowField.right, lessThanOrEqualTo(narrowRow.right));
+    },
+  );
 }
 
 class _RecordedRequest {
@@ -264,6 +334,7 @@ class _DuplicateStackNpcInventoryCoreService implements GoresaveCoreService {
                 'id': 'Cheese',
                 'path': '/Script/Angelscript.ItFo_Cheese',
                 'count': 3,
+                'equipped': true,
                 'removable': true,
                 'slotId': 0,
               },

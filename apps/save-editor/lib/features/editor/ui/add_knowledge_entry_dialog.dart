@@ -101,6 +101,7 @@ class _AddKnowledgeEntryDialogState
               e.id,
               locKey: e.locKey,
               caption: e.caption,
+              l10n: AppLocalizations.of(context),
             ) ??
             e.id;
         return e.id.toLowerCase().contains(query) ||
@@ -173,7 +174,10 @@ class _AddKnowledgeEntryDialogState
                                         g.category,
                                       ),
                                       label: l10n.categoryWithCount(
-                                        _cap(g.category),
+                                        _knowledgeCategoryLabel(
+                                          AppLocalizations.of(context),
+                                          g.category,
+                                        ),
                                         g.entries.length,
                                       ),
                                       selected:
@@ -234,8 +238,9 @@ class _AddKnowledgeEntryDialogState
           entry.id,
           locKey: entry.locKey,
           caption: entry.caption,
+          l10n: AppLocalizations.of(context),
         ) ??
-        readableKnowledgeEntry(entry.id);
+        readableKnowledgeEntry(entry.id, AppLocalizations.of(context));
     return ListTile(
       dense: true,
       leading: Icon(_iconForKnowledgeCategory(entry.category)),
@@ -248,8 +253,13 @@ class _AddKnowledgeEntryDialogState
   }
 }
 
-String _cap(String s) =>
-    s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
+String _knowledgeCategoryLabel(AppLocalizations l10n, String category) =>
+    switch (category) {
+      'topic' => l10n.knowledgeCategoryTopic,
+      'choice' => l10n.knowledgeCategoryChoice,
+      'info' => l10n.knowledgeCategoryInfo,
+      _ => category,
+    };
 
 IconData _iconForKnowledgeCategory(String category) {
   switch (category) {

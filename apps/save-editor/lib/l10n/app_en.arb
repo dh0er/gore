@@ -1,8 +1,8 @@
 {
   "debugSectionTitle": "Advanced (debug)",
   "debugSectionSubtitle": "Diagnostics & raw data for bug reports",
-  "showObjectIdsTitle": "Show object IDs",
-  "showObjectIdsSubtitle": "Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.",
+  "showObjectIdsTitle": "Show additional technical IDs",
+  "showObjectIdsSubtitle": "Show technical item, dialogue knowledge, quest, and orphan actor IDs in the editor. NPC IDs are always shown.",
   "@@locale": "en",
   "appTitle": "GORE Save Editor",
   "appLogoSemanticLabel": "GORE Save Editor logo",
@@ -111,6 +111,7 @@
   "browse": "Browse",
   "noSavFilesFound": "No .sav files found",
   "profile": "Profile",
+  "otherSaves": "Other saves",
   "profileWithSaves": "{name} ({count} saves)",
   "@profileWithSaves": {
     "placeholders": {
@@ -895,5 +896,199 @@
   "tutorialGateRanged": "Ranged combat",
   "tutorialGateRiding": "Riding",
   "tutorialGateSleep": "Sleeping",
-  "tutorialGateTrading": "Trading"
+  "tutorialGateTrading": "Trading",
+  "windowMinimizeTooltip": "Minimize",
+  "windowMaximizeTooltip": "Maximize",
+  "windowRestoreTooltip": "Restore",
+  "fallbackDialogEntry": "Dialog entry",
+  "fallbackDialogChoice": "Dialog choice",
+  "fallbackDialogTopic": "Dialog topic",
+  "fallbackDialogInformation": "Dialog information",
+  "fallbackQuest": "Quest",
+  "fallbackObjective": "Objective",
+  "fallbackItem": "Item",
+  "attributeSkillPointsFallback": "Skill points (LP)",
+  "attributeManualFallbackLabel": "{attributeId, select, Alcohol{Alcohol} AlcoholDepletionRate{Alcohol depletion rate} MaxAlcohol{Maximum alcohol} MaxSuperArmor{Maximum super armor} SuperArmor{Super armor} Fatigue{Fatigue} FillRatio{Fill ratio} FillRatioPeriod{Fill ratio period} MaxFatigue{Maximum fatigue} MaxThresholdIndex{Maximum threshold index} RecoveryRatePerHourOfSleep{Recovery per hour of sleep} DamageMultiplier{Damage multiplier} Toughness{Toughness} ToughnessA{Toughness A} ToughnessB{Toughness B} ToughnessC{Toughness C} XPExecutedBounty{Execution XP reward} XPKillOrDefeatBounty{Kill or defeat XP reward} SpeedModifier{Speed modifier} CriticalLevelPercent{Critical level (%)} MaxOxygen{Maximum oxygen} Oxygen{Oxygen} OxygenDepletionRate{Oxygen depletion rate} OxygenRecoveryRate{Oxygen recovery rate} MaxRestTime{Maximum rest time} MaxSleepTime{Maximum sleep time} SleepTime{Sleep time} SleepTimeRecoveryAmount{Sleep recovery amount} SleepTimeRecoveryPeriod{Sleep recovery period} MaxSwampweed{Maximum swampweed} Swampweed{Swampweed} SwampweedDepletionRate{Swampweed depletion rate} other{{fallback}}}",
+  "@attributeManualFallbackLabel": {"placeholders": {"attributeId": {"type": "String"}, "fallback": {"type": "String"}}},
+  "knowledgeTypeVoiceLine": "Voice line",
+  "knowledgeTypeOther": "Other",
+  "armorUpgradeUpper": "Upper",
+  "armorUpgradeMiddle": "Middle",
+  "armorUpgradeLower": "Lower",
+  "knowledgeCategoryTopic": "Topic",
+  "knowledgeCategoryChoice": "Choice",
+  "knowledgeCategoryInfo": "Information",
+  "statusOk": "OK",
+  "statusFailed": "Failed",
+  "missingSaveReference": "File missing",
+  "missingSaveReferenceDescription": "{slot}.sav is missing. It may have been deleted, moved, or renamed; the profile still references it.",
+  "@missingSaveReferenceDescription": {
+    "placeholders": {
+      "slot": {
+        "type": "String"
+      }
+    }
+  },
+  "removeFromProfile": "Remove from profile",
+  "removeSaveFromProfileTitle": "Remove save from profile?",
+  "removeSaveFromProfileBody": "Remove {save} from {profile}? The save file itself will be kept if it still exists.",
+  "@removeSaveFromProfileBody": {
+    "placeholders": {
+      "save": {
+        "type": "String"
+      },
+      "profile": {
+        "type": "String"
+      }
+    }
+  },
+  "unassignedSave": "Not assigned to a profile",
+  "armorUpgradeLight": "Light",
+  "armorUpgradeMedium": "Medium",
+  "armorUpgradeHeavy": "Heavy",
+  "knowledgeCaptionForcedConversation": "Forced conversation",
+  "knowledgeCaptionFollowupTopic": "Follow-up topic",
+  "knowledgeCaptionFallbackTopic": "Fallback topic",
+  "durationMinutes": "{minutes} min",
+  "@durationMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "durationHours": "{hours} hr",
+  "@durationHours": {
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
+  "durationHoursMinutes": "{hours} hr {minutes} min",
+  "@durationHoursMinutes": {
+    "placeholders": {
+      "hours": {
+        "type": "int"
+      },
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "backupStatusInvalidProfileStructure": "Invalid profile data",
+  "backupStatusSlotMetadataMissing": "Selected save metadata is missing",
+  "defaultProfileName": "Profile {id}",
+  "@defaultProfileName": {
+    "placeholders": {
+      "id": {
+        "type": "int"
+      }
+    }
+  },
+  "statusUnknown": "Unknown",
+  "editorUnexpectedError": "Unexpected error: {details}",
+  "@editorUnexpectedError": {"placeholders": {"details": {"type": "String"}}},
+  "editorOperationInProgress": "Another operation is in progress. Try again in a moment.",
+  "editorUnsavedBeforeDifficulty": "You have unsaved save edits. Save or reset them before changing the profile difficulty.",
+  "editorNoSaveFolderSelected": "No save folder selected.",
+  "editorNoSaveSelected": "No save selected.",
+  "coreUnknownError": "Unknown core error",
+  "editorUnsavedBeforeSwitchProfile": "Save or reset your unsaved changes first — switching profiles would move away from the current save.",
+  "editorUnsavedBeforeOpenFile": "Save or reset your unsaved changes before opening another file.",
+  "editorSelectSavFile": "Select a .sav savegame file.",
+  "editorNotGothicGsav": "The selected file is not a Gothic GSAV savegame.",
+  "editorUnsavedBeforeChangeSaveProfile": "Save or reset your unsaved changes before changing the save profile.",
+  "editorUnsavedBeforeRemoveProfile": "Save or reset your unsaved changes before removing a save from its profile.",
+  "editorUnsavedBeforeRestoreProfile": "You have unsaved save edits. Save or reset them before restoring a profile backup.",
+  "editorConflictingPropertyEdits": "Conflicting unsaved edits target the same property ({path}) from two tabs. Reset or revert one of them, then save again.",
+  "@editorConflictingPropertyEdits": {"placeholders": {"path": {"type": "String"}}},
+  "editorGlossaryMemoryConflict": "A glossary segment change and another unsaved All-data edit both target the Hero MemorizedEvents array ({path}). Glossary changes add or remove entries in that array, so the edits cannot be saved together — reset or revert one of them, then save again.",
+  "@editorGlossaryMemoryConflict": {"placeholders": {"path": {"type": "String"}}},
+  "editorGlossaryQuestConflict": "A glossary segment change and another unsaved edit target the same quest CurrentState property ({path}). The glossary change updates that state itself — reset or revert one of them, then save again.",
+  "@editorGlossaryQuestConflict": {"placeholders": {"path": {"type": "String"}}},
+  "editorRelationshipConflict": "A relationship override and another unsaved All-data edit both target the same NPC relationship entry ({path}). The structured relationship change can replace modifiers in that entry, so the edits cannot be saved together — reset or revert one of them, then save again.",
+  "@editorRelationshipConflict": {"placeholders": {"path": {"type": "String"}}},
+  "editorMultipleStructuralArrayEdits": "More than one unsaved structural edit targets the same array ({path}). Save or reset the first change before queuing another.",
+  "@editorMultipleStructuralArrayEdits": {"placeholders": {"path": {"type": "String"}}},
+  "editorStructuralArrayConflict": "A structural event change and another unsaved All-data edit both target {path}. Save or reset one of them before continuing.",
+  "@editorStructuralArrayConflict": {"placeholders": {"path": {"type": "String"}}},
+  "editorSkillsEffectConflict": "A Skills change and an All-data edit to the same actor’s effect (ActiveEffects › EffectSpec › Def) are both queued. They cannot be saved together — reset or revert one of them, then save again.",
+  "editorInventoryResetConflict": "An inventory reset and another edit to the same inventory are both queued. The reset replaces the entire inventory and would discard the other edit — reset or revert one of them, then save again.",
+  "editorUseFolder": "Use folder",
+  "editorGothicSavegameFileType": "Gothic savegame",
+  "editorNoDifficultyChanges": "No difficulty changes to write",
+  "editorDifficultyWritten": "Difficulty written to the profile (backup created)",
+  "editorChangesSavedWithBackup": "{count, plural, =1{1 change saved with backup} other{{count} changes saved with backup}}",
+  "@editorChangesSavedWithBackup": {"placeholders": {"count": {"type": "int"}}},
+  "editorProfileNotFound": "Profile {profileId} was not found.",
+  "@editorProfileNotFound": {"placeholders": {"profileId": {"type": "int"}}},
+  "editorNoFreeSaveSlot": "No free save slot is available in the game save folder (G1R-001 through G1R-999).",
+  "editorSaveImportedAssigned": "Save imported and assigned to profile {profileId}",
+  "@editorSaveImportedAssigned": {"placeholders": {"profileId": {"type": "int"}}},
+  "editorSaveAssigned": "Save assigned to profile {profileId} (paired backups created)",
+  "@editorSaveAssigned": {"placeholders": {"profileId": {"type": "int"}}},
+  "editorSaveSlotNotAssigned": "Save slot {slot} is not assigned to profile {profileId}.",
+  "@editorSaveSlotNotAssigned": {"placeholders": {"slot": {"type": "String"}, "profileId": {"type": "int"}}},
+  "editorSaveRemovedFromProfile": "Save removed from profile",
+  "editorRestoredBackup": "Restored backup: {path}",
+  "@editorRestoredBackup": {"placeholders": {"path": {"type": "String"}}},
+  "editorRestoredBackupWithoutCompanion": "Restored backup: {path} (PersistentDataList.sav left unchanged — no matching companion backup; slot metadata may differ)",
+  "@editorRestoredBackupWithoutCompanion": {"placeholders": {"path": {"type": "String"}}},
+  "editorCodecRoundtripPassed": "Codec roundtrip passed: chunk {chunkIndex} recompressed to {bytes} bytes",
+  "@editorCodecRoundtripPassed": {"placeholders": {"chunkIndex": {"type": "int"}, "bytes": {"type": "int"}}},
+  "editorDifficultyWriteFailed": "Could not write the profile difficulty: {details}",
+  "@editorDifficultyWriteFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorProfileAssignmentFailed": "Could not assign the save to the profile: {details}",
+  "@editorProfileAssignmentFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorProfileRemovalFailed": "Could not remove the save from the profile: {details}",
+  "@editorProfileRemovalFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorSaveFailed": "Could not save the changes: {details}",
+  "@editorSaveFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorScanSavesFailed": "Failed to scan saves: {details}",
+  "@editorScanSavesFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorInspectSaveFailed": "Failed to inspect save: {details}",
+  "@editorInspectSaveFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorLoadBackupsFailed": "Failed to load backups: {details}",
+  "@editorLoadBackupsFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorRestoreFailed": "Could not restore the backup: {details}",
+  "@editorRestoreFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorRestoreReloadFailed": "Restored backup: {path}, but reloading the save failed: {details}",
+  "@editorRestoreReloadFailed": {"placeholders": {"path": {"type": "String"}, "details": {"type": "String"}}},
+  "editorCodecCheckFailed": "Codec check failed: {details}",
+  "@editorCodecCheckFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorCodecValidationFailed": "Codec roundtrip failed: {details}",
+  "@editorCodecValidationFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorPropertySearchFailed": "Property search failed: {details}",
+  "@editorPropertySearchFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorSelectionChangedWhileLoadingHeroAttributes": "Save selection changed while loading hero attributes.",
+  "editorSkillsLoadFailed": "Skills load failed: {details}",
+  "@editorSkillsLoadFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorProgressionQueryFailed": "Progression query failed: {details}",
+  "@editorProgressionQueryFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorNpcListFailed": "NPC list failed: {details}",
+  "@editorNpcListFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorCharacterListFailed": "Character list failed: {details}",
+  "@editorCharacterListFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorNpcAttributesFailed": "NPC attributes failed: {details}",
+  "@editorNpcAttributesFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorNpcInventoryFailed": "NPC inventory failed: {details}",
+  "@editorNpcInventoryFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorFactionListFailed": "Faction list failed: {details}",
+  "@editorFactionListFailed": {"placeholders": {"details": {"type": "String"}}},
+  "editorNoBackupPath": "none",
+  "editorBackupMessage": "{prefix}: {backupPath}",
+  "@editorBackupMessage": {"placeholders": {"prefix": {"type": "String"}, "backupPath": {"type": "String"}}},
+  "editorBackupMessageWithPersistent": "{prefix}: {backupPath}; PersistentDataList backup: {persistentPath}",
+  "@editorBackupMessageWithPersistent": {"placeholders": {"prefix": {"type": "String"}, "backupPath": {"type": "String"}, "persistentPath": {"type": "String"}}},
+  "localizationStatusFailed": "Localization status failed: {details}",
+  "@localizationStatusFailed": {"placeholders": {"details": {"type": "String"}}},
+  "localizationExtractionFailed": "Extraction failed: {details}",
+  "@localizationExtractionFailed": {"placeholders": {"details": {"type": "String"}}},
+  "glossaryLoadFailed": "Glossary load failed: {details}",
+  "@glossaryLoadFailed": {"placeholders": {"details": {"type": "String"}}},
+  "backupStatusError": "Backup error: {details}",
+  "@backupStatusError": {"placeholders": {"details": {"type": "String"}}},
+  "glossaryCatalogSegmentLabel": "{segmentId, select, Access{Access} AccessDenied{Access Denied} AccesToTemple{Access to Temple} Advice{Advice} AfterFight{After Fight} AfterFireMages{After Fire Mages} AfterNek{After Nek} AfterQuest{After Quest} Alone{Alone} Amulet{Amulet} Annoying{Annoying} Armor{Armor} Avoid{Avoid} Backstory{Backstory} BackStory{Back Story} BasicMagic{Basic Magic} Beated{Beaten} BecomeMercenary{Become Mercenary} Beer{Beer} Bestiary{Bestiary} Blessing{Blessing} Boss{Boss} Bully{Bully} BullyAdvice{Bully Advice} Camp{Camp} CampDivided{Camp Divided} CareOfMessengers{Care of Messengers} ChangeOpinion{Change Opinion} ChargeUriziel{Charge Uriziel} Chosen{Chosen} Contact{Contact} Courier{Courier} CraftBows{Craft Bows} Crazy{Crazy} DailyMeal{Daily Meal} DailyRation_Trader{Daily Ration Trader} DAM{Dam} Dead{Dead} Deal{Deal} Dealer{Dealer} Deceived{Deceived} Dementia{Dementia} DenyAccess{Deny Access} DifferentOpinion{Different Opinion} Discussion{Discussion} DontTalk{Don’t Talk} Duel{Duel} Entrance{Entrance} Escape{Escape} Extended{Extended} Extra{Extra} ExtraInfo{Extra Info} Fanatic{Fanatic} Fight{Fight} FindUlumulu{Find Ulu-Mulu} FireMages{Fire Mages} FireMagesEscape{Fire Mages Escape} FiskNewDealer{New Fence for Fisk} FiskNewDealerCompleted{New Fence for Fisk — Completed} FogTower{Fog Tower} Food{Food} Forgave{Forgave} Forgive{Forgive} Forgiven{Forgiven} FourFriends{Four Friends} FreeHut{Free Hut} FreeMine{Free Mine} Fury{Fury} GoodTeacher{Good Teacher} Gossip{Gossip} GotScavenger{Got Scavenger} GrantedAccess{Granted Access} GRDArmor{Guard Armor} Guide{Guide} HateMages{Hate Mages} HateMagesExplanation{Hate Mages Explanation} HateRiceLord{Hate Rice Lord} Heal{Heal} Healing{Healing} Help{Help} Helper{Helper} HelpKagan{Help Kagan} HutStory{Hut Story} Ignore{Ignore} Impress{Impress} ImpressAlchemy{Impress Alchemy} ImpressInscription{Impress Inscription} Info{Info} Interested{Interested} Introduction{Introduction} Introduction_2{Introduction 2} Introduction_Armor{Introduction – Armor} Introduction_Teacher{Introduction – Teacher} Introduction_Trader{Introduction – Trader} Invocation{Invocation} JoinSC{Join Swamp Camp} Joint{Joint} KalomCamp{Kalom Camp} Leader{Leader} Learning{Learning} LearnOrcish{Learn Orcish} LeftParty{Left Party} Library{Library} Lie{Lie} Lock{Lock} Lockpick{Lockpick} Mad{Mad} Mandibles{Minecrawler Mandibles} MapMaker{Map Maker} Monastery{Monastery} MordragKO{Mordrag KO} Nek{Nek} NewCamp{New Camp} NewCamper{New Camper} NewLeader{New Leader} NightPatrol{Night Patrol} NotInterested{Not Interested} OldCamp{Old Camp} OrcEnclaveEntrance{Orc Enclave Entrance} OrcGraveyard{Orc Graveyard} OreArmor{Ore Armor} Party{Party} Pay{Pay} PayMoney{Pay Money} Permission{Permission} Pet{Pet} PreparingInvocation{Preparing Invocation} Quest{Quest} RankUpFireMages{Fire Mage Promotion} RankUpGuard{Guard Promotion} RanUpFireMagesCompleted{Fire Mage Promotion Completed} Realocated{Relocated} Reason{Reason} Respect{Respect} ReturnToSC{Return to Swamp Camp} RicelordForeman{Rice Lord’s Foreman} RideScavenger{Ride Scavenger} Robe{Robe} Safe{Safe} Scraper{Scraper} SecondChance{Second Chance} SecretLocation{Secret Location} SecretPassage{Secret Passage} SecretPath{Secret Path} SleeperFollower{Sleeper Follower} SleeperTemple{Sleeper Temple} SmallInfo{Small Info} Stonehenge{Stonehenge} StopFollowing{Stop Following} SwampCamp{Swamp Camp} Talkative{Talkative} Teach{Teach} TeachBow{Teach Bow} Teacher{Teacher} Teacher2{Teacher 2} TeacherInscription{Teacher Inscription} TeacherMana{Teacher Mana} TeachIchor{Teach Minecrawler Ichor Extraction} TeachMagic{Teach Magic} TeachOrcish{Teach Orcish} TeachStats{Teach Stats} TeachWeapon{Teach Weapon} Teleport{Teleport} TheMysteriousOrc{The Mysterious Orc} ThroneRoom{Throne Room} TradeBow{Trade Bow} Trader{Trader} TradeSkins_Trader{Skin Trader} Traitor{Traitor} Trial{Trial} TrollCanyon{Troll Canyon} Trust{Trust} Ulumulu{Ulu-Mulu} Unexperienced{Inexperienced} Uriziel{Uriziel} UrizielRune{Uriziel Rune} Useful{Useful} Velaya{Velaya} Vibrations{Vibrations} WaitFreeMine{Wait at Free Mine} WaitInTrainingArea{Wait In Training Area} Warning{Warning} WarningTooLate{Warning Came Too Late} WaterMessenger{Messenger for the Water Mages} Weapon{Weapon} Who{Who} Women{Women} other{{fallback}}}",
+  "@glossaryCatalogSegmentLabel": {"placeholders": {"segmentId": {"type": "String"}, "fallback": {"type": "String"}}}
 }

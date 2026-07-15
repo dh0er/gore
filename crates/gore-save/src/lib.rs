@@ -573,6 +573,41 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
                 backup,
             )?)
         }
+        "remove_save_from_profile" => {
+            let slot = payload
+                .get("slot")
+                .and_then(Value::as_str)
+                .filter(|value| looks_slot_name(value))
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "missing or invalid payload.slot save-slot name".to_string(),
+                    )
+                })?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest("missing or invalid payload.profileId".to_string())
+                })?;
+            let persistent_path = payload
+                .get("persistentPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest("missing payload.persistentPath".to_string())
+                })?;
+            let backup = payload
+                .get("backup")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            Ok(remove_save_from_profile(
+                &persistent_path,
+                slot,
+                profile_id,
+                backup,
+            )?)
+        }
         // Localized game text: extracted offline from the encrypted .lcache into
         // the shared `gore` dir (see gore_loc::loc_store). User-local only.
         "loc_status" => {
@@ -642,6 +677,58 @@ pub fn scan_save_dir_summary(path: &Path) -> Result<SaveDirSummary, CoreError> {
     scan_save_dir_summary_with_codec_backend(path, Some(&backend))
 }
 
+/// Give every valid saved-slot reference one deterministic profile owner.
+/// Profiles are ordered by id; direct profile-array membership wins, with the
+/// public-data map supplying otherwise missing registrations. Returning the
+/// same ownership map used to normalize the summaries keeps menu counts and
+/// save rows consistent even when PersistentDataList's redundant sources are
+/// stale, duplicated, or only partly populated.
+fn normalize_profile_saved_slots(
+    profiles: &mut [ProfileSummary],
+    slots: &HashMap<String, PersistentSlotMetadata>,
+) -> HashMap<String, i32> {
+    profiles.sort_by_key(|profile| profile.profile_id);
+    let mut owners = HashMap::new();
+    for profile in profiles.iter_mut() {
+        let profile_id = profile.profile_id;
+        profile.saved_slots.retain(|slot| {
+            if !looks_slot_name(slot) || owners.contains_key(slot) {
+                return false;
+            }
+            owners.insert(slot.clone(), profile_id);
+            true
+        });
+    }
+
+    // Some damaged/stale PersistentDataList files retain only the public-data
+    // map entry. Surface those slots in the same normalized profile list used
+    // for counts so a map-only orphan remains visible and removable. Sort the
+    // HashMap input first to keep output deterministic.
+    let mut mapped_slots = slots
+        .iter()
+        .filter_map(|(slot, metadata)| {
+            metadata
+                .profile_id
+                .map(|profile_id| (slot.clone(), profile_id))
+        })
+        .collect::<Vec<_>>();
+    mapped_slots.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    for (slot, profile_id) in mapped_slots {
+        if !looks_slot_name(&slot) || owners.contains_key(&slot) {
+            continue;
+        }
+        let Some(profile) = profiles
+            .iter_mut()
+            .find(|profile| profile.profile_id == profile_id)
+        else {
+            continue;
+        };
+        profile.saved_slots.push(slot.clone());
+        owners.insert(slot, profile_id);
+    }
+    owners
+}
+
 fn scan_save_dir_summary_with_codec_backend(
     path: &Path,
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
@@ -652,7 +739,9 @@ fn scan_save_dir_summary_with_codec_backend(
             path.display()
         )));
     }
-    let persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
+    let mut persistent = persistent_data_list_summary_for_dir(path).unwrap_or_default();
+    let profile_slot_owners =
+        normalize_profile_saved_slots(&mut persistent.profiles, &persistent.slots);
     let persistent_slots = &persistent.slots;
     let screenshots =
         screenshot_summaries_for_dir(path, &persistent.profiles, codec_backend).unwrap_or_default();
@@ -672,6 +761,7 @@ fn scan_save_dir_summary_with_codec_backend(
             continue;
         }
         let data = fs::read(&path)?;
+        let normalized_profile_id = profile_slot_owners.get(&slot).copied();
         let persistent = persistent_slots.get(&slot);
         let screenshot = screenshots.get(&slot).cloned();
         match inspect_bytes(&data, Some(&path), false) {
@@ -718,7 +808,10 @@ fn scan_save_dir_summary_with_codec_backend(
                         .and_then(|metadata| metadata.time_loaded_seconds),
                     quick_save: persistent.and_then(|metadata| metadata.quick_save),
                     auto_save: persistent.and_then(|metadata| metadata.auto_save),
-                    persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
+                    // The same normalized ownership drives the profile-menu
+                    // count, so direct array membership and map-only fallback
+                    // cannot disagree with the save row.
+                    persistent_profile_id: normalized_profile_id,
                     screenshot: screenshot.clone(),
                     difficulty: difficulty_for_gsav_bytes(&data),
                 });
@@ -742,10 +835,48 @@ fn scan_save_dir_summary_with_codec_backend(
                 time_loaded_seconds: persistent.and_then(|metadata| metadata.time_loaded_seconds),
                 quick_save: persistent.and_then(|metadata| metadata.quick_save),
                 auto_save: persistent.and_then(|metadata| metadata.auto_save),
-                persistent_profile_id: persistent.and_then(|metadata| metadata.profile_id),
+                persistent_profile_id: normalized_profile_id,
                 screenshot: screenshot.clone(),
                 difficulty: None,
             }),
+        }
+    }
+    // PersistentDataList.sav can retain a profile reference after the physical
+    // slot file was deleted, moved, or renamed. Keep that orphan visible in the
+    // scan result instead of letting the profile menu count disagree with the
+    // sidebar. It is deliberately a non-inspectable `missing` row; callers can
+    // remove the stale reference with `remove_save_from_profile`.
+    for profile in &persistent.profiles {
+        for slot in &profile.saved_slots {
+            if saves.iter().any(|save| save.slot == *slot) || !looks_slot_name(slot) {
+                continue;
+            }
+            let metadata = persistent_slots.get(slot);
+            saves.push(SaveListItem {
+                path: path.join(format!("{slot}.sav")).display().to_string(),
+                slot: slot.clone(),
+                format: "MISSING".to_string(),
+                file_size: 0,
+                sha1: String::new(),
+                status: "missing".to_string(),
+                player_save_name: None,
+                slot_name: metadata.and_then(|value| value.slot_name.clone()),
+                compression_method: None,
+                chunk_count: None,
+                persistent_player_save_name: metadata
+                    .and_then(|value| value.player_save_name.clone()),
+                chapter_id: metadata.and_then(|value| value.chapter_id),
+                map_name: metadata.and_then(|value| value.map_name.clone()),
+                time_played_seconds: metadata.and_then(|value| value.time_played_seconds),
+                time_loaded_seconds: metadata.and_then(|value| value.time_loaded_seconds),
+                quick_save: metadata.and_then(|value| value.quick_save),
+                auto_save: metadata.and_then(|value| value.auto_save),
+                // The profile array is the direct evidence for this orphan.
+                // Prefer it over a stale or absent map-entry id.
+                persistent_profile_id: Some(profile.profile_id),
+                screenshot: screenshots.get(slot).cloned(),
+                difficulty: None,
+            });
         }
     }
     saves.sort_by(|a, b| a.slot.cmp(&b.slot));
@@ -2911,6 +3042,54 @@ fn set_persistent_slot_profile_id(
     )
 }
 
+/// Remove one slot's public-data map entry while preserving every other entry
+/// and all enclosing container sizes. Returns false when the slot was already
+/// absent, which is valid for a stale profile-array-only reference.
+fn remove_persistent_slot_metadata(data: &mut Vec<u8>, slot: &str) -> Result<bool, CoreError> {
+    let root = parse_profile_file(data)?;
+    let (path, public_data) = properties::find_property_by_name(&root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    let properties::PropertyValue::Map { entries, .. } = &public_data.value else {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a MapProperty".to_string(),
+        ));
+    };
+    let Some(entry_index) = entries
+        .iter()
+        .position(|(key, _)| map_key_string(key) == Some(slot))
+    else {
+        return Ok(false);
+    };
+    let segments = properties::parse_path(&path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_container(
+        data,
+        &target,
+        &enclosing,
+        &properties::ContainerEdit::MapRemove { entry_index },
+    )?;
+    Ok(true)
+}
+
+fn persistent_slot_is_registered(
+    root: &properties::RootObject,
+    slot: &str,
+) -> Result<bool, CoreError> {
+    let (_, public_data) = properties::find_property_by_name(root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    let properties::PropertyValue::Map { entries, .. } = &public_data.value else {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a MapProperty".to_string(),
+        ));
+    };
+    Ok(entries
+        .iter()
+        .any(|(key, _)| map_key_string(key) == Some(slot)))
+}
+
 fn persistent_slot_property_path(
     root: &properties::RootObject,
     slot: &str,
@@ -3325,6 +3504,128 @@ fn assign_save_profile(
         "publicSlotUpdated": public_slot_updated,
         "publicProfileUpdated": public_profile_updated,
         "backupPath": backup_path,
+        "persistentBackupPath": persistent_backup_path,
+    }))
+}
+
+/// Unregister a save slot from every game profile without deleting the slot
+/// file itself. PersistentDataList owns both the profile membership arrays and
+/// the public-data registry; removing both avoids leaving a numeric
+/// `m_ProfileId` that would make a later scan treat the slot as still assigned.
+/// This also cleans orphaned references whose physical `.sav` is already gone.
+fn remove_save_from_profile(
+    persistent_path: &Path,
+    slot: &str,
+    profile_id: i32,
+    backup: bool,
+) -> Result<Value, CoreError> {
+    if !persistent_path.exists() {
+        return Err(CoreError::Validation(format!(
+            "PersistentDataList.sav was not found at {}",
+            persistent_path.display()
+        )));
+    }
+    if !looks_slot_name(slot) {
+        return Err(CoreError::InvalidRequest(format!(
+            "{slot:?} is not a valid save-slot name"
+        )));
+    }
+
+    let persistent_original = fs::read(persistent_path)?;
+    let root = parse_profile_file(&persistent_original)?;
+    profile_element(&root, profile_id)
+        .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+    let ids = profile_ids(&root)?;
+    let registered = persistent_slot_is_registered(&root, slot)?;
+    let registered_profile_id = if registered {
+        let path = persistent_slot_profile_path(&root, slot)?;
+        let property = properties::resolve(&root.properties, &properties::parse_path(&path)?)?;
+        match &property.value {
+            properties::PropertyValue::Int(value) => Some(*value),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let mut referenced_by_requested_profile = false;
+    for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+        referenced_by_requested_profile |=
+            profile_array_contains(&root, profile_id, array_name, slot)?;
+    }
+    if !referenced_by_requested_profile && registered_profile_id != Some(profile_id) {
+        return Err(CoreError::Validation(format!(
+            "slot {slot} is not associated with profile {profile_id}"
+        )));
+    }
+    drop(root);
+
+    let mut persistent_edited = persistent_original.clone();
+    for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+        remove_slot_from_all_profile_arrays(&mut persistent_edited, &ids, array_name, slot)?;
+    }
+    remove_persistent_slot_metadata(&mut persistent_edited, slot)?;
+
+    // Validate the complete edited structure before creating a backup or temp
+    // file. The slot must be absent from every profile array and from the map.
+    let edited_root = parse_profile_file(&persistent_edited).map_err(|error| {
+        CoreError::Validation(format!(
+            "profile removal produced an invalid PersistentDataList.sav: {error}"
+        ))
+    })?;
+    for &id in &ids {
+        for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+            if profile_array_contains(&edited_root, id, array_name, slot)? {
+                return Err(CoreError::Validation(format!(
+                    "slot {slot} remained in {array_name} for profile {id}"
+                )));
+            }
+        }
+    }
+    if persistent_slot_is_registered(&edited_root, slot)? {
+        return Err(CoreError::Validation(format!(
+            "slot {slot} remained in m_SavedGamesPublicData"
+        )));
+    }
+
+    if persistent_edited == persistent_original {
+        return Ok(json!({
+            "slot": slot,
+            "persistentPath": persistent_path,
+            "profileId": profile_id,
+            "bytesChanged": false,
+            "backupPath": Value::Null,
+            "persistentBackupPath": Value::Null,
+        }));
+    }
+
+    // This is a PersistentDataList-only operation. Avoid backup suffixes owned
+    // by slot files so the paired-restore heuristic can never couple this
+    // standalone profile backup to an unrelated save backup.
+    let persistent_backup_path = if backup {
+        Some(create_unique_backup_avoiding(
+            persistent_path,
+            &existing_foreign_backup_suffixes(persistent_path),
+        )?)
+    } else {
+        None
+    };
+
+    let persistent_tmp = persistent_path.with_extension("sav.tmp-goresave");
+    fs::write(&persistent_tmp, &persistent_edited)?;
+    parse_profile_file(&fs::read(&persistent_tmp)?).map_err(|error| {
+        CoreError::Validation(format!(
+            "staged PersistentDataList.sav did not validate: {error}"
+        ))
+    })?;
+    let pending = begin_replace(persistent_path, &persistent_tmp)?;
+    pending.commit();
+
+    Ok(json!({
+        "slot": slot,
+        "persistentPath": persistent_path,
+        "profileId": profile_id,
+        "bytesChanged": true,
+        "backupPath": Value::Null,
         "persistentBackupPath": persistent_backup_path,
     }))
 }
@@ -10901,16 +11202,29 @@ mod tests {
         props
     }
 
-    fn assignment_persistent_data_list(slot: &str, source_profile: i32) -> Vec<u8> {
-        let mut slot_value = str_property("m_SlotName", slot);
-        slot_value.extend_from_slice(&str_property("m_PlayerSaveName", "Assignment test"));
-        slot_value.extend_from_slice(&int_property("m_ProfileId", source_profile));
-        slot_value.extend_from_slice(&fstring("None"));
-
+    fn assignment_persistent_data_list_with_layout(
+        slot: &str,
+        registered_profile: Option<i32>,
+        profile0_values: &[&str],
+        profile1_values: &[&str],
+    ) -> Vec<u8> {
         let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
-        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
-        map_body.extend_from_slice(&fstring(slot));
-        map_body.extend_from_slice(&slot_value);
+        map_body.extend_from_slice(
+            &(if registered_profile.is_some() {
+                1u32
+            } else {
+                0u32
+            })
+            .to_le_bytes(),
+        );
+        if let Some(profile_id) = registered_profile {
+            let mut slot_value = str_property("m_SlotName", slot);
+            slot_value.extend_from_slice(&str_property("m_PlayerSaveName", "Assignment test"));
+            slot_value.extend_from_slice(&int_property("m_ProfileId", profile_id));
+            slot_value.extend_from_slice(&fstring("None"));
+            map_body.extend_from_slice(&fstring(slot));
+            map_body.extend_from_slice(&slot_value);
+        }
         let mut map_descriptor = 2u32.to_le_bytes().to_vec();
         map_descriptor.extend_from_slice(&fstring("StrProperty"));
         map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key flags
@@ -10924,14 +11238,6 @@ mod tests {
             &map_body,
         );
 
-        let profile0_slots = (source_profile == 0).then_some([slot]);
-        let profile1_slots = (source_profile == 1).then_some([slot]);
-        let profile0_values = profile0_slots
-            .as_ref()
-            .map_or(&[][..], |values| &values[..]);
-        let profile1_values = profile1_slots
-            .as_ref()
-            .map_or(&[][..], |values| &values[..]);
         let mut profile_body = 2u32.to_le_bytes().to_vec();
         let mut p0 = assignment_profile_props(0, profile0_values, profile0_values, &[]);
         p0.extend_from_slice(&fstring("None"));
@@ -10960,6 +11266,21 @@ mod tests {
         data.extend_from_slice(&[0u8; 24]);
         data.extend_from_slice(&object);
         data
+    }
+
+    fn assignment_persistent_data_list(slot: &str, source_profile: i32) -> Vec<u8> {
+        let profile0_values = (source_profile == 0).then_some([slot]);
+        let profile1_values = (source_profile == 1).then_some([slot]);
+        assignment_persistent_data_list_with_layout(
+            slot,
+            Some(source_profile),
+            profile0_values
+                .as_ref()
+                .map_or(&[][..], |values| &values[..]),
+            profile1_values
+                .as_ref()
+                .map_or(&[][..], |values| &values[..]),
+        )
     }
 
     fn public_payload_with_profile(name: &str, profile_id: i32) -> Vec<u8> {
@@ -11048,6 +11369,250 @@ mod tests {
         assert_eq!(
             summarize_public_payload(parts.public_payload).profile_id,
             Some(1)
+        );
+    }
+
+    #[test]
+    fn remove_save_from_profile_keeps_save_and_cleans_registry_with_backup() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Keep this file", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let response = execute_json_inner(
+            &json!({
+                "command": "remove_save_from_profile",
+                "payload": {
+                    "persistentPath": persistent_path,
+                    "slot": slot,
+                    "profileId": 0,
+                    "backup": true,
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(response["slot"], slot);
+        assert_eq!(response["profileId"], 0);
+        assert_eq!(response["bytesChanged"], true);
+        assert!(response["backupPath"].is_null());
+        assert!(Path::new(response["persistentBackupPath"].as_str().unwrap()).exists());
+        assert_eq!(fs::read(&save_path).unwrap(), save_original);
+
+        let written_persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written_persistent).unwrap();
+        assert!(!persistent_slot_is_registered(&root, slot).unwrap());
+        for profile_id in [0, 1] {
+            for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+                assert!(!profile_array_contains(&root, profile_id, array_name, slot).unwrap());
+            }
+        }
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        let remaining = summary.saves.iter().find(|save| save.slot == slot).unwrap();
+        assert_eq!(remaining.status, "ok");
+        assert_eq!(remaining.persistent_profile_id, None);
+        assert!(
+            summary
+                .profiles
+                .iter()
+                .all(|profile| !profile.saved_slots.iter().any(|saved| saved == slot))
+        );
+    }
+
+    #[test]
+    fn remove_array_only_missing_orphan_backs_up_exact_original_without_save_file() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-008";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let persistent_original =
+            assignment_persistent_data_list_with_layout(slot, None, &[slot], &[]);
+        fs::write(&persistent_path, &persistent_original).unwrap();
+        assert!(!save_path.exists());
+
+        let response = remove_save_from_profile(&persistent_path, slot, 0, true).unwrap();
+
+        assert_eq!(response["bytesChanged"], true);
+        let backup_path = Path::new(response["persistentBackupPath"].as_str().unwrap());
+        assert_eq!(fs::read(backup_path).unwrap(), persistent_original);
+        assert!(!save_path.exists());
+        assert!(!persistent_path.with_extension("sav.tmp-goresave").exists());
+
+        let written = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written).unwrap();
+        assert!(!persistent_slot_is_registered(&root, slot).unwrap());
+        for profile_id in [0, 1] {
+            for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+                assert!(!profile_array_contains(&root, profile_id, array_name, slot).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn remove_save_from_wrong_profile_leaves_no_side_effects() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-008";
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let persistent_original =
+            assignment_persistent_data_list_with_layout(slot, None, &[slot], &[]);
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let error = remove_save_from_profile(&persistent_path, slot, 1, true).unwrap_err();
+
+        assert!(error.to_string().contains("not associated with profile 1"));
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_original);
+        assert!(!persistent_path.with_extension("sav.tmp-goresave").exists());
+        assert!(!dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn scan_deduplicates_repeated_slot_within_profile() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-008";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Duplicate", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("PersistentDataList.sav"),
+            assignment_persistent_data_list_with_layout(slot, Some(0), &[slot, slot], &[]),
+        )
+        .unwrap();
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+
+        assert_eq!(
+            summary
+                .saves
+                .iter()
+                .filter(|save| save.slot == slot)
+                .count(),
+            1
+        );
+        assert_eq!(summary.profiles[0].saved_slots, vec![slot.to_string()]);
+        assert!(summary.profiles[1].saved_slots.is_empty());
+        let save = summary.saves.iter().find(|save| save.slot == slot).unwrap();
+        assert_eq!(save.persistent_profile_id, Some(0));
+    }
+
+    #[test]
+    fn scan_assigns_cross_profile_duplicate_to_first_profile_and_cleanup_removes_all() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-008";
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list_with_layout(slot, Some(1), &[slot, slot], &[slot]),
+        )
+        .unwrap();
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert_eq!(
+            summary
+                .saves
+                .iter()
+                .filter(|save| save.slot == slot)
+                .count(),
+            1
+        );
+        assert_eq!(summary.profiles[0].saved_slots, vec![slot.to_string()]);
+        assert!(summary.profiles[1].saved_slots.is_empty());
+        let missing = summary.saves.iter().find(|save| save.slot == slot).unwrap();
+        assert_eq!(missing.status, "missing");
+        assert_eq!(missing.persistent_profile_id, Some(0));
+
+        remove_save_from_profile(&persistent_path, slot, 0, false).unwrap();
+
+        let written = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written).unwrap();
+        assert!(!persistent_slot_is_registered(&root, slot).unwrap());
+        for profile_id in [0, 1] {
+            for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+                assert!(!profile_array_contains(&root, profile_id, array_name, slot).unwrap());
+            }
+        }
+        let rescanned = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert!(rescanned.saves.iter().all(|save| save.slot != slot));
+        assert!(
+            rescanned
+                .profiles
+                .iter()
+                .all(|profile| profile.saved_slots.is_empty())
+        );
+    }
+
+    #[test]
+    fn scan_save_dir_surfaces_missing_profile_reference() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        fs::write(
+            dir.path().join("PersistentDataList.sav"),
+            assignment_persistent_data_list(slot, 0),
+        )
+        .unwrap();
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+
+        let missing = summary.saves.iter().find(|save| save.slot == slot).unwrap();
+        assert_eq!(missing.status, "missing");
+        assert_eq!(missing.format, "MISSING");
+        assert_eq!(missing.file_size, 0);
+        assert_eq!(missing.persistent_profile_id, Some(0));
+        assert_eq!(
+            missing.path,
+            dir.path().join(format!("{slot}.sav")).display().to_string()
+        );
+        assert_eq!(
+            missing.persistent_player_save_name.as_deref(),
+            Some("Assignment test")
+        );
+        assert!(!missing.path.is_empty());
+    }
+
+    #[test]
+    fn scan_and_cleanup_surface_map_only_missing_profile_reference() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-009";
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list_with_layout(slot, Some(1), &[], &[]),
+        )
+        .unwrap();
+
+        let summary = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+
+        assert!(summary.profiles[0].saved_slots.is_empty());
+        assert_eq!(summary.profiles[1].saved_slots, vec![slot.to_string()]);
+        let missing = summary.saves.iter().find(|save| save.slot == slot).unwrap();
+        assert_eq!(missing.status, "missing");
+        assert_eq!(missing.persistent_profile_id, Some(1));
+
+        remove_save_from_profile(&persistent_path, slot, 1, false).unwrap();
+        let rescanned = scan_save_dir_summary_with_codec_backend(dir.path(), None).unwrap();
+        assert!(rescanned.saves.iter().all(|save| save.slot != slot));
+        assert!(
+            rescanned
+                .profiles
+                .iter()
+                .all(|profile| profile.saved_slots.is_empty())
         );
     }
 

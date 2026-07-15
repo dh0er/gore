@@ -15,11 +15,11 @@ class AppLocalizationsEn extends AppLocalizations {
   String get debugSectionSubtitle => 'Diagnostics & raw data for bug reports';
 
   @override
-  String get showObjectIdsTitle => 'Show object IDs';
+  String get showObjectIdsTitle => 'Show additional technical IDs';
 
   @override
   String get showObjectIdsSubtitle =>
-      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+      'Show technical item, dialogue knowledge, quest, and orphan actor IDs in the editor. NPC IDs are always shown.';
 
   @override
   String get appTitle => 'GORE Save Editor';
@@ -305,6 +305,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get profile => 'Profile';
+
+  @override
+  String get otherSaves => 'Other saves';
 
   @override
   String profileWithSaves(String name, int count) {
@@ -1604,4 +1607,661 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get tutorialGateTrading => 'Trading';
+
+  @override
+  String get windowMinimizeTooltip => 'Minimize';
+
+  @override
+  String get windowMaximizeTooltip => 'Maximize';
+
+  @override
+  String get windowRestoreTooltip => 'Restore';
+
+  @override
+  String get fallbackDialogEntry => 'Dialog entry';
+
+  @override
+  String get fallbackDialogChoice => 'Dialog choice';
+
+  @override
+  String get fallbackDialogTopic => 'Dialog topic';
+
+  @override
+  String get fallbackDialogInformation => 'Dialog information';
+
+  @override
+  String get fallbackQuest => 'Quest';
+
+  @override
+  String get fallbackObjective => 'Objective';
+
+  @override
+  String get fallbackItem => 'Item';
+
+  @override
+  String get attributeSkillPointsFallback => 'Skill points (LP)';
+
+  @override
+  String attributeManualFallbackLabel(String attributeId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'Alcohol': 'Alcohol',
+      'AlcoholDepletionRate': 'Alcohol depletion rate',
+      'MaxAlcohol': 'Maximum alcohol',
+      'MaxSuperArmor': 'Maximum super armor',
+      'SuperArmor': 'Super armor',
+      'Fatigue': 'Fatigue',
+      'FillRatio': 'Fill ratio',
+      'FillRatioPeriod': 'Fill ratio period',
+      'MaxFatigue': 'Maximum fatigue',
+      'MaxThresholdIndex': 'Maximum threshold index',
+      'RecoveryRatePerHourOfSleep': 'Recovery per hour of sleep',
+      'DamageMultiplier': 'Damage multiplier',
+      'Toughness': 'Toughness',
+      'ToughnessA': 'Toughness A',
+      'ToughnessB': 'Toughness B',
+      'ToughnessC': 'Toughness C',
+      'XPExecutedBounty': 'Execution XP reward',
+      'XPKillOrDefeatBounty': 'Kill or defeat XP reward',
+      'SpeedModifier': 'Speed modifier',
+      'CriticalLevelPercent': 'Critical level (%)',
+      'MaxOxygen': 'Maximum oxygen',
+      'Oxygen': 'Oxygen',
+      'OxygenDepletionRate': 'Oxygen depletion rate',
+      'OxygenRecoveryRate': 'Oxygen recovery rate',
+      'MaxRestTime': 'Maximum rest time',
+      'MaxSleepTime': 'Maximum sleep time',
+      'SleepTime': 'Sleep time',
+      'SleepTimeRecoveryAmount': 'Sleep recovery amount',
+      'SleepTimeRecoveryPeriod': 'Sleep recovery period',
+      'MaxSwampweed': 'Maximum swampweed',
+      'Swampweed': 'Swampweed',
+      'SwampweedDepletionRate': 'Swampweed depletion rate',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get knowledgeTypeVoiceLine => 'Voice line';
+
+  @override
+  String get knowledgeTypeOther => 'Other';
+
+  @override
+  String get armorUpgradeUpper => 'Upper';
+
+  @override
+  String get armorUpgradeMiddle => 'Middle';
+
+  @override
+  String get armorUpgradeLower => 'Lower';
+
+  @override
+  String get knowledgeCategoryTopic => 'Topic';
+
+  @override
+  String get knowledgeCategoryChoice => 'Choice';
+
+  @override
+  String get knowledgeCategoryInfo => 'Information';
+
+  @override
+  String get statusOk => 'OK';
+
+  @override
+  String get statusFailed => 'Failed';
+
+  @override
+  String get missingSaveReference => 'File missing';
+
+  @override
+  String missingSaveReferenceDescription(String slot) {
+    return '$slot.sav is missing. It may have been deleted, moved, or renamed; the profile still references it.';
+  }
+
+  @override
+  String get removeFromProfile => 'Remove from profile';
+
+  @override
+  String get removeSaveFromProfileTitle => 'Remove save from profile?';
+
+  @override
+  String removeSaveFromProfileBody(String save, String profile) {
+    return 'Remove $save from $profile? The save file itself will be kept if it still exists.';
+  }
+
+  @override
+  String get unassignedSave => 'Not assigned to a profile';
+
+  @override
+  String get armorUpgradeLight => 'Light';
+
+  @override
+  String get armorUpgradeMedium => 'Medium';
+
+  @override
+  String get armorUpgradeHeavy => 'Heavy';
+
+  @override
+  String get knowledgeCaptionForcedConversation => 'Forced conversation';
+
+  @override
+  String get knowledgeCaptionFollowupTopic => 'Follow-up topic';
+
+  @override
+  String get knowledgeCaptionFallbackTopic => 'Fallback topic';
+
+  @override
+  String durationMinutes(int minutes) {
+    return '$minutes min';
+  }
+
+  @override
+  String durationHours(int hours) {
+    return '$hours hr';
+  }
+
+  @override
+  String durationHoursMinutes(int hours, int minutes) {
+    return '$hours hr $minutes min';
+  }
+
+  @override
+  String get backupStatusInvalidProfileStructure => 'Invalid profile data';
+
+  @override
+  String get backupStatusSlotMetadataMissing =>
+      'Selected save metadata is missing';
+
+  @override
+  String defaultProfileName(int id) {
+    return 'Profile $id';
+  }
+
+  @override
+  String get statusUnknown => 'Unknown';
+
+  @override
+  String editorUnexpectedError(String details) {
+    return 'Unexpected error: $details';
+  }
+
+  @override
+  String get editorOperationInProgress =>
+      'Another operation is in progress. Try again in a moment.';
+
+  @override
+  String get editorUnsavedBeforeDifficulty =>
+      'You have unsaved save edits. Save or reset them before changing the profile difficulty.';
+
+  @override
+  String get editorNoSaveFolderSelected => 'No save folder selected.';
+
+  @override
+  String get editorNoSaveSelected => 'No save selected.';
+
+  @override
+  String get coreUnknownError => 'Unknown core error';
+
+  @override
+  String get editorUnsavedBeforeSwitchProfile =>
+      'Save or reset your unsaved changes first — switching profiles would move away from the current save.';
+
+  @override
+  String get editorUnsavedBeforeOpenFile =>
+      'Save or reset your unsaved changes before opening another file.';
+
+  @override
+  String get editorSelectSavFile => 'Select a .sav savegame file.';
+
+  @override
+  String get editorNotGothicGsav =>
+      'The selected file is not a Gothic GSAV savegame.';
+
+  @override
+  String get editorUnsavedBeforeChangeSaveProfile =>
+      'Save or reset your unsaved changes before changing the save profile.';
+
+  @override
+  String get editorUnsavedBeforeRemoveProfile =>
+      'Save or reset your unsaved changes before removing a save from its profile.';
+
+  @override
+  String get editorUnsavedBeforeRestoreProfile =>
+      'You have unsaved save edits. Save or reset them before restoring a profile backup.';
+
+  @override
+  String editorConflictingPropertyEdits(String path) {
+    return 'Conflicting unsaved edits target the same property ($path) from two tabs. Reset or revert one of them, then save again.';
+  }
+
+  @override
+  String editorGlossaryMemoryConflict(String path) {
+    return 'A glossary segment change and another unsaved All-data edit both target the Hero MemorizedEvents array ($path). Glossary changes add or remove entries in that array, so the edits cannot be saved together — reset or revert one of them, then save again.';
+  }
+
+  @override
+  String editorGlossaryQuestConflict(String path) {
+    return 'A glossary segment change and another unsaved edit target the same quest CurrentState property ($path). The glossary change updates that state itself — reset or revert one of them, then save again.';
+  }
+
+  @override
+  String editorRelationshipConflict(String path) {
+    return 'A relationship override and another unsaved All-data edit both target the same NPC relationship entry ($path). The structured relationship change can replace modifiers in that entry, so the edits cannot be saved together — reset or revert one of them, then save again.';
+  }
+
+  @override
+  String editorMultipleStructuralArrayEdits(String path) {
+    return 'More than one unsaved structural edit targets the same array ($path). Save or reset the first change before queuing another.';
+  }
+
+  @override
+  String editorStructuralArrayConflict(String path) {
+    return 'A structural event change and another unsaved All-data edit both target $path. Save or reset one of them before continuing.';
+  }
+
+  @override
+  String get editorSkillsEffectConflict =>
+      'A Skills change and an All-data edit to the same actor’s effect (ActiveEffects › EffectSpec › Def) are both queued. They cannot be saved together — reset or revert one of them, then save again.';
+
+  @override
+  String get editorInventoryResetConflict =>
+      'An inventory reset and another edit to the same inventory are both queued. The reset replaces the entire inventory and would discard the other edit — reset or revert one of them, then save again.';
+
+  @override
+  String get editorUseFolder => 'Use folder';
+
+  @override
+  String get editorGothicSavegameFileType => 'Gothic savegame';
+
+  @override
+  String get editorNoDifficultyChanges => 'No difficulty changes to write';
+
+  @override
+  String get editorDifficultyWritten =>
+      'Difficulty written to the profile (backup created)';
+
+  @override
+  String editorChangesSavedWithBackup(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count changes saved with backup',
+      one: '1 change saved with backup',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String editorProfileNotFound(int profileId) {
+    return 'Profile $profileId was not found.';
+  }
+
+  @override
+  String get editorNoFreeSaveSlot =>
+      'No free save slot is available in the game save folder (G1R-001 through G1R-999).';
+
+  @override
+  String editorSaveImportedAssigned(int profileId) {
+    return 'Save imported and assigned to profile $profileId';
+  }
+
+  @override
+  String editorSaveAssigned(int profileId) {
+    return 'Save assigned to profile $profileId (paired backups created)';
+  }
+
+  @override
+  String editorSaveSlotNotAssigned(String slot, int profileId) {
+    return 'Save slot $slot is not assigned to profile $profileId.';
+  }
+
+  @override
+  String get editorSaveRemovedFromProfile => 'Save removed from profile';
+
+  @override
+  String editorRestoredBackup(String path) {
+    return 'Restored backup: $path';
+  }
+
+  @override
+  String editorRestoredBackupWithoutCompanion(String path) {
+    return 'Restored backup: $path (PersistentDataList.sav left unchanged — no matching companion backup; slot metadata may differ)';
+  }
+
+  @override
+  String editorCodecRoundtripPassed(int chunkIndex, int bytes) {
+    return 'Codec roundtrip passed: chunk $chunkIndex recompressed to $bytes bytes';
+  }
+
+  @override
+  String editorDifficultyWriteFailed(String details) {
+    return 'Could not write the profile difficulty: $details';
+  }
+
+  @override
+  String editorProfileAssignmentFailed(String details) {
+    return 'Could not assign the save to the profile: $details';
+  }
+
+  @override
+  String editorProfileRemovalFailed(String details) {
+    return 'Could not remove the save from the profile: $details';
+  }
+
+  @override
+  String editorSaveFailed(String details) {
+    return 'Could not save the changes: $details';
+  }
+
+  @override
+  String editorScanSavesFailed(String details) {
+    return 'Failed to scan saves: $details';
+  }
+
+  @override
+  String editorInspectSaveFailed(String details) {
+    return 'Failed to inspect save: $details';
+  }
+
+  @override
+  String editorLoadBackupsFailed(String details) {
+    return 'Failed to load backups: $details';
+  }
+
+  @override
+  String editorRestoreFailed(String details) {
+    return 'Could not restore the backup: $details';
+  }
+
+  @override
+  String editorRestoreReloadFailed(String path, String details) {
+    return 'Restored backup: $path, but reloading the save failed: $details';
+  }
+
+  @override
+  String editorCodecCheckFailed(String details) {
+    return 'Codec check failed: $details';
+  }
+
+  @override
+  String editorCodecValidationFailed(String details) {
+    return 'Codec roundtrip failed: $details';
+  }
+
+  @override
+  String editorPropertySearchFailed(String details) {
+    return 'Property search failed: $details';
+  }
+
+  @override
+  String get editorSelectionChangedWhileLoadingHeroAttributes =>
+      'Save selection changed while loading hero attributes.';
+
+  @override
+  String editorSkillsLoadFailed(String details) {
+    return 'Skills load failed: $details';
+  }
+
+  @override
+  String editorProgressionQueryFailed(String details) {
+    return 'Progression query failed: $details';
+  }
+
+  @override
+  String editorNpcListFailed(String details) {
+    return 'NPC list failed: $details';
+  }
+
+  @override
+  String editorCharacterListFailed(String details) {
+    return 'Character list failed: $details';
+  }
+
+  @override
+  String editorNpcAttributesFailed(String details) {
+    return 'NPC attributes failed: $details';
+  }
+
+  @override
+  String editorNpcInventoryFailed(String details) {
+    return 'NPC inventory failed: $details';
+  }
+
+  @override
+  String editorFactionListFailed(String details) {
+    return 'Faction list failed: $details';
+  }
+
+  @override
+  String get editorNoBackupPath => 'none';
+
+  @override
+  String editorBackupMessage(String prefix, String backupPath) {
+    return '$prefix: $backupPath';
+  }
+
+  @override
+  String editorBackupMessageWithPersistent(
+    String prefix,
+    String backupPath,
+    String persistentPath,
+  ) {
+    return '$prefix: $backupPath; PersistentDataList backup: $persistentPath';
+  }
+
+  @override
+  String localizationStatusFailed(String details) {
+    return 'Localization status failed: $details';
+  }
+
+  @override
+  String localizationExtractionFailed(String details) {
+    return 'Extraction failed: $details';
+  }
+
+  @override
+  String glossaryLoadFailed(String details) {
+    return 'Glossary load failed: $details';
+  }
+
+  @override
+  String backupStatusError(String details) {
+    return 'Backup error: $details';
+  }
+
+  @override
+  String glossaryCatalogSegmentLabel(String segmentId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(segmentId, {
+      'Access': 'Access',
+      'AccessDenied': 'Access Denied',
+      'AccesToTemple': 'Access to Temple',
+      'Advice': 'Advice',
+      'AfterFight': 'After Fight',
+      'AfterFireMages': 'After Fire Mages',
+      'AfterNek': 'After Nek',
+      'AfterQuest': 'After Quest',
+      'Alone': 'Alone',
+      'Amulet': 'Amulet',
+      'Annoying': 'Annoying',
+      'Armor': 'Armor',
+      'Avoid': 'Avoid',
+      'Backstory': 'Backstory',
+      'BackStory': 'Back Story',
+      'BasicMagic': 'Basic Magic',
+      'Beated': 'Beaten',
+      'BecomeMercenary': 'Become Mercenary',
+      'Beer': 'Beer',
+      'Bestiary': 'Bestiary',
+      'Blessing': 'Blessing',
+      'Boss': 'Boss',
+      'Bully': 'Bully',
+      'BullyAdvice': 'Bully Advice',
+      'Camp': 'Camp',
+      'CampDivided': 'Camp Divided',
+      'CareOfMessengers': 'Care of Messengers',
+      'ChangeOpinion': 'Change Opinion',
+      'ChargeUriziel': 'Charge Uriziel',
+      'Chosen': 'Chosen',
+      'Contact': 'Contact',
+      'Courier': 'Courier',
+      'CraftBows': 'Craft Bows',
+      'Crazy': 'Crazy',
+      'DailyMeal': 'Daily Meal',
+      'DailyRation_Trader': 'Daily Ration Trader',
+      'DAM': 'Dam',
+      'Dead': 'Dead',
+      'Deal': 'Deal',
+      'Dealer': 'Dealer',
+      'Deceived': 'Deceived',
+      'Dementia': 'Dementia',
+      'DenyAccess': 'Deny Access',
+      'DifferentOpinion': 'Different Opinion',
+      'Discussion': 'Discussion',
+      'DontTalk': 'Don’t Talk',
+      'Duel': 'Duel',
+      'Entrance': 'Entrance',
+      'Escape': 'Escape',
+      'Extended': 'Extended',
+      'Extra': 'Extra',
+      'ExtraInfo': 'Extra Info',
+      'Fanatic': 'Fanatic',
+      'Fight': 'Fight',
+      'FindUlumulu': 'Find Ulu-Mulu',
+      'FireMages': 'Fire Mages',
+      'FireMagesEscape': 'Fire Mages Escape',
+      'FiskNewDealer': 'New Fence for Fisk',
+      'FiskNewDealerCompleted': 'New Fence for Fisk — Completed',
+      'FogTower': 'Fog Tower',
+      'Food': 'Food',
+      'Forgave': 'Forgave',
+      'Forgive': 'Forgive',
+      'Forgiven': 'Forgiven',
+      'FourFriends': 'Four Friends',
+      'FreeHut': 'Free Hut',
+      'FreeMine': 'Free Mine',
+      'Fury': 'Fury',
+      'GoodTeacher': 'Good Teacher',
+      'Gossip': 'Gossip',
+      'GotScavenger': 'Got Scavenger',
+      'GrantedAccess': 'Granted Access',
+      'GRDArmor': 'Guard Armor',
+      'Guide': 'Guide',
+      'HateMages': 'Hate Mages',
+      'HateMagesExplanation': 'Hate Mages Explanation',
+      'HateRiceLord': 'Hate Rice Lord',
+      'Heal': 'Heal',
+      'Healing': 'Healing',
+      'Help': 'Help',
+      'Helper': 'Helper',
+      'HelpKagan': 'Help Kagan',
+      'HutStory': 'Hut Story',
+      'Ignore': 'Ignore',
+      'Impress': 'Impress',
+      'ImpressAlchemy': 'Impress Alchemy',
+      'ImpressInscription': 'Impress Inscription',
+      'Info': 'Info',
+      'Interested': 'Interested',
+      'Introduction': 'Introduction',
+      'Introduction_2': 'Introduction 2',
+      'Introduction_Armor': 'Introduction – Armor',
+      'Introduction_Teacher': 'Introduction – Teacher',
+      'Introduction_Trader': 'Introduction – Trader',
+      'Invocation': 'Invocation',
+      'JoinSC': 'Join Swamp Camp',
+      'Joint': 'Joint',
+      'KalomCamp': 'Kalom Camp',
+      'Leader': 'Leader',
+      'Learning': 'Learning',
+      'LearnOrcish': 'Learn Orcish',
+      'LeftParty': 'Left Party',
+      'Library': 'Library',
+      'Lie': 'Lie',
+      'Lock': 'Lock',
+      'Lockpick': 'Lockpick',
+      'Mad': 'Mad',
+      'Mandibles': 'Minecrawler Mandibles',
+      'MapMaker': 'Map Maker',
+      'Monastery': 'Monastery',
+      'MordragKO': 'Mordrag KO',
+      'Nek': 'Nek',
+      'NewCamp': 'New Camp',
+      'NewCamper': 'New Camper',
+      'NewLeader': 'New Leader',
+      'NightPatrol': 'Night Patrol',
+      'NotInterested': 'Not Interested',
+      'OldCamp': 'Old Camp',
+      'OrcEnclaveEntrance': 'Orc Enclave Entrance',
+      'OrcGraveyard': 'Orc Graveyard',
+      'OreArmor': 'Ore Armor',
+      'Party': 'Party',
+      'Pay': 'Pay',
+      'PayMoney': 'Pay Money',
+      'Permission': 'Permission',
+      'Pet': 'Pet',
+      'PreparingInvocation': 'Preparing Invocation',
+      'Quest': 'Quest',
+      'RankUpFireMages': 'Fire Mage Promotion',
+      'RankUpGuard': 'Guard Promotion',
+      'RanUpFireMagesCompleted': 'Fire Mage Promotion Completed',
+      'Realocated': 'Relocated',
+      'Reason': 'Reason',
+      'Respect': 'Respect',
+      'ReturnToSC': 'Return to Swamp Camp',
+      'RicelordForeman': 'Rice Lord’s Foreman',
+      'RideScavenger': 'Ride Scavenger',
+      'Robe': 'Robe',
+      'Safe': 'Safe',
+      'Scraper': 'Scraper',
+      'SecondChance': 'Second Chance',
+      'SecretLocation': 'Secret Location',
+      'SecretPassage': 'Secret Passage',
+      'SecretPath': 'Secret Path',
+      'SleeperFollower': 'Sleeper Follower',
+      'SleeperTemple': 'Sleeper Temple',
+      'SmallInfo': 'Small Info',
+      'Stonehenge': 'Stonehenge',
+      'StopFollowing': 'Stop Following',
+      'SwampCamp': 'Swamp Camp',
+      'Talkative': 'Talkative',
+      'Teach': 'Teach',
+      'TeachBow': 'Teach Bow',
+      'Teacher': 'Teacher',
+      'Teacher2': 'Teacher 2',
+      'TeacherInscription': 'Teacher Inscription',
+      'TeacherMana': 'Teacher Mana',
+      'TeachIchor': 'Teach Minecrawler Ichor Extraction',
+      'TeachMagic': 'Teach Magic',
+      'TeachOrcish': 'Teach Orcish',
+      'TeachStats': 'Teach Stats',
+      'TeachWeapon': 'Teach Weapon',
+      'Teleport': 'Teleport',
+      'TheMysteriousOrc': 'The Mysterious Orc',
+      'ThroneRoom': 'Throne Room',
+      'TradeBow': 'Trade Bow',
+      'Trader': 'Trader',
+      'TradeSkins_Trader': 'Skin Trader',
+      'Traitor': 'Traitor',
+      'Trial': 'Trial',
+      'TrollCanyon': 'Troll Canyon',
+      'Trust': 'Trust',
+      'Ulumulu': 'Ulu-Mulu',
+      'Unexperienced': 'Inexperienced',
+      'Uriziel': 'Uriziel',
+      'UrizielRune': 'Uriziel Rune',
+      'Useful': 'Useful',
+      'Velaya': 'Velaya',
+      'Vibrations': 'Vibrations',
+      'WaitFreeMine': 'Wait at Free Mine',
+      'WaitInTrainingArea': 'Wait In Training Area',
+      'Warning': 'Warning',
+      'WarningTooLate': 'Warning Came Too Late',
+      'WaterMessenger': 'Messenger for the Water Mages',
+      'Weapon': 'Weapon',
+      'Who': 'Who',
+      'Women': 'Women',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
 }

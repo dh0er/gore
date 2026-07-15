@@ -369,8 +369,10 @@ class _QuestsDetailState extends ConsumerState<QuestsDetail> {
       isJournalQuest: hasCatalog
           ? (quest) => descriptionFor(quest) != null
           : null,
-      rawFallbackLabel: (quest) =>
-          readableQuestEntry(quest.name.isEmpty ? quest.id : quest.name),
+      rawFallbackLabel: (quest) => readableQuestEntry(
+        quest.name.isEmpty ? quest.id : quest.name,
+        AppLocalizations.of(context),
+      ),
       // Tests and installations without an extracted localization catalog can
       // still show conservative root rows. With a catalog, descriptions give
       // us the exact same journal/main-quest distinction as the game.
@@ -1195,16 +1197,20 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                               entry,
                               locKey: meta?.locKey,
                               caption: meta?.caption,
+                              l10n: l10n,
                             );
-                            final title = text ?? readableKnowledgeEntry(entry);
+                            final title =
+                                text ?? readableKnowledgeEntry(entry, l10n);
                             return ListTile(
                               dense: true,
                               tileColor: scheme.tertiaryContainer.withValues(
                                 alpha: 0.4,
                               ),
-                              title: Text(
-                                title,
-                                style: TextStyle(
+                              title: _KnowledgeEntryTitle(
+                                entry: entry,
+                                catalogCategory: meta?.category,
+                                title: title,
+                                titleStyle: TextStyle(
                                   color: scheme.onTertiaryContainer,
                                 ),
                               ),
@@ -1254,14 +1260,17 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                                   entry,
                                   locKey: meta?.locKey,
                                   caption: meta?.caption,
+                                  l10n: l10n,
                                 );
                                 final title =
-                                    text ?? readableKnowledgeEntry(entry);
+                                    text ?? readableKnowledgeEntry(entry, l10n);
                                 return ListTile(
                                   dense: true,
-                                  title: Text(
-                                    title,
-                                    style: isRemoved
+                                  title: _KnowledgeEntryTitle(
+                                    entry: entry,
+                                    catalogCategory: meta?.category,
+                                    title: title,
+                                    titleStyle: isRemoved
                                         ? const TextStyle(
                                             decoration:
                                                 TextDecoration.lineThrough,
@@ -1315,6 +1324,118 @@ class _KnowledgeDetailState extends ConsumerState<KnowledgeDetail> {
                 ],
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Keeps the entry kind visible even when technical object ids are disabled.
+/// The badge deliberately sits before the localized dialog text so it remains
+/// easy to scan in long knowledge lists.
+class _KnowledgeEntryTitle extends StatelessWidget {
+  const _KnowledgeEntryTitle({
+    required this.entry,
+    required this.title,
+    this.catalogCategory,
+    this.titleStyle,
+  });
+
+  final String entry;
+  final String title;
+  final String? catalogCategory;
+  final TextStyle? titleStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = knowledgeEntryType(entry, catalogCategory: catalogCategory);
+    return Row(
+      children: [
+        _KnowledgeEntryTypeBadge(entry: entry, type: type),
+        const SizedBox(width: 8),
+        Expanded(child: Text(title, style: titleStyle)),
+      ],
+    );
+  }
+}
+
+class _KnowledgeEntryTypeBadge extends StatelessWidget {
+  const _KnowledgeEntryTypeBadge({required this.entry, required this.type});
+
+  final String entry;
+  final KnowledgeEntryType type;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final label = knowledgeEntryTypeLabel(l10n, type);
+    final labelStyle = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(fontWeight: FontWeight.w600);
+    final textDirection = Directionality.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    final widestLabel = KnowledgeEntryType.values
+        .map((candidate) => knowledgeEntryTypeLabel(l10n, candidate))
+        .map((candidate) {
+          final painter = TextPainter(
+            text: TextSpan(text: candidate, style: labelStyle),
+            textDirection: textDirection,
+            textScaler: textScaler,
+            maxLines: 1,
+          )..layout();
+          return painter.width;
+        })
+        .reduce((widest, width) => width > widest ? width : widest);
+    // Every type uses the widest localized label. This keeps the badge column
+    // aligned without clipping longer translations or larger text scales.
+    final badgeWidth = 14 + 13 + 4 + widestLabel;
+    final (background, foreground, icon) = switch (type) {
+      KnowledgeEntryType.choice => (
+        scheme.secondaryContainer,
+        scheme.onSecondaryContainer,
+        Icons.call_split,
+      ),
+      KnowledgeEntryType.info => (
+        scheme.tertiaryContainer,
+        scheme.onTertiaryContainer,
+        Icons.info_outline,
+      ),
+      KnowledgeEntryType.voiceLine => (
+        scheme.surfaceContainerHighest,
+        scheme.onSurface,
+        Icons.record_voice_over_outlined,
+      ),
+      KnowledgeEntryType.topic => (
+        scheme.primaryContainer,
+        scheme.onPrimaryContainer,
+        Icons.topic_outlined,
+      ),
+      KnowledgeEntryType.other => (
+        scheme.surfaceContainerLow,
+        scheme.onSurfaceVariant,
+        Icons.help_outline,
+      ),
+    };
+
+    return Semantics(
+      label: label,
+      excludeSemantics: true,
+      child: Container(
+        key: ValueKey('knowledge-type-${type.name}-$entry'),
+        width: badgeWidth,
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: foreground),
+            const SizedBox(width: 4),
+            Text(label, style: labelStyle?.copyWith(color: foreground)),
           ],
         ),
       ),

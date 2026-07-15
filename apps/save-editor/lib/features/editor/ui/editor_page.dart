@@ -14,6 +14,7 @@ import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/game_time.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/ui/characters_tab.dart';
+import 'package:goresave/features/editor/ui/profile_localization.dart';
 import 'package:goresave/features/localization/domain/localization_controller.dart';
 import 'package:goresave/features/localization/ui/localization_flow.dart';
 import 'package:goresave/features/localization/ui/localization_settings.dart';
@@ -23,8 +24,6 @@ import 'package:goresave/providers/data_providers.dart';
 import 'package:intl/intl.dart';
 import 'difficulty_dialog.dart';
 import 'world_tab.dart';
-
-final _bytes = NumberFormat.decimalPattern();
 
 class EditorPage extends ConsumerStatefulWidget {
   const EditorPage({super.key});
@@ -134,9 +133,7 @@ class _EditorPageState extends ConsumerState<EditorPage>
               // must truncate instead of overflowing the title bar row.
               Flexible(
                 child: Text(
-                  // Title bar text is language-independent — always the
-                  // product name (see goresave_app.dart).
-                  'GORE Save Editor',
+                  l10n.appTitle,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -243,9 +240,25 @@ class _SaveSidebar extends StatelessWidget {
           _ProfileHeader(
             profile: state.activeProfile,
             profiles: state.profiles,
+            otherSavesSelected: state.otherSavesSelected,
             notifier: notifier,
             isLoading: state.isLoading,
           ),
+          if (state.otherSavesSelected)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+              child: SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  key: const ValueKey('other-saves-open-file'),
+                  icon: const Icon(Icons.file_open_outlined),
+                  label: Text(l10n.openSaveFile),
+                  onPressed: state.isLoading || state.hasUnsavedEdits
+                      ? null
+                      : notifier.openSaveFile,
+                ),
+              ),
+            ),
           Expanded(
             child: saves.isEmpty
                 ? Center(
@@ -264,13 +277,38 @@ class _SaveSidebar extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final save = saves[index];
                       final selected = save.path == state.selectedPath;
+                      ProfileSummary? assignedProfile;
+                      for (final profile in state.profiles) {
+                        if (profile.profileId == save.persistentProfileId) {
+                          assignedProfile = profile;
+                          break;
+                        }
+                      }
                       return Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         child: _SaveSlotCard(
                           save: save,
                           selected: selected,
-                          enabled: !state.isLoading,
+                          enabled: !state.isLoading && !save.isMissing,
                           onTap: () => notifier.inspect(save.path),
+                          onRemoveFromProfile:
+                              assignedProfile == null ||
+                                  state.isLoading ||
+                                  state.hasUnsavedEdits
+                              ? null
+                              : () => _confirmRemoveSaveFromProfile(
+                                  context,
+                                  save: save,
+                                  profile: assignedProfile!,
+                                  notifier: notifier,
+                                ),
+                          onRemoveFromOther:
+                              !state.otherSavesSelected ||
+                                  state.isLoading ||
+                                  state.hasUnsavedEdits
+                              ? null
+                              : () => notifier.removeOtherSave(save.path),
+                          showRemoveFromOther: state.otherSavesSelected,
                         ),
                       );
                     },
@@ -286,12 +324,14 @@ class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({
     required this.profile,
     required this.profiles,
+    required this.otherSavesSelected,
     required this.notifier,
     required this.isLoading,
   });
 
   final ProfileSummary? profile;
   final List<ProfileSummary> profiles;
+  final bool otherSavesSelected;
   final EditorNotifier notifier;
   final bool isLoading;
 
@@ -330,6 +370,7 @@ class _ProfileHeader extends StatelessWidget {
                   child: _ProfileSwitcher(
                     profile: profile,
                     profiles: profiles,
+                    otherSavesSelected: otherSavesSelected,
                     notifier: notifier,
                     isLoading: isLoading,
                   ),
@@ -393,18 +434,20 @@ class _ProfileHeader extends StatelessWidget {
   }
 }
 
-/// Profile picker plus the always-last "Open file" action. It remains a menu
-/// with zero/one profile so detached savegames are reachable in every setup.
+/// Profile picker containing only real profiles plus the dedicated persistent
+/// Other saves view. File opening lives inside that view's sidebar.
 class _ProfileSwitcher extends StatelessWidget {
   const _ProfileSwitcher({
     required this.profile,
     required this.profiles,
+    required this.otherSavesSelected,
     required this.notifier,
     required this.isLoading,
   });
 
   final ProfileSummary? profile;
   final List<ProfileSummary> profiles;
+  final bool otherSavesSelected;
   final EditorNotifier notifier;
   final bool isLoading;
 
@@ -418,8 +461,8 @@ class _ProfileSwitcher extends StatelessWidget {
       tooltip: l10n.switchProfile,
       enabled: !isLoading,
       onSelected: (choice) {
-        if (choice == 'open-file') {
-          notifier.openSaveFile();
+        if (choice == 'other-saves') {
+          notifier.selectOtherSaves();
           return;
         }
         final id = int.tryParse(choice.substring('profile:'.length));
@@ -438,7 +481,10 @@ class _ProfileSwitcher extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    l10n.profileWithSaves(p.displayName, p.savedSlots.length),
+                    l10n.profileWithSaves(
+                      localizedProfileDisplayName(l10n, p),
+                      p.savedSlots.length,
+                    ),
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
@@ -447,12 +493,16 @@ class _ProfileSwitcher extends StatelessWidget {
           ),
         if (profiles.isNotEmpty) const PopupMenuDivider(),
         PopupMenuItem<String>(
-          value: 'open-file',
+          key: const ValueKey('profile-menu-other-saves'),
+          value: 'other-saves',
           child: Row(
             children: [
-              const Icon(Icons.file_open_outlined, size: 18),
+              if (otherSavesSelected)
+                Icon(Icons.check, size: 18, color: scheme.primary)
+              else
+                const Icon(Icons.folder_copy_outlined, size: 18),
               const SizedBox(width: 8),
-              Expanded(child: Text(l10n.openSaveFile)),
+              Expanded(child: Text(l10n.otherSaves)),
             ],
           ),
         ),
@@ -462,7 +512,11 @@ class _ProfileSwitcher extends StatelessWidget {
         children: [
           Flexible(
             child: Text(
-              profile?.displayName ?? l10n.profile,
+              profile == null
+                  ? otherSavesSelected
+                        ? l10n.otherSaves
+                        : l10n.profile
+                  : localizedProfileDisplayName(l10n, profile!),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: textTheme.titleMedium,
@@ -485,20 +539,34 @@ class _SaveSlotCard extends StatelessWidget {
     required this.selected,
     required this.enabled,
     required this.onTap,
+    required this.showRemoveFromOther,
+    this.onRemoveFromProfile,
+    this.onRemoveFromOther,
   });
 
   final SaveSlot save;
   final bool selected;
   final bool enabled;
   final VoidCallback onTap;
+  final bool showRemoveFromOther;
+  final VoidCallback? onRemoveFromProfile;
+  final VoidCallback? onRemoveFromOther;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final accent = selected ? scheme.primary : scheme.outline;
+    final accent = save.isMissing
+        ? scheme.error
+        : selected
+        ? scheme.primary
+        : scheme.outline;
     final l10n = AppLocalizations.of(context);
     return Material(
-      color: selected ? scheme.primaryContainer : scheme.surfaceContainerLowest,
+      color: save.isMissing
+          ? scheme.errorContainer.withValues(alpha: 0.35)
+          : selected
+          ? scheme.primaryContainer
+          : scheme.surfaceContainerLowest,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: accent),
@@ -514,11 +582,26 @@ class _SaveSlotCard extends StatelessWidget {
               SizedBox(
                 width: 124,
                 height: 72,
-                child: _ScreenshotPreview(
-                  screenshot: save.screenshot,
-                  slot: save.slot,
-                  compact: true,
-                ),
+                child: save.isMissing
+                    ? Semantics(
+                        label: l10n.missingSaveReference,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: scheme.errorContainer,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Icon(
+                            Icons.file_present_outlined,
+                            color: scheme.error,
+                            size: 34,
+                          ),
+                        ),
+                      )
+                    : _ScreenshotPreview(
+                        screenshot: save.screenshot,
+                        slot: save.slot,
+                        compact: true,
+                      ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -531,12 +614,21 @@ class _SaveSlotCard extends StatelessWidget {
                       children: [
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
-                          child: _SaveKindIcon(
-                            quickSave: save.quickSave,
-                            autoSave: save.autoSave,
-                            external: save.isExternal,
-                            selected: selected,
-                          ),
+                          child: save.isMissing
+                              ? Tooltip(
+                                  message: l10n.missingSaveReference,
+                                  child: Icon(
+                                    Icons.link_off_outlined,
+                                    size: 16,
+                                    color: scheme.error,
+                                  ),
+                                )
+                              : _SaveKindIcon(
+                                  quickSave: save.quickSave,
+                                  autoSave: save.autoSave,
+                                  external: save.isExternal,
+                                  selected: selected,
+                                ),
                         ),
                         const SizedBox(width: 6),
                         Expanded(
@@ -547,6 +639,36 @@ class _SaveSlotCard extends StatelessWidget {
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
                         ),
+                        if (onRemoveFromProfile != null)
+                          IconButton(
+                            key: ValueKey(
+                              'remove-save-profile-${save.persistentProfileId}-${save.slot}',
+                            ),
+                            icon: const Icon(Icons.link_off_outlined, size: 18),
+                            tooltip: l10n.removeFromProfile,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            color: save.isMissing
+                                ? scheme.error
+                                : scheme.onSurfaceVariant,
+                            onPressed: onRemoveFromProfile,
+                          ),
+                        if (showRemoveFromOther)
+                          IconButton(
+                            key: ValueKey('remove-other-save-${save.path}'),
+                            icon: const Icon(Icons.close, size: 18),
+                            tooltip: l10n.removeEntry,
+                            visualDensity: VisualDensity.compact,
+                            constraints: const BoxConstraints(
+                              minWidth: 32,
+                              minHeight: 32,
+                            ),
+                            color: scheme.onSurfaceVariant,
+                            onPressed: onRemoveFromOther,
+                          ),
                       ],
                     ),
                     const SizedBox(height: 4),
@@ -613,25 +735,68 @@ class _SaveKindIcon extends StatelessWidget {
 }
 
 String _saveSlotSubtitle(AppLocalizations l10n, SaveSlot save) {
+  if (save.isMissing) {
+    return '${l10n.missingSaveReference}: '
+        '${l10n.missingSaveReferenceDescription(save.slot)}';
+  }
   final parts = <String>[];
+  if (!save.isExternal && save.persistentProfileId == null) {
+    parts.add(l10n.unassignedSave);
+  }
   if (save.chapterId != null) {
     parts.add(l10n.chapterLabel(save.chapterId!));
   }
-  final timePlayed = _formatDurationSeconds(save.timePlayedSeconds);
+  final timePlayed = _formatDurationSeconds(l10n, save.timePlayedSeconds);
   if (timePlayed != '-') {
     parts.add(timePlayed);
   }
   return parts.join(' | ');
 }
 
-String _formatDurationSeconds(double? seconds) {
+Future<void> _confirmRemoveSaveFromProfile(
+  BuildContext context, {
+  required SaveSlot save,
+  required ProfileSummary profile,
+  required EditorNotifier notifier,
+}) async {
+  final l10n = AppLocalizations.of(context);
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(l10n.removeSaveFromProfileTitle),
+      content: Text(
+        l10n.removeSaveFromProfileBody(
+          save.displayName,
+          localizedProfileDisplayName(l10n, profile),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: Text(l10n.cancel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: Text(l10n.removeFromProfile),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true) return;
+  await notifier.removeSaveFromProfile(
+    slot: save.slot,
+    profileId: profile.profileId,
+  );
+}
+
+String _formatDurationSeconds(AppLocalizations l10n, double? seconds) {
   if (seconds == null || seconds.isNaN || seconds.isInfinite) return '-';
   final totalMinutes = (seconds < 0 ? 0 : seconds / 60).floor();
   final hours = totalMinutes ~/ 60;
   final minutes = totalMinutes % 60;
-  if (hours <= 0) return '${minutes}m';
-  if (minutes == 0) return '${hours}h';
-  return '${hours}h ${minutes}m';
+  if (hours <= 0) return l10n.durationMinutes(minutes);
+  if (minutes == 0) return l10n.durationHours(hours);
+  return l10n.durationHoursMinutes(hours, minutes);
 }
 
 String _formatSaveKind(
@@ -1169,6 +1334,7 @@ class _HeaderCard extends StatelessWidget {
                               _InfoPill(
                                 icon: Icons.timer_outlined,
                                 label: _formatDurationSeconds(
+                                  l10n,
                                   inspection.timePlayedSeconds,
                                 ),
                               ),
@@ -1260,7 +1426,14 @@ class _InfoPill extends StatelessWidget {
           children: [
             Icon(icon, size: 15, color: scheme.onSurfaceVariant),
             const SizedBox(width: 5),
-            Text(label, style: Theme.of(context).textTheme.labelMedium),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.labelMedium,
+              ),
+            ),
           ],
         ),
       ),
@@ -1405,13 +1578,16 @@ class _SaveProfileCard extends StatelessWidget {
     // A detached file's embedded numeric profile id is not authoritative for
     // this folder. Keep the selector empty so even a coincidental matching id
     // can be chosen to trigger the import.
-    final currentId = external
-        ? null
-        : state.profiles.any(
-            (profile) => profile.profileId == save?.persistentProfileId,
-          )
-        ? save?.persistentProfileId
-        : null;
+    ProfileSummary? currentProfile;
+    if (!external) {
+      for (final profile in state.profiles) {
+        if (profile.profileId == save?.persistentProfileId) {
+          currentProfile = profile;
+          break;
+        }
+      }
+    }
+    final currentId = currentProfile?.profileId;
     final enabled =
         state.profiles.isNotEmpty && !state.isLoading && !state.hasUnsavedEdits;
     final explanation = external
@@ -1452,31 +1628,53 @@ class _SaveProfileCard extends StatelessWidget {
             const SizedBox(width: 20),
             SizedBox(
               width: 260,
-              child: DropdownButtonFormField<int>(
-                initialValue: currentId,
-                isExpanded: true,
-                decoration: InputDecoration(
-                  labelText: l10n.profile,
-                  isDense: true,
-                ),
-                hint: Text(l10n.saveProfileSelect),
-                items: [
-                  for (final profile in state.profiles)
-                    DropdownMenuItem<int>(
-                      value: profile.profileId,
-                      child: Text(
-                        profile.displayName,
-                        overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  DropdownButtonFormField<int>(
+                    initialValue: currentId,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      labelText: l10n.profile,
+                      isDense: true,
+                    ),
+                    hint: Text(l10n.saveProfileSelect),
+                    items: [
+                      for (final profile in state.profiles)
+                        DropdownMenuItem<int>(
+                          value: profile.profileId,
+                          child: Text(
+                            localizedProfileDisplayName(l10n, profile),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                    ],
+                    onChanged: enabled
+                        ? (profileId) {
+                            if (profileId != null && profileId != currentId) {
+                              notifier.assignSelectedSaveToProfile(profileId);
+                            }
+                          }
+                        : null,
+                  ),
+                  if (save != null && currentProfile != null)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        key: const ValueKey('remove-selected-save-profile'),
+                        icon: const Icon(Icons.link_off_outlined, size: 18),
+                        label: Text(l10n.removeFromProfile),
+                        onPressed: enabled
+                            ? () => _confirmRemoveSaveFromProfile(
+                                context,
+                                save: save,
+                                profile: currentProfile!,
+                                notifier: notifier,
+                              )
+                            : null,
                       ),
                     ),
                 ],
-                onChanged: enabled
-                    ? (profileId) {
-                        if (profileId != null && profileId != currentId) {
-                          notifier.assignSelectedSaveToProfile(profileId);
-                        }
-                      }
-                    : null,
               ),
             ),
           ],
@@ -2451,17 +2649,19 @@ class _BackupCard extends StatelessWidget {
                           ),
                         _SmallFact(
                           label: l10n.backupFactCreated,
-                          value: _formatBackupTime(backup.createdEpoch),
+                          value: _formatBackupTime(l10n, backup.createdEpoch),
                         ),
                         _SmallFact(
                           label: l10n.backupFactSize,
                           value: l10n.bytesValue(
-                            _bytes.format(backup.fileSize),
+                            NumberFormat.decimalPattern(
+                              l10n.localeName,
+                            ).format(backup.fileSize),
                           ),
                         ),
                         _SmallFact(
                           label: l10n.backupFactStatus,
-                          value: backup.status,
+                          value: _localizedBackupStatus(l10n, backup.status),
                         ),
                         _SmallFact(
                           label: l10n.backupFactSha1,
@@ -2560,19 +2760,30 @@ class _SmallFact extends StatelessWidget {
   }
 }
 
-String _formatBackupTime(int? epoch) {
+String _formatBackupTime(AppLocalizations l10n, int? epoch) {
   if (epoch == null) return '-';
   final dateTime = DateTime.fromMillisecondsSinceEpoch(
     epoch * 1000,
     isUtc: true,
   ).toLocal();
-  return DateFormat.yMd().add_Hms().format(dateTime);
+  return DateFormat.yMd(l10n.localeName).add_Hms().format(dateTime);
 }
 
 String _shortSha(String sha1) {
   if (sha1.length <= 12) return sha1;
   return sha1.substring(0, 12);
 }
+
+String _localizedBackupStatus(AppLocalizations l10n, String status) =>
+    switch (status) {
+      'ok' => l10n.statusOk,
+      'failed' || 'error' => l10n.statusFailed,
+      'invalid PersistentDataList structure' =>
+        l10n.backupStatusInvalidProfileStructure,
+      'selected slot metadata missing' => l10n.backupStatusSlotMetadataMissing,
+      'unknown' || '' => l10n.statusUnknown,
+      _ => l10n.backupStatusError(status),
+    };
 
 class _SettingsPanel extends StatelessWidget {
   const _SettingsPanel({required this.state, required this.notifier});
@@ -2707,7 +2918,11 @@ class CodecStatusView extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(l10n.codecStatusLine(codec.status)),
+                  Text(
+                    l10n.codecStatusLine(
+                      _localizedCodecStatus(l10n, codec.status),
+                    ),
+                  ),
                   Text(
                     l10n.codecCapabilityLine(
                       codec.canDecompress ? l10n.yes : l10n.no,
@@ -2724,6 +2939,15 @@ class CodecStatusView extends StatelessWidget {
     );
   }
 }
+
+String _localizedCodecStatus(AppLocalizations l10n, String status) =>
+    switch (status) {
+      'ready' => l10n.codecReady,
+      'decode_only' => l10n.codecReadOnly,
+      'unavailable' => l10n.codecUnavailable,
+      'unknown' || '' => l10n.statusUnknown,
+      _ => status,
+    };
 
 class _PathSettingRow extends StatelessWidget {
   const _PathSettingRow({

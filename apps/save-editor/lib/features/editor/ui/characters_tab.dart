@@ -25,16 +25,12 @@ import '../domain/editor_notifier.dart';
 /// attributes, inventory, or events; for an orphan selection those three
 /// sub-tabs show a clean empty state and only Wissen is wired up.
 ///
-/// Shared sub-tab layout: every sub-tab body is
-/// `ActorDetailHeader` above `Padding(EdgeInsets.fromLTRB(20, 8, 20, 20))` →
-/// one `Card` → `Padding(EdgeInsets.all(16))` → content. The 20 outer padding
-/// is the card's distance to the pane edges; the top is only 8 because the
-/// header's own line-height whitespace already contributes, making the
-/// header→card gap visually equal to the 20 side/bottom gaps. The 16 inner
-/// padding is the card's content inset. Attribute/Inventar apply this inside
-/// their detail widgets; Wissen/Ereignisse get the outer padding here (their
-/// detail widgets provide the Card + inner 16). Card titles are intentionally
-/// absent — the sub-tab labels already name the views.
+/// The [ActorDetailHeader] sits once above the secondary tab bar. It therefore
+/// identifies the persistent character context instead of being duplicated in
+/// each Attribute/Inventory/Knowledge/Events page. Every sub-tab body then uses
+/// `Padding(EdgeInsets.fromLTRB(20, 8, 20, 20))` → one `Card` →
+/// `Padding(EdgeInsets.all(16))` → content. Card titles are intentionally absent
+/// because the sub-tab labels already name the views.
 class CharactersTab extends ConsumerWidget {
   const CharactersTab({
     super.key,
@@ -88,6 +84,7 @@ class CharactersTab extends ConsumerWidget {
             notifier: notifier,
             editable: attributeEditable,
             actor: selected,
+            showActorHeader: false,
           );
 
     final Widget inventoryBody = isOrphan
@@ -101,39 +98,21 @@ class CharactersTab extends ConsumerWidget {
             notifier: notifier,
             actor: selected,
             canCompress: inventoryCanCompress,
+            showActorHeader: false,
           );
 
     // Wissen (knowledge) always works: the player's key is 'Hero' (which IS
     // selected.uniqueName for the player), an NPC's / orphan's key is its
-    // uniqueName. Passing selected.uniqueName covers all three. The same
-    // ActorDetailHeader the Attribute/Inventar bodies render sits above the
-    // card (same Column + Expanded structure as AttributeDetail) so all four
-    // sub-tabs identify the selection identically; it handles player (no id),
-    // NPC (full GlobalId), and orphan (uniqueName-resolved, no id line).
-    final Widget knowledgeBody = Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        ActorDetailHeader(
-          actor: selected,
-          locCatalog: locCatalog,
-          lang: lang,
-          showObjectIds: showObjectIds,
-        ),
-        Expanded(
-          // Shared sub-tab layout (see class comment): outer padding around
-          // the detail's Card, matching Attribute/Inventar.
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-            child: KnowledgeDetail(
-              uniqueName: selected.uniqueName,
-              notifier: notifier,
-              editable: progressionEditable,
-              reloadKey: inspection,
-              theme: theme,
-            ),
-          ),
-        ),
-      ],
+    // uniqueName. Passing selected.uniqueName covers all three.
+    final Widget knowledgeBody = Padding(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+      child: KnowledgeDetail(
+        uniqueName: selected.uniqueName,
+        notifier: notifier,
+        editable: progressionEditable,
+        reloadKey: inspection,
+        theme: theme,
+      ),
     );
 
     // Ereignisse (events) are keyed by GlobalId. Orphans have no GlobalId (and
@@ -141,8 +120,7 @@ class CharactersTab extends ConsumerWidget {
     // state instead of the detail (whose null branch is the misleading
     // "select a character" prompt). The player's events live under the save's
     // own Hero ACTOR GlobalId, stashed in `state.heroGlobalId` when the
-    // character index loads — three states under the same ActorDetailHeader
-    // (so the layout doesn't jump): while the index load is in flight
+    // character index loads. While the index load is in flight
     // (`heroGlobalIdSettled` false) a spinner holds the pane; once it settles
     // WITHOUT an id (index failed or carried no hero row) the pane shows the
     // no-events empty state instead of spinning forever (the master list
@@ -154,51 +132,31 @@ class CharactersTab extends ConsumerWidget {
             title: l10n.sectionEvents,
             body: l10n.characterNoActorBody,
           )
-        : Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              ActorDetailHeader(
-                actor: selected,
-                locCatalog: locCatalog,
-                lang: lang,
-                showObjectIds: showObjectIds,
-              ),
-              Expanded(
-                child: selected.isPlayer && state.heroGlobalId == null
-                    ? (state.heroGlobalIdSettled
-                          // The index load completed without a hero id (error
-                          // or no hero row): no id is coming, so settle to the
-                          // clean no-events empty state — never an eternal
-                          // spinner.
-                          ? _MessagePane(
-                              icon: Icons.history_outlined,
-                              title: l10n.sectionEvents,
-                              body: l10n.characterNoEventsBody,
-                            )
-                          // Character-index load still in flight: the hero id
-                          // is not known yet, so show progress rather than
-                          // mounting the detail with a null id.
-                          : const Center(child: CircularProgressIndicator()))
-                    // Shared sub-tab layout (see class comment): outer padding
-                    // around the detail's Card, matching Attribute/Inventar.
-                    : Padding(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-                        child: EventsDetail(
-                          globalId: selected.isPlayer
-                              ? state.heroGlobalId
-                              : selected.id,
-                          notifier: notifier,
-                          editable: progressionEditable,
-                          reloadKey: inspection,
-                          theme: theme,
-                          relationshipNpcId: selected.isPlayer
-                              ? null
-                              : selected.id,
-                          relationshipEditable: attributeEditable,
-                        ),
-                      ),
-              ),
-            ],
+        : selected.isPlayer && state.heroGlobalId == null
+        ? (state.heroGlobalIdSettled
+              // The index load completed without a hero id (error or no hero
+              // row): no id is coming, so settle to the clean no-events empty
+              // state — never an eternal spinner.
+              ? _MessagePane(
+                  icon: Icons.history_outlined,
+                  title: l10n.sectionEvents,
+                  body: l10n.characterNoEventsBody,
+                )
+              // Character-index load still in flight: the hero id is not known
+              // yet, so show progress rather than mounting the detail with a
+              // null id.
+              : const Center(child: CircularProgressIndicator()))
+        : Padding(
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+            child: EventsDetail(
+              globalId: selected.isPlayer ? state.heroGlobalId : selected.id,
+              notifier: notifier,
+              editable: progressionEditable,
+              reloadKey: inspection,
+              theme: theme,
+              relationshipNpcId: selected.isPlayer ? null : selected.id,
+              relationshipEditable: attributeEditable,
+            ),
           );
 
     return Row(
@@ -225,6 +183,16 @@ class CharactersTab extends ConsumerWidget {
             length: 4,
             child: Column(
               children: [
+                ActorDetailHeader(
+                  actor: selected,
+                  locCatalog: locCatalog,
+                  lang: lang,
+                  showObjectIds: showObjectIds,
+                ),
+                const SizedBox(
+                  key: ValueKey('actor-header-tab-gap'),
+                  height: 12,
+                ),
                 TabBar(
                   tabs: [
                     Tab(

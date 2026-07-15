@@ -16,17 +16,17 @@ class AppLocalizationsEs extends AppLocalizations {
       'Diagnóstico y datos sin procesar para informes de errores';
 
   @override
-  String get showObjectIdsTitle => 'Show object IDs';
+  String get showObjectIdsTitle => 'Mostrar ID técnicos adicionales';
 
   @override
   String get showObjectIdsSubtitle =>
-      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+      'Muestra los ID técnicos de objetos, conocimientos de diálogo, misiones y actores huérfanos. Los ID de NPC se muestran siempre.';
 
   @override
   String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'GORE Save Editor logo';
+  String get appLogoSemanticLabel => 'Logotipo de GORE Save Editor';
 
   @override
   String get zoomTooltip => 'Pulsa Ctrl +/- para acercar o alejar';
@@ -309,6 +309,9 @@ class AppLocalizationsEs extends AppLocalizations {
   String get profile => 'Perfil';
 
   @override
+  String get otherSaves => 'Otras partidas';
+
+  @override
   String profileWithSaves(String name, int count) {
     return '$name ($count partidas)';
   }
@@ -317,28 +320,28 @@ class AppLocalizationsEs extends AppLocalizations {
   String get switchProfile => 'Cambiar de perfil';
 
   @override
-  String get openSaveFile => 'Open file';
+  String get openSaveFile => 'Abrir archivo';
 
   @override
-  String get externalSave => 'Externally opened save';
+  String get externalSave => 'Partida abierta externamente';
 
   @override
-  String get saveProfileTitle => 'Save profile';
+  String get saveProfileTitle => 'Perfil de la partida';
 
   @override
   String get saveProfileDescription =>
-      'Assign this save to a different game profile. The save and profile index are backed up together.';
+      'Asigna esta partida a otro perfil del juego. Se crearán copias de seguridad conjuntas de la partida y del índice de perfiles.';
 
   @override
   String get saveProfileExternalHint =>
-      'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.';
+      'Selecciona un perfil para importar este archivo a la carpeta de partidas del juego y registrarlo allí. El archivo original no cambiará.';
 
   @override
   String get saveProfileNoProfiles =>
-      'No editable game profiles were found in PersistentDataList.sav.';
+      'No se encontraron perfiles editables en PersistentDataList.sav.';
 
   @override
-  String get saveProfileSelect => 'Select profile';
+  String get saveProfileSelect => 'Seleccionar perfil';
 
   @override
   String get rescanSaveFolder => 'Volver a examinar la carpeta de guardado';
@@ -407,28 +410,28 @@ class AppLocalizationsEs extends AppLocalizations {
   String get publicSaveName => 'Nombre público de la partida';
 
   @override
-  String get gameTimeTitle => 'Game time';
+  String get gameTimeTitle => 'Tiempo de juego';
 
   @override
-  String get gameTimeDay => 'Day';
+  String get gameTimeDay => 'Día';
 
   @override
-  String get gameTimeHours => 'Hours';
+  String get gameTimeHours => 'Horas';
 
   @override
-  String get gameTimeMinutes => 'Minutes';
+  String get gameTimeMinutes => 'Minutos';
 
   @override
-  String get gameTimeSeconds => 'Seconds';
+  String get gameTimeSeconds => 'Segundos';
 
   @override
   String gameTimeTotal(int seconds) {
-    return '= $seconds s total';
+    return '= $seconds s en total';
   }
 
   @override
   String get gameTimeInvalid =>
-      'Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.';
+      'Introduce números enteros: día ≥ 0, horas 0–23, minutos y segundos 0–59.';
 
   @override
   String get required => 'Obligatorio';
@@ -466,7 +469,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String attributeBase(String name) {
-    return '$name base';
+    return 'Valor base de $name';
   }
 
   @override
@@ -475,10 +478,10 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
-  String get attributeBaseValue => 'Base value';
+  String get attributeBaseValue => 'Valor base';
 
   @override
-  String get attributeCurrentValue => 'Current value';
+  String get attributeCurrentValue => 'Valor actual';
 
   @override
   String get inventoryTitle => 'Inventario';
@@ -516,26 +519,26 @@ class AppLocalizationsEs extends AppLocalizations {
   String get addItemButton => 'Añadir objeto';
 
   @override
-  String get resetInventoryButton => 'Reset inventory';
+  String get resetInventoryButton => 'Restablecer inventario';
 
   @override
   String get resetInventoryTooltipDefault =>
-      'Replace this inventory with the game-start save\'s inventory';
+      'Sustituir este inventario por el de la partida inicial';
 
   @override
   String get resetInventoryTooltipBlocked =>
-      'Save or cancel the pending inventory changes first';
+      'Guarda o cancela primero los cambios de inventario pendientes';
 
   @override
-  String get pendingResetTitle => 'Reset to game-start inventory';
+  String get pendingResetTitle => 'Restablecer al inventario inicial';
 
   @override
   String pendingResetSubtitle(String level) {
-    return 'Resources level: $level';
+    return 'Nivel de recursos: $level';
   }
 
   @override
-  String get cancelPendingReset => 'Cancel reset';
+  String get cancelPendingReset => 'Cancelar restablecimiento';
 
   @override
   String pendingAddSubtitle(int count) {
@@ -737,34 +740,34 @@ class AppLocalizationsEs extends AppLocalizations {
   String get npcStatusDead => 'muerto';
 
   @override
-  String get npcRelationshipRowLabel => 'Relationship';
+  String get npcRelationshipRowLabel => 'Relación';
 
   @override
-  String get npcRelationshipUnavailable => 'Relationship status unavailable';
+  String get npcRelationshipUnavailable => 'Estado de relación no disponible';
 
   @override
-  String get npcRelationshipAutomatic => 'Computed by game';
+  String get npcRelationshipAutomatic => 'Calculada por el juego';
 
   @override
   String get npcRelationshipAutomaticHint =>
-      'No permanent override is stored. Guild, story, area, and crime rules are evaluated in game.';
+      'No hay ninguna anulación permanente guardada. El juego evalúa las reglas de gremio, historia, zona y delitos.';
 
   @override
   String get npcRelationshipStoredHint =>
-      'Stored as a permanent NPC-to-player override. Guild, story, area, and crime rules can still change the effective status in game.';
+      'Guardada como anulación permanente entre el NPC y el jugador. Las reglas de gremio, historia, zona y delitos aún pueden cambiar la relación efectiva en el juego.';
 
   @override
-  String get npcRelationshipFriend => 'Friend';
+  String get npcRelationshipFriend => 'Amigo';
 
   @override
   String get npcRelationshipNeutral => 'Neutral';
 
   @override
-  String get npcRelationshipEnemy => 'Enemy';
+  String get npcRelationshipEnemy => 'Enemigo';
 
   @override
   String npcRelationshipPending(String relationship) {
-    return 'Will be $relationship on save';
+    return 'Será $relationship al guardar';
   }
 
   @override
@@ -860,7 +863,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get memoryEventRemovalQueued =>
-      'Event removal queued — press Save to apply it.';
+      'Eliminación del evento en cola: pulsa Guardar para aplicarla.';
 
   @override
   String get duplicateEvent => 'Duplicar evento';
@@ -874,7 +877,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get memoryEventDuplicationQueued =>
-      'Event duplication queued — press Save to apply it.';
+      'Duplicación del evento en cola: pulsa Guardar para aplicarla.';
 
   @override
   String get selectCharacterFromList => 'Selecciona un personaje de la lista';
@@ -1255,7 +1258,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get preset => 'Ajuste predefinido';
 
   @override
-  String get presetNovice => 'Principiante';
+  String get presetNovice => 'Fácil';
 
   @override
   String get presetGothic => 'Gothic';
@@ -1264,7 +1267,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get presetHard => 'Difícil';
 
   @override
-  String get presetCustom => 'Personalizado';
+  String get presetCustom => 'Personalizada';
 
   @override
   String unrecognisedPreset(Object preset) {
@@ -1272,7 +1275,7 @@ class AppLocalizationsEs extends AppLocalizations {
   }
 
   @override
-  String get closeCombatFlowHelper => 'Asistente de combate cuerpo a cuerpo';
+  String get closeCombatFlowHelper => 'Ayuda de fluidez de combate';
 
   @override
   String get permadeath => 'Muerte permanente';
@@ -1384,7 +1387,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String savingProgress(int done, int total) {
-    return 'Saving… $done of $total';
+    return 'Guardando… $done de $total';
   }
 
   @override
@@ -1420,198 +1423,858 @@ class AppLocalizationsEs extends AppLocalizations {
   String get skillCircle6 => 'Sexto Círculo de Magia';
 
   @override
-  String get sectionGlossary => 'Glossary';
+  String get sectionGlossary => 'Glosario';
 
   @override
-  String get glossarySearch => 'Search glossary';
+  String get glossarySearch => 'Buscar en el glosario';
 
   @override
-  String get glossaryOldCamp => 'Old Camp';
+  String get glossaryOldCamp => 'Campamento Viejo';
 
   @override
-  String get glossaryNewCamp => 'New Camp';
+  String get glossaryNewCamp => 'Campamento Nuevo';
 
   @override
-  String get glossarySwampCamp => 'Swamp Camp';
+  String get glossarySwampCamp => 'Campamento del Pantano';
 
   @override
-  String get glossaryOutsiders => 'Outsiders';
+  String get glossaryOutsiders => 'Forasteros';
 
   @override
-  String get glossaryCreatures => 'Creatures';
+  String get glossaryCreatures => 'Criaturas';
 
   @override
-  String get glossaryLocations => 'Locations';
+  String get glossaryLocations => 'Ubicaciones';
 
   @override
-  String get glossaryFilterLabel => 'Filter';
+  String get glossaryFilterLabel => 'Filtro';
 
   @override
-  String get glossaryFilterTraders => 'Traders';
+  String get glossaryFilterTraders => 'Comerciantes';
 
   @override
-  String get glossaryFilterTeachers => 'Teachers';
+  String get glossaryFilterTeachers => 'Instructores';
 
   @override
-  String get glossaryFilterArmorers => 'Armorers';
+  String get glossaryFilterArmorers => 'Armeros';
 
   @override
-  String get glossaryFilterHostile => 'Hostile';
+  String get glossaryFilterHostile => 'Hostiles';
 
   @override
   String get glossaryRelationshipFilterNote =>
-      'Shows permanent enemy overrides stored in the save. Dynamic guild, story, area, and crime relationships are computed only in game.';
+      'Muestra las anulaciones permanentes de enemigo guardadas en la partida. Las relaciones dinámicas de gremio, historia, zona y delitos solo se calculan en el juego.';
 
   @override
-  String get glossaryFilterDead => 'Dead';
+  String get glossaryFilterDead => 'Muertos';
 
   @override
-  String get glossaryAddEntry => 'Add glossary entry';
+  String get glossaryAddEntry => 'Añadir entrada al glosario';
 
   @override
-  String get glossaryAddTitle => 'Add glossary entry';
+  String get glossaryAddTitle => 'Añadir entrada al glosario';
 
   @override
-  String get glossaryResetChanges => 'Reset glossary changes';
+  String get glossaryResetChanges => 'Restablecer cambios del glosario';
 
   @override
   String get glossaryNoVisibleEntries =>
-      'No visible glossary entries match this view.';
+      'Ninguna entrada visible del glosario coincide con esta vista.';
 
   @override
   String get glossaryNoHiddenEntries =>
-      'Every available entry is already visible.';
+      'Todas las entradas disponibles ya están visibles.';
 
   @override
-  String get glossaryNoMatch => 'No glossary entries match.';
+  String get glossaryNoMatch => 'Ninguna entrada del glosario coincide.';
 
   @override
   String get glossarySelectEntry =>
-      'Select a glossary entry to edit its entries.';
+      'Selecciona una entrada del glosario para editar sus apartados.';
 
   @override
   String glossaryEntryCount(int count) {
-    return '$count entries';
+    return '$count entradas';
   }
 
   @override
   String glossarySegmentsCount(int unlocked, int total) {
-    return '$unlocked of $total entries';
+    return '$unlocked de $total entradas';
   }
 
   @override
-  String get glossaryPortraitUnlocked => 'Portrait unlocked';
+  String get glossaryPortraitUnlocked => 'Retrato desbloqueado';
 
   @override
-  String get glossaryPortraitSilhouette => 'Silhouette — portrait not unlocked';
+  String get glossaryPortraitSilhouette => 'Silueta: retrato no desbloqueado';
 
   @override
-  String get glossarySegments => 'Entries';
+  String get glossarySegments => 'Entradas';
 
   @override
-  String get glossaryPending => 'Unsaved change';
+  String get glossaryPending => 'Cambio sin guardar';
 
   @override
-  String get glossaryShowFullText => 'Show full entry text';
+  String get glossaryShowFullText => 'Mostrar el texto completo de la entrada';
 
   @override
-  String get glossarySegmentIntroduction => 'Introduction / portrait';
+  String get glossarySegmentIntroduction => 'Introducción / retrato';
 
   @override
-  String get glossarySegmentUnlock => 'Discovery';
+  String get glossarySegmentUnlock => 'Descubrimiento';
 
   @override
   String glossarySegmentEntry(int number) {
-    return 'Entry $number';
+    return 'Entrada $number';
   }
 
   @override
-  String get questJournalAll => 'All quests';
+  String get questJournalAll => 'Todas las misiones';
 
   @override
-  String get questJournalOldCamp => 'Old Camp';
+  String get questJournalOldCamp => 'Campamento Viejo';
 
   @override
-  String get questJournalNewCamp => 'New Camp';
+  String get questJournalNewCamp => 'Campamento Nuevo';
 
   @override
-  String get questJournalSwampCamp => 'Swamp Camp';
+  String get questJournalSwampCamp => 'Campamento del Pantano';
 
   @override
-  String get questJournalColony => 'The Colony';
+  String get questJournalColony => 'La Colonia';
 
   @override
-  String get questJournalCompleted => 'Completed';
+  String get questJournalCompleted => 'Completadas';
 
   @override
   String get questJournalHint =>
-      'In-game journal view. Internal and not-yet-started quest states remain available under All Data.';
+      'Vista del diario del juego. Los estados internos y de misiones aún no iniciadas siguen disponibles en Todos los datos.';
 
   @override
   String get questJournalNoEntries =>
-      'No journal quests match the current filters.';
+      'Ninguna misión del diario coincide con los filtros actuales.';
 
   @override
-  String get glossaryTutorials => 'Tutorials';
+  String get glossaryTutorials => 'Tutoriales';
 
   @override
   String get tutorialGateNote =>
-      'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.';
+      'Estas filas controlan los desbloqueos de tutoriales guardados. Un desbloqueo no corresponde necesariamente a una sola página de tutorial del juego.';
 
   @override
-  String get tutorialResetChanges => 'Reset tutorial changes';
+  String get tutorialResetChanges => 'Restablecer cambios de tutoriales';
 
   @override
   String get tutorialNoGates =>
-      'No tutorial unlock gates are available in this save.';
+      'No hay desbloqueos de tutoriales disponibles en esta partida.';
 
   @override
   String tutorialGateUnlockCount(int unlocked, int total) {
-    return '$unlocked of $total tutorial gates unlocked';
+    return '$unlocked de $total tutoriales desbloqueados';
   }
 
   @override
-  String get tutorialGateCombatBasics => 'Combat basics';
+  String get tutorialGateCombatBasics => 'Fundamentos del combate';
 
   @override
-  String get tutorialGateCrafting => 'Crafting';
+  String get tutorialGateCrafting => 'Fabricación';
 
   @override
-  String get tutorialGateCrime => 'Crime and consequences';
+  String get tutorialGateCrime => 'Delitos y consecuencias';
 
   @override
-  String get tutorialGateDrugs => 'Consumables and effects';
+  String get tutorialGateDrugs => 'Consumibles y efectos';
 
   @override
-  String get tutorialGateLockpicking => 'Lockpicking';
+  String get tutorialGateLockpicking => 'Forzar cerraduras';
 
   @override
-  String get tutorialGateMagic => 'Magic';
+  String get tutorialGateMagic => 'Magia';
 
   @override
-  String get tutorialGateMap => 'Map';
+  String get tutorialGateMap => 'Mapa';
 
   @override
-  String get tutorialGateMeleeCombat => 'Melee combat';
+  String get tutorialGateMeleeCombat => 'Combate cuerpo a cuerpo';
 
   @override
-  String get tutorialGateNavigation => 'Movement and navigation';
+  String get tutorialGateNavigation => 'Movimiento y navegación';
 
   @override
-  String get tutorialGatePerception => 'Perception';
+  String get tutorialGatePerception => 'Percepción';
 
   @override
-  String get tutorialGatePlayerProgression => 'Character progression';
+  String get tutorialGatePlayerProgression => 'Progreso del personaje';
 
   @override
-  String get tutorialGateRanged => 'Ranged combat';
+  String get tutorialGateRanged => 'Combate a distancia';
 
   @override
-  String get tutorialGateRiding => 'Riding';
+  String get tutorialGateRiding => 'Montar';
 
   @override
-  String get tutorialGateSleep => 'Sleeping';
+  String get tutorialGateSleep => 'Dormir';
 
   @override
-  String get tutorialGateTrading => 'Trading';
+  String get tutorialGateTrading => 'Comercio';
+
+  @override
+  String get windowMinimizeTooltip => 'Minimizar';
+
+  @override
+  String get windowMaximizeTooltip => 'Maximizar';
+
+  @override
+  String get windowRestoreTooltip => 'Restaurar';
+
+  @override
+  String get fallbackDialogEntry => 'Entrada de diálogo';
+
+  @override
+  String get fallbackDialogChoice => 'Opción de diálogo';
+
+  @override
+  String get fallbackDialogTopic => 'Tema de diálogo';
+
+  @override
+  String get fallbackDialogInformation => 'Información de diálogo';
+
+  @override
+  String get fallbackQuest => 'Misión';
+
+  @override
+  String get fallbackObjective => 'Objetivo';
+
+  @override
+  String get fallbackItem => 'Objeto';
+
+  @override
+  String get attributeSkillPointsFallback => 'Puntos de aprendizaje (PA)';
+
+  @override
+  String attributeManualFallbackLabel(String attributeId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'Alcohol': 'Alcohol',
+      'AlcoholDepletionRate': 'Tasa de reducción de alcohol',
+      'MaxAlcohol': 'Nivel máximo de alcohol',
+      'MaxSuperArmor': 'Superarmadura máxima',
+      'SuperArmor': 'Superarmadura',
+      'Fatigue': 'Fatiga',
+      'FillRatio': 'Proporción de llenado',
+      'FillRatioPeriod': 'Periodo de llenado',
+      'MaxFatigue': 'Fatiga máxima',
+      'MaxThresholdIndex': 'Índice de umbral máximo',
+      'RecoveryRatePerHourOfSleep': 'Recuperación por hora de sueño',
+      'DamageMultiplier': 'Multiplicador de daño',
+      'Toughness': 'Tenacidad',
+      'ToughnessA': 'Tenacidad A',
+      'ToughnessB': 'Tenacidad B',
+      'ToughnessC': 'Tenacidad C',
+      'XPExecutedBounty': 'Recompensa de EXP por ejecución',
+      'XPKillOrDefeatBounty': 'Recompensa de EXP por muerte o derrota',
+      'SpeedModifier': 'Modificador de velocidad',
+      'CriticalLevelPercent': 'Nivel crítico (%)',
+      'MaxOxygen': 'Oxígeno máximo',
+      'Oxygen': 'Oxígeno',
+      'OxygenDepletionRate': 'Tasa de consumo de oxígeno',
+      'OxygenRecoveryRate': 'Tasa de recuperación de oxígeno',
+      'MaxRestTime': 'Tiempo máximo de descanso',
+      'MaxSleepTime': 'Tiempo máximo de sueño',
+      'SleepTime': 'Tiempo de sueño',
+      'SleepTimeRecoveryAmount': 'Cantidad recuperada durante el sueño',
+      'SleepTimeRecoveryPeriod': 'Intervalo de recuperación durante el sueño',
+      'MaxSwampweed': 'Cantidad máxima de hierba de pantano',
+      'Swampweed': 'Hierba de pantano',
+      'SwampweedDepletionRate': 'Tasa de consumo de hierba de pantano',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get knowledgeTypeVoiceLine => 'Línea de voz';
+
+  @override
+  String get knowledgeTypeOther => 'Otro';
+
+  @override
+  String get armorUpgradeUpper => 'Superior';
+
+  @override
+  String get armorUpgradeMiddle => 'Central';
+
+  @override
+  String get armorUpgradeLower => 'Inferior';
+
+  @override
+  String get knowledgeCategoryTopic => 'Tema';
+
+  @override
+  String get knowledgeCategoryChoice => 'Opción';
+
+  @override
+  String get knowledgeCategoryInfo => 'Información';
+
+  @override
+  String get statusOk => 'Correcto';
+
+  @override
+  String get statusFailed => 'Fallido';
+
+  @override
+  String get missingSaveReference => 'Falta el archivo';
+
+  @override
+  String missingSaveReferenceDescription(String slot) {
+    return 'Falta $slot.sav. Puede que se haya eliminado, movido o renombrado; el perfil aún hace referencia al archivo.';
+  }
+
+  @override
+  String get removeFromProfile => 'Quitar del perfil';
+
+  @override
+  String get removeSaveFromProfileTitle => '¿Quitar la partida del perfil?';
+
+  @override
+  String removeSaveFromProfileBody(String save, String profile) {
+    return '¿Quitar $save de $profile? El archivo de partida se conservará si aún existe.';
+  }
+
+  @override
+  String get unassignedSave => 'Sin asignar a un perfil';
+
+  @override
+  String get armorUpgradeLight => 'Ligera';
+
+  @override
+  String get armorUpgradeMedium => 'Media';
+
+  @override
+  String get armorUpgradeHeavy => 'Pesada';
+
+  @override
+  String get knowledgeCaptionForcedConversation => 'Conversación forzada';
+
+  @override
+  String get knowledgeCaptionFollowupTopic => 'Tema de seguimiento';
+
+  @override
+  String get knowledgeCaptionFallbackTopic => 'Tema alternativo';
+
+  @override
+  String durationMinutes(int minutes) {
+    return '$minutes min';
+  }
+
+  @override
+  String durationHours(int hours) {
+    return '$hours h';
+  }
+
+  @override
+  String durationHoursMinutes(int hours, int minutes) {
+    return '$hours h $minutes min';
+  }
+
+  @override
+  String get backupStatusInvalidProfileStructure =>
+      'Datos de perfil no válidos';
+
+  @override
+  String get backupStatusSlotMetadataMissing =>
+      'Faltan los metadatos de la partida seleccionada';
+
+  @override
+  String defaultProfileName(int id) {
+    return 'Perfil $id';
+  }
+
+  @override
+  String get statusUnknown => 'Desconocido';
+
+  @override
+  String editorUnexpectedError(String details) {
+    return 'Error inesperado: $details';
+  }
+
+  @override
+  String get editorOperationInProgress =>
+      'Hay otra operación en curso. Inténtalo de nuevo en un momento.';
+
+  @override
+  String get editorUnsavedBeforeDifficulty =>
+      'La partida contiene cambios sin guardar. Guárdalos o restablécelos antes de cambiar la dificultad del perfil.';
+
+  @override
+  String get editorNoSaveFolderSelected =>
+      'No se ha seleccionado ninguna carpeta de partidas.';
+
+  @override
+  String get editorNoSaveSelected => 'No se ha seleccionado ninguna partida.';
+
+  @override
+  String get coreUnknownError => 'Error interno desconocido';
+
+  @override
+  String get editorUnsavedBeforeSwitchProfile =>
+      'Guarda o restablece primero los cambios pendientes; cambiar de perfil te haría abandonar la partida actual.';
+
+  @override
+  String get editorUnsavedBeforeOpenFile =>
+      'Guarda o restablece los cambios pendientes antes de abrir otro archivo.';
+
+  @override
+  String get editorSelectSavFile => 'Selecciona un archivo de partida .sav.';
+
+  @override
+  String get editorNotGothicGsav =>
+      'El archivo seleccionado no es una partida Gothic GSAV.';
+
+  @override
+  String get editorUnsavedBeforeChangeSaveProfile =>
+      'Guarda o restablece los cambios pendientes antes de cambiar el perfil de la partida.';
+
+  @override
+  String get editorUnsavedBeforeRemoveProfile =>
+      'Guarda o restablece los cambios pendientes antes de quitar una partida de su perfil.';
+
+  @override
+  String get editorUnsavedBeforeRestoreProfile =>
+      'La partida contiene cambios sin guardar. Guárdalos o restablécelos antes de restaurar una copia de seguridad del perfil.';
+
+  @override
+  String editorConflictingPropertyEdits(String path) {
+    return 'Hay cambios pendientes de dos pestañas que afectan a la misma propiedad ($path). Restablece o deshaz uno de ellos y vuelve a guardar.';
+  }
+
+  @override
+  String editorGlossaryMemoryConflict(String path) {
+    return 'Un cambio de segmento del glosario y otro cambio pendiente de Todos los datos afectan a la matriz Hero MemorizedEvents ($path). Los cambios del glosario añaden o eliminan entradas de esa matriz, por lo que no se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.';
+  }
+
+  @override
+  String editorGlossaryQuestConflict(String path) {
+    return 'Un cambio de segmento del glosario y otro cambio pendiente afectan a la misma propiedad CurrentState de una misión ($path). El propio cambio del glosario actualiza ese estado. Restablece o deshaz uno de ellos y vuelve a guardar.';
+  }
+
+  @override
+  String editorRelationshipConflict(String path) {
+    return 'Un cambio de relación y otro cambio pendiente de Todos los datos afectan a la misma entrada de relación de un PNJ ($path). El cambio de relación estructurado puede sustituir modificadores de esa entrada, por lo que no se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.';
+  }
+
+  @override
+  String editorMultipleStructuralArrayEdits(String path) {
+    return 'Hay más de un cambio estructural pendiente para la misma matriz ($path). Guarda o restablece el primer cambio antes de añadir otro.';
+  }
+
+  @override
+  String editorStructuralArrayConflict(String path) {
+    return 'Un cambio estructural de evento y otro cambio pendiente de Todos los datos afectan a $path. Guarda o restablece uno de ellos antes de continuar.';
+  }
+
+  @override
+  String get editorSkillsEffectConflict =>
+      'Hay pendientes un cambio de Habilidades y otro de Todos los datos para el mismo efecto del personaje (ActiveEffects › EffectSpec › Def). No se pueden guardar juntos. Restablece o deshaz uno de ellos y vuelve a guardar.';
+
+  @override
+  String get editorInventoryResetConflict =>
+      'Hay pendientes un restablecimiento del inventario y otro cambio en el mismo inventario. El restablecimiento sustituye todo el inventario y descartaría el otro cambio. Restablece o deshaz uno de ellos y vuelve a guardar.';
+
+  @override
+  String get editorUseFolder => 'Usar carpeta';
+
+  @override
+  String get editorGothicSavegameFileType => 'Partida de Gothic';
+
+  @override
+  String get editorNoDifficultyChanges =>
+      'No hay cambios de dificultad que guardar';
+
+  @override
+  String get editorDifficultyWritten =>
+      'Dificultad guardada en el perfil (se creó una copia de seguridad)';
+
+  @override
+  String editorChangesSavedWithBackup(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count cambios guardados con copia de seguridad',
+      one: '1 cambio guardado con copia de seguridad',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String editorProfileNotFound(int profileId) {
+    return 'No se encontró el perfil $profileId.';
+  }
+
+  @override
+  String get editorNoFreeSaveSlot =>
+      'No hay ninguna ranura libre en la carpeta de partidas del juego (de G1R-001 a G1R-999).';
+
+  @override
+  String editorSaveImportedAssigned(int profileId) {
+    return 'Partida importada y asignada al perfil $profileId';
+  }
+
+  @override
+  String editorSaveAssigned(int profileId) {
+    return 'Partida asignada al perfil $profileId (se crearon copias de seguridad asociadas)';
+  }
+
+  @override
+  String editorSaveSlotNotAssigned(String slot, int profileId) {
+    return 'La ranura de partida $slot no está asignada al perfil $profileId.';
+  }
+
+  @override
+  String get editorSaveRemovedFromProfile => 'Partida quitada del perfil';
+
+  @override
+  String editorRestoredBackup(String path) {
+    return 'Copia de seguridad restaurada: $path';
+  }
+
+  @override
+  String editorRestoredBackupWithoutCompanion(String path) {
+    return 'Copia de seguridad restaurada: $path (PersistentDataList.sav no se modificó porque no había una copia asociada coincidente; los metadatos de la ranura pueden diferir)';
+  }
+
+  @override
+  String editorCodecRoundtripPassed(int chunkIndex, int bytes) {
+    return 'Verificación de ida y vuelta del códec superada: el bloque $chunkIndex se volvió a comprimir a $bytes bytes';
+  }
+
+  @override
+  String editorDifficultyWriteFailed(String details) {
+    return 'No se pudo guardar la dificultad del perfil: $details';
+  }
+
+  @override
+  String editorProfileAssignmentFailed(String details) {
+    return 'No se pudo asignar la partida al perfil: $details';
+  }
+
+  @override
+  String editorProfileRemovalFailed(String details) {
+    return 'No se pudo quitar la partida del perfil: $details';
+  }
+
+  @override
+  String editorSaveFailed(String details) {
+    return 'No se pudieron guardar los cambios: $details';
+  }
+
+  @override
+  String editorScanSavesFailed(String details) {
+    return 'No se pudieron examinar las partidas: $details';
+  }
+
+  @override
+  String editorInspectSaveFailed(String details) {
+    return 'No se pudo inspeccionar la partida: $details';
+  }
+
+  @override
+  String editorLoadBackupsFailed(String details) {
+    return 'No se pudieron cargar las copias de seguridad: $details';
+  }
+
+  @override
+  String editorRestoreFailed(String details) {
+    return 'No se pudo restaurar la copia de seguridad: $details';
+  }
+
+  @override
+  String editorRestoreReloadFailed(String path, String details) {
+    return 'Copia de seguridad restaurada: $path, pero no se pudo volver a cargar la partida: $details';
+  }
+
+  @override
+  String editorCodecCheckFailed(String details) {
+    return 'Error al comprobar el códec: $details';
+  }
+
+  @override
+  String editorCodecValidationFailed(String details) {
+    return 'Error en la verificación de ida y vuelta del códec: $details';
+  }
+
+  @override
+  String editorPropertySearchFailed(String details) {
+    return 'Error al buscar propiedades: $details';
+  }
+
+  @override
+  String get editorSelectionChangedWhileLoadingHeroAttributes =>
+      'La partida seleccionada cambió mientras se cargaban los atributos del héroe.';
+
+  @override
+  String editorSkillsLoadFailed(String details) {
+    return 'No se pudieron cargar las habilidades: $details';
+  }
+
+  @override
+  String editorProgressionQueryFailed(String details) {
+    return 'Error en la consulta de progresión: $details';
+  }
+
+  @override
+  String editorNpcListFailed(String details) {
+    return 'No se pudo cargar la lista de PNJ: $details';
+  }
+
+  @override
+  String editorCharacterListFailed(String details) {
+    return 'No se pudo cargar la lista de personajes: $details';
+  }
+
+  @override
+  String editorNpcAttributesFailed(String details) {
+    return 'No se pudieron cargar los atributos del PNJ: $details';
+  }
+
+  @override
+  String editorNpcInventoryFailed(String details) {
+    return 'No se pudo cargar el inventario del PNJ: $details';
+  }
+
+  @override
+  String editorFactionListFailed(String details) {
+    return 'No se pudo cargar la lista de facciones: $details';
+  }
+
+  @override
+  String get editorNoBackupPath => 'ninguna';
+
+  @override
+  String editorBackupMessage(String prefix, String backupPath) {
+    return '$prefix: $backupPath';
+  }
+
+  @override
+  String editorBackupMessageWithPersistent(
+    String prefix,
+    String backupPath,
+    String persistentPath,
+  ) {
+    return '$prefix: $backupPath; copia de seguridad de PersistentDataList: $persistentPath';
+  }
+
+  @override
+  String localizationStatusFailed(String details) {
+    return 'No se pudo obtener el estado de localización: $details';
+  }
+
+  @override
+  String localizationExtractionFailed(String details) {
+    return 'Error de extracción: $details';
+  }
+
+  @override
+  String glossaryLoadFailed(String details) {
+    return 'No se pudo cargar el glosario: $details';
+  }
+
+  @override
+  String backupStatusError(String details) {
+    return 'Error de la copia de seguridad: $details';
+  }
+
+  @override
+  String glossaryCatalogSegmentLabel(String segmentId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(segmentId, {
+      'Access': 'Acceso',
+      'AccessDenied': 'Acceso denegado',
+      'AccesToTemple': 'Acceso al templo',
+      'Advice': 'Consejo',
+      'AfterFight': 'Después de la pelea',
+      'AfterFireMages': 'Después de los magos del fuego',
+      'AfterNek': 'Después de Nek',
+      'AfterQuest': 'Después de la misión',
+      'Alone': 'Solo',
+      'Amulet': 'Amuleto',
+      'Annoying': 'Molesto',
+      'Armor': 'Armadura',
+      'Avoid': 'Evitar',
+      'Backstory': 'Historia personal',
+      'BackStory': 'Historia personal',
+      'BasicMagic': 'Magia básica',
+      'Beated': 'Derrotado',
+      'BecomeMercenary': 'Convertirse en mercenario',
+      'Beer': 'Cerveza',
+      'Bestiary': 'Bestiario',
+      'Blessing': 'Bendición',
+      'Boss': 'Jefe',
+      'Bully': 'Matón',
+      'BullyAdvice': 'Consejo sobre el matón',
+      'Camp': 'Campamento',
+      'CampDivided': 'Campamento dividido',
+      'CareOfMessengers': 'Cuidar de los mensajeros',
+      'ChangeOpinion': 'Cambio de opinión',
+      'ChargeUriziel': 'Cargar a Uriziel',
+      'Chosen': 'Elegido',
+      'Contact': 'Contacto',
+      'Courier': 'Mensajero',
+      'CraftBows': 'Fabricar arcos',
+      'Crazy': 'Loco',
+      'DailyMeal': 'Comida diaria',
+      'DailyRation_Trader': 'Comerciante de raciones diarias',
+      'DAM': 'Presa',
+      'Dead': 'Muerto',
+      'Deal': 'Trato',
+      'Dealer': 'Comerciante',
+      'Deceived': 'Engañado',
+      'Dementia': 'Demencia',
+      'DenyAccess': 'Denegar el acceso',
+      'DifferentOpinion': 'Opinión diferente',
+      'Discussion': 'Discusión',
+      'DontTalk': 'No hablar',
+      'Duel': 'Duelo',
+      'Entrance': 'Entrada',
+      'Escape': 'Huida',
+      'Extended': 'Extendido',
+      'Extra': 'Adicional',
+      'ExtraInfo': 'Información adicional',
+      'Fanatic': 'Fanático',
+      'Fight': 'Combate',
+      'FindUlumulu': 'Encontrar Ulu-Mulu',
+      'FireMages': 'Magos de Fuego',
+      'FireMagesEscape': 'Huida de los Magos de Fuego',
+      'FiskNewDealer': 'Nuevo perista para Fisk',
+      'FiskNewDealerCompleted': 'Nuevo perista para Fisk — completado',
+      'FogTower': 'Torre de la Niebla',
+      'Food': 'Comida',
+      'Forgave': 'Perdonó',
+      'Forgive': 'Perdonar',
+      'Forgiven': 'Perdonado',
+      'FourFriends': 'Cuatro amigos',
+      'FreeHut': 'Choza libre',
+      'FreeMine': 'Mina Libre',
+      'Fury': 'Furia',
+      'GoodTeacher': 'Buen maestro',
+      'Gossip': 'Chismes',
+      'GotScavenger': 'Carroñero obtenido',
+      'GrantedAccess': 'Acceso concedido',
+      'GRDArmor': 'Armadura de guardia',
+      'Guide': 'Guía',
+      'HateMages': 'Odio a los magos',
+      'HateMagesExplanation': 'Explicación del odio a los magos',
+      'HateRiceLord': 'Odio al Señor del Arroz',
+      'Heal': 'Sanación',
+      'Healing': 'Curación',
+      'Help': 'Ayuda',
+      'Helper': 'Ayudante',
+      'HelpKagan': 'Ayudar a Kagan',
+      'HutStory': 'Historia de la choza',
+      'Ignore': 'Ignorar',
+      'Impress': 'Impresionar',
+      'ImpressAlchemy': 'Impresionar con alquimia',
+      'ImpressInscription': 'Impresionar con inscripciones',
+      'Info': 'Información',
+      'Interested': 'Interesado',
+      'Introduction': 'Introducción / retrato',
+      'Introduction_2': 'Introducción / retrato 2',
+      'Introduction_Armor': 'Introducción: armadura',
+      'Introduction_Teacher': 'Introducción: instructor',
+      'Introduction_Trader': 'Introducción: comerciante',
+      'Invocation': 'Invocación',
+      'JoinSC': 'Unirse al Campamento del Pantano',
+      'Joint': 'Porro',
+      'KalomCamp': 'Campamento de Kalom',
+      'Leader': 'Líder',
+      'Learning': 'Aprendizaje',
+      'LearnOrcish': 'Aprender el idioma orco',
+      'LeftParty': 'Abandonó el grupo',
+      'Library': 'Biblioteca',
+      'Lie': 'Mentira',
+      'Lock': 'Cerradura',
+      'Lockpick': 'Ganzúa',
+      'Mad': 'Loco',
+      'Mandibles': 'Mandíbulas de reptador',
+      'MapMaker': 'Cartógrafo',
+      'Monastery': 'Monasterio',
+      'MordragKO': 'Mordrag KO',
+      'Nek': 'Nek',
+      'NewCamp': 'Campamento Nuevo',
+      'NewCamper': 'Nuevo en el campamento',
+      'NewLeader': 'Nuevo líder',
+      'NightPatrol': 'Patrulla nocturna',
+      'NotInterested': 'No interesado',
+      'OldCamp': 'Campamento Viejo',
+      'OrcEnclaveEntrance': 'Entrada al enclave orco',
+      'OrcGraveyard': 'Cementerio de orcos',
+      'OreArmor': 'Armadura de mineral',
+      'Party': 'Grupo',
+      'Pay': 'Pagar',
+      'PayMoney': 'Pagar dinero',
+      'Permission': 'Permiso',
+      'Pet': 'Mascota',
+      'PreparingInvocation': 'Preparando la invocación',
+      'Quest': 'Misión',
+      'RankUpFireMages': 'Ascenso a Mago de Fuego',
+      'RankUpGuard': 'Ascenso a guardia',
+      'RanUpFireMagesCompleted': 'Ascenso a Mago de Fuego completado',
+      'Realocated': 'Reubicado',
+      'Reason': 'Razón',
+      'Respect': 'Respeto',
+      'ReturnToSC': 'Regreso al Campamento del Pantano',
+      'RicelordForeman': 'Capataz del Señor del Arroz',
+      'RideScavenger': 'Montar un carroñero',
+      'Robe': 'Túnica',
+      'Safe': 'Seguro',
+      'Scraper': 'Raspador',
+      'SecondChance': 'Segunda oportunidad',
+      'SecretLocation': 'Ubicación secreta',
+      'SecretPassage': 'Pasaje secreto',
+      'SecretPath': 'Camino secreto',
+      'SleeperFollower': 'Seguidor del Durmiente',
+      'SleeperTemple': 'Templo del Durmiente',
+      'SmallInfo': 'Información breve',
+      'Stonehenge': 'Círculo de piedras',
+      'StopFollowing': 'Dejar de seguir',
+      'SwampCamp': 'Campamento del Pantano',
+      'Talkative': 'Hablador',
+      'Teach': 'Enseñar',
+      'TeachBow': 'Enseñar tiro con arco',
+      'Teacher': 'Instructor',
+      'Teacher2': 'Instructor 2',
+      'TeacherInscription': 'Instructor de inscripciones',
+      'TeacherMana': 'Instructor de maná',
+      'TeachIchor': 'Enseñar a extraer icor de reptadores',
+      'TeachMagic': 'Enseñar magia',
+      'TeachOrcish': 'Enseñar el idioma orco',
+      'TeachStats': 'Enseñar atributos',
+      'TeachWeapon': 'Enseñar manejo de armas',
+      'Teleport': 'Teletransporte',
+      'TheMysteriousOrc': 'El orco misterioso',
+      'ThroneRoom': 'Salón del Trono',
+      'TradeBow': 'Comercio de arcos',
+      'Trader': 'Comerciante',
+      'TradeSkins_Trader': 'Comerciante de pieles',
+      'Traitor': 'Traidor',
+      'Trial': 'Prueba',
+      'TrollCanyon': 'Cañón del trol',
+      'Trust': 'Confianza',
+      'Ulumulu': 'Ulu-Mulu',
+      'Unexperienced': 'Sin experiencia',
+      'Uriziel': 'Uriziel',
+      'UrizielRune': 'Runa Uriziel',
+      'Useful': 'Útil',
+      'Velaya': 'Velaya',
+      'Vibrations': 'Vibraciones',
+      'WaitFreeMine': 'Esperar en la Mina Libre',
+      'WaitInTrainingArea': 'Esperar en la zona de entrenamiento',
+      'Warning': 'Advertencia',
+      'WarningTooLate': 'Advertencia demasiado tardía',
+      'WaterMessenger': 'Mensajero de los Magos del Agua',
+      'Weapon': 'Arma',
+      'Who': 'Quién',
+      'Women': 'Mujeres',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
 }

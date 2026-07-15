@@ -66,6 +66,7 @@ class InventoryDetail extends ConsumerWidget {
     required this.notifier,
     required this.actor,
     this.canCompress = false,
+    this.showActorHeader = true,
   });
 
   final SaveInspection inspection;
@@ -75,6 +76,10 @@ class InventoryDetail extends ConsumerWidget {
   /// The selected actor (player or NPC). Orphans are guarded out by the caller,
   /// so this is only ever the player or a spawned NPC.
   final Actor actor;
+
+  /// Standalone detail views may keep their own actor label. CharactersTab
+  /// disables it because its persistent header now sits above the sub-tab bar.
+  final bool showActorHeader;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -111,9 +116,10 @@ class InventoryDetail extends ConsumerWidget {
       );
     }
 
-    // Shared header above the inventory body, identifying the selected actor
-    // (NPC name + full GlobalId, or "Player") — same widget the Attribute tab
-    // uses, so both tabs make the selection obvious.
+    if (!showActorHeader) return body;
+
+    // Standalone fallback: CharactersTab renders this header once above its
+    // sub-tab bar and passes showActorHeader:false.
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -603,6 +609,7 @@ class _PrivateInventorySummaryCardState
         localizedGameName(locCatalog, lang, item.id) ??
         itemDisplayNameFromId(
           item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
+          fallback: l10n.fallbackItem,
         );
     final groups = groupInventoryItems(items, displayNameOf: nameOf);
 
@@ -655,6 +662,17 @@ class _PrivateInventorySummaryCardState
     final resetBlocked =
         hasPendingAdd || hasPendingRemove || hasPendingCount || hasPendingReset;
 
+    void resetPendingChanges() {
+      setState(() {
+        _pendingCountChanges.clear();
+        _pendingAdds.clear();
+        _pendingRemove = null;
+        _pendingReset = false;
+        _pendingResetLevel = null;
+      });
+      widget.notifier.clearPendingEdit(widget.pendingKey);
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -670,79 +688,197 @@ class _PrivateInventorySummaryCardState
                 (widget.editable && hasPendingChanges) ||
                 widget.canAddItem ||
                 widget.canReset)
-              Row(
-                children: [
-                  if (hasItems)
-                    Expanded(
-                      child: TextField(
-                        controller: _searchController,
-                        decoration: InputDecoration(
-                          labelText: l10n.filterItems,
-                          prefixIcon: const Icon(Icons.search),
+              LayoutBuilder(
+                builder: (context, toolbarConstraints) {
+                  final addTooltip = hasPendingRemove
+                      ? l10n.addItemTooltipPendingRemove
+                      : hasPendingCount
+                      ? l10n.addItemTooltipPendingCount
+                      : l10n.addItemTooltipDefault;
+                  final resetTooltip = resetBlocked
+                      ? l10n.resetInventoryTooltipBlocked
+                      : l10n.resetInventoryTooltipDefault;
+                  double labeledActionWidth(String label) {
+                    final painter = TextPainter(
+                      text: TextSpan(
+                        text: label,
+                        style: theme.textTheme.labelLarge,
+                      ),
+                      maxLines: 1,
+                      textDirection: Directionality.of(context),
+                      textScaler: MediaQuery.textScalerOf(context),
+                    )..layout();
+                    // Icon, icon/label gap and Material button padding.
+                    return painter.width + 80;
+                  }
+
+                  final addActionWidth = widget.canAddItem
+                      ? labeledActionWidth(l10n.addItemButton)
+                      : 0.0;
+                  final resetActionWidth = widget.canReset
+                      ? labeledActionWidth(l10n.resetInventoryButton)
+                      : 0.0;
+                  var requiredWideWidth = hasItems ? 240.0 : 0.0;
+                  if (widget.canAddItem) {
+                    requiredWideWidth += 8 + addActionWidth;
+                  }
+                  if (widget.canReset) {
+                    requiredWideWidth += 8 + resetActionWidth;
+                  }
+                  if (widget.editable && hasPendingChanges) {
+                    requiredWideWidth += 8 + 48;
+                  }
+                  final compactToolbar =
+                      toolbarConstraints.maxWidth < requiredWideWidth;
+                  final widestLabeledAction = addActionWidth > resetActionWidth
+                      ? addActionWidth
+                      : resetActionWidth;
+                  // A labeled button is a single, non-breaking Wrap child.
+                  // Fall back to icons whenever even the widest localized
+                  // action (including the current TextScaler) cannot fit.
+                  final iconOnlyToolbar =
+                      toolbarConstraints.maxWidth < widestLabeledAction;
+                  final searchField = TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      labelText: l10n.filterItems,
+                      prefixIcon: const Icon(Icons.search),
+                    ),
+                    onChanged: (value) => setState(() => _query = value),
+                  );
+
+                  if (compactToolbar) {
+                    // At the minimum desktop width this pane can be narrower
+                    // than the three labeled actions. Put the search on its own
+                    // line and let 48 px icon actions wrap below it.
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (hasItems) searchField,
+                        if (hasItems &&
+                            (widget.canAddItem ||
+                                widget.canReset ||
+                                (widget.editable && hasPendingChanges)))
+                          const SizedBox(height: 8),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (widget.canAddItem)
+                                Tooltip(
+                                  message: addTooltip,
+                                  child: iconOnlyToolbar
+                                      ? IconButton.filled(
+                                          icon: const Icon(Icons.add),
+                                          onPressed: addBlocked
+                                              ? null
+                                              : _openAddDialog,
+                                        )
+                                      : FilledButton.icon(
+                                          icon: const Icon(Icons.add, size: 18),
+                                          label: Text(l10n.addItemButton),
+                                          onPressed: addBlocked
+                                              ? null
+                                              : _openAddDialog,
+                                        ),
+                                ),
+                              if (widget.canReset)
+                                Tooltip(
+                                  message: resetTooltip,
+                                  child: iconOnlyToolbar
+                                      ? IconButton.outlined(
+                                          icon: const Icon(
+                                            Icons.settings_backup_restore,
+                                          ),
+                                          onPressed: resetBlocked
+                                              ? null
+                                              : _queueReset,
+                                        )
+                                      : OutlinedButton.icon(
+                                          icon: const Icon(
+                                            Icons.settings_backup_restore,
+                                            size: 18,
+                                          ),
+                                          label: Text(
+                                            l10n.resetInventoryButton,
+                                          ),
+                                          onPressed: resetBlocked
+                                              ? null
+                                              : _queueReset,
+                                        ),
+                                ),
+                              if (widget.editable && hasPendingChanges)
+                                Tooltip(
+                                  message: l10n.resetInventoryChanges,
+                                  child: IconButton(
+                                    icon: const Icon(Icons.undo_outlined),
+                                    onPressed: resetPendingChanges,
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                        onChanged: (value) => setState(() => _query = value),
-                      ),
-                    )
-                  else
-                    const Spacer(),
-                  if (widget.canAddItem) ...[
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: hasPendingRemove
-                          ? l10n.addItemTooltipPendingRemove
-                          : hasPendingCount
-                          ? l10n.addItemTooltipPendingCount
-                          : l10n.addItemTooltipDefault,
-                      child: FilledButton.icon(
-                        icon: const Icon(Icons.add, size: 18),
-                        label: Text(l10n.addItemButton),
-                        onPressed: addBlocked ? null : _openAddDialog,
-                      ),
-                    ),
-                  ],
-                  if (widget.canReset) ...[
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: resetBlocked
-                          ? l10n.resetInventoryTooltipBlocked
-                          : l10n.resetInventoryTooltipDefault,
-                      child: OutlinedButton.icon(
-                        icon: const Icon(
-                          Icons.settings_backup_restore,
-                          size: 18,
+                      ],
+                    );
+                  }
+
+                  return Row(
+                    children: [
+                      if (hasItems)
+                        Expanded(child: searchField)
+                      else
+                        const Spacer(),
+                      if (widget.canAddItem) ...[
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: addTooltip,
+                          child: FilledButton.icon(
+                            icon: const Icon(Icons.add, size: 18),
+                            label: Text(l10n.addItemButton),
+                            onPressed: addBlocked ? null : _openAddDialog,
+                          ),
                         ),
-                        label: Text(l10n.resetInventoryButton),
-                        onPressed: resetBlocked ? null : _queueReset,
-                      ),
-                    ),
-                  ],
-                  if (widget.editable && hasPendingChanges) ...[
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: l10n.resetInventoryChanges,
-                      child: IconButton(
-                        icon: const Icon(Icons.undo_outlined),
-                        onPressed: () {
-                          setState(() {
-                            _pendingCountChanges.clear();
-                            _pendingAdds.clear();
-                            _pendingRemove = null;
-                            _pendingReset = false;
-                            _pendingResetLevel = null;
-                          });
-                          widget.notifier.clearPendingEdit(widget.pendingKey);
-                        },
-                      ),
-                    ),
-                  ],
-                ],
+                      ],
+                      if (widget.canReset) ...[
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: resetTooltip,
+                          child: OutlinedButton.icon(
+                            icon: const Icon(
+                              Icons.settings_backup_restore,
+                              size: 18,
+                            ),
+                            label: Text(l10n.resetInventoryButton),
+                            onPressed: resetBlocked ? null : _queueReset,
+                          ),
+                        ),
+                      ],
+                      if (widget.editable && hasPendingChanges) ...[
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: l10n.resetInventoryChanges,
+                          child: IconButton(
+                            icon: const Icon(Icons.undo_outlined),
+                            onPressed: resetPendingChanges,
+                          ),
+                        ),
+                      ],
+                    ],
+                  );
+                },
               ),
             for (final add in _pendingAdds) ...[
               const SizedBox(height: 12),
               _PendingStructuralRow(
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
-                title: itemDisplayNameFromId(_itemDisplayFromPath(add.path)),
+                title: itemDisplayNameFromId(
+                  _itemDisplayFromPath(add.path),
+                  fallback: l10n.fallbackItem,
+                ),
                 subtitle: l10n.pendingAddSubtitle(add.count),
                 technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
@@ -759,6 +895,7 @@ class _PrivateInventorySummaryCardState
                 icon: Icons.delete_outline,
                 title: itemDisplayNameFromId(
                   _itemDisplayFromPath(_pendingRemovePath!),
+                  fallback: l10n.fallbackItem,
                 ),
                 subtitle: l10n.pendingRemovalSubtitle,
                 technicalId: showObjectIds
@@ -798,197 +935,341 @@ class _PrivateInventorySummaryCardState
                           style: theme.textTheme.bodyMedium,
                         ),
                       )
-                    : Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          SizedBox(
-                            width: 200,
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surfaceContainerLow,
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: SingleChildScrollView(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 6,
-                                ),
-                                child: Column(
-                                  children: [
-                                    for (final group in groups)
-                                      SidebarTile(
-                                        icon: iconForItemCategory(
-                                          group.category,
-                                        ),
-                                        label: l10n.categoryWithCount(
-                                          localizedItemCategoryLabel(
-                                            l10n,
-                                            group.category,
-                                          ),
-                                          group.items.length,
-                                        ),
-                                        selected:
-                                            !searching &&
-                                            group.category == selected,
-                                        onTap: () => setState(() {
-                                          _selectedCategory = group.category;
-                                          // Leave search mode so the chosen
-                                          // category's items are shown.
-                                          _query = '';
-                                          _searchController.clear();
-                                        }),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: shownItems.isEmpty
-                                ? const SizedBox.shrink()
-                                : ListView.builder(
-                                    itemCount: shownItems.length,
+                    : LayoutBuilder(
+                        builder: (context, browserConstraints) {
+                          final compactBrowser =
+                              browserConstraints.maxWidth < 600;
+                          final ultraCompactBrowser =
+                              browserConstraints.maxWidth < 360;
+                          return Column(
+                            children: [
+                              if (compactBrowser && !searching) ...[
+                                SizedBox(
+                                  height: 48,
+                                  child: ListView.separated(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: groups.length,
+                                    separatorBuilder: (_, _) =>
+                                        const SizedBox(width: 8),
                                     itemBuilder: (context, index) {
-                                      final item = shownItems[index];
-                                      return ListTile(
-                                        dense: true,
-                                        leading: const Icon(
-                                          Icons.category_outlined,
+                                      final group = groups[index];
+                                      return ChoiceChip(
+                                        avatar: Icon(
+                                          iconForItemCategory(group.category),
+                                          size: 18,
                                         ),
-                                        title: Row(
-                                          children: [
-                                            Flexible(
-                                              child: Text(
-                                                nameOf(item),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                              ),
+                                        label: Text(
+                                          l10n.categoryWithCount(
+                                            localizedItemCategoryLabel(
+                                              l10n,
+                                              group.category,
                                             ),
-                                            if (item.equipped) ...[
-                                              const SizedBox(width: 8),
-                                              Container(
-                                                padding:
-                                                    const EdgeInsets.symmetric(
-                                                      horizontal: 6,
-                                                      vertical: 2,
-                                                    ),
-                                                decoration: BoxDecoration(
-                                                  color: theme
-                                                      .colorScheme
-                                                      .primaryContainer,
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
-                                                ),
-                                                child: Text(
-                                                  l10n.equippedBadge,
-                                                  style: theme
-                                                      .textTheme
-                                                      .labelSmall
-                                                      ?.copyWith(
-                                                        color: theme
-                                                            .colorScheme
-                                                            .onPrimaryContainer,
-                                                      ),
-                                                ),
-                                              ),
-                                            ],
-                                          ],
+                                            group.items.length,
+                                          ),
                                         ),
-                                        subtitle:
-                                            (!showObjectIds ||
-                                                    (item.id.isEmpty &&
-                                                        item.path.isEmpty)) &&
-                                                item.upgrades.isEmpty
-                                            ? null
-                                            : Column(
-                                                crossAxisAlignment:
-                                                    CrossAxisAlignment.start,
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  if (showObjectIds &&
-                                                      item.id.isNotEmpty)
-                                                    Text(
-                                                      item.id,
-                                                      maxLines: 1,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
+                                        selected: group.category == selected,
+                                        onSelected: (_) => setState(() {
+                                          _selectedCategory = group.category;
+                                        }),
+                                      );
+                                    },
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                              ],
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (!compactBrowser)
+                                      SizedBox(
+                                        width: 200,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            color: theme
+                                                .colorScheme
+                                                .surfaceContainerLow,
+                                            borderRadius: BorderRadius.circular(
+                                              12,
+                                            ),
+                                          ),
+                                          child: SingleChildScrollView(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 6,
+                                            ),
+                                            child: Column(
+                                              children: [
+                                                for (final group in groups)
+                                                  SidebarTile(
+                                                    icon: iconForItemCategory(
+                                                      group.category,
                                                     ),
-                                                  if (showObjectIds &&
-                                                      item.path.isNotEmpty &&
-                                                      item.path != item.id)
-                                                    Text(
-                                                      item.path,
-                                                      maxLines: 1,
-                                                      overflow:
-                                                          TextOverflow.ellipsis,
+                                                    label: l10n.categoryWithCount(
+                                                      localizedItemCategoryLabel(
+                                                        l10n,
+                                                        group.category,
+                                                      ),
+                                                      group.items.length,
                                                     ),
-                                                  if (item.upgrades.isNotEmpty)
-                                                    Padding(
-                                                      padding:
-                                                          const EdgeInsets.only(
-                                                            top: 4,
+                                                    selected:
+                                                        !searching &&
+                                                        group.category ==
+                                                            selected,
+                                                    onTap: () => setState(() {
+                                                      _selectedCategory =
+                                                          group.category;
+                                                      // Leave search mode so the chosen
+                                                      // category's items are shown.
+                                                      _query = '';
+                                                      _searchController.clear();
+                                                    }),
+                                                  ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    if (!compactBrowser)
+                                      const SizedBox(width: 16),
+                                    Expanded(
+                                      child: shownItems.isEmpty
+                                          ? const SizedBox.shrink()
+                                          : ListView.builder(
+                                              itemCount: shownItems.length,
+                                              itemBuilder: (context, index) {
+                                                final item = shownItems[index];
+                                                final itemTrailing =
+                                                    _inventoryItemTrailing(
+                                                      theme,
+                                                      l10n,
+                                                      item,
+                                                      canRemove: canRemove,
+                                                      countEditable:
+                                                          countEditable,
+                                                      removeBlocked:
+                                                          removeBlocked,
+                                                      compact: compactBrowser,
+                                                      ultraCompact:
+                                                          ultraCompactBrowser,
+                                                    );
+                                                // Keep the editable value close to its
+                                                // item name on wide windows. A ListTile
+                                                // otherwise expands across the complete
+                                                // detail pane and pins its trailing count
+                                                // field to the far-right card edge. The
+                                                // max width is only an upper bound: on a
+                                                // narrow pane the row still consumes the
+                                                // available width and remains scrollable
+                                                // with the surrounding ListView.
+                                                return Align(
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: ConstrainedBox(
+                                                    constraints:
+                                                        const BoxConstraints(
+                                                          maxWidth: 560,
+                                                        ),
+                                                    child: ListTile(
+                                                      key: ValueKey((
+                                                        'inventory-item-row',
+                                                        _inventoryItemKey(item),
+                                                      )),
+                                                      dense: true,
+                                                      // The count editor itself is a
+                                                      // 48 px control. Removing ListTile's
+                                                      // extra vertical padding keeps
+                                                      // adjacent inventory rows compact
+                                                      // without shrinking either the
+                                                      // field or delete touch target.
+                                                      minTileHeight: 48,
+                                                      minVerticalPadding: 0,
+                                                      contentPadding:
+                                                          const EdgeInsets.symmetric(
+                                                            horizontal: 8,
                                                           ),
-                                                      child: Wrap(
-                                                        spacing: 4,
-                                                        runSpacing: 2,
+                                                      horizontalTitleGap: 8,
+                                                      leading: compactBrowser
+                                                          ? null
+                                                          : const Icon(
+                                                              Icons
+                                                                  .category_outlined,
+                                                            ),
+                                                      title: Column(
                                                         crossAxisAlignment:
-                                                            WrapCrossAlignment
-                                                                .center,
+                                                            CrossAxisAlignment
+                                                                .stretch,
                                                         children: [
-                                                          Text(
-                                                            l10n.armorUpgradesLabel,
-                                                            style: theme
-                                                                .textTheme
-                                                                .labelSmall,
-                                                          ),
-                                                          for (final u
-                                                              in item.upgrades)
-                                                            Container(
-                                                              padding:
-                                                                  const EdgeInsets.symmetric(
-                                                                    horizontal:
-                                                                        6,
-                                                                    vertical: 1,
-                                                                  ),
-                                                              decoration: BoxDecoration(
-                                                                color: theme
-                                                                    .colorScheme
-                                                                    .surfaceContainerHighest,
-                                                                borderRadius:
-                                                                    BorderRadius.circular(
-                                                                      4,
-                                                                    ),
+                                                          Row(
+                                                            children: [
+                                                              Flexible(
+                                                                child: Text(
+                                                                  nameOf(item),
+                                                                  maxLines: 1,
+                                                                  overflow:
+                                                                      TextOverflow
+                                                                          .ellipsis,
+                                                                ),
                                                               ),
-                                                              child: Text(
-                                                                '${_upgradePart(u.key)}: ${_upgradeTier(u.value)}',
-                                                                style: theme
-                                                                    .textTheme
-                                                                    .labelSmall
-                                                                    ?.copyWith(
-                                                                      color: theme
-                                                                          .colorScheme
-                                                                          .onSurfaceVariant,
-                                                                    ),
+                                                              if (item
+                                                                  .equipped) ...[
+                                                                const SizedBox(
+                                                                  width: 8,
+                                                                ),
+                                                                Container(
+                                                                  padding:
+                                                                      const EdgeInsets.symmetric(
+                                                                        horizontal:
+                                                                            6,
+                                                                        vertical:
+                                                                            2,
+                                                                      ),
+                                                                  decoration: BoxDecoration(
+                                                                    color: theme
+                                                                        .colorScheme
+                                                                        .primaryContainer,
+                                                                    borderRadius:
+                                                                        BorderRadius.circular(
+                                                                          4,
+                                                                        ),
+                                                                  ),
+                                                                  child: Text(
+                                                                    l10n.equippedBadge,
+                                                                    style: theme
+                                                                        .textTheme
+                                                                        .labelSmall
+                                                                        ?.copyWith(
+                                                                          color: theme
+                                                                              .colorScheme
+                                                                              .onPrimaryContainer,
+                                                                        ),
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ],
+                                                          ),
+                                                          if (ultraCompactBrowser)
+                                                            Padding(
+                                                              padding:
+                                                                  const EdgeInsets.only(
+                                                                    top: 4,
+                                                                  ),
+                                                              child: Align(
+                                                                alignment: Alignment
+                                                                    .centerRight,
+                                                                child:
+                                                                    itemTrailing,
                                                               ),
                                                             ),
                                                         ],
                                                       ),
+                                                      subtitle:
+                                                          (!showObjectIds ||
+                                                                  (item.id.isEmpty &&
+                                                                      item
+                                                                          .path
+                                                                          .isEmpty)) &&
+                                                              item
+                                                                  .upgrades
+                                                                  .isEmpty
+                                                          ? null
+                                                          : Column(
+                                                              crossAxisAlignment:
+                                                                  CrossAxisAlignment
+                                                                      .start,
+                                                              mainAxisSize:
+                                                                  MainAxisSize
+                                                                      .min,
+                                                              children: [
+                                                                if (showObjectIds &&
+                                                                    item
+                                                                        .id
+                                                                        .isNotEmpty)
+                                                                  Text(
+                                                                    item.id,
+                                                                    maxLines: 1,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                  ),
+                                                                if (showObjectIds &&
+                                                                    item
+                                                                        .path
+                                                                        .isNotEmpty &&
+                                                                    item.path !=
+                                                                        item.id)
+                                                                  Text(
+                                                                    item.path,
+                                                                    maxLines: 1,
+                                                                    overflow:
+                                                                        TextOverflow
+                                                                            .ellipsis,
+                                                                  ),
+                                                                if (item
+                                                                    .upgrades
+                                                                    .isNotEmpty)
+                                                                  Padding(
+                                                                    padding:
+                                                                        const EdgeInsets.only(
+                                                                          top:
+                                                                              4,
+                                                                        ),
+                                                                    child: Wrap(
+                                                                      spacing:
+                                                                          4,
+                                                                      runSpacing:
+                                                                          2,
+                                                                      crossAxisAlignment:
+                                                                          WrapCrossAlignment
+                                                                              .center,
+                                                                      children: [
+                                                                        Text(
+                                                                          l10n.armorUpgradesLabel,
+                                                                          style: theme
+                                                                              .textTheme
+                                                                              .labelSmall,
+                                                                        ),
+                                                                        for (final u
+                                                                            in item.upgrades)
+                                                                          Container(
+                                                                            padding: const EdgeInsets.symmetric(
+                                                                              horizontal: 6,
+                                                                              vertical: 1,
+                                                                            ),
+                                                                            decoration: BoxDecoration(
+                                                                              color: theme.colorScheme.surfaceContainerHighest,
+                                                                              borderRadius: BorderRadius.circular(
+                                                                                4,
+                                                                              ),
+                                                                            ),
+                                                                            child: Text(
+                                                                              '${_upgradePart(l10n, u.key)}: ${_upgradeTier(l10n, u.value)}',
+                                                                              style: theme.textTheme.labelSmall?.copyWith(
+                                                                                color: theme.colorScheme.onSurfaceVariant,
+                                                                              ),
+                                                                            ),
+                                                                          ),
+                                                                      ],
+                                                                    ),
+                                                                  ),
+                                                              ],
+                                                            ),
+                                                      trailing:
+                                                          ultraCompactBrowser
+                                                          ? null
+                                                          : itemTrailing,
                                                     ),
-                                                ],
-                                              ),
-                                        trailing: _inventoryItemTrailing(
-                                          theme,
-                                          l10n,
-                                          item,
-                                          canRemove: canRemove,
-                                          countEditable: countEditable,
-                                          removeBlocked: removeBlocked,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                          ),
-                        ],
+                                                  ),
+                                                );
+                                              },
+                                            ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
               ),
             ] else if (!hasPendingAdd) ...[
@@ -1031,6 +1312,8 @@ class _PrivateInventorySummaryCardState
     required bool canRemove,
     required bool countEditable,
     required bool removeBlocked,
+    required bool compact,
+    required bool ultraCompact,
   }) {
     // The count editor shows only when count editing is currently allowed (the
     // inventory is count-editable AND no structural edit is pending). A
@@ -1049,6 +1332,8 @@ class _PrivateInventorySummaryCardState
             // one row showing the other slot's count).
             key: ValueKey(_inventoryItemKey(item)),
             item: item,
+            compact: compact,
+            ultraCompact: ultraCompact,
             pendingCount: _pendingCountChanges[_inventoryItemKey(item)]?.count,
             onPendingCountChanged: (change) =>
                 _setPendingCountChange(item, change),
@@ -1092,14 +1377,14 @@ enum _PendingTone { add, remove }
 String _itemDisplayFromPath(String path) =>
     path.contains('.') ? path.split('.').last : path.split('/').last;
 
-String _upgradePart(String key) {
-  if (key.contains('Upper')) return 'Upper';
-  if (key.contains('Mid')) return 'Mid';
-  if (key.contains('Lower')) return 'Lower';
+String _upgradePart(AppLocalizations l10n, String key) {
+  if (key.contains('Upper')) return l10n.armorUpgradeUpper;
+  if (key.contains('Mid')) return l10n.armorUpgradeMiddle;
+  if (key.contains('Lower')) return l10n.armorUpgradeLower;
   return key;
 }
 
-String _upgradeTier(String value) {
+String _upgradeTier(AppLocalizations l10n, String value) {
   var v = value;
   for (final p in const ['m_UpperBody_', 'm_MidBody_', 'm_LowerBody_']) {
     if (v.startsWith(p)) {
@@ -1107,7 +1392,16 @@ String _upgradeTier(String value) {
       break;
     }
   }
-  return v.replaceAll('_ArmorUpgrade', '');
+  v = v.replaceAll('_ArmorUpgrade', '');
+  final match = RegExp(r'^(Light|Medium|Heavy)(.*)$').firstMatch(v);
+  if (match == null) return v;
+  final localized = switch (match.group(1)) {
+    'Light' => l10n.armorUpgradeLight,
+    'Medium' => l10n.armorUpgradeMedium,
+    'Heavy' => l10n.armorUpgradeHeavy,
+    _ => match.group(1)!,
+  };
+  return '$localized${match.group(2)}';
 }
 
 /// A highlighted card shown when there is a pending structural inventory edit
@@ -1187,11 +1481,15 @@ class _InventoryItemCountEditor extends StatefulWidget {
   const _InventoryItemCountEditor({
     super.key,
     required this.item,
+    required this.compact,
+    required this.ultraCompact,
     required this.onPendingCountChanged,
     this.pendingCount,
   });
 
   final PrivateInventoryItem item;
+  final bool compact;
+  final bool ultraCompact;
   final int? pendingCount;
   final void Function(InventoryItemCountChange? change) onPendingCountChanged;
 
@@ -1266,19 +1564,27 @@ class _InventoryItemCountEditorState extends State<_InventoryItemCountEditor> {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 132,
-      child: TextField(
-        controller: _controller,
-        keyboardType: TextInputType.number,
-        onChanged: _onCountTextChanged,
-        decoration: InputDecoration(
-          labelText: AppLocalizations.of(context).count,
-          errorText: _error,
-          // Compact the field so it fits inside the dense ListTile row. A
-          // reserved helper line would steal the input box's vertical space
-          // here (the tile caps the field height), squeezing the box until the
-          // value clips at the border — so the error grows the row instead.
-          isDense: true,
+      key: const ValueKey('inventory-count-editor-touch-target'),
+      width: widget.ultraCompact
+          ? 72
+          : widget.compact
+          ? 96
+          : 132,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 48),
+        child: TextField(
+          controller: _controller,
+          keyboardType: TextInputType.number,
+          onChanged: _onCountTextChanged,
+          decoration: InputDecoration(
+            labelText: AppLocalizations.of(context).count,
+            errorText: _error,
+            // Compact the field so it fits inside the dense ListTile row. A
+            // reserved helper line would steal the input box's vertical space
+            // here (the tile caps the field height), squeezing the box until the
+            // value clips at the border — so the error grows the row instead.
+            isDense: true,
+          ),
         ),
       ),
     );

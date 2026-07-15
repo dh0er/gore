@@ -1,3 +1,5 @@
+import 'package:goresave/l10n/app_localizations.dart';
+
 import 'game_lang.dart';
 
 /// Resolves a gameplay attribute id to the same localized label the game uses.
@@ -12,8 +14,9 @@ String localizedAttributeName(
   GameLang lang,
   String attributeId, {
   String? setClass,
+  AppLocalizations? l10n,
 }) {
-  final fallback = readableAttributeName(attributeId);
+  final fallback = readableAttributeName(attributeId, l10n);
   if (catalog.isEmpty || attributeId.trim().isEmpty) return fallback;
 
   final id = _catalogPart(attributeId);
@@ -61,10 +64,12 @@ String localizedAttributeName(
 /// Human-friendly fallback for attributes absent from the loc catalog.
 /// Technical ids remain stable in the underlying edit paths; only their label
 /// is prettified here (`DamageMultiplier` -> `Damage multiplier`).
-String readableAttributeName(String attributeId) {
+String readableAttributeName(String attributeId, [AppLocalizations? l10n]) {
   final trimmed = attributeId.trim();
   if (trimmed.isEmpty) return attributeId;
-  if (trimmed == 'SkillPoints') return 'Skill points (LP)';
+  if (trimmed == 'SkillPoints') {
+    return l10n?.attributeSkillPointsFallback ?? 'Skill points (LP)';
+  }
 
   var text = trimmed.replaceAll(RegExp(r'[_-]+'), ' ');
   text = text.replaceAllMapped(
@@ -77,7 +82,8 @@ String readableAttributeName(String attributeId) {
   );
   text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
   if (text.isEmpty) return trimmed;
-  return '${text[0].toUpperCase()}${text.substring(1).toLowerCase()}';
+  final readable = '${text[0].toUpperCase()}${text.substring(1).toLowerCase()}';
+  return l10n?.attributeManualFallbackLabel(trimmed, readable) ?? readable;
 }
 
 String? _attributeSetName(String? setClass) {

@@ -15,17 +15,17 @@ class AppLocalizationsJa extends AppLocalizations {
   String get debugSectionSubtitle => 'バグ報告用の診断と生データ';
 
   @override
-  String get showObjectIdsTitle => 'Show object IDs';
+  String get showObjectIdsTitle => '追加の技術 ID を表示';
 
   @override
   String get showObjectIdsSubtitle =>
-      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+      'アイテム、会話知識、クエスト、孤立アクターの技術 ID を表示します。NPC ID は常に表示されます。';
 
   @override
   String get appTitle => 'GORE Save Editor';
 
   @override
-  String get appLogoSemanticLabel => 'GORE Save Editor logo';
+  String get appLogoSemanticLabel => 'GORE Save Editor のロゴ';
 
   @override
   String get zoomTooltip => 'Ctrl +/- で拡大・縮小';
@@ -56,7 +56,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get skillsUnavailableBody =>
-      'このセーブデータではスキルを編集できません。主人公に変更できるエフェクトデータがありません。';
+      'このセーブデータではスキルを編集できません。ヒーローに変更できるエフェクトデータがありません。';
 
   @override
   String get skillNotLearned => '未習得';
@@ -232,7 +232,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillNameBlacksmithing => '鍛冶';
 
   @override
-  String get skillNameMagicCircle => '魔法サークル';
+  String get skillNameMagicCircle => 'マジック・サークル';
 
   @override
   String get skillNameOrcish => 'オーク語';
@@ -304,7 +304,10 @@ class AppLocalizationsJa extends AppLocalizations {
   String get noSavFilesFound => '.sav ファイルが見つかりません';
 
   @override
-  String get profile => 'プロファイル';
+  String get profile => 'プロフィール';
+
+  @override
+  String get otherSaves => 'その他のセーブデータ';
 
   @override
   String profileWithSaves(String name, int count) {
@@ -312,34 +315,34 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get switchProfile => 'プロファイルを切り替え';
+  String get switchProfile => 'プロフィールを切り替え';
 
   @override
-  String get openSaveFile => 'Open file';
+  String get openSaveFile => 'ファイルを開く';
 
   @override
-  String get externalSave => 'Externally opened save';
+  String get externalSave => '外部から開いたセーブデータ';
 
   @override
-  String get saveProfileTitle => 'Save profile';
+  String get saveProfileTitle => 'セーブプロフィール';
 
   @override
   String get saveProfileDescription =>
-      'Assign this save to a different game profile. The save and profile index are backed up together.';
+      'このセーブデータを別のゲームプロフィールに割り当てます。セーブデータとプロフィールインデックスは一緒にバックアップされます。';
 
   @override
   String get saveProfileExternalHint =>
-      'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.';
+      'プロフィールを選択し、このファイルをゲームのセーブフォルダーへインポートして登録します。元のファイルは変更されません。';
 
   @override
   String get saveProfileNoProfiles =>
-      'No editable game profiles were found in PersistentDataList.sav.';
+      'PersistentDataList.sav に編集可能なゲームプロフィールが見つかりません。';
 
   @override
-  String get saveProfileSelect => 'Select profile';
+  String get saveProfileSelect => 'プロフィールを選択';
 
   @override
-  String get rescanSaveFolder => 'セーブフォルダを再スキャン';
+  String get rescanSaveFolder => 'セーブフォルダーを再スキャン';
 
   @override
   String get discardUnsavedChangesTitle => '未保存の変更を破棄しますか？';
@@ -404,28 +407,27 @@ class AppLocalizationsJa extends AppLocalizations {
   String get publicSaveName => '公開セーブ名';
 
   @override
-  String get gameTimeTitle => 'Game time';
+  String get gameTimeTitle => 'プレイ時間';
 
   @override
-  String get gameTimeDay => 'Day';
+  String get gameTimeDay => '日';
 
   @override
-  String get gameTimeHours => 'Hours';
+  String get gameTimeHours => '時間';
 
   @override
-  String get gameTimeMinutes => 'Minutes';
+  String get gameTimeMinutes => '分';
 
   @override
-  String get gameTimeSeconds => 'Seconds';
+  String get gameTimeSeconds => '秒';
 
   @override
   String gameTimeTotal(int seconds) {
-    return '= $seconds s total';
+    return '= 合計 $seconds 秒';
   }
 
   @override
-  String get gameTimeInvalid =>
-      'Enter whole numbers — day ≥ 0, hours 0–23, minutes and seconds 0–59.';
+  String get gameTimeInvalid => '整数を入力してください：日 ≥ 0、時間 0～23、分と秒 0～59。';
 
   @override
   String get required => '必須';
@@ -471,10 +473,10 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get attributeBaseValue => 'Base value';
+  String get attributeBaseValue => '基本値';
 
   @override
-  String get attributeCurrentValue => 'Current value';
+  String get attributeCurrentValue => '現在値';
 
   @override
   String get inventoryTitle => 'インベントリ';
@@ -511,26 +513,24 @@ class AppLocalizationsJa extends AppLocalizations {
   String get addItemButton => 'アイテムを追加';
 
   @override
-  String get resetInventoryButton => 'Reset inventory';
+  String get resetInventoryButton => 'インベントリをリセット';
 
   @override
-  String get resetInventoryTooltipDefault =>
-      'Replace this inventory with the game-start save\'s inventory';
+  String get resetInventoryTooltipDefault => 'このインベントリをゲーム開始時のものに置き換えます';
 
   @override
-  String get resetInventoryTooltipBlocked =>
-      'Save or cancel the pending inventory changes first';
+  String get resetInventoryTooltipBlocked => '先に保留中のインベントリ変更を保存またはキャンセルしてください';
 
   @override
-  String get pendingResetTitle => 'Reset to game-start inventory';
+  String get pendingResetTitle => 'ゲーム開始時のインベントリにリセット';
 
   @override
   String pendingResetSubtitle(String level) {
-    return 'Resources level: $level';
+    return 'リソースレベル：$level';
   }
 
   @override
-  String get cancelPendingReset => 'Cancel reset';
+  String get cancelPendingReset => 'リセットをキャンセル';
 
   @override
   String pendingAddSubtitle(int count) {
@@ -731,34 +731,34 @@ class AppLocalizationsJa extends AppLocalizations {
   String get npcStatusDead => '死亡';
 
   @override
-  String get npcRelationshipRowLabel => 'Relationship';
+  String get npcRelationshipRowLabel => '関係';
 
   @override
-  String get npcRelationshipUnavailable => 'Relationship status unavailable';
+  String get npcRelationshipUnavailable => '関係ステータスを利用できません';
 
   @override
-  String get npcRelationshipAutomatic => 'Computed by game';
+  String get npcRelationshipAutomatic => 'ゲームが計算';
 
   @override
   String get npcRelationshipAutomaticHint =>
-      'No permanent override is stored. Guild, story, area, and crime rules are evaluated in game.';
+      '永続的な上書きは保存されていません。ゲーム内でギルド、ストーリー、地域、犯罪のルールが評価されます。';
 
   @override
   String get npcRelationshipStoredHint =>
-      'Stored as a permanent NPC-to-player override. Guild, story, area, and crime rules can still change the effective status in game.';
+      'NPC からプレイヤーへの永続的な上書きとして保存されています。ゲーム内のギルド、ストーリー、地域、犯罪のルールによって実際の関係が変わる場合があります。';
 
   @override
-  String get npcRelationshipFriend => 'Friend';
+  String get npcRelationshipFriend => '友好';
 
   @override
-  String get npcRelationshipNeutral => 'Neutral';
+  String get npcRelationshipNeutral => '中立';
 
   @override
-  String get npcRelationshipEnemy => 'Enemy';
+  String get npcRelationshipEnemy => '敵';
 
   @override
   String npcRelationshipPending(String relationship) {
-    return 'Will be $relationship on save';
+    return '保存後の関係：$relationship';
   }
 
   @override
@@ -851,8 +851,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get removeMemoryEventBody => 'このメモリイベントを削除しますか？ 事前にバックアップが作成されます。';
 
   @override
-  String get memoryEventRemovalQueued =>
-      'Event removal queued — press Save to apply it.';
+  String get memoryEventRemovalQueued => 'イベントの削除を保留しました。保存すると適用されます。';
 
   @override
   String get duplicateEvent => 'イベントを複製';
@@ -864,8 +863,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get duplicateMemoryEventBody => 'このメモリイベントを複製しますか？ 事前にバックアップが作成されます。';
 
   @override
-  String get memoryEventDuplicationQueued =>
-      'Event duplication queued — press Save to apply it.';
+  String get memoryEventDuplicationQueued => 'イベントの複製を保留しました。保存すると適用されます。';
 
   @override
   String get selectCharacterFromList => 'リストからキャラクターを選択してください';
@@ -949,13 +947,13 @@ class AppLocalizationsJa extends AppLocalizations {
   String get factionsEmpty => '派閥に対する未解決の罪はありません。';
 
   @override
-  String get factionGuildOldCamp => '旧営地';
+  String get factionGuildOldCamp => 'オールド・キャンプ';
 
   @override
-  String get factionGuildNewCamp => '新営地';
+  String get factionGuildNewCamp => 'ニュー・キャンプ';
 
   @override
-  String get factionGuildSwampCamp => '沼営地';
+  String get factionGuildSwampCamp => 'スワンプ・キャンプ';
 
   @override
   String get factionGuildOther => 'その他/個人';
@@ -1013,7 +1011,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get slotBackups => 'スロットのバックアップ';
 
   @override
-  String get profileBackups => 'プロファイルのバックアップ';
+  String get profileBackups => 'プロフィールのバックアップ';
 
   @override
   String get backupFactName => '名前';
@@ -1208,7 +1206,7 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get difficultyNoProfile => 'プロファイルなし';
+  String get difficultyNoProfile => 'プロフィールなし';
 
   @override
   String get difficultyNoDifficulty => '難易度なし';
@@ -1217,19 +1215,19 @@ class AppLocalizationsJa extends AppLocalizations {
   String get difficultyLabel => '難易度';
 
   @override
-  String get difficultyTooltipNoProfile => 'プロファイルが選択されていません';
+  String get difficultyTooltipNoProfile => 'プロフィールが選択されていません';
 
   @override
-  String get difficultyTooltipEdit => 'このプロファイルの難易度を編集';
+  String get difficultyTooltipEdit => 'このプロフィールの難易度を編集';
 
   @override
-  String get difficultyTooltipNoEditable => 'このプロファイルには編集可能な難易度がありません';
+  String get difficultyTooltipNoEditable => 'このプロフィールには編集可能な難易度がありません';
 
   @override
   String get preset => 'プリセット';
 
   @override
-  String get presetNovice => '初心者';
+  String get presetNovice => 'イージー';
 
   @override
   String get presetGothic => 'Gothic';
@@ -1246,7 +1244,7 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
-  String get closeCombatFlowHelper => '近接戦闘フロウヘルパー';
+  String get closeCombatFlowHelper => '接近戦フロー・ヘルパー';
 
   @override
   String get permadeath => 'パーマデス';
@@ -1258,13 +1256,13 @@ class AppLocalizationsJa extends AppLocalizations {
   String get levelCombat => '戦闘';
 
   @override
-  String get levelResources => 'リソース';
+  String get levelResources => '資源';
 
   @override
-  String get levelProgression => '進行';
+  String get levelProgression => '進行度';
 
   @override
-  String get difficultyAppliesToAllSaves => '難易度はこのプロファイルのすべてのセーブに適用されます。';
+  String get difficultyAppliesToAllSaves => '難易度はこのプロフィールのすべてのセーブに適用されます。';
 
   @override
   String get savingDifficultyFailed => '難易度の保存に失敗しました。';
@@ -1356,7 +1354,7 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String savingProgress(int done, int total) {
-    return 'Saving… $done of $total';
+    return '保存中… $done / $total';
   }
 
   @override
@@ -1392,198 +1390,840 @@ class AppLocalizationsJa extends AppLocalizations {
   String get skillCircle6 => '第六魔法円';
 
   @override
-  String get sectionGlossary => 'Glossary';
+  String get sectionGlossary => '用語集';
 
   @override
-  String get glossarySearch => 'Search glossary';
+  String get glossarySearch => '用語集を検索';
 
   @override
-  String get glossaryOldCamp => 'Old Camp';
+  String get glossaryOldCamp => 'オールド・キャンプ';
 
   @override
-  String get glossaryNewCamp => 'New Camp';
+  String get glossaryNewCamp => 'ニュー・キャンプ';
 
   @override
-  String get glossarySwampCamp => 'Swamp Camp';
+  String get glossarySwampCamp => 'スワンプ・キャンプ';
 
   @override
-  String get glossaryOutsiders => 'Outsiders';
+  String get glossaryOutsiders => 'よそ者';
 
   @override
-  String get glossaryCreatures => 'Creatures';
+  String get glossaryCreatures => 'クリーチャー';
 
   @override
-  String get glossaryLocations => 'Locations';
+  String get glossaryLocations => '場所';
 
   @override
-  String get glossaryFilterLabel => 'Filter';
+  String get glossaryFilterLabel => 'フィルター';
 
   @override
-  String get glossaryFilterTraders => 'Traders';
+  String get glossaryFilterTraders => '商人';
 
   @override
-  String get glossaryFilterTeachers => 'Teachers';
+  String get glossaryFilterTeachers => '教師';
 
   @override
-  String get glossaryFilterArmorers => 'Armorers';
+  String get glossaryFilterArmorers => '防具職人';
 
   @override
-  String get glossaryFilterHostile => 'Hostile';
+  String get glossaryFilterHostile => '敵対';
 
   @override
   String get glossaryRelationshipFilterNote =>
-      'Shows permanent enemy overrides stored in the save. Dynamic guild, story, area, and crime relationships are computed only in game.';
+      'セーブデータに保存された永続的な敵対設定を表示します。ギルド、ストーリー、地域、犯罪による動的な関係はゲーム内でのみ計算されます。';
 
   @override
-  String get glossaryFilterDead => 'Dead';
+  String get glossaryFilterDead => '死亡';
 
   @override
-  String get glossaryAddEntry => 'Add glossary entry';
+  String get glossaryAddEntry => '用語集エントリを追加';
 
   @override
-  String get glossaryAddTitle => 'Add glossary entry';
+  String get glossaryAddTitle => '用語集エントリを追加';
 
   @override
-  String get glossaryResetChanges => 'Reset glossary changes';
+  String get glossaryResetChanges => '用語集の変更をリセット';
 
   @override
-  String get glossaryNoVisibleEntries =>
-      'No visible glossary entries match this view.';
+  String get glossaryNoVisibleEntries => 'この表示に一致する用語集エントリがありません。';
 
   @override
-  String get glossaryNoHiddenEntries =>
-      'Every available entry is already visible.';
+  String get glossaryNoHiddenEntries => '利用可能なエントリはすべて表示されています。';
 
   @override
-  String get glossaryNoMatch => 'No glossary entries match.';
+  String get glossaryNoMatch => '一致する用語集エントリがありません。';
 
   @override
-  String get glossarySelectEntry =>
-      'Select a glossary entry to edit its entries.';
+  String get glossarySelectEntry => '編集する用語集エントリを選択してください。';
 
   @override
   String glossaryEntryCount(int count) {
-    return '$count entries';
+    return '$count 件';
   }
 
   @override
   String glossarySegmentsCount(int unlocked, int total) {
-    return '$unlocked of $total entries';
+    return '$total 件中 $unlocked 件';
   }
 
   @override
-  String get glossaryPortraitUnlocked => 'Portrait unlocked';
+  String get glossaryPortraitUnlocked => '肖像解除済み';
 
   @override
-  String get glossaryPortraitSilhouette => 'Silhouette — portrait not unlocked';
+  String get glossaryPortraitSilhouette => 'シルエット — 肖像未解除';
 
   @override
-  String get glossarySegments => 'Entries';
+  String get glossarySegments => 'エントリ';
 
   @override
-  String get glossaryPending => 'Unsaved change';
+  String get glossaryPending => '未保存の変更';
 
   @override
-  String get glossaryShowFullText => 'Show full entry text';
+  String get glossaryShowFullText => 'エントリ全文を表示';
 
   @override
-  String get glossarySegmentIntroduction => 'Introduction / portrait';
+  String get glossarySegmentIntroduction => '紹介 / 肖像';
 
   @override
-  String get glossarySegmentUnlock => 'Discovery';
+  String get glossarySegmentUnlock => '発見';
 
   @override
   String glossarySegmentEntry(int number) {
-    return 'Entry $number';
+    return 'エントリ $number';
   }
 
   @override
-  String get questJournalAll => 'All quests';
+  String get questJournalAll => 'すべてのクエスト';
 
   @override
-  String get questJournalOldCamp => 'Old Camp';
+  String get questJournalOldCamp => 'オールド・キャンプ';
 
   @override
-  String get questJournalNewCamp => 'New Camp';
+  String get questJournalNewCamp => 'ニュー・キャンプ';
 
   @override
-  String get questJournalSwampCamp => 'Swamp Camp';
+  String get questJournalSwampCamp => 'スワンプ・キャンプ';
 
   @override
-  String get questJournalColony => 'The Colony';
+  String get questJournalColony => 'コロニー';
 
   @override
-  String get questJournalCompleted => 'Completed';
+  String get questJournalCompleted => '完了済み';
 
   @override
   String get questJournalHint =>
-      'In-game journal view. Internal and not-yet-started quest states remain available under All Data.';
+      'ゲーム内ジャーナル表示です。内部状態および未開始のクエスト状態は「すべてのデータ」で確認できます。';
 
   @override
-  String get questJournalNoEntries =>
-      'No journal quests match the current filters.';
+  String get questJournalNoEntries => '現在のフィルターに一致するジャーナルクエストがありません。';
 
   @override
-  String get glossaryTutorials => 'Tutorials';
+  String get glossaryTutorials => 'チュートリアル';
 
   @override
   String get tutorialGateNote =>
-      'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.';
+      'これらの行は保存されたチュートリアル解除状態を制御します。1 つの解除状態がゲーム内の 1 ページに対応するとは限りません。';
 
   @override
-  String get tutorialResetChanges => 'Reset tutorial changes';
+  String get tutorialResetChanges => 'チュートリアルの変更をリセット';
 
   @override
-  String get tutorialNoGates =>
-      'No tutorial unlock gates are available in this save.';
+  String get tutorialNoGates => 'このセーブデータには利用可能なチュートリアル解除状態がありません。';
 
   @override
   String tutorialGateUnlockCount(int unlocked, int total) {
-    return '$unlocked of $total tutorial gates unlocked';
+    return '$total 件中 $unlocked 件のチュートリアルを解除';
   }
 
   @override
-  String get tutorialGateCombatBasics => 'Combat basics';
+  String get tutorialGateCombatBasics => '戦闘の基本';
 
   @override
-  String get tutorialGateCrafting => 'Crafting';
+  String get tutorialGateCrafting => 'クラフト';
 
   @override
-  String get tutorialGateCrime => 'Crime and consequences';
+  String get tutorialGateCrime => '犯罪とその結果';
 
   @override
-  String get tutorialGateDrugs => 'Consumables and effects';
+  String get tutorialGateDrugs => '消耗品と効果';
 
   @override
-  String get tutorialGateLockpicking => 'Lockpicking';
+  String get tutorialGateLockpicking => '鍵開け';
 
   @override
-  String get tutorialGateMagic => 'Magic';
+  String get tutorialGateMagic => '魔法';
 
   @override
-  String get tutorialGateMap => 'Map';
+  String get tutorialGateMap => 'マップ';
 
   @override
-  String get tutorialGateMeleeCombat => 'Melee combat';
+  String get tutorialGateMeleeCombat => '近接戦闘';
 
   @override
-  String get tutorialGateNavigation => 'Movement and navigation';
+  String get tutorialGateNavigation => '移動とナビゲーション';
 
   @override
-  String get tutorialGatePerception => 'Perception';
+  String get tutorialGatePerception => '知覚';
 
   @override
-  String get tutorialGatePlayerProgression => 'Character progression';
+  String get tutorialGatePlayerProgression => 'キャラクター進行';
 
   @override
-  String get tutorialGateRanged => 'Ranged combat';
+  String get tutorialGateRanged => '遠距離戦闘';
 
   @override
-  String get tutorialGateRiding => 'Riding';
+  String get tutorialGateRiding => '騎乗';
 
   @override
-  String get tutorialGateSleep => 'Sleeping';
+  String get tutorialGateSleep => '睡眠';
 
   @override
-  String get tutorialGateTrading => 'Trading';
+  String get tutorialGateTrading => '取引';
+
+  @override
+  String get windowMinimizeTooltip => '最小化';
+
+  @override
+  String get windowMaximizeTooltip => '最大化';
+
+  @override
+  String get windowRestoreTooltip => '元に戻す';
+
+  @override
+  String get fallbackDialogEntry => '会話エントリ';
+
+  @override
+  String get fallbackDialogChoice => '会話の選択肢';
+
+  @override
+  String get fallbackDialogTopic => '会話トピック';
+
+  @override
+  String get fallbackDialogInformation => '会話情報';
+
+  @override
+  String get fallbackQuest => 'クエスト';
+
+  @override
+  String get fallbackObjective => '目標';
+
+  @override
+  String get fallbackItem => 'アイテム';
+
+  @override
+  String get attributeSkillPointsFallback => 'スキルポイント（LP）';
+
+  @override
+  String attributeManualFallbackLabel(String attributeId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(attributeId, {
+      'Alcohol': 'アルコール',
+      'AlcoholDepletionRate': 'アルコール減少速度',
+      'MaxAlcohol': '最大アルコール値',
+      'MaxSuperArmor': '最大スーパーアーマー',
+      'SuperArmor': 'スーパーアーマー',
+      'Fatigue': '疲労',
+      'FillRatio': '充填率',
+      'FillRatioPeriod': '充填周期',
+      'MaxFatigue': '最大疲労',
+      'MaxThresholdIndex': '最大しきい値インデックス',
+      'RecoveryRatePerHourOfSleep': '睡眠1時間あたりの回復量',
+      'DamageMultiplier': 'ダメージ倍率',
+      'Toughness': '強靭度',
+      'ToughnessA': '強靭度 A',
+      'ToughnessB': '強靭度 B',
+      'ToughnessC': '強靭度 C',
+      'XPExecutedBounty': '処刑時のXP報酬',
+      'XPKillOrDefeatBounty': '撃破時のXP報酬',
+      'SpeedModifier': '速度補正',
+      'CriticalLevelPercent': 'クリティカルレベル（%）',
+      'MaxOxygen': '最大酸素量',
+      'Oxygen': '酸素',
+      'OxygenDepletionRate': '酸素消費速度',
+      'OxygenRecoveryRate': '酸素回復速度',
+      'MaxRestTime': '最大休息時間',
+      'MaxSleepTime': '最大睡眠時間',
+      'SleepTime': '睡眠時間',
+      'SleepTimeRecoveryAmount': '睡眠回復量',
+      'SleepTimeRecoveryPeriod': '睡眠回復周期',
+      'MaxSwampweed': '最大沼地草量',
+      'Swampweed': '沼地草',
+      'SwampweedDepletionRate': '沼地草消費速度',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get knowledgeTypeVoiceLine => 'ボイスライン';
+
+  @override
+  String get knowledgeTypeOther => 'その他';
+
+  @override
+  String get armorUpgradeUpper => '上部';
+
+  @override
+  String get armorUpgradeMiddle => '中央';
+
+  @override
+  String get armorUpgradeLower => '下部';
+
+  @override
+  String get knowledgeCategoryTopic => 'トピック';
+
+  @override
+  String get knowledgeCategoryChoice => '選択肢';
+
+  @override
+  String get knowledgeCategoryInfo => '情報';
+
+  @override
+  String get statusOk => '正常';
+
+  @override
+  String get statusFailed => '失敗';
+
+  @override
+  String get missingSaveReference => 'ファイルがありません';
+
+  @override
+  String missingSaveReferenceDescription(String slot) {
+    return '$slot.sav がありません。削除、移動、または名前変更された可能性がありますが、プロフィールにはまだ参照が残っています。';
+  }
+
+  @override
+  String get removeFromProfile => 'プロフィールから削除';
+
+  @override
+  String get removeSaveFromProfileTitle => 'セーブデータをプロフィールから削除しますか？';
+
+  @override
+  String removeSaveFromProfileBody(String save, String profile) {
+    return '$save を $profile から削除しますか？セーブファイル自体が存在する場合は保持されます。';
+  }
+
+  @override
+  String get unassignedSave => 'プロフィールに未割り当て';
+
+  @override
+  String get armorUpgradeLight => '軽量';
+
+  @override
+  String get armorUpgradeMedium => '中量';
+
+  @override
+  String get armorUpgradeHeavy => '重量';
+
+  @override
+  String get knowledgeCaptionForcedConversation => '強制会話';
+
+  @override
+  String get knowledgeCaptionFollowupTopic => 'フォローアップトピック';
+
+  @override
+  String get knowledgeCaptionFallbackTopic => '代替トピック';
+
+  @override
+  String durationMinutes(int minutes) {
+    return '$minutes分';
+  }
+
+  @override
+  String durationHours(int hours) {
+    return '$hours時間';
+  }
+
+  @override
+  String durationHoursMinutes(int hours, int minutes) {
+    return '$hours時間$minutes分';
+  }
+
+  @override
+  String get backupStatusInvalidProfileStructure => 'プロフィールデータが無効です';
+
+  @override
+  String get backupStatusSlotMetadataMissing => '選択したセーブデータのメタデータがありません';
+
+  @override
+  String defaultProfileName(int id) {
+    return 'プロフィール $id';
+  }
+
+  @override
+  String get statusUnknown => '不明';
+
+  @override
+  String editorUnexpectedError(String details) {
+    return '予期しないエラー: $details';
+  }
+
+  @override
+  String get editorOperationInProgress => '別の処理を実行中です。しばらくしてからもう一度お試しください。';
+
+  @override
+  String get editorUnsavedBeforeDifficulty =>
+      'セーブデータに未保存の変更があります。プロフィールの難易度を変更する前に、変更を保存するかリセットしてください。';
+
+  @override
+  String get editorNoSaveFolderSelected => 'セーブフォルダーが選択されていません。';
+
+  @override
+  String get editorNoSaveSelected => 'セーブデータが選択されていません。';
+
+  @override
+  String get coreUnknownError => '不明なコアエラー';
+
+  @override
+  String get editorUnsavedBeforeSwitchProfile =>
+      'まず未保存の変更を保存するかリセットしてください。プロフィールを切り替えると、現在のセーブデータから移動します。';
+
+  @override
+  String get editorUnsavedBeforeOpenFile =>
+      '別のファイルを開く前に、未保存の変更を保存するかリセットしてください。';
+
+  @override
+  String get editorSelectSavFile => 'セーブデータの .sav ファイルを選択してください。';
+
+  @override
+  String get editorNotGothicGsav => '選択したファイルは Gothic GSAV セーブデータではありません。';
+
+  @override
+  String get editorUnsavedBeforeChangeSaveProfile =>
+      'セーブデータのプロフィールを変更する前に、未保存の変更を保存するかリセットしてください。';
+
+  @override
+  String get editorUnsavedBeforeRemoveProfile =>
+      'セーブデータをプロフィールから削除する前に、未保存の変更を保存するかリセットしてください。';
+
+  @override
+  String get editorUnsavedBeforeRestoreProfile =>
+      'セーブデータに未保存の変更があります。プロフィールのバックアップを復元する前に、変更を保存するかリセットしてください。';
+
+  @override
+  String editorConflictingPropertyEdits(String path) {
+    return '2 つのタブで保留中の変更が同じプロパティ ($path) を対象にしています。一方をリセットするか元に戻してから、もう一度保存してください。';
+  }
+
+  @override
+  String editorGlossaryMemoryConflict(String path) {
+    return '用語集のセグメント変更と全データで保留中の別の変更が、どちらも Hero MemorizedEvents 配列 ($path) を対象にしています。用語集の変更はこの配列のエントリを追加または削除するため、両方を一緒に保存できません。一方をリセットするか元に戻してから、もう一度保存してください。';
+  }
+
+  @override
+  String editorGlossaryQuestConflict(String path) {
+    return '用語集のセグメント変更と保留中の別の変更が、どちらもクエストの同じ CurrentState プロパティ ($path) を対象にしています。用語集の変更自体がこの状態を更新します。一方をリセットするか元に戻してから、もう一度保存してください。';
+  }
+
+  @override
+  String editorRelationshipConflict(String path) {
+    return '関係設定の上書きと全データで保留中の別の変更が、どちらも同じ NPC 関係エントリ ($path) を対象にしています。構造化された関係の変更によって、このエントリ内の補正値が置き換わる可能性があるため、両方を一緒に保存できません。一方をリセットするか元に戻してから、もう一度保存してください。';
+  }
+
+  @override
+  String editorMultipleStructuralArrayEdits(String path) {
+    return '同じ配列 ($path) を対象とする構造変更が複数保留中です。別の変更を追加する前に、最初の変更を保存するかリセットしてください。';
+  }
+
+  @override
+  String editorStructuralArrayConflict(String path) {
+    return 'イベントの構造変更と全データで保留中の別の変更が、どちらも $path を対象にしています。続行する前に、一方を保存するかリセットしてください。';
+  }
+
+  @override
+  String get editorSkillsEffectConflict =>
+      'スキルの変更と、同じキャラクターのエフェクト (ActiveEffects › EffectSpec › Def) に対する全データでの変更が両方とも保留中です。両方を一緒に保存できません。一方をリセットするか元に戻してから、もう一度保存してください。';
+
+  @override
+  String get editorInventoryResetConflict =>
+      'インベントリのリセットと、同じインベントリへの別の変更が両方とも保留中です。リセットするとインベントリ全体が置き換わり、別の変更が破棄されます。一方をリセットするか元に戻してから、もう一度保存してください。';
+
+  @override
+  String get editorUseFolder => 'このフォルダーを使用';
+
+  @override
+  String get editorGothicSavegameFileType => 'Gothic セーブデータ';
+
+  @override
+  String get editorNoDifficultyChanges => '保存する難易度の変更はありません';
+
+  @override
+  String get editorDifficultyWritten => '難易度をプロフィールに保存しました（バックアップを作成しました）';
+
+  @override
+  String editorChangesSavedWithBackup(int count) {
+    return '$count 件の変更を保存し、バックアップを作成しました';
+  }
+
+  @override
+  String editorProfileNotFound(int profileId) {
+    return 'プロフィール $profileId が見つかりません。';
+  }
+
+  @override
+  String get editorNoFreeSaveSlot =>
+      'ゲームのセーブフォルダーに空きスロットがありません（G1R-001～G1R-999）。';
+
+  @override
+  String editorSaveImportedAssigned(int profileId) {
+    return 'セーブデータをインポートし、プロフィール $profileId に割り当てました';
+  }
+
+  @override
+  String editorSaveAssigned(int profileId) {
+    return 'セーブデータをプロフィール $profileId に割り当てました（対応するバックアップを作成しました）';
+  }
+
+  @override
+  String editorSaveSlotNotAssigned(String slot, int profileId) {
+    return 'セーブスロット $slot はプロフィール $profileId に割り当てられていません。';
+  }
+
+  @override
+  String get editorSaveRemovedFromProfile => 'セーブデータをプロフィールから削除しました';
+
+  @override
+  String editorRestoredBackup(String path) {
+    return 'バックアップを復元しました: $path';
+  }
+
+  @override
+  String editorRestoredBackupWithoutCompanion(String path) {
+    return 'バックアップを復元しました: $path（一致する関連バックアップがないため PersistentDataList.sav は変更されていません。スロットのメタデータが異なる可能性があります）';
+  }
+
+  @override
+  String editorCodecRoundtripPassed(int chunkIndex, int bytes) {
+    return 'コーデックの往復検証に成功しました: チャンク $chunkIndex を $bytes バイトに再圧縮しました';
+  }
+
+  @override
+  String editorDifficultyWriteFailed(String details) {
+    return 'プロフィールの難易度を保存できませんでした: $details';
+  }
+
+  @override
+  String editorProfileAssignmentFailed(String details) {
+    return 'セーブデータをプロフィールに割り当てられませんでした: $details';
+  }
+
+  @override
+  String editorProfileRemovalFailed(String details) {
+    return 'セーブデータをプロフィールから削除できませんでした: $details';
+  }
+
+  @override
+  String editorSaveFailed(String details) {
+    return '変更を保存できませんでした: $details';
+  }
+
+  @override
+  String editorScanSavesFailed(String details) {
+    return 'セーブデータのスキャンに失敗しました: $details';
+  }
+
+  @override
+  String editorInspectSaveFailed(String details) {
+    return 'セーブデータの検査に失敗しました: $details';
+  }
+
+  @override
+  String editorLoadBackupsFailed(String details) {
+    return 'バックアップの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorRestoreFailed(String details) {
+    return 'バックアップを復元できませんでした: $details';
+  }
+
+  @override
+  String editorRestoreReloadFailed(String path, String details) {
+    return 'バックアップを復元しました: $path。ただし、セーブデータの再読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorCodecCheckFailed(String details) {
+    return 'コーデックの確認に失敗しました: $details';
+  }
+
+  @override
+  String editorCodecValidationFailed(String details) {
+    return 'コーデックの往復検証に失敗しました: $details';
+  }
+
+  @override
+  String editorPropertySearchFailed(String details) {
+    return 'プロパティの検索に失敗しました: $details';
+  }
+
+  @override
+  String get editorSelectionChangedWhileLoadingHeroAttributes =>
+      'ヒーローの属性を読み込んでいる間に、選択中のセーブデータが変更されました。';
+
+  @override
+  String editorSkillsLoadFailed(String details) {
+    return 'スキルの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorProgressionQueryFailed(String details) {
+    return '進行状況の照会に失敗しました: $details';
+  }
+
+  @override
+  String editorNpcListFailed(String details) {
+    return 'NPC リストの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorCharacterListFailed(String details) {
+    return 'キャラクターリストの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorNpcAttributesFailed(String details) {
+    return 'NPC の属性の読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorNpcInventoryFailed(String details) {
+    return 'NPC のインベントリの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String editorFactionListFailed(String details) {
+    return '派閥リストの読み込みに失敗しました: $details';
+  }
+
+  @override
+  String get editorNoBackupPath => 'なし';
+
+  @override
+  String editorBackupMessage(String prefix, String backupPath) {
+    return '$prefix: $backupPath';
+  }
+
+  @override
+  String editorBackupMessageWithPersistent(
+    String prefix,
+    String backupPath,
+    String persistentPath,
+  ) {
+    return '$prefix: $backupPath; PersistentDataList のバックアップ: $persistentPath';
+  }
+
+  @override
+  String localizationStatusFailed(String details) {
+    return 'ローカライズ状況の取得に失敗しました: $details';
+  }
+
+  @override
+  String localizationExtractionFailed(String details) {
+    return '抽出に失敗しました: $details';
+  }
+
+  @override
+  String glossaryLoadFailed(String details) {
+    return '用語集の読み込みに失敗しました: $details';
+  }
+
+  @override
+  String backupStatusError(String details) {
+    return 'バックアップエラー: $details';
+  }
+
+  @override
+  String glossaryCatalogSegmentLabel(String segmentId, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(segmentId, {
+      'Access': '通行許可',
+      'AccessDenied': '通行拒否',
+      'AccesToTemple': '神殿への立ち入り',
+      'Advice': '助言',
+      'AfterFight': '戦いの後',
+      'AfterFireMages': '炎の魔術師事件の後',
+      'AfterNek': 'ネックの後',
+      'AfterQuest': 'クエストの後',
+      'Alone': '独り',
+      'Amulet': 'アミュレット',
+      'Annoying': 'うっとうしい',
+      'Armor': '防具',
+      'Avoid': '避ける',
+      'Backstory': '過去',
+      'BackStory': '過去',
+      'BasicMagic': '魔法の基礎',
+      'Beated': '倒された',
+      'BecomeMercenary': '傭兵になる',
+      'Beer': 'ビール',
+      'Bestiary': '魔物図鑑',
+      'Blessing': '祝福',
+      'Boss': 'ボス',
+      'Bully': 'いじめっ子',
+      'BullyAdvice': 'いじめへの助言',
+      'Camp': 'キャンプ',
+      'CampDivided': '分裂したキャンプ',
+      'CareOfMessengers': '使者の世話',
+      'ChangeOpinion': '考えを変える',
+      'ChargeUriziel': 'ウリジエルに力を込める',
+      'Chosen': '選ばれし者',
+      'Contact': '連絡',
+      'Courier': '配達人',
+      'CraftBows': '弓の製作',
+      'Crazy': '狂気',
+      'DailyMeal': '毎日の食事',
+      'DailyRation_Trader': '日々の配給係',
+      'DAM': 'ダム',
+      'Dead': '死亡',
+      'Deal': '取引',
+      'Dealer': '取引人',
+      'Deceived': '騙された',
+      'Dementia': '認知症',
+      'DenyAccess': '通行拒否',
+      'DifferentOpinion': '意見の相違',
+      'Discussion': '話し合い',
+      'DontTalk': '話しかけるな',
+      'Duel': '決闘',
+      'Entrance': '入口',
+      'Escape': '脱出',
+      'Extended': '拡張',
+      'Extra': '追加',
+      'ExtraInfo': '追加情報',
+      'Fanatic': '狂信者',
+      'Fight': '戦い',
+      'FindUlumulu': 'ウルムルを探す',
+      'FireMages': '炎の魔術師',
+      'FireMagesEscape': '炎の魔術師の脱出',
+      'FiskNewDealer': 'フィスクのための新しい故買人',
+      'FiskNewDealerCompleted': 'フィスクのための新しい故買人（完了）',
+      'FogTower': '霧の塔',
+      'Food': '食料',
+      'Forgave': '許した',
+      'Forgive': '許す',
+      'Forgiven': '許された',
+      'FourFriends': '4人の仲間',
+      'FreeHut': '空き小屋',
+      'FreeMine': 'フリー・マイン',
+      'Fury': '激怒',
+      'GoodTeacher': '優れた師匠',
+      'Gossip': '噂話',
+      'GotScavenger': 'スカベンジャーを入手',
+      'GrantedAccess': '通行許可済み',
+      'GRDArmor': '護衛の防具',
+      'Guide': '案内役',
+      'HateMages': '魔術師嫌い',
+      'HateMagesExplanation': '魔術師嫌いの理由',
+      'HateRiceLord': 'ライス・ロードへの憎しみ',
+      'Heal': '回復',
+      'Healing': '回復',
+      'Help': '助け',
+      'Helper': '協力者',
+      'HelpKagan': 'ケイガンを助ける',
+      'HutStory': '小屋の話',
+      'Ignore': '無視',
+      'Impress': '感心させる',
+      'ImpressAlchemy': '錬金術で感心させる',
+      'ImpressInscription': '刻印で感心させる',
+      'Info': '情報',
+      'Interested': '興味あり',
+      'Introduction': '初対面',
+      'Introduction_2': '2度目の紹介',
+      'Introduction_Armor': '防具の紹介',
+      'Introduction_Teacher': '初対面（師匠）',
+      'Introduction_Trader': '初対面（商人）',
+      'Invocation': '召喚',
+      'JoinSC': 'スワンプ・キャンプに加入',
+      'Joint': 'スワンプウィード巻き',
+      'KalomCamp': 'コル・カロムの野営地',
+      'Leader': '指導者',
+      'Learning': '修行',
+      'LearnOrcish': 'オーク語を学ぶ',
+      'LeftParty': 'パーティー離脱',
+      'Library': '図書館',
+      'Lie': '嘘',
+      'Lock': '鍵',
+      'Lockpick': 'ロックピック',
+      'Mad': '正気を失った',
+      'Mandibles': 'マインクローラーのあご',
+      'MapMaker': '地図職人',
+      'Monastery': '修道院',
+      'MordragKO': 'モードラッグを倒す',
+      'Nek': 'ネック',
+      'NewCamp': 'ニュー・キャンプ',
+      'NewCamper': '新入り',
+      'NewLeader': '新たな指導者',
+      'NightPatrol': '夜間巡回',
+      'NotInterested': '興味なし',
+      'OldCamp': 'オールド・キャンプ',
+      'OrcEnclaveEntrance': 'オークの飛地の入口',
+      'OrcGraveyard': 'オーク墓地',
+      'OreArmor': '鉱石の防具',
+      'Party': 'パーティー',
+      'Pay': '支払い',
+      'PayMoney': '金を払う',
+      'Permission': '許可',
+      'Pet': 'ペット',
+      'PreparingInvocation': '召喚の準備',
+      'Quest': 'クエスト',
+      'RankUpFireMages': '炎の魔術師への昇格',
+      'RankUpGuard': '護衛への昇格',
+      'RanUpFireMagesCompleted': '炎の魔術師への昇格完了',
+      'Realocated': '移動済み',
+      'Reason': '理由',
+      'Respect': '敬意',
+      'ReturnToSC': 'スワンプ・キャンプへ戻る',
+      'RicelordForeman': 'ライス・ロードの監督',
+      'RideScavenger': 'スカベンジャーに乗る',
+      'Robe': 'ローブ',
+      'Safe': '安全',
+      'Scraper': 'スクレーパー',
+      'SecondChance': '二度目の機会',
+      'SecretLocation': '秘密の場所',
+      'SecretPassage': '秘密の通路',
+      'SecretPath': '秘密の道',
+      'SleeperFollower': 'スリーパーの信徒',
+      'SleeperTemple': 'スリーパーの神殿',
+      'SmallInfo': 'ちょっとした情報',
+      'Stonehenge': 'ストーンヘンジ',
+      'StopFollowing': '追従をやめる',
+      'SwampCamp': 'スワンプ・キャンプ',
+      'Talkative': 'おしゃべり',
+      'Teach': '訓練',
+      'TeachBow': '弓術訓練',
+      'Teacher': '師匠',
+      'Teacher2': '2人目の師匠',
+      'TeacherInscription': '刻印の師匠',
+      'TeacherMana': 'マナの師匠',
+      'TeachIchor': 'マインクローラーの膿漿の採取訓練',
+      'TeachMagic': '魔法の訓練',
+      'TeachOrcish': 'オーク語の訓練',
+      'TeachStats': '能力値の訓練',
+      'TeachWeapon': '武器の訓練',
+      'Teleport': 'テレポート',
+      'TheMysteriousOrc': '謎のオーク',
+      'ThroneRoom': '玉座の間',
+      'TradeBow': '弓の取引',
+      'Trader': '商人',
+      'TradeSkins_Trader': '毛皮商人',
+      'Traitor': '裏切り者',
+      'Trial': '試練',
+      'TrollCanyon': 'トロールの峡谷',
+      'Trust': '信頼',
+      'Ulumulu': 'ウルムル',
+      'Unexperienced': '未熟',
+      'Uriziel': 'ウリジエル',
+      'UrizielRune': 'ウリジエルのルーン',
+      'Useful': '役に立つ',
+      'Velaya': 'ベラヤ',
+      'Vibrations': '振動',
+      'WaitFreeMine': 'フリー・マインで待つ',
+      'WaitInTrainingArea': '訓練場で待つ',
+      'Warning': '警告',
+      'WarningTooLate': '手遅れの警告',
+      'WaterMessenger': '水の魔術師の使者',
+      'Weapon': '武器',
+      'Who': '正体',
+      'Women': '女性たち',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
 }

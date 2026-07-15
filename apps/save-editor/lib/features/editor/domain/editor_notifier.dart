@@ -14,11 +14,15 @@ import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
+import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/utils/default_paths.dart';
 import 'package:path/path.dart' as p;
 import 'package:state_notifier/state_notifier.dart';
 
 const _unchanged = Object();
+
+AppLocalizations _defaultEnglishLocalizations() => AppLocalizationsEn();
 
 /// Sorts saves by in-game playtime (highest first). Slots with null playtime
 /// sink to the bottom. Equal or both-null playtime falls back to file
@@ -35,6 +39,10 @@ void _sortByPlaytimeDesc(List<SaveSlot> saves) {
     }
   }
   saves.sort((a, b) {
+    // Orphaned profile references are useful cleanup rows, not playable saves.
+    // Keep them below every real file regardless of retained PDL playtime so
+    // refresh never appears to prefer a missing slot.
+    if (a.isMissing != b.isMissing) return a.isMissing ? 1 : -1;
     final pa = a.timePlayedSeconds;
     final pb = b.timePlayedSeconds;
     // Primary key: playtime descending; nulls sink to the bottom.
@@ -56,6 +64,40 @@ void _sortByPlaytimeDesc(List<SaveSlot> saves) {
   });
 }
 
+bool _sameSavePath(String a, String b) {
+  final windowsStyle =
+      a.contains('\\') ||
+      b.contains('\\') ||
+      RegExp(r'^[A-Za-z]:').hasMatch(a) ||
+      RegExp(r'^[A-Za-z]:').hasMatch(b) ||
+      a.startsWith('//') ||
+      b.startsWith('//');
+  final context = windowsStyle ? p.windows : p.posix;
+  final normalizedA = context.normalize(a);
+  final normalizedB = context.normalize(b);
+  return windowsStyle
+      ? normalizedA.toLowerCase() == normalizedB.toLowerCase()
+      : normalizedA == normalizedB;
+}
+
+List<String> _addSavePath(List<String> paths, String path) {
+  if (paths.any((candidate) => _sameSavePath(candidate, path))) return paths;
+  return List.unmodifiable([...paths, path]);
+}
+
+List<String> _removeSavePath(List<String> paths, String path) =>
+    List.unmodifiable(
+      paths.where((candidate) => !_sameSavePath(candidate, path)),
+    );
+
+bool _sameSavePathList(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (!_sameSavePath(a[i], b[i])) return false;
+  }
+  return true;
+}
+
 class EditorState {
   const EditorState({
     required this.saveDir,
@@ -64,6 +106,9 @@ class EditorState {
     this.profiles = const [],
     this.activeProfileId,
     this.selectedProfileId,
+    this.externalSavePaths = const [],
+    this.hiddenOtherSavePaths = const [],
+    this.otherSavesSelected = false,
     this.backups = const [],
     this.companionBackups = const [],
     this.selectedPath,
@@ -96,6 +141,16 @@ class EditorState {
   /// Explicitly selected profile id. Null means no explicit selection — use
   /// [effectiveProfileId] for the resolved value.
   final int? selectedProfileId;
+
+  /// Persistent paths opened outside the configured save folder.
+  final List<String> externalSavePaths;
+
+  /// Profileless scanned paths explicitly removed from the Other saves list.
+  /// Tombstones are required so a rescan does not immediately re-add them.
+  final List<String> hiddenOtherSavePaths;
+
+  /// Whether the save sidebar is showing [otherSaves] instead of a profile.
+  final bool otherSavesSelected;
 
   final List<BackupEntry> backups;
   final List<BackupEntry> companionBackups;
@@ -162,44 +217,77 @@ class EditorState {
 
   SaveSlot? get selectedSave {
     for (final save in saves) {
-      if (save.path == selectedPath) return save;
+      if (selectedPath != null && _sameSavePath(save.path, selectedPath!)) {
+        return save;
+      }
     }
     return null;
   }
+
+  /// Resolve the authoritative profile association. Current core scans include
+  /// `persistentProfileId`; the slot arrays are also consulted for older scan
+  /// payloads and lightweight test doubles that only expose the association on
+  /// [ProfileSummary.savedSlots].
+  int? profileIdForSave(SaveSlot save) {
+    // An arbitrary external file can share a conventional slot basename with a
+    // local profile save. Slot-name coincidence is never profile membership.
+    if (save.isExternal) return null;
+    final direct = save.persistentProfileId;
+    if (direct != null) return direct;
+    for (final profile in profiles) {
+      if (profile.savedSlots.contains(save.slot)) return profile.profileId;
+    }
+    return null;
+  }
+
+  /// Existing, profileless saves in the dedicated Other view. Missing profile
+  /// references stay with their profile; explicitly hidden scanned saves are
+  /// filtered through [hiddenOtherSavePaths].
+  List<SaveSlot> get otherSaves => saves
+      .where(
+        (save) =>
+            !save.isMissing &&
+            profileIdForSave(save) == null &&
+            !hiddenOtherSavePaths.any((path) => _sameSavePath(path, save.path)),
+      )
+      .toList(growable: false);
 
   /// The profile id to use for filtering: the explicitly selected profile, or
   /// fall back to the scan's active profile id.
   /// One resolution shared by the header and the save-list filter, so they
   /// can never disagree: explicit switcher choice first, then the selected
   /// save's own profile, then the scan's active profile id.
-  int? get effectiveProfileId =>
-      selectedProfileId ?? selectedSave?.persistentProfileId ?? activeProfileId;
+  int? get effectiveProfileId {
+    if (otherSavesSelected) return null;
+    final save = selectedSave;
+    return selectedProfileId ??
+        (save == null ? null : profileIdForSave(save)) ??
+        activeProfileId;
+  }
 
-  /// Saves to show in the sidebar. When there are fewer than 2 profiles, or
-  /// no effective profile id, all saves are shown. Otherwise only saves whose
-  /// [SaveSlot.persistentProfileId] matches [effectiveProfileId] are shown
-  /// (saves with a null persistentProfileId stay visible in every profile —
-  /// they cannot be attributed). The currently selected save is always kept
-  /// visible so it is never silently removed from the list mid-session.
+  /// Saves to show in the sidebar. A profile list contains only saves whose
+  /// [SaveSlot.persistentProfileId] matches [effectiveProfileId]. Unassigned
+  /// saves never leak into one or every profile list; they are reachable only
+  /// through the dedicated [otherSaves] view.
   List<SaveSlot> get visibleSaves {
+    if (otherSavesSelected) return otherSaves;
     final eid = effectiveProfileId;
-    if (eid == null || profiles.length < 2) return saves;
-    return saves
-        .where(
-          (s) =>
-              s.persistentProfileId == eid ||
-              s.persistentProfileId == null ||
-              s.path == selectedPath,
-        )
-        .toList();
+    if (eid == null) {
+      return saves.where((save) => profileIdForSave(save) != null).toList();
+    }
+    return saves.where((save) => profileIdForSave(save) == eid).toList();
   }
 
   ProfileSummary? get activeProfile {
+    if (otherSavesSelected) return null;
     // A directly opened file is detached from this folder's
     // PersistentDataList. Even if its embedded numeric id happens to match a
     // local profile, that coincidence must never expose profile-wide difficulty
     // editing for the wrong profile.
-    if (selectedSave?.isExternal == true) return null;
+    final save = selectedSave;
+    if (save != null && (save.isExternal || profileIdForSave(save) == null)) {
+      return null;
+    }
     // Same resolution as the save-list filter (effectiveProfileId), so the
     // header always describes the profile whose saves are listed.
     final targetProfileId = effectiveProfileId;
@@ -218,6 +306,9 @@ class EditorState {
     List<ProfileSummary>? profiles,
     Object? activeProfileId = _unchanged,
     Object? selectedProfileId = _unchanged,
+    List<String>? externalSavePaths,
+    List<String>? hiddenOtherSavePaths,
+    bool? otherSavesSelected,
     List<BackupEntry>? backups,
     List<BackupEntry>? companionBackups,
     Object? selectedPath = _unchanged,
@@ -252,6 +343,9 @@ class EditorState {
       selectedProfileId: identical(selectedProfileId, _unchanged)
           ? this.selectedProfileId
           : selectedProfileId as int?,
+      externalSavePaths: externalSavePaths ?? this.externalSavePaths,
+      hiddenOtherSavePaths: hiddenOtherSavePaths ?? this.hiddenOtherSavePaths,
+      otherSavesSelected: otherSavesSelected ?? this.otherSavesSelected,
       backups: clearBackups ? const [] : backups ?? this.backups,
       companionBackups: clearBackups
           ? const []
@@ -295,7 +389,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     this._core, {
     String? saveDir,
     EditorSettingsStore? settingsStore,
+    AppLocalizations Function()? localizations,
+    bool Function(String path)? fileExists,
   }) : _settingsStore = settingsStore ?? const NoopEditorSettingsStore(),
+       _localizations = localizations ?? _defaultEnglishLocalizations,
+       _fileExists = fileExists ?? ((path) => File(path).existsSync()),
        super(
          _initialState(
            saveDir: saveDir,
@@ -308,6 +406,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   final GoresaveCoreService _core;
   final EditorSettingsStore _settingsStore;
+  final AppLocalizations Function() _localizations;
+  final bool Function(String path) _fileExists;
+
+  AppLocalizations get _l10n => _localizations();
+
+  bool _saveFileExists(String path) {
+    try {
+      return _fileExists(path);
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Monotonic token identifying the latest in-flight load. Only the op holding
   /// the current token may write loading/result state; superseded ops bail
@@ -335,7 +445,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// overlay, clear prior errors, and always clear loading afterwards — even if
   /// the core call throws — so the spinner can't get stuck. Counting also lets
   /// checkCodec see that a load is in flight and not race it with an inspect.
-  Future<void> _withLoading(Future<void> Function() body) async {
+  Future<void> _withLoading(
+    Future<void> Function() body, {
+    String Function(String details)? failureMessage,
+  }) async {
     _loadStarted();
     state = state.copyWith(isLoading: true, clearError: true);
     try {
@@ -343,7 +456,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     } catch (error) {
       // A thrown core call (e.g. bad JSON / null native response) must surface
       // as an error rather than propagate and leave the UI wedged.
-      state = state.copyWith(error: 'Unexpected error: $error');
+      state = state.copyWith(
+        error: (failureMessage ?? _l10n.editorUnexpectedError)('$error'),
+      );
     } finally {
       _loadFinished();
     }
@@ -358,20 +473,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
+    required String Function(String details) failureMessage,
     String command = 'write_save',
+    void Function()? beforeRefresh,
   }) async {
     var ok = false;
     await _withLoading(() async {
       final response = await _execute(command, payload: payload);
       if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
+        state = state.copyWith(error: failureMessage(_errorDetails(response)));
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(lastWriteMessage: message(data));
+      beforeRefresh?.call();
       await refresh();
       ok = true;
-    });
+    }, failureMessage: failureMessage);
     return ok;
   }
 
@@ -395,9 +513,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // explicit error so the dialog explains why rather than showing a generic
     // failure.
     if (state.isLoading) {
-      state = state.copyWith(
-        error: 'Another operation is in progress. Try again in a moment.',
-      );
+      state = state.copyWith(error: _l10n.editorOperationInProgress);
       return Future.value(false);
     }
     // Refuse while slot edits are pending: this write runs _runWrite -> refresh,
@@ -405,16 +521,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // discarding those drafts even though no write_save ran for them. Make the
     // user save or reset them first.
     if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'You have unsaved save edits. Save or reset them before changing '
-            'the profile difficulty.',
-      );
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeDifficulty);
       return Future.value(false);
     }
     final dir = state.saveDir;
     if (dir.isEmpty) {
-      state = state.copyWith(error: 'No save folder selected.');
+      state = state.copyWith(error: _l10n.editorNoSaveFolderSelected);
       return Future.value(false);
     }
     // `dir` carries the on-disk style of the save folder (Windows-style for
@@ -437,11 +549,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return _runWrite(
       command: 'write_difficulty',
       payload: payload,
+      failureMessage: (details) => _l10n.editorDifficultyWriteFailed(details),
       message: (data) {
         final written = (data['targetsWritten'] as num?)?.toInt() ?? 0;
         return written == 0
-            ? 'No difficulty changes to write'
-            : 'Difficulty written to the profile (backup created)';
+            ? _l10n.editorNoDifficultyChanges
+            : _l10n.editorDifficultyWritten;
       },
     );
   }
@@ -560,11 +673,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// the selection is cleared.
   Future<void> selectProfile(int? profileId) async {
     if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'Save or reset your unsaved changes first — switching profiles '
-            'would move away from the current save.',
-      );
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeSwitchProfile);
       return;
     }
 
@@ -574,13 +683,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // and prevent the selection from moving.
     final currentSave = state.selectedSave;
     final selectionMatchesNewProfile =
-        profileId == null ||
-        state.profiles.length < 2 ||
-        currentSave == null ||
-        (!currentSave.isExternal && currentSave.persistentProfileId == null) ||
-        currentSave.persistentProfileId == profileId;
+        currentSave != null &&
+        !currentSave.isExternal &&
+        state.profileIdForSave(currentSave) != null &&
+        (profileId == null || state.profileIdForSave(currentSave) == profileId);
 
-    state = state.copyWith(selectedProfileId: profileId);
+    state = state.copyWith(
+      selectedProfileId: profileId,
+      otherSavesSelected: false,
+    );
 
     if (selectionMatchesNewProfile) {
       // Current selection is compatible with the new profile — stay put.
@@ -588,20 +699,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }
 
     // Current save does not belong to the new profile — move to the first
-    // save that does. Prefer saves attributed to the target profile; an
-    // unattributed (null persistentProfileId) save is only a fallback so it
-    // cannot shadow the profile's own saves in global sort order. The
-    // selectedPath exemption is intentionally absent (we have already
-    // established the current save is the wrong profile).
+    // save that does. Unattributed saves are intentionally absent: the
+    // switcher's dedicated Other saves view is their only navigation path.
     final attributed = state.saves.where(
-      (s) => s.persistentProfileId == profileId,
+      (s) => !s.isMissing && state.profileIdForSave(s) == profileId,
     );
-    final unattributed = state.saves.where(
-      (s) => s.persistentProfileId == null,
-    );
-    final candidate = attributed.isNotEmpty
-        ? attributed.first
-        : (unattributed.isNotEmpty ? unattributed.first : null);
+    final candidate = profileId == null
+        ? state.saves
+              .where(
+                (save) =>
+                    !save.isMissing && state.profileIdForSave(save) != null,
+              )
+              .firstOrNull
+        : attributed.firstOrNull;
 
     if (candidate != null) {
       await _inspect(candidate.path);
@@ -613,6 +723,74 @@ class EditorNotifier extends StateNotifier<EditorState> {
         clearPendingEdits: true,
       );
     }
+  }
+
+  /// Switch the sidebar to the persistent list of profileless saves.
+  Future<void> selectOtherSaves() async {
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeSwitchProfile);
+      return;
+    }
+    if (state.isLoading) return;
+    final currentPath = state.selectedPath;
+    state = state.copyWith(selectedProfileId: null, otherSavesSelected: true);
+    if (currentPath != null &&
+        state.otherSaves.any((save) => _sameSavePath(save.path, currentPath))) {
+      return;
+    }
+    final candidate = state.otherSaves.firstOrNull;
+    if (candidate != null) {
+      await _inspect(candidate.path, clearWriteMessage: true);
+    } else {
+      state = state.copyWith(
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        clearPendingEdits: true,
+      );
+    }
+  }
+
+  /// Remove one entry from the Other saves list without deleting its file.
+  /// The path receives a persistent tombstone so the next scan does not re-add
+  /// it, even if an external file becomes a regular scanned file meanwhile.
+  Future<bool> removeOtherSave(String path) async {
+    if (state.isLoading) return false;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeSwitchProfile);
+      return false;
+    }
+    final save = state.otherSaves
+        .where((candidate) => _sameSavePath(candidate.path, path))
+        .firstOrNull;
+    if (save == null) return false;
+
+    final selectedWasRemoved = _sameSavePath(path, state.selectedPath ?? '');
+    state = state.copyWith(
+      saves: save.isExternal
+          ? [
+              for (final candidate in state.saves)
+                if (!_sameSavePath(candidate.path, path)) candidate,
+            ]
+          : null,
+      externalSavePaths: _removeSavePath(state.externalSavePaths, path),
+      hiddenOtherSavePaths: _addSavePath(state.hiddenOtherSavePaths, save.path),
+    );
+    _persistSettings();
+
+    if (!selectedWasRemoved) return true;
+    final next = state.otherSaves.firstOrNull;
+    if (next != null) {
+      await _inspect(next.path, clearWriteMessage: true);
+    } else {
+      state = state.copyWith(
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        clearPendingEdits: true,
+      );
+    }
+    return true;
   }
 
   Future<Map<String, Object?>> _execute(
@@ -723,10 +901,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final path = typedPath.join(' › ');
       if (!seenTypedPaths.add(path)) {
         state = state.copyWith(
-          error:
-              'Conflicting unsaved edits target the same property '
-              '($path) from two tabs. Reset or revert one of them, '
-              'then save again.',
+          error: _l10n.editorConflictingPropertyEdits(path),
         );
         return false;
       }
@@ -756,13 +931,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           continue;
         }
         final path = rawPath.join(' › ');
-        state = state.copyWith(
-          error:
-              'A glossary segment change and another unsaved All-data edit '
-              'both target the Hero MemorizedEvents array ($path). Glossary '
-              'changes add or remove entries in that array, so the edits cannot '
-              'be saved together — reset or revert one of them, then save again.',
-        );
+        state = state.copyWith(error: _l10n.editorGlossaryMemoryConflict(path));
         return false;
       }
     }
@@ -780,13 +949,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final questPath = List<Object?>.from(rawQuestPath);
       if (!typedPaths.any((path) => _sameEditorPath(path, questPath))) continue;
       final path = questPath.join(' › ');
-      state = state.copyWith(
-        error:
-            'A glossary segment change and another unsaved edit target the '
-            'same quest CurrentState property ($path). The glossary change '
-            'updates that state itself — reset or revert one of them, then '
-            'save again.',
-      );
+      state = state.copyWith(error: _l10n.editorGlossaryQuestConflict(path));
       return false;
     }
 
@@ -822,14 +985,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           continue;
         }
         final path = rawPath.join(' › ');
-        state = state.copyWith(
-          error:
-              'A relationship override and another unsaved All-data edit '
-              'both target the same NPC relationship entry ($path). The '
-              'structured relationship change can replace modifiers in that '
-              'entry, so the edits cannot be saved together — reset or revert '
-              'one of them, then save again.',
-        );
+        state = state.copyWith(error: _l10n.editorRelationshipConflict(path));
         return false;
       }
     }
@@ -854,10 +1010,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final path = List<Object?>.from(rawPath);
       if (structuralArrayPaths.any((other) => _sameEditorPath(other, path))) {
         state = state.copyWith(
-          error:
-              'More than one unsaved structural edit targets the same array '
-              '(${path.join(' › ')}). Save or reset the first change before '
-              'queuing another.',
+          error: _l10n.editorMultipleStructuralArrayEdits(path.join(' › ')),
         );
         return false;
       }
@@ -869,10 +1022,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       if (conflictingValuePath.isEmpty) continue;
       state = state.copyWith(
-        error:
-            'A structural event change and another unsaved All-data edit both '
-            'target ${arrayPath.join(' › ')}. Save or reset one of them '
-            'before continuing.',
+        error: _l10n.editorStructuralArrayConflict(arrayPath.join(' › ')),
       );
       return false;
     }
@@ -952,12 +1102,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final actor = _activeEffectsDefActor(k.edit);
       return actor != null && skillActors.contains(actor);
     })) {
-      state = state.copyWith(
-        error:
-            'A Skills change and an All-data edit to the same actor’s effect '
-            '(ActiveEffects › EffectSpec › Def) are both queued. They cannot be '
-            'saved together — reset or revert one of them, then save again.',
-      );
+      state = state.copyWith(error: _l10n.editorSkillsEffectConflict);
       return false;
     }
     // A reset REPLACES the whole m_Inventory of its actor. Any other edit that
@@ -990,12 +1135,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           }
           return false;
         })) {
-      state = state.copyWith(
-        error:
-            'An inventory reset and another edit to the same inventory are both '
-            'queued. The reset replaces the entire inventory and would discard the '
-            'other edit — reset or revert one of them, then save again.',
-      );
+      state = state.copyWith(error: _l10n.editorInventoryResetConflict);
       return false;
     }
     final fixedBatch = allEdits
@@ -1070,7 +1210,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           );
           if (response['ok'] != true) {
             // Stop on the first failure. Earlier sub-writes already committed.
-            failureError = _errorMessage(response);
+            failureError = _l10n.editorSaveFailed(_errorDetails(response));
             break;
           }
           if (i == 0) {
@@ -1090,7 +1230,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           // All sub-writes succeeded.
           state = state.copyWith(
             lastWriteMessage: _backupMessage(
-              '$n change${n == 1 ? '' : 's'} saved with backup',
+              _l10n.editorChangesSavedWithBackup(n),
               firstData,
             ),
           );
@@ -1128,7 +1268,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
           state = state.copyWith(clearSaveProgress: true);
         }
       }
-    });
+    }, failureMessage: (details) => _l10n.editorSaveFailed(details));
 
     // Converge the pending set to only the still-uncommitted edits — per EDIT, so
     // a partially-committed key keeps its unwritten edits for retry — even if the
@@ -1182,7 +1322,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   Future<void> chooseSaveDir() async {
     final selected = await getDirectoryPath(
-      confirmButtonText: 'Use folder',
+      confirmButtonText: _l10n.editorUseFolder,
       initialDirectory: state.saveDir,
     );
     if (selected == null) return;
@@ -1194,8 +1334,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// menu call sites share the same file filter and loading guard.
   Future<void> openSaveFile() async {
     final file = await openFile(
-      acceptedTypeGroups: const [
-        XTypeGroup(label: 'Gothic savegame', extensions: ['sav']),
+      acceptedTypeGroups: [
+        XTypeGroup(
+          label: _l10n.editorGothicSavegameFileType,
+          extensions: const ['sav'],
+        ),
       ],
     );
     if (file == null) return;
@@ -1207,31 +1350,49 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<void> loadExternalSave(String path) async {
     if (state.isLoading) return;
     if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'Save or reset your unsaved changes before opening another file.',
-      );
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeOpenFile);
       return;
     }
     final normalized = path.trim();
     if (normalized.isEmpty || !normalized.toLowerCase().endsWith('.sav')) {
-      state = state.copyWith(error: 'Select a .sav savegame file.');
+      state = state.copyWith(error: _l10n.editorSelectSavFile);
       return;
     }
 
     SaveSlot? existing;
     for (final save in state.saves) {
-      if (save.path == normalized) {
-        existing = save;
-        break;
+      if (_sameSavePath(save.path, normalized)) {
+        // A scanned entry is authoritative if stale state ever contains both
+        // it and a detached placeholder for the same Windows path.
+        if (!save.isExternal) {
+          existing = save;
+          break;
+        }
+        existing ??= save;
       }
     }
     // Picking a file that already belongs to the scanned folder is just an
     // ordinary selection; retain its authoritative profile association.
     if (existing != null && !existing.isExternal) {
-      await inspect(normalized);
+      final profileId = state.profileIdForSave(existing);
+      final externalSavePaths = _removeSavePath(
+        state.externalSavePaths,
+        existing.path,
+      );
+      final hiddenOtherSavePaths = profileId == null
+          ? _removeSavePath(state.hiddenOtherSavePaths, existing.path)
+          : state.hiddenOtherSavePaths;
+      state = state.copyWith(
+        selectedProfileId: profileId,
+        otherSavesSelected: profileId == null,
+        externalSavePaths: externalSavePaths,
+        hiddenOtherSavePaths: hiddenOtherSavePaths,
+      );
+      _persistSettings();
+      await inspect(existing.path);
       return;
     }
+    final previousState = state;
     final placeholder = existing?.isExternal == true
         ? existing!
         : SaveSlot(
@@ -1243,31 +1404,40 @@ class EditorNotifier extends StateNotifier<EditorState> {
             status: 'loading',
             isExternal: true,
           );
+    // Reopening an existing detached save with different Windows casing or
+    // separators must keep the path stored by its SaveSlot. EditorState's
+    // selection/offer accessors intentionally use that canonical value.
+    final externalPath = placeholder.path;
     final saves = <SaveSlot>[
       for (final save in state.saves)
-        if (save.path != normalized) save,
+        if (!_sameSavePath(save.path, externalPath)) save,
       placeholder,
     ];
     _sortByPlaytimeDesc(saves);
-    state = state.copyWith(saves: saves);
-    await _inspect(normalized, clearWriteMessage: true);
+    final externalSavePaths = _addSavePath(
+      state.externalSavePaths,
+      externalPath,
+    );
+    state = state.copyWith(
+      saves: saves,
+      externalSavePaths: externalSavePaths,
+      hiddenOtherSavePaths: _removeSavePath(
+        state.hiddenOtherSavePaths,
+        externalPath,
+      ),
+      selectedProfileId: null,
+      otherSavesSelected: true,
+    );
+    await _inspect(externalPath, clearWriteMessage: true);
 
-    final inspection = state.selectedPath == normalized
+    final inspection = state.selectedPath == externalPath
         ? state.inspection
         : null;
     if (inspection == null || inspection.format != 'GSAV') {
-      final remaining = state.saves
-          .where((save) => save.path != normalized)
-          .toList(growable: false);
-      state = state.copyWith(
-        saves: remaining,
-        selectedPath: null,
-        clearInspection: true,
-        clearBackups: true,
-        error: inspection?.format == 'GSAV'
-            ? null
-            : 'The selected file is not a Gothic GSAV savegame.',
-      );
+      final openError = state.error ?? _l10n.editorNotGothicGsav;
+      state = previousState.copyWith(error: openError);
+    } else {
+      _persistSettings();
     }
   }
 
@@ -1303,35 +1473,138 @@ class EditorNotifier extends StateNotifier<EditorState> {
     _loadStarted();
     state = state.copyWith(isLoading: true, clearError: true);
     try {
-      final response = await _execute(
-        'scan_save_dir',
-        payload: {'path': state.saveDir},
-      );
-      if (seq != _loadSeq) return;
-      if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
-        return;
+      Map<String, Object?> response;
+      try {
+        response = await _execute(
+          'scan_save_dir',
+          payload: {'path': state.saveDir},
+        );
+      } catch (error) {
+        // Treat a thrown worker/native failure like a structured scan error so
+        // detached files can still be restored and stale paths pruned.
+        response = {
+          'ok': false,
+          'error': {'message': '$error'},
+        };
       }
-      final data = (response['data'] as Map?)?.cast<String, Object?>();
-      final rawSaves = (data?['saves'] as List?) ?? const [];
-      final saves = rawSaves
-          .whereType<Map>()
-          .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
-          .toList();
-      // Directly opened saves are not part of scan_save_dir. Keep them as
-      // detached sidebar entries until the app/session or save folder changes.
-      for (final external in state.saves.where((save) => save.isExternal)) {
-        if (!saves.any((save) => save.path == external.path)) {
-          saves.add(external);
+      if (seq != _loadSeq) return;
+      String? scanError;
+      Map<String, Object?>? data;
+      late final List<ProfileSummary> profiles;
+      late final List<SaveSlot> saves;
+      if (response['ok'] == true) {
+        data = (response['data'] as Map?)?.cast<String, Object?>();
+        final rawProfiles = (data?['profiles'] as List?) ?? const [];
+        profiles = rawProfiles
+            .whereType<Map>()
+            .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
+            .toList();
+        final profileBySavedSlot = <String, int>{
+          for (final profile in profiles)
+            for (final slot in profile.savedSlots) slot: profile.profileId,
+        };
+        final rawSaves = (data?['saves'] as List?) ?? const [];
+        saves = rawSaves.whereType<Map>().map((m) {
+          final json = m.cast<String, Object?>();
+          final inferredProfileId = profileBySavedSlot[json['slot'] as String?];
+          return SaveSlot.fromJson(
+            json['persistentProfileId'] == null && inferredProfileId != null
+                ? {...json, 'persistentProfileId': inferredProfileId}
+                : json,
+          );
+        }).toList();
+      } else {
+        // Detached saves are independent from the configured game save folder.
+        // Keep the last successful folder snapshot, but still restore/prune the
+        // persisted external list when that folder is missing or unreadable.
+        scanError = _l10n.editorScanSavesFailed(_errorDetails(response));
+        profiles = List<ProfileSummary>.of(state.profiles);
+        saves = state.saves.where((save) => !save.isExternal).toList();
+      }
+      bool isUnassignedInNewScan(SaveSlot save) =>
+          !save.isMissing &&
+          save.persistentProfileId == null &&
+          !profiles.any((profile) => profile.savedSlots.contains(save.slot));
+
+      // Restore every persisted external file as a detached SaveSlot. A file
+      // that has since appeared in the configured scan becomes authoritative
+      // there instead; a path that vanished from disk is pruned automatically.
+      var externalSavePaths = <String>[];
+      var hiddenOtherSavePaths = state.hiddenOtherSavePaths;
+      for (final externalPath in state.externalSavePaths) {
+        final scanned = saves
+            .where(
+              (save) =>
+                  !save.isExternal && _sameSavePath(save.path, externalPath),
+            )
+            .firstOrNull;
+        if (scanned != null) {
+          if (isUnassignedInNewScan(scanned)) {
+            // Explicitly opening a scanned, profileless file re-adds it after a
+            // previous manual removal from the Other list.
+            hiddenOtherSavePaths = _removeSavePath(
+              hiddenOtherSavePaths,
+              externalPath,
+            );
+          }
+          continue;
+        }
+        if (!_saveFileExists(externalPath)) continue;
+        externalSavePaths = _addSavePath(externalSavePaths, externalPath);
+        if (saves.any(
+          (save) => save.isExternal && _sameSavePath(save.path, externalPath),
+        )) {
+          continue;
+        }
+        final retained = state.saves
+            .where(
+              (save) =>
+                  save.isExternal && _sameSavePath(save.path, externalPath),
+            )
+            .firstOrNull;
+        final normalized = externalPath.replaceAll('\\', '/');
+        final fileName = normalized.split('/').last;
+        final dot = fileName.lastIndexOf('.');
+        final slot = dot > 0 ? fileName.substring(0, dot) : fileName;
+        saves.add(
+          retained ??
+              SaveSlot(
+                path: externalPath,
+                slot: slot.isEmpty ? 'external' : slot,
+                format: 'GSAV',
+                fileSize: 0,
+                sha1: '',
+                status: 'ok',
+                isExternal: true,
+              ),
+        );
+      }
+
+      // Keep a scanned-save tombstone only while the same file still exists and
+      // remains profileless. Assigned/deleted saves cannot belong to this list.
+      var keptHiddenOtherSavePaths = <String>[];
+      for (final hiddenPath in hiddenOtherSavePaths) {
+        final scanned = saves
+            .where(
+              (save) =>
+                  !save.isExternal && _sameSavePath(save.path, hiddenPath),
+            )
+            .firstOrNull;
+        final keep = scanned != null
+            ? isUnassignedInNewScan(scanned)
+            : _saveFileExists(hiddenPath);
+        if (keep) {
+          keptHiddenOtherSavePaths = _addSavePath(
+            keptHiddenOtherSavePaths,
+            hiddenPath,
+          );
         }
       }
+      hiddenOtherSavePaths = keptHiddenOtherSavePaths;
       _sortByPlaytimeDesc(saves);
-      final rawProfiles = (data?['profiles'] as List?) ?? const [];
-      final profiles = rawProfiles
-          .whereType<Map>()
-          .map((m) => ProfileSummary.fromJson(m.cast<String, Object?>()))
-          .toList();
-      final activeProfileId = (data?['activeProfileId'] as num?)?.toInt();
+      final activeProfileId = scanError == null
+          ? (data?['activeProfileId'] as num?)?.toInt()
+          : state.activeProfileId;
       // Keep the explicit profile selection if that profile still exists in
       // the new scan result, otherwise reset it to null.
       final profileIds = profiles.map((p) => p.profileId).toSet();
@@ -1348,16 +1621,32 @@ class EditorNotifier extends StateNotifier<EditorState> {
         profiles: profiles,
         activeProfileId: activeProfileId,
         selectedProfileId: keptSelectedProfileId,
+        externalSavePaths: externalSavePaths,
+        hiddenOtherSavePaths: hiddenOtherSavePaths,
+        // With no profiles, Other saves is the switcher's only destination and
+        // therefore the natural initial view (including its Open file button).
+        otherSavesSelected: profiles.isEmpty ? true : state.otherSavesSelected,
       );
+      final settingsChanged =
+          !_sameSavePathList(state.externalSavePaths, externalSavePaths) ||
+          !_sameSavePathList(state.hiddenOtherSavePaths, hiddenOtherSavePaths);
       // Compute visible saves with the updated state fields to find a
       // sensible first selection path when the folder or profile changed.
       final visibleAfterRefresh = newState.visibleSaves;
+      final retainedSelection = visibleAfterRefresh
+          .where(
+            (save) =>
+                !save.isMissing &&
+                state.selectedPath != null &&
+                _sameSavePath(save.path, state.selectedPath!),
+          )
+          .firstOrNull;
       final selectedPath =
-          visibleAfterRefresh.any((s) => s.path == state.selectedPath)
-          ? state.selectedPath
-          : (visibleAfterRefresh.isNotEmpty
-                ? visibleAfterRefresh.first.path
-                : null);
+          retainedSelection?.path ??
+          visibleAfterRefresh
+              .where((save) => !save.isMissing)
+              .firstOrNull
+              ?.path;
       // Pending edits are cleared by _inspect once the fresh inspection
       // actually lands (so a failed re-inspect keeps them retryable); only
       // when nothing remains selected is there no inspect to do it.
@@ -1368,30 +1657,35 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // folder changed) resets the actor-aware tabs to the player. Pre-setting it
       // here made switchingSlot always false on refresh, leaking a stale NPC
       // GlobalId into the newly inspected save.
+      state = newState;
+      if (settingsChanged) _persistSettings();
       if (selectedPath == null) {
-        state = newState.copyWith(
+        state = state.copyWith(
           selectedPath: null,
           clearInspection: true,
           clearBackups: true,
           clearPendingEdits: true,
         );
       } else {
-        state = newState;
         await _inspect(
           selectedPath,
           // Restore the preserved partial-save edits only if we landed back on
           // the same save they target (atomic with the inspection re-seed).
           restorePendingEdits:
-              (preservedForPath != null && selectedPath == preservedForPath)
+              (preservedForPath != null &&
+                  _sameSavePath(selectedPath, preservedForPath))
               ? preservedEdits
               : null,
         );
+      }
+      if (scanError != null && state.error == null) {
+        state = state.copyWith(error: scanError);
       }
     } catch (error) {
       // A thrown core call (e.g. invalid/null native JSON) must surface as an
       // in-app error, not just an async console error.
       if (seq == _loadSeq) {
-        state = state.copyWith(error: 'Failed to scan saves: $error');
+        state = state.copyWith(error: _l10n.editorScanSavesFailed('$error'));
       }
     } finally {
       _loadFinished();
@@ -1399,6 +1693,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   Future<void> inspect(String path) async {
+    // Missing profile references use the expected file path as a stable row
+    // key, but no file exists to inspect. Ignore programmatic taps as well as
+    // disabling the row in the widget so this invariant is enforced in-domain.
+    if (state.saves.any(
+      (save) => _sameSavePath(save.path, path) && save.isMissing,
+    )) {
+      return;
+    }
     await _inspect(path, clearWriteMessage: true);
   }
 
@@ -1410,7 +1712,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final seq = ++_loadSeq;
     // Switching slots: drop the previous slot's inspection/backups so the panes
     // don't keep showing stale data while the new load runs.
-    final switchingSlot = state.selectedPath != path;
+    final switchingSlot =
+        state.selectedPath == null || !_sameSavePath(state.selectedPath!, path);
     _loadStarted();
     state = state.copyWith(
       selectedPath: path,
@@ -1441,7 +1744,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       if (seq != _loadSeq) return;
       if (response['ok'] != true) {
         state = state.copyWith(
-          error: _errorMessage(response),
+          error: _l10n.editorInspectSaveFailed(_errorDetails(response)),
           clearInspection: true,
           clearBackups: true,
         );
@@ -1457,12 +1760,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
       _invalidateNpcCache();
       final inspection = SaveInspection.fromJson(data);
       final selectedWasExternal = state.saves.any(
-        (save) => save.path == path && save.isExternal,
+        (save) => save.isExternal && _sameSavePath(save.path, path),
       );
       final refreshedSaves = selectedWasExternal
           ? <SaveSlot>[
               for (final save in state.saves)
-                if (save.path != path) save,
+                if (!_sameSavePath(save.path, path)) save,
               SaveSlot.fromInspection(inspection, isExternal: true),
             ]
           : state.saves;
@@ -1498,7 +1801,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     } catch (error) {
       if (seq == _loadSeq) {
         state = state.copyWith(
-          error: 'Failed to inspect save: $error',
+          error: _l10n.editorInspectSaveFailed('$error'),
           clearInspection: true,
           clearBackups: true,
         );
@@ -1517,23 +1820,20 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<bool> assignSelectedSaveToProfile(int profileId) async {
     if (state.isLoading) return false;
     if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'Save or reset your unsaved changes before changing the save profile.',
-      );
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeChangeSaveProfile);
       return false;
     }
     final save = state.selectedSave;
     if (save == null) return false;
     if (!state.profiles.any((profile) => profile.profileId == profileId)) {
-      state = state.copyWith(error: 'Profile $profileId was not found.');
+      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
       return false;
     }
     if (!save.isExternal && save.persistentProfileId == profileId) return true;
 
     final dir = state.saveDir;
     if (dir.trim().isEmpty) {
-      state = state.copyWith(error: 'No save folder selected.');
+      state = state.copyWith(error: _l10n.editorNoSaveFolderSelected);
       return false;
     }
     final isWindowsStyle =
@@ -1544,17 +1844,16 @@ class EditorNotifier extends StateNotifier<EditorState> {
         ? _freeExternalImportPath(save, ctx)
         : null;
     if (save.isExternal && destinationPath == null) {
-      state = state.copyWith(
-        error:
-            'No free save slot is available in the game save folder '
-            '(G1R-001 through G1R-999).',
-      );
+      state = state.copyWith(error: _l10n.editorNoFreeSaveSlot);
       return false;
     }
 
     final previousSaves = state.saves;
     final previousPath = state.selectedPath;
     final previousSelection = state.selectedProfileId;
+    final previousExternalSavePaths = state.externalSavePaths;
+    final previousHiddenOtherSavePaths = state.hiddenOtherSavePaths;
+    final previousOtherSelection = state.otherSavesSelected;
     // Keep the freshly assigned save visible through the trailing rescan. For
     // imports, remove the detached source before refresh so refresh() does not
     // merge it back into the scanned folder list, and point selection at the
@@ -1568,6 +1867,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
           : null,
       selectedPath: save.isExternal ? destinationPath : _unchanged,
       selectedProfileId: profileId,
+      otherSavesSelected: false,
+      externalSavePaths: _removeSavePath(state.externalSavePaths, save.path),
+      hiddenOtherSavePaths: _removeSavePath(
+        state.hiddenOtherSavePaths,
+        save.path,
+      ),
     );
     final ok = await _runWrite(
       command: 'assign_save_profile',
@@ -1578,9 +1883,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
         'profileId': profileId,
         'backup': true,
       },
+      failureMessage: (details) => _l10n.editorProfileAssignmentFailed(details),
       message: (data) => save.isExternal
-          ? 'Save imported and assigned to profile $profileId'
-          : 'Save assigned to profile $profileId (paired backups created)',
+          ? _l10n.editorSaveImportedAssigned(profileId)
+          : _l10n.editorSaveAssigned(profileId),
+      beforeRefresh: _persistSettings,
     );
     if (!ok) {
       // The command did not commit. Restore the detached entry and selection
@@ -1590,9 +1897,82 @@ class EditorNotifier extends StateNotifier<EditorState> {
         saves: previousSaves,
         selectedPath: previousPath,
         selectedProfileId: previousSelection,
+        externalSavePaths: previousExternalSavePaths,
+        hiddenOtherSavePaths: previousHiddenOtherSavePaths,
+        otherSavesSelected: previousOtherSelection,
       );
     }
     return ok;
+  }
+
+  /// Remove a slot from its game profile without deleting the physical save.
+  ///
+  /// The core removes all profile-array references and the authoritative
+  /// PersistentDataList public-data entry in one validated, backed-up write.
+  /// This works for both a real save and a missing/orphaned reference. A real
+  /// file remains in the scan as an unattributed save; an orphan disappears.
+  Future<bool> removeSaveFromProfile({
+    required String slot,
+    required int profileId,
+  }) async {
+    if (state.isLoading) return false;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeRemoveProfile);
+      return false;
+    }
+    final profile = state.profiles
+        .where((candidate) => candidate.profileId == profileId)
+        .firstOrNull;
+    if (profile == null) {
+      state = state.copyWith(error: _l10n.editorProfileNotFound(profileId));
+      return false;
+    }
+    final save = state.saves
+        .where(
+          (candidate) =>
+              candidate.slot == slot &&
+              candidate.persistentProfileId == profileId,
+        )
+        .firstOrNull;
+    if (!profile.savedSlots.contains(slot) && save == null) {
+      state = state.copyWith(
+        error: _l10n.editorSaveSlotNotAssigned(slot, profileId),
+      );
+      return false;
+    }
+
+    final dir = state.saveDir;
+    if (dir.trim().isEmpty) {
+      state = state.copyWith(error: _l10n.editorNoSaveFolderSelected);
+      return false;
+    }
+    final isWindowsStyle =
+        dir.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(dir);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+
+    return _runWrite(
+      command: 'remove_save_from_profile',
+      payload: {
+        'persistentPath': ctx.join(dir, 'PersistentDataList.sav'),
+        'slot': slot,
+        'profileId': profileId,
+        'backup': true,
+      },
+      failureMessage: (details) => _l10n.editorProfileRemovalFailed(details),
+      message: (data) =>
+          _backupMessage(_l10n.editorSaveRemovedFromProfile, data),
+      beforeRefresh: save == null || save.isMissing
+          ? null
+          : () {
+              state = state.copyWith(
+                hiddenOtherSavePaths: _removeSavePath(
+                  state.hiddenOtherSavePaths,
+                  save.path,
+                ),
+              );
+              _persistSettings();
+            },
+    );
   }
 
   String? _freeExternalImportPath(SaveSlot source, p.Context ctx) {
@@ -1648,7 +2028,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
     } catch (error) {
       if (seq == _loadSeq) {
-        state = state.copyWith(error: 'Failed to load backups: $error');
+        state = state.copyWith(error: _l10n.editorLoadBackupsFailed('$error'));
       }
     } finally {
       _loadFinished();
@@ -1665,11 +2045,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // restore while they are unsaved (mirrors the profile difficulty write)
     // rather than silently discarding them.
     if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'You have unsaved save edits. Save or reset them before restoring '
-            'a profile backup.',
-      );
+      state = state.copyWith(error: _l10n.editorUnsavedBeforeRestoreProfile);
       return;
     }
     final selected = state.selectedPath;
@@ -1698,7 +2074,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {'path': path, 'backupPath': backupPath},
       );
       if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
+        state = state.copyWith(
+          error: _l10n.editorRestoreFailed(_errorDetails(response)),
+        );
         return;
       }
       final data = (response['data'] as Map?)?.cast<String, Object?>();
@@ -1712,9 +2090,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final targetIsPdl = path.endsWith('PersistentDataList.sav');
       final restoreMessage =
           companionPresent && !companionRestored && !targetIsPdl
-          ? 'Restored backup: $backupPath (PersistentDataList.sav left unchanged '
-                '— no matching companion backup; slot metadata may differ)'
-          : 'Restored backup: $backupPath';
+          ? _l10n.editorRestoredBackupWithoutCompanion(backupPath)
+          : _l10n.editorRestoredBackup(backupPath);
       state = state.copyWith(lastWriteMessage: restoreMessage);
       // Rescan so the sidebar/profile summary reflect the rolled-back public
       // name and PersistentDataList metadata, not just the detail pane.
@@ -1726,11 +2103,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // failed restore.
       if (state.error != null) {
         state = state.copyWith(
-          error:
-              'Restored backup: $backupPath, but reloading the save failed: ${state.error}',
+          error: _l10n.editorRestoreReloadFailed(backupPath, state.error!),
         );
       }
-    });
+    }, failureMessage: (details) => _l10n.editorRestoreFailed(details));
   }
 
   Future<void> checkCodec() async {
@@ -1741,7 +2117,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         // does not wipe this message, and drop the now-stale codec status so
         // the UI doesn't keep showing an earlier "ready" state.
         state = state.copyWith(
-          codecError: _errorMessage(response),
+          codecError: _l10n.editorCodecCheckFailed(_errorDetails(response)),
           clearCodecStatus: true,
         );
         return;
@@ -1759,7 +2135,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // checkCodec is fire-and-forget from the constructor; a thrown core call
       // must surface in UI state, not as an unhandled async error.
       state = state.copyWith(
-        codecError: 'Codec check failed: $error',
+        codecError: _l10n.editorCodecCheckFailed('$error'),
         clearCodecStatus: true,
       );
     }
@@ -1777,15 +2153,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {'path': path},
       );
       if (response['ok'] != true) {
-        state = state.copyWith(error: _errorMessage(response));
+        state = state.copyWith(
+          error: _l10n.editorCodecValidationFailed(_errorDetails(response)),
+        );
         return;
       }
       final data = (response['data'] as Map).cast<String, Object?>();
       state = state.copyWith(
-        lastWriteMessage:
-            'Codec roundtrip passed: chunk ${data['chunkIndex']} recompressed to ${data['recompressedSize']} bytes',
+        lastWriteMessage: _l10n.editorCodecRoundtripPassed(
+          (data['chunkIndex'] as num?)?.toInt() ?? 0,
+          (data['recompressedSize'] as num?)?.toInt() ?? 0,
+        ),
       );
-    });
+    }, failureMessage: (details) => _l10n.editorCodecValidationFailed(details));
   }
 
   /// Search every typed property in the decoded private payload. The core
@@ -1799,7 +2179,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) async {
     final path = state.selectedPath;
     if (path == null) {
-      return const TypedSearchResult(error: 'No save selected.');
+      return TypedSearchResult(error: _l10n.editorNoSaveSelected);
     }
     try {
       final response = await _execute(
@@ -1812,13 +2192,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
         },
       );
       if (response['ok'] != true) {
-        return TypedSearchResult(error: _errorMessage(response));
+        return TypedSearchResult(
+          error: _l10n.editorPropertySearchFailed(_errorDetails(response)),
+        );
       }
       return TypedSearchResult.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
     } catch (error) {
-      return TypedSearchResult(error: 'Property search failed: $error');
+      return TypedSearchResult(
+        error: _l10n.editorPropertySearchFailed('$error'),
+      );
     }
   }
 
@@ -1845,8 +2229,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
         limit: 1000,
       );
       if (state.selectedPath != loadPath) {
-        return const HeroAttributesResult(
-          error: 'Save selection changed while loading hero attributes.',
+        return HeroAttributesResult(
+          error: _l10n.editorSelectionChangedWhileLoadingHeroAttributes,
         );
       }
       if (result.error != null) {
@@ -1909,7 +2293,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<SkillsResult> loadSkills({String actor = 'Hero'}) async {
     final path = state.selectedPath;
     if (path == null) {
-      return const SkillsResult(error: 'No save selected.');
+      return SkillsResult(error: _l10n.editorNoSaveSelected);
     }
     try {
       final response = await _execute(
@@ -1917,13 +2301,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {'path': path, 'actor': actor},
       );
       if (response['ok'] != true) {
-        return SkillsResult(error: _errorMessage(response));
+        return SkillsResult(
+          error: _l10n.editorSkillsLoadFailed(_errorDetails(response)),
+        );
       }
       return SkillsResult.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
     } catch (error) {
-      return SkillsResult(error: 'Skills load failed: $error');
+      return SkillsResult(error: _l10n.editorSkillsLoadFailed('$error'));
     }
   }
 
@@ -1936,7 +2322,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) async {
     final path = state.selectedPath;
     if (path == null) {
-      onError('No save selected.');
+      onError(_l10n.editorNoSaveSelected);
       return null;
     }
     try {
@@ -1945,12 +2331,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {'path': path, ...params},
       );
       if (response['ok'] != true) {
-        onError(_errorMessage(response));
+        onError(_l10n.editorProgressionQueryFailed(_errorDetails(response)));
         return null;
       }
       return (response['data'] as Map).cast<String, Object?>();
     } catch (error) {
-      onError('Progression query failed: $error');
+      onError(_l10n.editorProgressionQueryFailed('$error'));
       return null;
     }
   }
@@ -2088,7 +2474,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // [loadAllNpcActors]); single-shot callers omit it and use the live path.
     final resolvedPath = path ?? state.selectedPath;
     if (resolvedPath == null) {
-      return const NpcActorsPage(error: 'No save selected.');
+      return NpcActorsPage(error: _l10n.editorNoSaveSelected);
     }
     try {
       final response = await _execute(
@@ -2101,13 +2487,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         },
       );
       if (response['ok'] != true) {
-        return NpcActorsPage(error: _errorMessage(response));
+        return NpcActorsPage(
+          error: _l10n.editorNpcListFailed(_errorDetails(response)),
+        );
       }
       return NpcActorsPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
     } catch (error) {
-      return NpcActorsPage(error: 'NPC list failed: $error');
+      return NpcActorsPage(error: _l10n.editorNpcListFailed('$error'));
     }
   }
 
@@ -2133,7 +2521,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<CharacterIndexPage> loadAllCharacters() async {
     final path = state.selectedPath;
     if (path == null) {
-      return const CharacterIndexPage(error: 'No save selected.');
+      return CharacterIndexPage(error: _l10n.editorNoSaveSelected);
     }
     // Marks the load settled — only for the save this request was issued
     // against: a slot switch during the (serialized, possibly slow) core call
@@ -2151,7 +2539,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       );
       if (response['ok'] != true) {
         settle();
-        return CharacterIndexPage(error: _errorMessage(response));
+        return CharacterIndexPage(
+          error: _l10n.editorCharacterListFailed(_errorDetails(response)),
+        );
       }
       final page = CharacterIndexPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
@@ -2170,7 +2560,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       return page;
     } catch (error) {
       settle();
-      return CharacterIndexPage(error: 'Character list failed: $error');
+      return CharacterIndexPage(
+        error: _l10n.editorCharacterListFailed('$error'),
+      );
     }
   }
 
@@ -2289,7 +2681,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final path = state.selectedPath;
     if (path == null) {
       return Future.value(
-        const NpcAttributesResult(error: 'No save selected.'),
+        NpcAttributesResult(error: _l10n.editorNoSaveSelected),
       );
     }
     _guardNpcDetailCache(path);
@@ -2303,14 +2695,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
         );
         if (response['ok'] != true) {
           _npcAttributesCache.remove(id);
-          return NpcAttributesResult(error: _errorMessage(response));
+          return NpcAttributesResult(
+            error: _l10n.editorNpcAttributesFailed(_errorDetails(response)),
+          );
         }
         return NpcAttributesResult.fromJson(
           (response['data'] as Map).cast<String, Object?>(),
         );
       } catch (error) {
         _npcAttributesCache.remove(id);
-        return NpcAttributesResult(error: 'NPC attributes failed: $error');
+        return NpcAttributesResult(
+          error: _l10n.editorNpcAttributesFailed('$error'),
+        );
       }
     }();
     _npcAttributesCache[id] = future;
@@ -2327,7 +2723,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<NpcInventoryResult> loadNpcInventory(String id) {
     final path = state.selectedPath;
     if (path == null) {
-      return Future.value(const NpcInventoryResult(error: 'No save selected.'));
+      return Future.value(
+        NpcInventoryResult(error: _l10n.editorNoSaveSelected),
+      );
     }
     _guardNpcDetailCache(path);
     final cached = _npcInventoryCache[id];
@@ -2340,14 +2738,18 @@ class EditorNotifier extends StateNotifier<EditorState> {
         );
         if (response['ok'] != true) {
           _npcInventoryCache.remove(id);
-          return NpcInventoryResult(error: _errorMessage(response));
+          return NpcInventoryResult(
+            error: _l10n.editorNpcInventoryFailed(_errorDetails(response)),
+          );
         }
         return NpcInventoryResult.fromJson(
           (response['data'] as Map).cast<String, Object?>(),
         );
       } catch (error) {
         _npcInventoryCache.remove(id);
-        return NpcInventoryResult(error: 'NPC inventory failed: $error');
+        return NpcInventoryResult(
+          error: _l10n.editorNpcInventoryFailed('$error'),
+        );
       }
     }();
     _npcInventoryCache[id] = future;
@@ -2463,7 +2865,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<FactionsPage> loadFactions() async {
     final path = state.selectedPath;
     if (path == null) {
-      return const FactionsPage(error: 'No save selected.');
+      return FactionsPage(error: _l10n.editorNoSaveSelected);
     }
     try {
       final response = await _execute(
@@ -2471,13 +2873,15 @@ class EditorNotifier extends StateNotifier<EditorState> {
         payload: {'path': path},
       );
       if (response['ok'] != true) {
-        return FactionsPage(error: _errorMessage(response));
+        return FactionsPage(
+          error: _l10n.editorFactionListFailed(_errorDetails(response)),
+        );
       }
       return FactionsPage.fromJson(
         (response['data'] as Map).cast<String, Object?>(),
       );
     } catch (error) {
-      return FactionsPage(error: 'Faction list failed: $error');
+      return FactionsPage(error: _l10n.editorFactionListFailed('$error'));
     }
   }
 
@@ -2514,18 +2918,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
       .map((k) => k.substring(_factionForgivePrefix.length))
       .toSet();
 
-  String _errorMessage(Map<String, Object?> response) {
+  String _errorDetails(Map<String, Object?> response) {
     final error = (response['error'] as Map?)?.cast<String, Object?>();
-    return error?['message'] as String? ?? 'Unknown core error';
+    return error?['message'] as String? ?? _l10n.coreUnknownError;
   }
 
   String _backupMessage(String prefix, Map<String, Object?> data) {
-    final backupPath = data['backupPath'] ?? 'none';
+    final backupPath =
+        data['backupPath']?.toString() ?? _l10n.editorNoBackupPath;
     final persistentBackupPath = data['persistentBackupPath'] as String?;
     if (persistentBackupPath == null || persistentBackupPath.isEmpty) {
-      return '$prefix: $backupPath';
+      return _l10n.editorBackupMessage(prefix, backupPath);
     }
-    return '$prefix: $backupPath; PersistentDataList backup: $persistentBackupPath';
+    return _l10n.editorBackupMessageWithPersistent(
+      prefix,
+      backupPath,
+      persistentBackupPath,
+    );
   }
 
   Future<_BackupSnapshot?> _loadBackups(String path, int seq) async {
@@ -2535,7 +2944,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (seq != _loadSeq) return null;
     if (response['ok'] != true) {
       // Leave isLoading to the caller's load-counter bookkeeping.
-      state = state.copyWith(error: _errorMessage(response));
+      state = state.copyWith(
+        error: _l10n.editorLoadBackupsFailed(_errorDetails(response)),
+      );
       return null;
     }
     final data = (response['data'] as Map?)?.cast<String, Object?>();
@@ -2557,7 +2968,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }
 
   void _persistSettings() {
-    _settingsStore.write(EditorSettings(saveDir: state.saveDir));
+    _settingsStore.write(
+      EditorSettings(
+        saveDir: state.saveDir,
+        externalSavePaths: state.externalSavePaths,
+        hiddenOtherSavePaths: state.hiddenOtherSavePaths,
+      ),
+    );
   }
 
   static EditorState _initialState({
@@ -2565,7 +2982,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     required EditorSettingsStore settingsStore,
   }) {
     final stored = settingsStore.read();
-    return EditorState(saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot());
+    return EditorState(
+      saveDir: saveDir ?? stored.saveDir ?? defaultSaveRoot(),
+      externalSavePaths: stored.externalSavePaths,
+      hiddenOtherSavePaths: stored.hiddenOtherSavePaths,
+    );
   }
 }
 

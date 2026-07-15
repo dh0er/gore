@@ -94,10 +94,13 @@ class _NpcRelationshipEditorState extends State<NpcRelationshipEditor> {
       });
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
+      final message = AppLocalizations.of(
+        context,
+      ).editorNpcListFailed(error.toString());
       setState(() {
         _loading = false;
         _actor = null;
-        _error = error.toString();
+        _error = message;
       });
     }
   }

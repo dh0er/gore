@@ -91,7 +91,11 @@ class _AddInventoryItemDialogState
     GameLang lang,
     String id,
   ) {
-    return localizedGameName(catalog, lang, id) ?? itemDisplayNameFromId(id);
+    return localizedGameName(catalog, lang, id) ??
+        itemDisplayNameFromId(
+          id,
+          fallback: AppLocalizations.of(context).fallbackItem,
+        );
   }
 
   bool get _canAdd {

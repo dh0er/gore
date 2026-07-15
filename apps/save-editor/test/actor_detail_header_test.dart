@@ -7,7 +7,9 @@ import 'package:goresave/loc/game_lang.dart';
 import 'support/l10n_test_app.dart';
 
 void main() {
-  testWidgets('NPC header hides the GlobalId by default', (tester) async {
+  testWidgets('NPC header always shows the GlobalId when ids are disabled', (
+    tester,
+  ) async {
     const id = 'Herek-WP_OM_TUNNEL_ME_01';
     await tester.pumpWidget(
       wrapWithL10n(
@@ -18,6 +20,7 @@ void main() {
               'herek': {'english': 'Herek'},
             },
             lang: kGameLangs.first,
+            showObjectIds: false,
           ),
         ),
       ),
@@ -25,7 +28,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Herek'), findsOneWidget);
-    expect(find.text(id), findsNothing);
+    expect(find.widgetWithText(SelectableText, id), findsOneWidget);
   });
 
   testWidgets(

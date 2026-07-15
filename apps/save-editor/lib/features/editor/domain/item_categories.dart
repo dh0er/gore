@@ -94,7 +94,7 @@ ItemCategory itemCategoryFromId(String id) {
 
 /// Human-readable name derived from the class id; never reads game
 /// localization data (legal posture: identifiers only).
-String itemDisplayNameFromId(String id) {
+String itemDisplayNameFromId(String id, {String fallback = 'Item'}) {
   const prefixes = [
     'ItMw_',
     'ItRw_',
@@ -129,7 +129,7 @@ String itemDisplayNameFromId(String id) {
   final cleaned = genericItemPrefix
       ? _humanizeItemToken(name)
       : name.replaceAll('_', ' ').trim();
-  return cleaned.isEmpty ? 'Item' : cleaned;
+  return cleaned.isEmpty ? fallback : cleaned;
 }
 
 bool _isAsciiUpper(int codeUnit) => codeUnit >= 0x41 && codeUnit <= 0x5a;

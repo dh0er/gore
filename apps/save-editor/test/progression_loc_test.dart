@@ -128,6 +128,40 @@ void main() {
     });
   });
 
+  group('knowledgeEntryType', () {
+    test('classifies every known dialog-knowledge prefix', () {
+      expect(knowledgeEntryType('ChoiceDiegoHello'), KnowledgeEntryType.choice);
+      expect(knowledgeEntryType('Info_Diego_Hello'), KnowledgeEntryType.info);
+      expect(
+        knowledgeEntryType('Voiceline_info_diego'),
+        KnowledgeEntryType.voiceLine,
+      );
+      expect(
+        knowledgeEntryType('Topic_Diego_209799'),
+        KnowledgeEntryType.topic,
+      );
+      expect(
+        knowledgeEntryType('UnclassifiedKnowledge'),
+        KnowledgeEntryType.other,
+      );
+    });
+
+    test('prefers catalog category metadata over an opaque entry id', () {
+      expect(
+        knowledgeEntryType('GeneratedNode209799', catalogCategory: 'choice'),
+        KnowledgeEntryType.choice,
+      );
+      expect(
+        knowledgeEntryType('GeneratedNode209799', catalogCategory: 'info'),
+        KnowledgeEntryType.info,
+      );
+      expect(
+        knowledgeEntryType('GeneratedNode209799', catalogCategory: 'topic'),
+        KnowledgeEntryType.topic,
+      );
+    });
+  });
+
   group('localizedQuestName', () {
     test('quest class id → quest-<body>-name', () {
       expect(

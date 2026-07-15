@@ -6,6 +6,20 @@ notes, so every release needs an entry.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-07-15
+
+### Added
+
+- Added an "Other saves" view for persistent management of profileless and
+  external savegames.
+- Savegames can now be assigned or removed from a profile.
+
+### Changed
+
+- Improved the quest layout and hierarchy.
+- Moved tutorials to the Glossary.
+- General improvements of UI and translations.
+
 ## [1.1.0] - 2026-07-14
 
 ### Added
