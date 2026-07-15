@@ -15,12 +15,48 @@ typedef ScriptCompileInstallStateLoader =
 
 enum ScriptCompileInstallSafetyPhase { noGame, loading, ready, failed }
 
+/// Persistent app-scoped evidence that the selected installation may require
+/// recovery before any later compiler or deploy mutation.
+///
+/// Managed revision-3 compiler checks deliberately return no mini-cache path,
+/// so they cannot be represented by [ScriptCompileReport]. This smaller closed
+/// record keeps the shared safety gate recovery-dominant without inventing
+/// artifact authority. A fresh native install-state probe is the only clear
+/// operation.
+final class ScriptCompileRecoveryEvidence {
+  const ScriptCompileRecoveryEvidence({
+    required this.code,
+    required this.message,
+    required this.installRestore,
+    this.legacyReport,
+  });
+
+  final String code;
+  final String message;
+  final ScriptCompileInstallRestore installRestore;
+  final ScriptCompileReport? legacyReport;
+
+  factory ScriptCompileRecoveryEvidence.fromLegacyReport(
+    ScriptCompileReport report,
+  ) {
+    final failure = report.failure;
+    return ScriptCompileRecoveryEvidence(
+      code: failure?.code ?? 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+      message:
+          failure?.message ??
+          'The previous compiler attempt requires installation recovery.',
+      installRestore: report.installRestore,
+      legacyReport: report,
+    );
+  }
+}
+
 final class ScriptCompileInstallSafetyState {
   const ScriptCompileInstallSafetyState._({
     required this.gameRoot,
     required this.phase,
     required this.installState,
-    required this.recoveryReport,
+    required this.recoveryEvidence,
     required this.errorMessage,
   });
 
@@ -29,21 +65,26 @@ final class ScriptCompileInstallSafetyState {
         gameRoot: null,
         phase: ScriptCompileInstallSafetyPhase.noGame,
         installState: null,
-        recoveryReport: null,
+        recoveryEvidence: null,
         errorMessage: null,
       );
 
   final String? gameRoot;
   final ScriptCompileInstallSafetyPhase phase;
   final ScriptCompileInstallState? installState;
-  final ScriptCompileReport? recoveryReport;
+  final ScriptCompileRecoveryEvidence? recoveryEvidence;
   final String? errorMessage;
+
+  /// Compatibility accessor for the legacy Script-tab report dialog.
+  ScriptCompileReport? get recoveryReport => recoveryEvidence?.legacyReport;
+
+  bool get recoveryRequired => recoveryEvidence != null;
 
   bool get liveMutationAllowed =>
       gameRoot != null &&
       phase == ScriptCompileInstallSafetyPhase.ready &&
       installState?.safeToCompile == true &&
-      recoveryReport == null;
+      recoveryEvidence == null;
 
   bool get showBlockingBanner => gameRoot != null && !liveMutationAllowed;
 
@@ -52,17 +93,17 @@ final class ScriptCompileInstallSafetyState {
     ScriptCompileInstallSafetyPhase? phase,
     ScriptCompileInstallState? installState,
     bool clearInstallState = false,
-    ScriptCompileReport? recoveryReport,
-    bool clearRecoveryReport = false,
+    ScriptCompileRecoveryEvidence? recoveryEvidence,
+    bool clearRecoveryEvidence = false,
     String? errorMessage,
     bool clearError = false,
   }) => ScriptCompileInstallSafetyState._(
     gameRoot: gameRoot ?? this.gameRoot,
     phase: phase ?? this.phase,
     installState: clearInstallState ? null : installState ?? this.installState,
-    recoveryReport: clearRecoveryReport
+    recoveryEvidence: clearRecoveryEvidence
         ? null
-        : recoveryReport ?? this.recoveryReport,
+        : recoveryEvidence ?? this.recoveryEvidence,
     errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
   );
 }
@@ -83,7 +124,8 @@ final class ScriptCompileInstallSafetyController
   }
 
   final ScriptCompileInstallStateLoader _load;
-  final Map<String, ScriptCompileReport> _recoveryReports = {};
+  final p.PathMap<ScriptCompileRecoveryEvidence> _recoveryEvidence =
+      p.PathMap<ScriptCompileRecoveryEvidence>();
   int _generation = 0;
   bool _disposed = false;
 
@@ -91,13 +133,13 @@ final class ScriptCompileInstallSafetyController
 
   void setGameRoot(String? gameRoot, {bool refresh = true}) {
     final currentRoot = state.gameRoot;
-    final currentReport = state.recoveryReport;
-    if (currentRoot != null && currentReport != null) {
-      _recoveryReports[currentRoot] = currentReport;
+    final currentRecovery = state.recoveryEvidence;
+    if (currentRoot != null && currentRecovery != null) {
+      _recoveryEvidence[currentRoot] = currentRecovery;
     }
     final normalized = gameRoot == null || gameRoot.isEmpty
         ? null
-        : p.normalize(p.absolute(gameRoot));
+        : _normalizeGameRoot(gameRoot);
     _generation++;
     if (normalized == null) {
       state = const ScriptCompileInstallSafetyState.noGame();
@@ -109,16 +151,63 @@ final class ScriptCompileInstallSafetyController
           ? ScriptCompileInstallSafetyPhase.loading
           : ScriptCompileInstallSafetyPhase.failed,
       installState: null,
-      recoveryReport: _recoveryReports[normalized],
+      recoveryEvidence: _recoveryEvidence[normalized],
       errorMessage: refresh ? null : 'Install safety has not been checked.',
     );
     if (refresh) unawaited(this.refresh());
   }
 
-  void recordCompileReport(ScriptCompileReport report) {
-    if (!report.recoveryRequired || state.gameRoot == null) return;
-    _recoveryReports[state.gameRoot!] = report;
-    state = state.copyWith(recoveryReport: report);
+  void recordCompileReport(
+    ScriptCompileReport report, {
+    required String gameRoot,
+  }) {
+    if (!report.recoveryRequired) return;
+    final evidence = ScriptCompileRecoveryEvidence.fromLegacyReport(report);
+    _recordRecoveryForRoot(gameRoot, evidence);
+  }
+
+  /// Retain recovery from an evidence-only managed compiler check.
+  ///
+  /// This accepts only the recovery projection, never a staging or output path.
+  void recordManagedRecovery({
+    required String gameRoot,
+    required String code,
+    required String message,
+    required ScriptCompileInstallRestore installRestore,
+  }) {
+    final evidence = ScriptCompileRecoveryEvidence(
+      code: code,
+      message: message,
+      installRestore: installRestore,
+    );
+    _recordRecoveryForRoot(gameRoot, evidence);
+  }
+
+  void _recordRecoveryForRoot(
+    String gameRoot,
+    ScriptCompileRecoveryEvidence evidence,
+  ) {
+    final normalized = _normalizeGameRoot(gameRoot);
+
+    _recoveryEvidence[normalized] = evidence;
+    if (state.gameRoot == null || !p.equals(state.gameRoot!, normalized)) {
+      return;
+    }
+
+    // Recovery is newer, mutation-derived evidence. Invalidate every probe for
+    // this selected install that started before it so a late safe result cannot
+    // erase the record. A probe for another selected install remains valid.
+    _generation++;
+
+    // The pre-mutation install probe is no longer authoritative. A new native
+    // probe is the only operation that may restore the ready state and clear
+    // recovery evidence.
+    state = state.copyWith(
+      phase: ScriptCompileInstallSafetyPhase.failed,
+      clearInstallState: true,
+      recoveryEvidence: evidence,
+      errorMessage: 'Installation recovery must be rechecked.',
+    );
   }
 
   Future<ScriptCompileInstallSafetyState> refresh() async {
@@ -136,11 +225,11 @@ final class ScriptCompileInstallSafetyController
           state.gameRoot != gameRoot) {
         return state;
       }
-      if (result.safeToCompile) _recoveryReports.remove(gameRoot);
+      if (result.safeToCompile) _recoveryEvidence.remove(gameRoot);
       state = state.copyWith(
         phase: ScriptCompileInstallSafetyPhase.ready,
         installState: result,
-        clearRecoveryReport: result.safeToCompile,
+        clearRecoveryEvidence: result.safeToCompile,
         clearError: true,
       );
     } catch (error) {
@@ -188,3 +277,5 @@ String _boundedInstallStateError(Object error) {
   if (text.length <= 4096) return text;
   return '${text.substring(0, 4093)}...';
 }
+
+String _normalizeGameRoot(String gameRoot) => p.normalize(p.absolute(gameRoot));

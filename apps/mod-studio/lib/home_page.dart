@@ -41,6 +41,7 @@ import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
 import 'project/revision3_npc_profile_dialog.dart';
+import 'project/revision3_managed_compiler_check_panel.dart';
 import 'project/revision3_npc_wizard.dart';
 import 'project/revision3_quest_authoring.dart';
 import 'project/revision3_quest_context_authoring.dart';
@@ -74,6 +75,52 @@ import 'textures/ui/texture_tab.dart';
 
 typedef ManagedRevision3DirectoryPicker =
     Future<String?> Function(String confirmButtonText);
+
+final class _Revision3ManagedCompilerSelection {
+  const _Revision3ManagedCompilerSelection({
+    required this.entityId,
+    required this.entityRevision,
+    required this.moduleId,
+    required this.moduleRevision,
+  });
+
+  final String entityId;
+  final int entityRevision;
+  final String moduleId;
+  final int moduleRevision;
+}
+
+_Revision3ManagedCompilerSelection? _revision3ManagedCompilerSelection({
+  required Revision3ContentIndex index,
+  required Revision3ContentEntity entity,
+  required Revision3ContentEntityKind expectedKind,
+}) {
+  if (entity.kind != expectedKind) return null;
+  Revision3ContentReference? moduleReference;
+  for (final reference in entity.references) {
+    if (reference.role != 'draft_script_module' ||
+        reference.resolution != Revision3ContentReferenceResolution.resolved ||
+        reference.target.projectId != index.projectId ||
+        reference.target.expectedKind !=
+            Revision3ContentEntityKind.scriptModule) {
+      continue;
+    }
+    if (moduleReference != null) return null;
+    moduleReference = reference;
+  }
+  if (moduleReference == null) return null;
+  final module = index.entityById(moduleReference.target.entityId);
+  if (module == null ||
+      module.kind != Revision3ContentEntityKind.scriptModule) {
+    return null;
+  }
+  return _Revision3ManagedCompilerSelection(
+    entityId: entity.id,
+    entityRevision: entity.revision,
+    moduleId: module.id,
+    moduleRevision: module.revision,
+  );
+}
 
 /// Injectable selection boundary; opening and adoption remain owned by the
 /// app-wide [CurrentProjectCoordinator].
@@ -1193,6 +1240,28 @@ class _HomePageState extends ConsumerState<HomePage>
                 expectedHead: currentProject.head,
                 npcId: npcId,
               ),
+          checkManagedCompiler:
+              ({
+                required entityKind,
+                required entityId,
+                required expectedEntityRevision,
+                required expectedModuleId,
+                required expectedModuleRevision,
+                required gameRoot,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .checkCurrentRevision3ManagedCompiler(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    entityKind: entityKind,
+                    entityId: entityId,
+                    expectedEntityRevision: expectedEntityRevision,
+                    expectedModuleId: expectedModuleId,
+                    expectedModuleRevision: expectedModuleRevision,
+                    gameRoot: gameRoot,
+                  ),
         ),
         NoCurrentProjectState() => _NoCurrentProjectView(
           onCreateManaged: _projectActionBusy
@@ -1375,6 +1444,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     required this.editQuestContext,
     required this.inspectQuestSource,
     required this.inspectNpcSource,
+    required this.checkManagedCompiler,
   });
 
   final ManagedRevision3CurrentProjectState project;
@@ -1415,6 +1485,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3QuestContextTechnicalPublisher editQuestContext;
   final Revision3QuestSourceInspectionLoader inspectQuestSource;
   final Revision3NpcSourceInspectionLoader inspectNpcSource;
+  final Revision3ManagedCompilerPublisher checkManagedCompiler;
 
   @override
   Widget build(BuildContext context) {
@@ -2505,13 +2576,30 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   ) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || project.requiresReopen) return;
+    final compilerSelection = _revision3ManagedCompilerSelection(
+      index: index,
+      entity: quest,
+      expectedKind: Revision3ContentEntityKind.questDraft,
+    );
     await showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => Revision3QuestSourceInspectionDialog(
         questTitle: quest.summary.primaryIdentity,
         questId: quest.id,
         gameRoot: configuredGameRoot,
         inspect: inspectQuestSource,
+        checkCompiler: compilerSelection == null
+            ? null
+            : () => checkManagedCompiler(
+                entityKind:
+                    AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+                entityId: compilerSelection.entityId,
+                expectedEntityRevision: compilerSelection.entityRevision,
+                expectedModuleId: compilerSelection.moduleId,
+                expectedModuleRevision: compilerSelection.moduleRevision,
+                gameRoot: configuredGameRoot,
+              ),
       ),
     );
   }
@@ -2522,12 +2610,33 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     Revision3ContentEntity npc,
   ) async {
     if (project.requiresReopen) return;
+    final configuredGameRoot = gameRoot;
+    final compilerSelection = configuredGameRoot == null
+        ? null
+        : _revision3ManagedCompilerSelection(
+            index: index,
+            entity: npc,
+            expectedKind: Revision3ContentEntityKind.npcDraft,
+          );
     await showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (context) => Revision3NpcProfileDialog(
         npcTitle: npc.summary.primaryIdentity,
         npcId: npc.id,
         inspect: inspectNpcSource,
+        gameRoot: configuredGameRoot,
+        checkCompiler: compilerSelection == null || configuredGameRoot == null
+            ? null
+            : () => checkManagedCompiler(
+                entityKind:
+                    AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+                entityId: compilerSelection.entityId,
+                expectedEntityRevision: compilerSelection.entityRevision,
+                expectedModuleId: compilerSelection.moduleId,
+                expectedModuleRevision: compilerSelection.moduleRevision,
+                gameRoot: configuredGameRoot,
+              ),
       ),
     );
   }

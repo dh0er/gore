@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../core/mod_ffi.dart';
 import 'current_project_controller.dart';
+import 'revision3_managed_compiler_check_panel.dart';
 
 typedef Revision3NpcSourceInspectionLoader =
     Future<AuthoringRevision3NpcSourceInspectionResult> Function({
@@ -17,12 +18,16 @@ class Revision3NpcProfileDialog extends StatefulWidget {
     required this.npcTitle,
     required this.npcId,
     required this.inspect,
+    this.gameRoot,
+    this.checkCompiler,
     super.key,
   });
 
   final String npcTitle;
   final String npcId;
   final Revision3NpcSourceInspectionLoader inspect;
+  final String? gameRoot;
+  final Revision3ManagedCompilerChecker? checkCompiler;
 
   @override
   State<Revision3NpcProfileDialog> createState() =>
@@ -31,6 +36,8 @@ class Revision3NpcProfileDialog extends StatefulWidget {
 
 class _Revision3NpcProfileDialogState extends State<Revision3NpcProfileDialog> {
   late Future<AuthoringRevision3NpcSourceInspectionResult> _inspection;
+  bool _compilerAccepted = false;
+  bool _compilerBusy = false;
 
   @override
   void initState() {
@@ -45,60 +52,99 @@ class _Revision3NpcProfileDialogState extends State<Revision3NpcProfileDialog> {
     final next = _load();
     setState(() {
       _inspection = next;
+      _compilerAccepted = false;
+      _compilerBusy = false;
     });
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    key: const Key('revision3-npc-profile-dialog'),
-    title: Text('Profile & checks — ${widget.npcTitle}'),
-    content: SizedBox(
-      width: 760,
-      height: 650,
-      child: FutureBuilder<AuthoringRevision3NpcSourceInspectionResult>(
-        future: _inspection,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Verifying the saved NPC Draft and generated source…'),
-                ],
-              ),
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_compilerBusy,
+    child: AlertDialog(
+      key: const Key('revision3-npc-profile-dialog'),
+      title: Text('Profile & checks — ${widget.npcTitle}'),
+      content: SizedBox(
+        width: 760,
+        height: 650,
+        child: FutureBuilder<AuthoringRevision3NpcSourceInspectionResult>(
+          future: _inspection,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Verifying the saved NPC Draft and generated source…'),
+                  ],
+                ),
+              );
+            }
+            final result = snapshot.data;
+            if (result == null) {
+              return _NpcInspectionError(
+                error: snapshot.error ?? StateError('inspection failed'),
+                retry: _retry,
+              );
+            }
+            return _NpcInspectionResult(
+              result: result,
+              gameRoot: widget.gameRoot,
+              checkCompiler: widget.checkCompiler,
+              compilerAccepted: _compilerAccepted,
+              onCompilerAcceptanceChanged: (accepted) {
+                if (!mounted || accepted == _compilerAccepted) return;
+                setState(() => _compilerAccepted = accepted);
+              },
+              onCompilerBusyChanged: (busy) {
+                if (!mounted || busy == _compilerBusy) return;
+                setState(() => _compilerBusy = busy);
+              },
             );
-          }
-          final result = snapshot.data;
-          if (result == null) {
-            return _NpcInspectionError(
-              error: snapshot.error ?? StateError('inspection failed'),
-              retry: _retry,
-            );
-          }
-          return _NpcInspectionResult(result: result);
-        },
+          },
+        ),
       ),
+      actions: [
+        TextButton(
+          key: const Key('revision3-npc-profile-dialog-close'),
+          onPressed: _compilerBusy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('Close'),
-      ),
-    ],
   );
 }
 
 class _NpcInspectionResult extends StatelessWidget {
-  const _NpcInspectionResult({required this.result});
+  const _NpcInspectionResult({
+    required this.result,
+    required this.gameRoot,
+    required this.checkCompiler,
+    required this.compilerAccepted,
+    required this.onCompilerAcceptanceChanged,
+    required this.onCompilerBusyChanged,
+  });
 
   final AuthoringRevision3NpcSourceInspectionResult result;
+  final String? gameRoot;
+  final Revision3ManagedCompilerChecker? checkCompiler;
+  final bool compilerAccepted;
+  final ValueChanged<bool> onCompilerAcceptanceChanged;
+  final ValueChanged<bool> onCompilerBusyChanged;
 
   @override
   Widget build(BuildContext context) {
     final plan = result.plan;
     final basedOn = plan.knownParentLabel;
+    final blockers = plan.diagnostics
+        .where(
+          (diagnostic) =>
+              !compilerAccepted ||
+              diagnostic.code !=
+                  AuthoringRevision3NpcInspectionDiagnosticCode.compilerNotRun,
+        )
+        .toList(growable: false);
     return ListView(
       key: const Key('revision3-npc-profile-result'),
       children: [
@@ -122,6 +168,15 @@ class _NpcInspectionResult extends StatelessWidget {
               avatar: Icon(Icons.location_off_outlined, size: 18),
               label: Text('Not spawned'),
             ),
+            if (compilerAccepted)
+              const Chip(
+                avatar: Icon(
+                  Icons.verified_outlined,
+                  size: 18,
+                  color: Colors.green,
+                ),
+                label: Text('Compiler accepted'),
+              ),
           ],
         ),
         if (basedOn != null) ...[
@@ -146,14 +201,22 @@ class _NpcInspectionResult extends StatelessWidget {
           body:
               'The project head and canonical project bytes stayed unchanged throughout this read-only check.',
         ),
+        if (gameRoot != null && checkCompiler != null) ...[
+          const SizedBox(height: 16),
+          Revision3ManagedCompilerCheckPanel(
+            gameRoot: gameRoot!,
+            check: checkCompiler!,
+            onAcceptanceChanged: onCompilerAcceptanceChanged,
+            onBusyChanged: onCompilerBusyChanged,
+          ),
+        ],
         const SizedBox(height: 18),
         Text(
-          'Build readiness — ${plan.diagnostics.length} blockers',
+          'Build readiness — ${blockers.length} blockers',
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 6),
-        for (final diagnostic in plan.diagnostics)
-          _NpcBlocker(diagnostic: diagnostic),
+        for (final diagnostic in blockers) _NpcBlocker(diagnostic: diagnostic),
         const SizedBox(height: 12),
         ExpansionTile(
           key: const Key('revision3-npc-profile-advanced'),

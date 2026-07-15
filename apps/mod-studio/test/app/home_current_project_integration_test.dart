@@ -18,11 +18,13 @@ import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_library.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
+import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
@@ -1412,17 +1414,41 @@ void main() {
         root: Directory(r'C:\mods\quest-source-inspection'),
         projectId: revision3QuestOutlineProjectId,
         projectRevision: fixture.projectRevision,
-        head: _head(fixture.projectRevision),
+        head: fixture.head,
+        canonicalProjectJsonValue: fixture.projectJson,
         contentIndexBuilder: (_) => fixture.contentIndex(),
         onQuestSourceInspection: (lease, requestedGameRoot, questId) async {
           expect(requestedGameRoot, gameRoot.path);
           expect(questId, revision3QuestOutlineQuestId);
-          throw const ModFfiException(
-            command: 'authoring_store_inspect_revision3_quest_source_v1',
-            code: 'AUTHORING_REVISION3_QUEST_INSPECTION_INPUT_MISSING',
-            message: 'fixture input is intentionally absent',
+          return _questSourceInspection(
+            fixture: fixture,
+            expectedHead: lease.head,
           );
         },
+        onManagedCompilerCheck:
+            (
+              lease,
+              entityKind,
+              requestedGameRoot,
+              entityId,
+              expectedEntityRevision,
+              expectedModuleId,
+              expectedModuleRevision,
+            ) async {
+              expect(
+                entityKind,
+                AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+              );
+              expect(requestedGameRoot, gameRoot.path);
+              expect(entityId, revision3QuestOutlineQuestId);
+              expect(expectedEntityRevision, fixture.questRevision);
+              expect(expectedModuleId, revision3QuestOutlineModuleId);
+              expect(expectedModuleRevision, fixture.moduleRevision);
+              return _questManagedCompilerReceipt(
+                fixture: fixture,
+                expectedHead: lease.head,
+              );
+            },
       );
       final coordinator = CurrentProjectCoordinator(
         openManagedRevision3: (_) async => managed,
@@ -1475,14 +1501,28 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(const Key('revision3-quest-source-inspection-error')),
+        find.byKey(const Key('revision3-quest-source-inspection-result')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('revision3-quest-source-inspection-error')),
+        findsNothing,
+      );
+      final panel = tester.widget<Revision3ManagedCompilerCheckPanel>(
+        find.byType(Revision3ManagedCompilerCheckPanel),
+      );
+      final receipt = await panel.check();
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(managed.managedCompilerCheckCalls, 1);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .requiresReopen,
         isFalse,
       );
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-source-inspection-close')),
+      );
+      await tester.pumpAndSettle();
     },
   );
 
@@ -1549,6 +1589,100 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Build blocked'), findsOneWidget);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      await opening;
+    },
+  );
+
+  testWidgets(
+    'NPC compiler panel binds the selected exact entity and module to the lease',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_npc_compiler_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final fixture = _npcManagedCompilerFixture();
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\npc-managed-compiler'),
+        projectId: revision3NpcInspectionProjectId,
+        projectRevision: 7,
+        head: fixture.head,
+        canonicalProjectJsonValue: fixture.projectJson,
+        contentIndexBuilder: (_) => fixture.contentIndex,
+        onNpcSourceInspection: (lease, npcId) async =>
+            revision3NpcInspectionResult(
+              head: lease.head,
+              projectJson: lease.canonicalProjectJson,
+              npcId: npcId,
+            ),
+        onManagedCompilerCheck:
+            (
+              lease,
+              entityKind,
+              requestedGameRoot,
+              entityId,
+              expectedEntityRevision,
+              expectedModuleId,
+              expectedModuleRevision,
+            ) async {
+              expect(
+                entityKind,
+                AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+              );
+              expect(requestedGameRoot, gameRoot.path);
+              expect(entityId, revision3NpcInspectionNpcId);
+              expect(expectedEntityRevision, 2);
+              expect(expectedModuleId, revision3NpcInspectionModuleId);
+              expect(expectedModuleRevision, 3);
+              return _npcManagedCompilerReceipt(
+                projectJson: lease.canonicalProjectJson,
+                head: lease.head,
+                sourceSha256: fixture.sourceSha256,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
+      final library = tester.widget<Revision3ContentLibrary>(
+        find.byType(Revision3ContentLibrary),
+      );
+      final npc = fixture.contentIndex.entities.singleWhere(
+        (entity) => entity.kind == Revision3ContentEntityKind.npcDraft,
+      );
+      final opening = library.inspectNpcSource!(fixture.contentIndex, npc);
+      await tester.pumpAndSettle();
+
+      final panelFinder = find.byType(Revision3ManagedCompilerCheckPanel);
+      expect(panelFinder, findsOneWidget);
+      final panel = tester.widget<Revision3ManagedCompilerCheckPanel>(
+        panelFinder,
+      );
+      final receipt = await panel.check();
+
+      expect(receipt.acceptedAtExactCurrent, isTrue);
+      expect(managed.managedCompilerCheckCalls, 1);
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .requiresReopen,
@@ -3172,11 +3306,13 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     required this.projectId,
     required this.projectRevision,
     required this.head,
+    this.canonicalProjectJsonValue = '{}',
     this.verificationError,
     this.onNpcPublish,
     this.onQuestPublish,
     this.onQuestSourceInspection,
     this.onNpcSourceInspection,
+    this.onManagedCompilerCheck,
     this.onQuestOutlinePublish,
     this.onQuestTransitionsSeed,
     this.onQuestTransitionsPublish,
@@ -3199,7 +3335,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   final String projectId;
   @override
-  String get canonicalProjectJson => '{}';
+  String get canonicalProjectJson => canonicalProjectJsonValue;
+  final String canonicalProjectJsonValue;
   @override
   int projectRevision;
   @override
@@ -3228,6 +3365,16 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     String npcId,
   )?
   onNpcSourceInspection;
+  final Future<ManagedRevision3CompilerCheckReceipt> Function(
+    _FakeManagedLease lease,
+    AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    String gameRoot,
+    String entityId,
+    int expectedEntityRevision,
+    String expectedModuleId,
+    int expectedModuleRevision,
+  )?
+  onManagedCompilerCheck;
   final Revision3QuestOutlineEditPublication Function(
     _FakeManagedLease lease,
     Revision3QuestOutlineEditInput input,
@@ -3318,6 +3465,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int questPublishCalls = 0;
   int questSourceInspectionCalls = 0;
   int npcSourceInspectionCalls = 0;
+  int managedCompilerCheckCalls = 0;
   final List<String> npcSourceInspectionNpcIds = <String>[];
   int questOutlinePublishCalls = 0;
   int questTransitionsSeedCalls = 0;
@@ -3374,6 +3522,31 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no NPC source inspector');
     }
     return inspect(this, npcId);
+  }
+
+  @override
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) async {
+    managedCompilerCheckCalls++;
+    final check = onManagedCompilerCheck;
+    if (check == null) {
+      throw StateError('fake managed lease has no managed compiler check');
+    }
+    return check(
+      this,
+      entityKind,
+      gameRoot,
+      entityId,
+      expectedEntityRevision,
+      expectedModuleId,
+      expectedModuleRevision,
+    );
   }
 
   @override
@@ -3791,6 +3964,386 @@ Revision3ContentIndex _globalSearchContentIndex({
   ],
   'assets': <Object?>[],
 });
+
+({
+  String projectJson,
+  AuthoringWorkingHead head,
+  Revision3ContentIndex contentIndex,
+  String sourceSha256,
+})
+_npcManagedCompilerFixture() {
+  const revision = 7;
+  final baseProjectJson = revision3NpcInspectionProjectJson(
+    projectId: revision3NpcInspectionProjectId,
+    revision: revision,
+  );
+  final baseProject = (jsonDecode(baseProjectJson) as Map)
+      .cast<String, Object?>();
+  final request = AuthoringRevision3NpcDraftRequestV1.forProject(
+    expectedHead: revision3NpcFixtureHead(baseProjectJson),
+    currentProjectJson: baseProjectJson,
+    npcId: revision3NpcInspectionNpcId,
+    scriptModuleId: revision3NpcInspectionModuleId,
+    displayName: 'Inspection Guard',
+    intent: AuthoringRevision3NpcDraftIntentV1(
+      moduleNamespace: revision3NpcInspectionModuleNamespace,
+      uniqueName: revision3NpcInspectionUniqueName,
+      parentCatalogId: 'g1r:npc:om_grd_asghan_263',
+    ),
+  );
+  final target = (baseProject['target']! as Map).cast<String, Object?>();
+  final input = revision3NpcFixtureInput(request: request, target: target);
+  final npcEntity = revision3NpcFixtureEntity(
+    projectId: revision3NpcInspectionProjectId,
+    request: request,
+    input: input,
+  )..['revision'] = 2;
+  final moduleEntity = revision3NpcFixtureModuleEntity(
+    projectId: revision3NpcInspectionProjectId,
+    request: request,
+    input: input,
+  )..['revision'] = 3;
+  baseProject['entities'] = <String, Object?>{
+    revision3NpcInspectionNpcId: npcEntity,
+    revision3NpcInspectionModuleId: moduleEntity,
+  };
+  final projectJson = jsonEncode(baseProject);
+  final head = revision3NpcFixtureHead(projectJson);
+  final modulePayload = (moduleEntity['payload']! as Map)
+      .cast<String, Object?>();
+  final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+  final sourceSha256 = moduleData['source_sha256']! as String;
+  final referenceToModule = <String, Object?>{
+    'role': 'draft_script_module',
+    'qualifier': null,
+    'target': <String, Object?>{
+      'project_id': revision3NpcInspectionProjectId,
+      'entity_id': revision3NpcInspectionModuleId,
+      'expected_kind': 'script_module',
+    },
+    'resolution': 'resolved',
+  };
+  final referenceToNpc = <String, Object?>{
+    'role': 'origin_owner',
+    'qualifier': null,
+    'target': <String, Object?>{
+      'project_id': revision3NpcInspectionProjectId,
+      'entity_id': revision3NpcInspectionNpcId,
+      'expected_kind': 'npc_draft',
+    },
+    'resolution': 'resolved',
+  };
+  final contentIndex = Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': revision3NpcInspectionProjectId,
+    'project_revision': revision,
+    'project_name': 'Home NPC compiler project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': target,
+    'authoring_locales': <Object?>[],
+    'entity_counts': <String, Object?>{'npc_draft': 1, 'script_module': 1},
+    'entities': <Object?>[
+      <String, Object?>{
+        'id': revision3NpcInspectionNpcId,
+        'kind': 'npc_draft',
+        'display_name': 'Inspection Guard',
+        'revision': 2,
+        'origin': npcEntity['origin'],
+        'summary': <String, Object?>{
+          'kind': 'npc_draft',
+          'data': <String, Object?>{
+            'unique_name': revision3NpcInspectionUniqueName,
+            'module_namespace': revision3NpcInspectionModuleNamespace,
+            'parent_character_definition':
+                'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+            'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+            'parent_spawn_definition':
+                'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+          },
+        },
+        'references': <Object?>[referenceToModule],
+        'asset_references': <Object?>[],
+      },
+      <String, Object?>{
+        'id': revision3NpcInspectionModuleId,
+        'kind': 'script_module',
+        'display_name': revision3NpcInspectionModuleNamespace,
+        'revision': 3,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': revision3NpcFixtureGeneratorId,
+          'generator_version': revision3NpcFixtureGeneratorVersion,
+          'owner': <String, Object?>{
+            'project_id': revision3NpcInspectionProjectId,
+            'entity_id': revision3NpcInspectionNpcId,
+            'expected_kind': 'npc_draft',
+          },
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': revision3NpcFixtureGeneratorId,
+            'generator_version': revision3NpcFixtureGeneratorVersion,
+            'module_namespace': revision3NpcInspectionModuleNamespace,
+            'module_relative_path':
+                '${revision3NpcInspectionModuleNamespace.replaceAll('.', '/')}.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[referenceToNpc],
+        'asset_references': <Object?>[],
+      },
+    ],
+    'assets': <Object?>[],
+  });
+  return (
+    projectJson: projectJson,
+    head: head,
+    contentIndex: contentIndex,
+    sourceSha256: sourceSha256,
+  );
+}
+
+ManagedRevision3CompilerCheckReceipt _npcManagedCompilerReceipt({
+  required String projectJson,
+  required AuthoringWorkingHead head,
+  required String sourceSha256,
+}) {
+  final bytes = utf8.encode(projectJson);
+  final result = AuthoringRevision3ManagedCompilerCheckResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'compiler_check_only',
+      'exact_current': true,
+      'head_json': head.canonicalJson,
+      'project': <String, Object?>{
+        'id': revision3NpcInspectionProjectId,
+        'revision': 7,
+        'seal': <String, Object?>{
+          'byte_len': bytes.length,
+          'sha256': crypto.sha256.convert(bytes).toString(),
+        },
+      },
+      'entity': <String, Object?>{
+        'kind': 'npc_draft',
+        'id': revision3NpcInspectionNpcId,
+        'revision': 2,
+      },
+      'module': <String, Object?>{
+        'id': revision3NpcInspectionModuleId,
+        'revision': 3,
+        'namespace': revision3NpcInspectionModuleNamespace,
+        'relative_path':
+            '${revision3NpcInspectionModuleNamespace.replaceAll('.', '/')}.as',
+        'source_sha256': sourceSha256,
+      },
+      'compiler': <String, Object?>{
+        'outcome': 'compiled_evidence_only',
+        'compile_error': null,
+        'compiler_diagnostics': <String, Object?>{
+          'capture': 'captured',
+          'messages': <Object?>[],
+          'omitted': 0,
+        },
+        'install_restore': 'restored_exact',
+        'recovery_required': false,
+        'output_discarded': true,
+      },
+      'scope': 'compiler_check_only',
+      'build_status': 'blocked',
+      'deploy_status': 'not_supported',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedEntityId: revision3NpcInspectionNpcId,
+    expectedKind: AuthoringRevision3ManagedCompilerEntityKind.npcDraft,
+  );
+  return ManagedRevision3CompilerCheckReceipt(
+    result: result,
+    storeStillExactCurrent: true,
+  );
+}
+
+AuthoringRevision3QuestSourceInspectionResult _questSourceInspection({
+  required Revision3QuestOutlineFixture fixture,
+  required AuthoringWorkingHead expectedHead,
+}) {
+  final projectJson = fixture.projectJson;
+  final projectBytes = utf8.encode(projectJson);
+  final projectSeal = <String, Object?>{
+    'byte_len': projectBytes.length,
+    'sha256': crypto.sha256.convert(projectBytes).toString(),
+  };
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final target = (project['target']! as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+      .cast<String, Object?>();
+  final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+  final questData = (questPayload['data']! as Map).cast<String, Object?>();
+  final input = (questData['input']! as Map).cast<String, Object?>();
+  final inputBytes = utf8.encode(jsonEncode(input));
+  final module = (entities[revision3QuestOutlineModuleId]! as Map)
+      .cast<String, Object?>();
+  final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+  final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+  final source = moduleData['source']! as String;
+  final sourceBytes = utf8.encode(source);
+  final sourceSha256 = moduleData['source_sha256']! as String;
+  final questRef = <String, Object?>{
+    'project_id': revision3QuestOutlineProjectId,
+    'id': revision3QuestOutlineQuestId,
+    'expected_kind': 'quest_draft',
+  };
+  final plan = <String, Object?>{
+    'format': 'revision3_quest_source_inspection_plan',
+    'schema_revision': 3,
+    'scope': 'source_inspection_only',
+    'build_status': 'blocked',
+    'runtime_qualification': 'runtime_unqualified',
+    'publication_status': 'not_supported',
+    'provenance': <String, Object?>{
+      'project_id': revision3QuestOutlineProjectId,
+      'project_revision': fixture.projectRevision,
+      'target_executable': target['executable'],
+      'canonical_project': projectSeal,
+      'collision_basis_head': jsonDecode(expectedHead.canonicalJson),
+      'collision_basis_project': projectSeal,
+      'collision_nonquest_project': _homeSealJson(projectBytes.length, 'd'),
+      'collision_prior_quest_count': 0,
+      'collision_prior_quest_evidence': _homeSealJson(64, '1'),
+      'collision_artifact': _homeSealJson(123, 'e'),
+      'collision_source': _homeSealJson(123, 'f'),
+    },
+    'module': <String, Object?>{
+      'quest': questRef,
+      'script_module': <String, Object?>{
+        'project_id': revision3QuestOutlineProjectId,
+        'id': revision3QuestOutlineModuleId,
+        'expected_kind': 'script_module',
+      },
+      'draft_input': <String, Object?>{
+        'byte_len': inputBytes.length,
+        'sha256': crypto.sha256.convert(inputBytes).toString(),
+      },
+      'persisted_source': <String, Object?>{
+        'byte_len': sourceBytes.length,
+        'sha256': sourceSha256,
+      },
+      'generated': <String, Object?>{
+        'generator_id': moduleData['generator_id'],
+        'generator_version': moduleData['generator_version'],
+        'owner': questRef,
+        'module_namespace': moduleData['module_namespace'],
+        'module_relative_path': moduleData['module_relative_path'],
+        'source': source,
+        'source_sha256': sourceSha256,
+        'input_fingerprint': moduleData['input_fingerprint'],
+        'status': moduleData['status'],
+      },
+    },
+  };
+  final planJson = jsonEncode(plan);
+  final planBytes = utf8.encode(planJson);
+  return AuthoringRevision3QuestSourceInspectionResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'inspection_only',
+      'head_json': expectedHead.canonicalJson,
+      'project_id': revision3QuestOutlineProjectId,
+      'project_revision': fixture.projectRevision,
+      'project_seal': projectSeal,
+      'quest_id': revision3QuestOutlineQuestId,
+      'plan_json': planJson,
+      'plan_seal': <String, Object?>{
+        'byte_len': planBytes.length,
+        'sha256': crypto.sha256.convert(planBytes).toString(),
+      },
+      'scope': 'source_inspection_only',
+      'build_status': 'blocked',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: expectedHead,
+    requestedQuestId: revision3QuestOutlineQuestId,
+  );
+}
+
+ManagedRevision3CompilerCheckReceipt _questManagedCompilerReceipt({
+  required Revision3QuestOutlineFixture fixture,
+  required AuthoringWorkingHead expectedHead,
+}) {
+  final project = (jsonDecode(fixture.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final module = (entities[revision3QuestOutlineModuleId]! as Map)
+      .cast<String, Object?>();
+  final payload = (module['payload']! as Map).cast<String, Object?>();
+  final data = (payload['data']! as Map).cast<String, Object?>();
+  final result = AuthoringRevision3ManagedCompilerCheckResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'compiler_check_only',
+      'exact_current': true,
+      'head_json': expectedHead.canonicalJson,
+      'project': <String, Object?>{
+        'id': revision3QuestOutlineProjectId,
+        'revision': fixture.projectRevision,
+        'seal': <String, Object?>{
+          'byte_len': expectedHead.snapshotByteLength,
+          'sha256': expectedHead.snapshotSha256,
+        },
+      },
+      'entity': <String, Object?>{
+        'kind': 'quest_draft',
+        'id': revision3QuestOutlineQuestId,
+        'revision': fixture.questRevision,
+      },
+      'module': <String, Object?>{
+        'id': revision3QuestOutlineModuleId,
+        'revision': fixture.moduleRevision,
+        'namespace': data['module_namespace'],
+        'relative_path': data['module_relative_path'],
+        'source_sha256': data['source_sha256'],
+      },
+      'compiler': <String, Object?>{
+        'outcome': 'compiled_evidence_only',
+        'compile_error': null,
+        'compiler_diagnostics': <String, Object?>{
+          'capture': 'captured',
+          'messages': <Object?>[],
+          'omitted': 0,
+        },
+        'install_restore': 'restored_exact',
+        'recovery_required': false,
+        'output_discarded': true,
+      },
+      'scope': 'compiler_check_only',
+      'build_status': 'blocked',
+      'deploy_status': 'not_supported',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: expectedHead,
+    requestedEntityId: revision3QuestOutlineQuestId,
+    expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+  );
+  return ManagedRevision3CompilerCheckReceipt(
+    result: result,
+    storeStillExactCurrent: true,
+  );
+}
+
+Map<String, Object?> _homeSealJson(int byteLength, String digit) =>
+    <String, Object?>{
+      'byte_len': byteLength,
+      'sha256': List<String>.filled(64, digit).join(),
+    };
 
 Revision3ContentIndex _npcInspectionIndex({
   required String projectId,

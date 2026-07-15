@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 import '../core/mod_ffi.dart';
 import 'current_project_controller.dart';
+import 'revision3_managed_compiler_check_panel.dart';
 
 typedef Revision3QuestSourceInspectionLoader =
     Future<AuthoringRevision3QuestSourceInspectionResult> Function({
@@ -21,6 +22,7 @@ class Revision3QuestSourceInspectionDialog extends StatefulWidget {
     required this.questId,
     required this.gameRoot,
     required this.inspect,
+    this.checkCompiler,
     super.key,
   });
 
@@ -28,6 +30,7 @@ class Revision3QuestSourceInspectionDialog extends StatefulWidget {
   final String questId;
   final String gameRoot;
   final Revision3QuestSourceInspectionLoader inspect;
+  final Revision3ManagedCompilerChecker? checkCompiler;
 
   @override
   State<Revision3QuestSourceInspectionDialog> createState() =>
@@ -37,6 +40,7 @@ class Revision3QuestSourceInspectionDialog extends StatefulWidget {
 class _Revision3QuestSourceInspectionDialogState
     extends State<Revision3QuestSourceInspectionDialog> {
   late Future<AuthoringRevision3QuestSourceInspectionResult> _inspection;
+  bool _compilerBusy = false;
 
   @override
   void initState() {
@@ -55,51 +59,71 @@ class _Revision3QuestSourceInspectionDialogState
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
-    key: const Key('revision3-quest-source-inspection-dialog'),
-    title: Text('Source & checks — ${widget.questTitle}'),
-    content: SizedBox(
-      width: 760,
-      height: 620,
-      child: FutureBuilder<AuthoringRevision3QuestSourceInspectionResult>(
-        future: _inspection,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState != ConnectionState.done) {
-            return const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Verifying the saved Quest and its source inputs…'),
-                ],
-              ),
+  Widget build(BuildContext context) => PopScope(
+    canPop: !_compilerBusy,
+    child: AlertDialog(
+      key: const Key('revision3-quest-source-inspection-dialog'),
+      title: Text('Source & checks — ${widget.questTitle}'),
+      content: SizedBox(
+        width: 760,
+        height: 620,
+        child: FutureBuilder<AuthoringRevision3QuestSourceInspectionResult>(
+          future: _inspection,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Verifying the saved Quest and its source inputs…'),
+                  ],
+                ),
+              );
+            }
+            final result = snapshot.data;
+            if (result == null) {
+              return _InspectionError(
+                error: snapshot.error ?? StateError('inspection failed'),
+                retry: _retry,
+              );
+            }
+            return _InspectionResult(
+              result: result,
+              gameRoot: widget.gameRoot,
+              checkCompiler: widget.checkCompiler,
+              onCompilerBusyChanged: (busy) {
+                if (!mounted || busy == _compilerBusy) return;
+                setState(() => _compilerBusy = busy);
+              },
             );
-          }
-          final result = snapshot.data;
-          if (result == null) {
-            return _InspectionError(
-              error: snapshot.error ?? StateError('inspection failed'),
-              retry: _retry,
-            );
-          }
-          return _InspectionResult(result: result);
-        },
+          },
+        ),
       ),
+      actions: [
+        TextButton(
+          key: const Key('revision3-quest-source-inspection-close'),
+          onPressed: _compilerBusy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+      ],
     ),
-    actions: [
-      TextButton(
-        onPressed: () => Navigator.of(context).pop(),
-        child: const Text('Close'),
-      ),
-    ],
   );
 }
 
 class _InspectionResult extends StatelessWidget {
-  const _InspectionResult({required this.result});
+  const _InspectionResult({
+    required this.result,
+    required this.gameRoot,
+    required this.checkCompiler,
+    required this.onCompilerBusyChanged,
+  });
 
   final AuthoringRevision3QuestSourceInspectionResult result;
+  final String gameRoot;
+  final Revision3ManagedCompilerChecker? checkCompiler;
+  final ValueChanged<bool> onCompilerBusyChanged;
 
   @override
   Widget build(BuildContext context) => ListView(
@@ -128,18 +152,27 @@ class _InspectionResult extends StatelessWidget {
         body:
             'The project head was unchanged before and after this read-only inspection.',
       ),
+      if (checkCompiler != null) ...[
+        const SizedBox(height: 16),
+        Revision3ManagedCompilerCheckPanel(
+          gameRoot: gameRoot,
+          check: checkCompiler!,
+          onBusyChanged: onCompilerBusyChanged,
+        ),
+      ],
       const SizedBox(height: 16),
       Text(
         'What this does not prove',
         style: Theme.of(context).textTheme.titleMedium,
       ),
       const SizedBox(height: 8),
-      const _ClosedStatus(
-        icon: Icons.code_off_outlined,
-        title: 'Compilation was not run',
-        body:
-            'This view verifies generated source; it is not a compiler result.',
-      ),
+      if (checkCompiler == null)
+        const _ClosedStatus(
+          icon: Icons.code_off_outlined,
+          title: 'Compilation was not run',
+          body:
+              'This view verifies generated source; it is not a compiler result.',
+        ),
       const _ClosedStatus(
         icon: Icons.block_outlined,
         title: 'Build is still blocked',

@@ -959,7 +959,12 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     Directory? work;
     try {
       final checked = await installSafety.refresh();
-      if (!checked.liveMutationAllowed) {
+      if (!checked.liveMutationAllowed ||
+          checked.gameRoot == null ||
+          !p.equals(
+            p.normalize(p.absolute(checked.gameRoot!)),
+            p.normalize(p.absolute(gameRoot)),
+          )) {
         if (mounted) {
           setState(() {
             _error = true;
@@ -980,7 +985,7 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
         workDir: work.path,
         allowNewSymbols: mod.allowNewSymbols,
       );
-      installSafety.recordCompileReport(report);
+      installSafety.recordCompileReport(report, gameRoot: gameRoot);
       await installSafety.refresh();
       if (!report.compiled) {
         var cleanupWarning = '';

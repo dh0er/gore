@@ -127,6 +127,16 @@ final class Revision3NpcSourceInspectionStaleCheckpointException
   const Revision3NpcSourceInspectionStaleCheckpointException();
 }
 
+final class Revision3ManagedCompilerCheckRequiresReopenException
+    implements Exception {
+  const Revision3ManagedCompilerCheckRequiresReopenException();
+}
+
+final class Revision3ManagedCompilerCheckStaleCheckpointException
+    implements Exception {
+  const Revision3ManagedCompilerCheckStaleCheckpointException();
+}
+
 final class Revision3DataAssetPackageIndexRequiresReopenException
     implements Exception {
   const Revision3DataAssetPackageIndexRequiresReopenException();
@@ -209,6 +219,14 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   });
   Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
     required String npcId,
+  });
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
   });
   Future<AuthoringRevision3DataAssetPackageIndexResult>
   readDataAssetPackageIndexV1({required String gameRoot});
@@ -436,6 +454,23 @@ final class _ManagedRevision3SessionLease
   Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
     required String npcId,
   }) => _session.inspectNpcSourceV1(npcId: npcId);
+
+  @override
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) => _session.checkCompilerV1(
+    entityKind: entityKind,
+    gameRoot: gameRoot,
+    entityId: entityId,
+    expectedEntityRevision: expectedEntityRevision,
+    expectedModuleId: expectedModuleId,
+    expectedModuleRevision: expectedModuleRevision,
+  );
 
   @override
   Future<AuthoringRevision3DataAssetPackageIndexResult>
@@ -1419,6 +1454,99 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3NpcSourceInspectionRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Check one exact-current Quest/NPC ScriptModule with the game compiler.
+  ///
+  /// The selected revisions and module identity are compared with the
+  /// coordinator's canonical project snapshot before the lease callback can
+  /// run. Native receives only the selected entity ID and derives the source
+  /// itself. Returned evidence is compiler-only: it grants no build, runtime,
+  /// deployment, publication, or reusable-artifact authority.
+  Future<ManagedRevision3CompilerCheckReceipt>
+  checkCurrentRevision3ManagedCompiler({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required String gameRoot,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'managed compiler checks are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ManagedCompilerCheckRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'managed compiler checks require a game installation',
+      );
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        !revision3ManagedCompilerSelectionMatches(
+          currentProjectJson: lease.canonicalProjectJson,
+          entityKind: entityKind,
+          entityId: entityId,
+          expectedEntityRevision: expectedEntityRevision,
+          expectedModuleId: expectedModuleId,
+          expectedModuleRevision: expectedModuleRevision,
+        )) {
+      throw const Revision3ManagedCompilerCheckStaleCheckpointException();
+    }
+    try {
+      final receipt = await lease.checkCompilerV1(
+        entityKind: entityKind,
+        gameRoot: gameRoot,
+        entityId: entityId,
+        expectedEntityRevision: expectedEntityRevision,
+        expectedModuleId: expectedModuleId,
+        expectedModuleRevision: expectedModuleRevision,
+      );
+      final result = receipt.result;
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.project.id != expectedProjectId ||
+          result.project.revision != expectedProjectRevision ||
+          result.entity.kind != entityKind ||
+          result.entity.id != entityId ||
+          result.entity.revision != expectedEntityRevision ||
+          result.module.id != expectedModuleId ||
+          result.module.revision != expectedModuleRevision ||
+          receipt.storeStillExactCurrent != !lease.requiresReopen) {
+        throw const CurrentProjectCoordinatorException(
+          'managed compiler receipt disagrees with the selected exact checkpoint',
+        );
+      }
+      return receipt;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3ManagedCompilerCheckRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ManagedRevision3CompilerSelectionStaleException) {
+        Error.throwWithStackTrace(
+          const Revision3ManagedCompilerCheckStaleCheckpointException(),
           stackTrace,
         );
       }

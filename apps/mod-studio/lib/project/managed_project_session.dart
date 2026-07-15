@@ -62,6 +62,41 @@ class ManagedProjectReentrantOperationException
   String toString() => 'ManagedProjectReentrantOperationException: $message';
 }
 
+/// The selected Quest/NPC or its generated ScriptModule no longer matches the
+/// exact project generation that owns this managed session.
+///
+/// This is a caller-visible selection race, not Store uncertainty. It is safe
+/// to refresh the content index and retry while the published head stays exact.
+final class ManagedRevision3CompilerSelectionStaleException
+    extends ManagedProjectSessionException {
+  const ManagedRevision3CompilerSelectionStaleException()
+    : super('the selected compiler target is stale for the exact project');
+}
+
+/// Evidence from one compiler-only check plus the app-side post-call Store
+/// audit. No compiled artifact is retained and this receipt grants no build,
+/// runtime, deployment, or publication authority.
+final class ManagedRevision3CompilerCheckReceipt {
+  const ManagedRevision3CompilerCheckReceipt({
+    required this.result,
+    required this.storeStillExactCurrent,
+  });
+
+  final AuthoringRevision3ManagedCompilerCheckResult result;
+
+  /// False when the fixed Store head changed after native produced [result].
+  /// The evidence and any recovery instructions remain reportable, but another
+  /// managed operation requires closing and reopening the project.
+  final bool storeStillExactCurrent;
+
+  bool get exactCurrent => storeStillExactCurrent && result.exactCurrent;
+
+  bool get acceptedAtExactCurrent =>
+      storeStillExactCurrent && result.acceptedAtExactCurrent;
+
+  bool get recoveryRequired => result.recoveryRequired;
+}
+
 /// One immutable decision produced from the exact latest project inside a managed session's
 /// serialized operation lane.
 sealed class ManagedProjectDerivedSave<T> {
@@ -522,6 +557,20 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String npcId,
   });
 
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkQuestCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  });
+
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  });
+
   Future<AuthoringRevision3DataAssetPackageIndexResult>
   readDataAssetPackageIndexV1({
     required String root,
@@ -738,6 +787,32 @@ final class ModFfiManagedRevision3AuthoringStore
     required String npcId,
   }) => ffi.authoringStoreInspectRevision3NpcSourceV1(
     root: root,
+    expectedHead: expectedHead,
+    npcId: npcId,
+  );
+
+  @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkQuestCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String questId,
+  }) => ffi.authoringStoreCheckRevision3QuestCompilerV1(
+    root: root,
+    gameRoot: gameRoot,
+    expectedHead: expectedHead,
+    questId: questId,
+  );
+
+  @override
+  Future<AuthoringRevision3ManagedCompilerCheckResult> checkNpcCompilerV1({
+    required String root,
+    required String gameRoot,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+  }) => ffi.authoringStoreCheckRevision3NpcCompilerV1(
+    root: root,
+    gameRoot: gameRoot,
     expectedHead: expectedHead,
     npcId: npcId,
   );
@@ -2354,6 +2429,86 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3NpcSourceInspectionError,
   );
 
+  /// Run the game compiler against one native-derived Quest/NPC module from
+  /// the exact serialized Store basis. Only the selected entity ID crosses the
+  /// wire; the expected revisions and module identity are caller-side stale
+  /// selection guards and are re-derived from [projectJson] in this lane.
+  ///
+  /// Native discards the compiled mini-cache before returning. A post-call
+  /// fixed-head drift marks this session for reopen but preserves the bounded
+  /// compiler/recovery evidence in the returned receipt.
+  Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
+    required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+    required String gameRoot,
+    required String entityId,
+    required int expectedEntityRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+  }) async {
+    final result = await _core
+        .readBasisSnapshot<AuthoringRevision3ManagedCompilerCheckResult>(
+          (basis) async {
+            final selection = _managedRevision3CompilerSelection(
+              currentProjectJson: basis.projectJson,
+              entityKind: entityKind,
+              entityId: entityId,
+            );
+            if (selection == null ||
+                selection.entityRevision != expectedEntityRevision ||
+                selection.moduleId != expectedModuleId ||
+                selection.moduleRevision != expectedModuleRevision) {
+              throw const ManagedRevision3CompilerSelectionStaleException();
+            }
+            final result = switch (entityKind) {
+              AuthoringRevision3ManagedCompilerEntityKind.questDraft =>
+                await _store.checkQuestCompilerV1(
+                  root: root.path,
+                  gameRoot: gameRoot,
+                  expectedHead: basis.head,
+                  questId: entityId,
+                ),
+              AuthoringRevision3ManagedCompilerEntityKind.npcDraft =>
+                await _store.checkNpcCompilerV1(
+                  root: root.path,
+                  gameRoot: gameRoot,
+                  expectedHead: basis.head,
+                  npcId: entityId,
+                ),
+            };
+            final projectBytes = utf8.encode(basis.projectJson);
+            final projectId = basis.projectId;
+            final projectRevision = basis.projectRevision;
+            if (projectId == null ||
+                projectRevision == null ||
+                result.head.canonicalJson != basis.head.canonicalJson ||
+                result.project.id != projectId ||
+                result.project.revision != projectRevision ||
+                result.project.seal.byteLength != projectBytes.length ||
+                result.project.seal.sha256 !=
+                    crypto.sha256.convert(projectBytes).toString() ||
+                result.entity.kind != entityKind ||
+                result.entity.id != entityId ||
+                result.entity.revision != selection.entityRevision ||
+                result.module.id != selection.moduleId ||
+                result.module.revision != selection.moduleRevision ||
+                result.module.namespace != selection.moduleNamespace ||
+                result.module.relativePath != selection.moduleRelativePath ||
+                result.module.sourceSha256 != selection.sourceSha256) {
+              throw const ManagedProjectVerificationException(
+                'revision-3 managed compiler evidence disagrees with its exact session basis',
+              );
+            }
+            return result;
+          },
+          operation: 'checkCompilerV1',
+          handleReadError: _core._throwRevision3ManagedCompilerCheckError,
+        );
+    return ManagedRevision3CompilerCheckReceipt(
+      result: result,
+      storeStillExactCurrent: !_core.requiresReopen,
+    );
+  }
+
   /// Read path-only installed DataAsset package candidates for the exact
   /// current project generation. Native code reopens both the Store and the
   /// selected installation, reads no ExportBundle payload, and returns no
@@ -2493,6 +2648,259 @@ class ManagedRevision3AuthoringProjectSession {
   Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
 
   Future<void> close() => _core.close();
+}
+
+/// Synchronous stale-selection preflight over an already fully-opened
+/// canonical revision-3 project. The managed session repeats this derivation
+/// inside its serialized exact-head lane before any native compiler call.
+bool revision3ManagedCompilerSelectionMatches({
+  required String currentProjectJson,
+  required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+  required String entityId,
+  required int expectedEntityRevision,
+  required String expectedModuleId,
+  required int expectedModuleRevision,
+}) {
+  final selection = _managedRevision3CompilerSelection(
+    currentProjectJson: currentProjectJson,
+    entityKind: entityKind,
+    entityId: entityId,
+  );
+  return selection != null &&
+      selection.entityRevision == expectedEntityRevision &&
+      selection.moduleId == expectedModuleId &&
+      selection.moduleRevision == expectedModuleRevision;
+}
+
+final class _ManagedRevision3CompilerSelection {
+  const _ManagedRevision3CompilerSelection({
+    required this.entityRevision,
+    required this.moduleId,
+    required this.moduleRevision,
+    required this.moduleNamespace,
+    required this.moduleRelativePath,
+    required this.sourceSha256,
+  });
+
+  final int entityRevision;
+  final String moduleId;
+  final int moduleRevision;
+  final String moduleNamespace;
+  final String moduleRelativePath;
+  final String sourceSha256;
+}
+
+_ManagedRevision3CompilerSelection? _managedRevision3CompilerSelection({
+  required String currentProjectJson,
+  required AuthoringRevision3ManagedCompilerEntityKind entityKind,
+  required String entityId,
+}) {
+  if (!_managedRevision3CompilerIdPattern.hasMatch(entityId) ||
+      entityId == _managedRevision3CompilerZeroId) {
+    return null;
+  }
+  final Object? decoded;
+  try {
+    decoded = jsonDecode(currentProjectJson);
+  } on FormatException catch (error) {
+    throw ManagedProjectVerificationException(
+      'canonical revision-3 compiler basis is not JSON: ${error.message}',
+    );
+  }
+  final project = _managedRevision3CompilerObject(decoded, 'project');
+  final projectId = _managedRevision3CompilerId(
+    project['project_id'],
+    'project_id',
+  );
+  _managedRevision3CompilerRevision(project['revision'], 'project revision');
+  final entities = _managedRevision3CompilerObject(
+    project['entities'],
+    'project entities',
+  );
+  final rawEntity = entities[entityId];
+  if (rawEntity == null) return null;
+  final entity = _managedRevision3CompilerObject(
+    rawEntity,
+    'selected compiler entity',
+  );
+  if (_managedRevision3CompilerId(entity['id'], 'selected entity id') !=
+      entityId) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler entity key and identity disagree',
+    );
+  }
+  final payload = _managedRevision3CompilerObject(
+    entity['payload'],
+    'selected compiler entity payload',
+  );
+  if (payload['kind'] != entityKind.wireName) return null;
+  final entityRevision = _managedRevision3CompilerRevision(
+    entity['revision'],
+    'selected entity revision',
+  );
+  final entityData = _managedRevision3CompilerObject(
+    payload['data'],
+    'selected compiler entity data',
+  );
+  final moduleReference = _managedRevision3CompilerReference(
+    entityData['script_module'],
+    context: 'selected compiler ScriptModule reference',
+    expectedProjectId: projectId,
+    expectedKind: 'script_module',
+  );
+  if (moduleReference.id == entityId) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler entity aliases its ScriptModule',
+    );
+  }
+  final rawModule = entities[moduleReference.id];
+  if (rawModule == null) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler ScriptModule is absent from the exact project',
+    );
+  }
+  final module = _managedRevision3CompilerObject(
+    rawModule,
+    'selected compiler ScriptModule',
+  );
+  if (_managedRevision3CompilerId(module['id'], 'ScriptModule id') !=
+      moduleReference.id) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler ScriptModule key and identity disagree',
+    );
+  }
+  final moduleRevision = _managedRevision3CompilerRevision(
+    module['revision'],
+    'ScriptModule revision',
+  );
+  final modulePayload = _managedRevision3CompilerObject(
+    module['payload'],
+    'selected compiler ScriptModule payload',
+  );
+  if (modulePayload['kind'] != 'script_module') {
+    throw const ManagedProjectVerificationException(
+      'selected compiler module reference targets another entity kind',
+    );
+  }
+  final moduleData = _managedRevision3CompilerObject(
+    modulePayload['data'],
+    'selected compiler ScriptModule data',
+  );
+  final owner = _managedRevision3CompilerReference(
+    moduleData['owner'],
+    context: 'selected compiler ScriptModule owner',
+    expectedProjectId: projectId,
+    expectedKind: entityKind.wireName,
+  );
+  if (owner.id != entityId) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler ScriptModule belongs to another entity',
+    );
+  }
+  final moduleNamespace = _managedRevision3CompilerString(
+    moduleData['module_namespace'],
+    'ScriptModule namespace',
+  );
+  final moduleRelativePath = _managedRevision3CompilerString(
+    moduleData['module_relative_path'],
+    'ScriptModule relative path',
+  );
+  if (moduleRelativePath != '${moduleNamespace.replaceAll('.', '/')}.as') {
+    throw const ManagedProjectVerificationException(
+      'selected compiler ScriptModule namespace and path disagree',
+    );
+  }
+  final sourceSha256 = _managedRevision3CompilerString(
+    moduleData['source_sha256'],
+    'ScriptModule source SHA-256',
+  );
+  if (!_managedRevision3CompilerShaPattern.hasMatch(sourceSha256)) {
+    throw const ManagedProjectVerificationException(
+      'selected compiler ScriptModule source SHA-256 is invalid',
+    );
+  }
+  return _ManagedRevision3CompilerSelection(
+    entityRevision: entityRevision,
+    moduleId: moduleReference.id,
+    moduleRevision: moduleRevision,
+    moduleNamespace: moduleNamespace,
+    moduleRelativePath: moduleRelativePath,
+    sourceSha256: sourceSha256,
+  );
+}
+
+const _managedRevision3CompilerZeroId = '00000000000000000000000000000000';
+final _managedRevision3CompilerIdPattern = RegExp(r'^[0-9a-f]{32}$');
+final _managedRevision3CompilerShaPattern = RegExp(r'^[0-9a-f]{64}$');
+
+({String id}) _managedRevision3CompilerReference(
+  Object? value, {
+  required String context,
+  required String expectedProjectId,
+  required String expectedKind,
+}) {
+  final reference = _managedRevision3CompilerObject(value, context);
+  if (_managedRevision3CompilerId(
+        reference['project_id'],
+        '$context project',
+      ) !=
+      expectedProjectId) {
+    throw ManagedProjectVerificationException(
+      '$context belongs to another project',
+    );
+  }
+  if (reference['expected_kind'] != expectedKind) {
+    throw ManagedProjectVerificationException(
+      '$context names another entity kind',
+    );
+  }
+  return (id: _managedRevision3CompilerId(reference['id'], '$context id'));
+}
+
+Map<String, Object?> _managedRevision3CompilerObject(
+  Object? value,
+  String context,
+) {
+  if (value is! Map) {
+    throw ManagedProjectVerificationException('$context is not an object');
+  }
+  final result = <String, Object?>{};
+  for (final entry in value.entries) {
+    if (entry.key is! String) {
+      throw ManagedProjectVerificationException(
+        '$context has a non-string field',
+      );
+    }
+    result[entry.key as String] = entry.value;
+  }
+  return result;
+}
+
+String _managedRevision3CompilerId(Object? value, String context) {
+  if (value is! String ||
+      !_managedRevision3CompilerIdPattern.hasMatch(value) ||
+      value == _managedRevision3CompilerZeroId) {
+    throw ManagedProjectVerificationException('$context is not a valid ID');
+  }
+  return value;
+}
+
+int _managedRevision3CompilerRevision(Object? value, String context) {
+  if (value is! int || value < 0 || value > 0x7fffffffffffffff) {
+    throw ManagedProjectVerificationException(
+      '$context is outside the signed wire domain',
+    );
+  }
+  return value;
+}
+
+String _managedRevision3CompilerString(Object? value, String context) {
+  if (value is! String || value.isEmpty || value.contains('\u0000')) {
+    throw ManagedProjectVerificationException(
+      '$context is not bounded non-empty text',
+    );
+  }
+  return value;
 }
 
 bool _sameOrderedStrings(List<String> left, List<String> right) {
@@ -3158,6 +3566,48 @@ class _ManagedProjectSessionCore {
     Error.throwWithStackTrace(
       const ManagedProjectVerificationException(
         'managed revision-3 NPC source inspection could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3ManagedCompilerCheckError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ManagedRevision3CompilerSelectionStaleException ||
+        error is ArgumentError ||
+        error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_COMPILER_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ManagedCompilerCheckErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      // Compiler rejection, diagnostics, restore disposition, and install
+      // recovery are valid result values. A thrown native error therefore has
+      // no trustworthy evidence boundary and fails closed until deliberately
+      // classified otherwise.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 compiler evidence could not be verified exactly',
       ),
       stackTrace,
     );
@@ -3903,6 +4353,15 @@ bool _revision3NpcSourceInspectionErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_NPC_INSPECTION_PROJECT_INVALID',
   'AUTHORING_REVISION3_NPC_INSPECTION_REQUEST_INVALID',
   'AUTHORING_REVISION3_NPC_INSPECTION_RESPONSE_LIMIT',
+}.contains(code);
+
+bool _revision3ManagedCompilerCheckErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_COMPILER_REQUEST_INVALID',
+  'AUTHORING_REVISION3_COMPILER_INPUT_LIMIT',
+  'AUTHORING_REVISION3_COMPILER_HEAD_INVALID',
+  'AUTHORING_REVISION3_COMPILER_STORE_ROOT_MISSING',
+  'AUTHORING_REVISION3_COMPILER_HEAD_MISSING',
+  'AUTHORING_REVISION3_COMPILER_ENTITY_INVALID',
 }.contains(code);
 
 bool _revision3DataAssetPackageIndexErrorIsRetryable(String code) => const {

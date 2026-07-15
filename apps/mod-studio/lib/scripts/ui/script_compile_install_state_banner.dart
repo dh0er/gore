@@ -162,7 +162,7 @@ String _captureLabel(ScriptCompileCaptureDisposition capture) =>
     };
 
 String _headline(ScriptCompileInstallSafetyState state) {
-  if (state.recoveryReport != null) {
+  if (state.recoveryRequired) {
     return 'Game installation recovery required';
   }
   if (state.phase == ScriptCompileInstallSafetyPhase.loading) {
@@ -184,13 +184,12 @@ String _headline(ScriptCompileInstallSafetyState state) {
 
 String _details(ScriptCompileInstallSafetyState state) {
   final lines = <String>[];
-  final report = state.recoveryReport;
-  if (report != null) {
+  final recovery = state.recoveryEvidence;
+  if (recovery != null) {
     lines.add(
       'Mod Studio will not compile or deploy until a fresh native check proves exact recovery.',
     );
-    final failure = report.failure;
-    if (failure != null) lines.add('${failure.code}: ${failure.message}');
+    lines.add('${recovery.code}: ${recovery.message}');
   } else if (state.phase == ScriptCompileInstallSafetyPhase.loading) {
     lines.add(
       'Compile and Deploy stay disabled until the read-only check completes.',

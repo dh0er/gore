@@ -1,11 +1,17 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
+import 'package:gore_mod/project/managed_project_session.dart';
+import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_quest_source_inspection_dialog.dart';
+import 'package:gore_mod/scripts/domain/script_compile_install_state.dart';
+import 'package:gore_mod/scripts/domain/script_compile_install_state_provider.dart';
 
 const _projectId = '11111111111111111111111111111111';
 const _questId = '22222222222222222222222222222222';
@@ -139,37 +145,179 @@ void main() {
       expect(calls, 1);
     }
   });
+
+  testWidgets('Quest dialog cannot close during its compiler check', (
+    tester,
+  ) async {
+    final inspection = _inspection();
+    final pending = Completer<ManagedRevision3CompilerCheckReceipt>();
+    final safety = ScriptCompileInstallSafetyController(
+      (_) async => _safeInstall(),
+      gameRoot: r'C:\Game',
+      autoRefresh: false,
+    );
+    await safety.refresh();
+    var checkStarted = false;
+
+    await _openInspectionDialog(
+      tester,
+      inspect: ({required gameRoot, required questId}) async => inspection,
+      safety: safety,
+      checkCompiler: () {
+        checkStarted = true;
+        return pending.future;
+      },
+    );
+    final result = find.byKey(
+      const Key('revision3-quest-source-inspection-result'),
+    );
+    final scrollable = find
+        .descendant(of: result, matching: find.byType(Scrollable))
+        .first;
+    final run = find.byKey(const Key('revision3-managed-compiler-check-run'));
+    await tester.scrollUntilVisible(run, 180, scrollable: scrollable);
+    await Scrollable.ensureVisible(tester.element(run), alignment: 0.5);
+    await tester.pumpAndSettle();
+    await tester.tap(run.hitTestable());
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('revision3-managed-compiler-confirm')),
+    );
+    for (var attempt = 0; attempt < 10 && !checkStarted; attempt++) {
+      await tester.pump();
+    }
+
+    expect(checkStarted, isTrue);
+    await tester.pump();
+    final close = find.byKey(
+      const Key('revision3-quest-source-inspection-close'),
+    );
+    expect(tester.widget<TextButton>(close).onPressed, isNull);
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const Key('revision3-quest-source-inspection-dialog')),
+      findsOneWidget,
+    );
+
+    pending.complete(_acceptedQuestCompilerReceipt(inspection));
+    await tester.pumpAndSettle();
+    await tester.pump();
+    expect(tester.widget<TextButton>(close).onPressed, isNotNull);
+    expect(
+      find.byKey(const Key('revision3-managed-compiler-check-result')),
+      findsOneWidget,
+    );
+  });
 }
 
 Future<void> _openInspectionDialog(
   WidgetTester tester, {
   required Revision3QuestSourceInspectionLoader inspect,
+  Revision3ManagedCompilerChecker? checkCompiler,
+  ScriptCompileInstallSafetyController? safety,
 }) async {
-  await tester.pumpWidget(
-    MaterialApp(
-      home: Builder(
-        builder: (context) => Scaffold(
-          body: TextButton(
-            key: const Key('open-revision3-quest-source-inspection'),
-            onPressed: () => showDialog<void>(
-              context: context,
-              builder: (_) => Revision3QuestSourceInspectionDialog(
-                questTitle: 'Secure the gate',
-                questId: _questId,
-                gameRoot: r'C:\Game',
-                inspect: inspect,
-              ),
+  Widget app = MaterialApp(
+    home: Builder(
+      builder: (context) => Scaffold(
+        body: TextButton(
+          key: const Key('open-revision3-quest-source-inspection'),
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (_) => Revision3QuestSourceInspectionDialog(
+              questTitle: 'Secure the gate',
+              questId: _questId,
+              gameRoot: r'C:\Game',
+              inspect: inspect,
+              checkCompiler: checkCompiler,
             ),
-            child: const Text('Open inspection'),
           ),
+          child: const Text('Open inspection'),
         ),
       ),
     ),
   );
+  if (safety != null) {
+    app = ProviderScope(
+      overrides: [
+        scriptCompileInstallSafetyProvider.overrideWith((ref) => safety),
+      ],
+      child: app,
+    );
+  }
+  await tester.pumpWidget(app);
   await tester.tap(
     find.byKey(const Key('open-revision3-quest-source-inspection')),
   );
   await tester.pumpAndSettle();
+}
+
+ScriptCompileInstallState _safeInstall() =>
+    ScriptCompileInstallState.fromJson(<String, Object?>{
+      'ok': true,
+      'disposition': 'safe_to_compile',
+      'safe_to_compile': true,
+      'game_process': 'not_running',
+      'artifacts': <Object?>[],
+      'issues': <Object?>[],
+    });
+
+ManagedRevision3CompilerCheckReceipt _acceptedQuestCompilerReceipt(
+  AuthoringRevision3QuestSourceInspectionResult inspection,
+) {
+  final head = inspection.head;
+  final result = AuthoringRevision3ManagedCompilerCheckResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'compiler_check_only',
+      'exact_current': true,
+      'head_json': head.canonicalJson,
+      'project': <String, Object?>{
+        'id': inspection.projectId,
+        'revision': inspection.projectRevision,
+        'seal': <String, Object?>{
+          'byte_len': head.snapshotByteLength,
+          'sha256': head.snapshotSha256,
+        },
+      },
+      'entity': <String, Object?>{
+        'kind': 'quest_draft',
+        'id': inspection.questId,
+        'revision': 1,
+      },
+      'module': <String, Object?>{
+        'id': inspection.plan.module.scriptModule.id,
+        'revision': 1,
+        'namespace': inspection.moduleNamespace,
+        'relative_path': inspection.moduleRelativePath,
+        'source_sha256': inspection.plan.module.generated.sourceSha256,
+      },
+      'compiler': <String, Object?>{
+        'outcome': 'compiled_evidence_only',
+        'compile_error': null,
+        'compiler_diagnostics': <String, Object?>{
+          'capture': 'captured',
+          'messages': <Object?>[],
+          'omitted': 0,
+        },
+        'install_restore': 'restored_exact',
+        'recovery_required': false,
+        'output_discarded': true,
+      },
+      'scope': 'compiler_check_only',
+      'build_status': 'blocked',
+      'deploy_status': 'not_supported',
+      'runtime_qualification': 'runtime_unqualified',
+      'publication_status': 'not_supported',
+    },
+    expectedHead: head,
+    requestedEntityId: inspection.questId,
+    expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+  );
+  return ManagedRevision3CompilerCheckReceipt(
+    result: result,
+    storeStillExactCurrent: true,
+  );
 }
 
 AuthoringRevision3QuestSourceInspectionResult _inspection() {
