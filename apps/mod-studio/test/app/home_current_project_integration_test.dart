@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -16,6 +17,7 @@ import 'package:gore_mod/dataasset/ui/dataasset_lab.dart';
 import 'package:gore_mod/dataasset/ui/dataasset_semantic_edit_panel.dart';
 import 'package:gore_mod/gore_mod_app.dart';
 import 'package:gore_mod/home_page.dart';
+import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
@@ -31,11 +33,15 @@ import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_target_dialog.dart';
+import 'package:gore_mod/project/revision3_voice_wizard.dart';
 import 'package:path/path.dart' as p;
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
+import '../support/revision3_project_problems_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
@@ -541,7 +547,7 @@ void main() {
   });
 
   testWidgets(
-    'managed open owns the shell, hides legacy actions, and Ctrl+S verifies',
+    'managed open owns the shell, Ctrl+S verifies, and Close releases it',
     (tester) async {
       await _setDesktopTestSurface(tester);
       final legacy = _FakeLegacyLease(path: 'legacy.goremod');
@@ -623,6 +629,12 @@ void main() {
           .whereType<PopupMenuItem<String>>()
           .singleWhere((item) => item.key == const Key('project-save-as'));
       expect(saveAs.enabled, isFalse);
+      final close = menu
+          .itemBuilder(tester.element(menuFinder))
+          .whereType<PopupMenuItem<String>>()
+          .singleWhere((item) => item.key == const Key('project-close'));
+      expect(close.enabled, isTrue);
+      expect((close.child as Text).data, 'Close project');
       expect((saveAs.child as Text).data, 'Save project as…');
 
       await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
@@ -635,6 +647,16 @@ void main() {
       expect(managed.verifyCalls, 1);
       final verified = coordinator.state as ManagedRevision3CurrentProjectState;
       expect(verified.head.canonicalJson, managed.head.canonicalJson);
+
+      await tester.tap(menuFinder);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('project-close')));
+      await tester.pumpAndSettle();
+      expect(managed.closeCalls, 1);
+      expect(
+        find.byKey(const Key('managed-revision3-project-view')),
+        findsNothing,
+      );
     },
   );
 
@@ -997,6 +1019,7 @@ void main() {
         find.byKey(const Key('revision3-project-dashboard')),
         findsOneWidget,
       );
+      expect(find.byKey(const Key('managed-review-problems')), findsOneWidget);
 
       await _navigateManagedDataAssets(tester);
       expect(managed.dataAssetListCalls, 1);
@@ -1088,7 +1111,19 @@ void main() {
         tester,
         sectionId: 'localization-voice',
         actionId: 'manage-voice-takes',
-        enabled: true,
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'resolve-voice-target',
+        enabled: false,
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'manage-voice-takes',
+        enabled: false,
       );
       _expectManagedSectionAction(
         tester,
@@ -1102,26 +1137,15 @@ void main() {
         const Key('revision3-project-workspace-nav-validate-test'),
       );
       expect(
-        find.byKey(const Key('revision3-project-section-validate-test-page')),
+        find.byKey(const Key('revision3-project-problems-view')),
         findsOneWidget,
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'validate-test',
-        actionId: 'verify-current-head',
-        enabled: true,
+      final verifyAssessment = find.byKey(
+        const Key('revision3-project-problems-verify-current-project'),
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'validate-test',
-        actionId: 'inspect-references',
-        enabled: true,
-      );
-      await _tapManagedSectionAction(
-        tester,
-        sectionId: 'validate-test',
-        actionId: 'verify-current-head',
-      );
+      expect(verifyAssessment, findsOneWidget);
+      await tester.ensureVisible(verifyAssessment);
+      await tester.tap(verifyAssessment);
       await tester.pump(const Duration(milliseconds: 300));
       expect(managed.verifyCalls, 1);
 
@@ -1166,6 +1190,81 @@ void main() {
       );
     },
   );
+
+  testWidgets('Problems opens the exact referenced entity in Content checks', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final fixture = revision3ProjectProblemsFixture(
+      includeDialogGraph: false,
+      includeReferenceProblem: true,
+      includeAssetProblem: false,
+      includeVoiceProblems: false,
+      includeDataAssetStage: false,
+    );
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\problems-deep-link'),
+      projectId: fixture.projectId,
+      projectRevision: fixture.projectRevision,
+      head: _head(fixture.projectRevision),
+      contentIndexBuilder: (_) => fixture.contentIndex,
+      onDataAssetList: (_) => fixture.dataAssetStages,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+    await _navigateManagedWorkspace(
+      tester,
+      const Key('revision3-project-workspace-nav-validate-test'),
+    );
+
+    final openEntity = find.byKey(
+      const Key(
+        'revision3-project-problems-action-entity-'
+        '$revision3ProjectProblemsNpcId',
+      ),
+    );
+    expect(openEntity, findsOneWidget);
+    await tester.ensureVisible(openEntity);
+    await tester.tap(openEntity);
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-content-entity-details-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      ),
+      findsOneWidget,
+    );
+    final problemsTab = find.byKey(
+      const Key(
+        'revision3-story-workbench-tab-problemsChecks-'
+        '$revision3ProjectProblemsNpcId',
+      ),
+    );
+    expect(problemsTab, findsOneWidget);
+    expect(tester.widget<ChoiceChip>(problemsTab).selected, isTrue);
+    expect(
+      find.byKey(
+        const Key(
+          'revision3-story-workbench-section-problemsChecks-'
+          '$revision3ProjectProblemsNpcId',
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets(
     'visible managed Quest wizard publishes and reloads the new revision',
@@ -2248,6 +2347,315 @@ void main() {
   );
 
   testWidgets(
+    'configured Voice actions stay visible with localized dialog prerequisite',
+    (tester) async {
+      await _setNarrowShortTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_prerequisite_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-prerequisite'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
+      expect(dashboardAction, findsOneWidget);
+      expect(tester.widget<InkWell>(dashboardAction).onTap, isNull);
+      final dashboardPrerequisite = AppLocalizations.of(
+        tester.element(dashboardAction),
+      ).managedActionAddVoiceTakeRequiresDialogLine;
+      expect(
+        find.descendant(
+          of: dashboardAction,
+          matching: find.text(dashboardPrerequisite),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      await _navigateManagedLocalizationVoice(tester);
+
+      final sectionAction = _managedSectionAction(
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+      );
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+        enabled: false,
+      );
+      final sectionPrerequisite = AppLocalizations.of(
+        tester.element(sectionAction),
+      ).managedActionAddVoiceTakeRequiresDialogLine;
+      expect(
+        find.descendant(
+          of: sectionAction,
+          matching: find.text(sectionPrerequisite),
+        ),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      expect(managed.voicePublishCalls, 0);
+    },
+  );
+
+  testWidgets('exact DialogLine enables Voice add on dashboard and section', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    final gameRoot = Directory.systemTemp.createTempSync(
+      'gore_r3_voice_dialog_line_game_',
+    );
+    Directory(p.join(gameRoot.path, 'G1R')).createSync();
+    addTearDown(() {
+      if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+    });
+    final managed = _FakeManagedLease(
+      root: Directory(r'C:\mods\voice-dialog-line'),
+      projectId: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      contentIndexBuilder: (lease) =>
+          revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+      gamePath: gameRoot.path,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.pumpAndSettle();
+
+    final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
+    expect(dashboardAction, findsOneWidget);
+    expect(tester.widget<InkWell>(dashboardAction).onTap, isNotNull);
+
+    await _navigateManagedLocalizationVoice(tester);
+
+    _expectManagedSectionAction(
+      tester,
+      sectionId: 'localization-voice',
+      actionId: 'add-voice-take',
+      enabled: true,
+    );
+    _expectManagedSectionAction(
+      tester,
+      sectionId: 'localization-voice',
+      actionId: 'manage-voice-takes',
+      enabled: true,
+    );
+    _expectManagedSectionAction(
+      tester,
+      sectionId: 'localization-voice',
+      actionId: 'resolve-voice-target',
+      enabled: true,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'unresolved DialogLine localization keeps catalog-dependent Voice actions disabled',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_unresolved_localization_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-unresolved-localization'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _voiceIndexWithUnresolvedLocalization(
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      for (final key in const <Key>[
+        Key('managed-add-voice-take'),
+        Key('managed-manage-voice-takes'),
+        Key('managed-resolve-voice-target'),
+      ]) {
+        final action = find.byKey(key);
+        expect(action, findsOneWidget);
+        expect(tester.widget<InkWell>(action).onTap, isNull);
+      }
+
+      await _navigateManagedLocalizationVoice(tester);
+      for (final actionId in const <String>[
+        'add-voice-take',
+        'manage-voice-takes',
+        'resolve-voice-target',
+      ]) {
+        _expectManagedSectionAction(
+          tester,
+          sectionId: 'localization-voice',
+          actionId: actionId,
+          enabled: false,
+        );
+      }
+      expect(find.byType(Revision3VoiceTakeDialog), findsNothing);
+      expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
+      expect(find.byType(Revision3VoiceTargetDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'late DialogLine index cannot enable Voice add for a newer empty revision',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_stale_gate_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final staleGateLoad = Completer<Revision3ContentIndex>();
+      final freshGateLoad = Completer<Revision3ContentIndex>();
+      var contentRead = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-stale-gate'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onContentIndexRead: (lease) {
+          contentRead++;
+          return switch (contentRead) {
+            1 => Future.value(
+              _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              ),
+            ),
+            2 => staleGateLoad.future,
+            3 => Future.value(
+              _contentIndex(projectId: lease.projectId, revision: 8),
+            ),
+            4 => freshGateLoad.future,
+            _ => Future.value(
+              _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              ),
+            ),
+          };
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester, settle: false);
+      await tester.pump();
+      expect(contentRead, 2);
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+        enabled: false,
+      );
+
+      managed.projectRevision = 8;
+      managed.head = _head(8);
+      (coordinator as dynamic).state = ManagedRevision3CurrentProjectState(
+        root: managed.root,
+        projectId: managed.projectId,
+        projectRevision: managed.projectRevision,
+        head: managed.head,
+        requiresReopen: false,
+      );
+      await tester.pump();
+
+      staleGateLoad.complete(revision3VoiceContentIndexFixture(revision: 7));
+      for (var index = 0; index < 10 && contentRead < 4; index++) {
+        await tester.pump();
+      }
+      expect(contentRead, 4);
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+        enabled: false,
+      );
+
+      freshGateLoad.complete(
+        _contentIndex(projectId: managed.projectId, revision: 8),
+      );
+      await tester.pumpAndSettle();
+      _expectManagedSectionAction(
+        tester,
+        sectionId: 'localization-voice',
+        actionId: 'add-voice-take',
+        enabled: false,
+      );
+
+      await _navigateManagedHome(tester);
+      final dashboardAction = find.byKey(const Key('managed-add-voice-take'));
+      expect(dashboardAction, findsOneWidget);
+      expect(tester.widget<InkWell>(dashboardAction).onTap, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'managed Voice selection works without a game root and retains Library selection',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -2318,6 +2726,21 @@ void main() {
         isNull,
         reason: 'Ogg import still needs its separate safety game root',
       );
+      final missingGame = AppLocalizations.of(
+        tester.element(find.byKey(const Key('managed-add-voice-take'))),
+      ).managedDashboardMissingGameDescription;
+      for (final key in const <Key>[
+        Key('managed-add-voice-take'),
+        Key('managed-resolve-voice-target'),
+        Key('managed-build-voice-bundle'),
+      ]) {
+        final action = find.byKey(key);
+        expect(tester.widget<InkWell>(action).onTap, isNull);
+        expect(
+          find.descendant(of: action, matching: find.text(missingGame)),
+          findsOneWidget,
+        );
+      }
       await _navigateManagedContent(tester);
       final libraryLine = find.byKey(
         const Key('revision3-content-entity-$revision3VoiceContentLineId'),
@@ -3334,6 +3757,31 @@ Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _navigateManagedLocalizationVoice(
+  WidgetTester tester, {
+  bool settle = true,
+}) async {
+  const destinationKey = Key(
+    'revision3-project-workspace-nav-localization-voice',
+  );
+  final narrowMenu = find.byKey(
+    const Key('revision3-project-workspace-narrow-menu'),
+  );
+  if (narrowMenu.evaluate().isNotEmpty) {
+    await tester.tap(narrowMenu);
+    await tester.pumpAndSettle();
+  }
+  final destination = find.byKey(destinationKey);
+  expect(destination, findsOneWidget);
+  await tester.ensureVisible(destination);
+  await tester.tap(destination);
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
+}
+
 Future<void> _openStoryWorkbenchEntity(
   WidgetTester tester,
   String entityId,
@@ -3502,6 +3950,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
     this.onDataAssetPackageIndexRead,
+    this.onContentIndexRead,
     this.contentIndexBuilder,
   });
 
@@ -3631,6 +4080,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     String gameRoot,
   )?
   onDataAssetPackageIndexRead;
+  final Future<Revision3ContentIndex> Function(_FakeManagedLease lease)?
+  onContentIndexRead;
   final Revision3ContentIndex Function(_FakeManagedLease lease)?
   contentIndexBuilder;
   bool requiresReopenValue = false;
@@ -3667,6 +4118,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   @override
   Future<Revision3ContentIndex> readContentIndex() async {
     contentReadCalls++;
+    final read = onContentIndexRead;
+    if (read != null) return read(this);
     return contentIndexBuilder?.call(this) ??
         (throw StateError('fake managed lease has no content index'));
   }
@@ -4670,6 +5123,24 @@ Revision3ContentIndex _voiceSelectionIndex({
       entity['summary'] = summary;
     }
   }
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Revision3ContentIndex _voiceIndexWithUnresolvedLocalization({
+  required int revision,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+  final entities = (json['entities']! as List).cast<Map<String, Object?>>();
+  final line = entities.singleWhere(
+    (entity) => entity['kind'] == 'dialog_line',
+  );
+  final references = (line['references']! as List).cast<Map<String, Object?>>();
+  final localization = references.singleWhere(
+    (reference) => reference['role'] == 'dialog_localization',
+  );
+  final target = (localization['target']! as Map).cast<String, Object?>();
+  target['entity_id'] = '99999999999999999999999999999999';
+  localization['resolution'] = 'missing_entity';
   return Revision3ContentIndex.fromJsonObject(json);
 }
 

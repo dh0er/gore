@@ -92,6 +92,7 @@ void main() {
     await _setSurfaceSize(tester, const Size(1000, 900));
     var createCalls = 0;
     var toolCalls = 0;
+    var gatedToolCalls = 0;
     var settingsCalls = 0;
     final enabledCreate = Revision3ProjectDashboardAction(
       id: 'create-npc-draft',
@@ -114,6 +115,15 @@ void main() {
       description: 'Manage exact project candidates.',
       onPressed: () => toolCalls++,
     );
+    final gatedTool = Revision3ProjectDashboardAction(
+      id: 'add-voice-take',
+      icon: Icons.record_voice_over_outlined,
+      title: 'Add Voice take',
+      description: 'Import a recording.',
+      disabledReason: 'Add a dialog line before importing a recording.',
+      enabledFor: (_) => false,
+      onPressed: () => gatedToolCalls++,
+    );
     final settings = Revision3ProjectDashboardAction(
       id: 'open-settings',
       icon: Icons.settings_outlined,
@@ -127,7 +137,7 @@ void main() {
       load: () async => _fixture(),
       gameConfigured: false,
       createActions: [enabledCreate, disabledCreate],
-      toolActions: [tool],
+      toolActions: [tool, gatedTool],
       settingsAction: settings,
     );
     await tester.pumpAndSettle();
@@ -155,6 +165,18 @@ void main() {
     await tester.ensureVisible(toolFinder);
     await tester.tap(toolFinder);
     expect(toolCalls, 1);
+
+    final gatedToolFinder = find.byKey(
+      const Key('revision3-project-dashboard-action-add-voice-take'),
+    );
+    await tester.ensureVisible(gatedToolFinder);
+    expect(tester.widget<InkWell>(gatedToolFinder).onTap, isNull);
+    expect(
+      find.text('Add a dialog line before importing a recording.'),
+      findsOneWidget,
+    );
+    await tester.tap(gatedToolFinder);
+    expect(gatedToolCalls, 0);
 
     final settingsFinder = find.byKey(
       const Key('revision3-project-dashboard-settings-action'),

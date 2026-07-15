@@ -382,6 +382,14 @@ class AppLocalizationsDe extends AppLocalizations {
   String get projectManagedRevision3Title => 'Verwaltetes Revision-3-Projekt';
 
   @override
+  String get projectClose => 'Projekt schließen';
+
+  @override
+  String projectCloseFailed(String error) {
+    return 'Das Projekt konnte nicht geschlossen werden: $error';
+  }
+
+  @override
   String get projectManagedRevision3IdentityOnly =>
       'Diese Oberfläche zeigt derzeit ausschließlich die verifizierte Projektidentität. Strg+S öffnet den exakten aktuellen Head erneut und verifiziert ihn; Legacy-Editoren, Build/Deploy und Speichern unter sind nicht verfügbar.';
 
@@ -773,7 +781,11 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedActionAddVoiceTakeDescription =>
-      'Importiere eine Ogg-Vorbis-Aufnahme in dieses Projekt, ohne sie bereitzustellen.';
+      'Importiere eine Ogg-Vorbis-Aufnahme für eine vorhandene Dialogzeile, ohne sie bereitzustellen.';
+
+  @override
+  String get managedActionAddVoiceTakeRequiresDialogLine =>
+      'Erstelle oder repariere zuerst eine Dialogzeile mit genau einem gültigen Lokalisierungseintrag, bevor du Voice-Werkzeuge verwendest.';
 
   @override
   String get managedActionManageVoiceTakesTitle => 'Sprachaufnahmen verwalten';
@@ -1279,4 +1291,249 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedStoryWorkbenchReferenceUnresolvedLabel =>
       'Referenz nicht aufgelöst';
+
+  @override
+  String get managedProblemsTitle => 'Probleme & Bereitschaft';
+
+  @override
+  String get managedProblemsDescription =>
+      'Sieh, was Aufmerksamkeit braucht, und öffne direkt den genau betroffenen Projektinhalt.';
+
+  @override
+  String get managedProblemsScopeNotice =>
+      'Jeder Status gilt nur für den genannten Bereich. Fehlerfreie Referenzen bedeuten nicht, dass der Mod gebaut oder im Spiel getestet werden kann.';
+
+  @override
+  String get managedProblemsRefresh => 'Probleme aktualisieren';
+
+  @override
+  String get managedProblemsPartialTitle =>
+      'Einige Prüfungen sind nicht verfügbar';
+
+  @override
+  String get managedProblemsDataAssetsUnavailable =>
+      'DataAsset-Änderungen konnten nicht geprüft werden. Andere exakte Projektbefunde werden weiterhin angezeigt.';
+
+  @override
+  String get managedProblemsOverviewHeading => 'Bereitschaft nach Bereich';
+
+  @override
+  String get managedProblemsSearchLabel => 'Probleme durchsuchen';
+
+  @override
+  String get managedProblemsClearSearch => 'Problemsuche leeren';
+
+  @override
+  String get managedProblemsListHeading => 'Probleme';
+
+  @override
+  String get managedProblemsEmptyTitle =>
+      'Keine modellierten Strukturprobleme gefunden';
+
+  @override
+  String get managedProblemsEmptyDescription =>
+      'Die derzeit in Mod Studio modellierten exakten Prüfungen fanden nichts zu reparieren.';
+
+  @override
+  String get managedProblemsEmptyBoundary =>
+      'Compilerbelege wurden nicht geprüft, der vollständige verwaltete Build ist nicht verfügbar und das Laufzeitverhalten bleibt unqualifiziert.';
+
+  @override
+  String get managedProblemsFilteredEmptyTitle => 'Keine passenden Probleme';
+
+  @override
+  String get managedProblemsFilteredEmptyDescription =>
+      'Ändere Suche oder Bereichsfilter, um andere Befunde zu sehen.';
+
+  @override
+  String get managedProblemsSelectTitle => 'Problem auswählen';
+
+  @override
+  String get managedProblemsSelectDescription =>
+      'Wähle einen Befund, um Bedeutung und sicherste verfügbare nächste Aktion zu sehen.';
+
+  @override
+  String get managedProblemsDetailHeading => 'Problemdetails';
+
+  @override
+  String get managedProblemsCloseDetail => 'Problemdetails schließen';
+
+  @override
+  String get managedProblemsCategoryLabel => 'Bereich';
+
+  @override
+  String get managedProblemsSeverityLabel => 'Dringlichkeit';
+
+  @override
+  String get managedProblemsSourceLabel => 'Beleg';
+
+  @override
+  String get managedProblemsOpenSourceEntity => 'Ausgangsinhalt öffnen';
+
+  @override
+  String get managedProblemsOpenReferencedAsset => 'Verknüpftes Asset öffnen';
+
+  @override
+  String get managedProblemsOpenDataAssetEdits => 'DataAsset-Änderungen öffnen';
+
+  @override
+  String get managedProblemsActionFailed =>
+      'Das exakte Ziel konnte nicht geöffnet werden. Aktualisiere die Projektprobleme und versuche es erneut.';
+
+  @override
+  String get managedProblemsActionProgress =>
+      'Exaktes Projektziel wird geöffnet';
+
+  @override
+  String get managedProblemsCategoryReferences => 'Referenzen';
+
+  @override
+  String get managedProblemsCategorySetup => 'Einrichtung';
+
+  @override
+  String get managedProblemsCategoryDataAssets => 'DataAssets';
+
+  @override
+  String get managedProblemsSeverityInformation => 'Information';
+
+  @override
+  String get managedProblemsSeverityWarning => 'Braucht Aufmerksamkeit';
+
+  @override
+  String get managedProblemsSeverityBlocking => 'Blockiert diesen Bereich';
+
+  @override
+  String get managedProblemsScopeReferencesTitle => 'Referenzintegrität';
+
+  @override
+  String get managedProblemsScopeReferencesDescription =>
+      'Prüft exakte Verknüpfungen zwischen aktuellem Projektinhalt und Assets.';
+
+  @override
+  String get managedProblemsScopeDataAssetsTitle =>
+      'DataAsset-Änderungsregister';
+
+  @override
+  String get managedProblemsScopeDataAssetsDescription =>
+      'Prüft, ob die exakte aktuelle Liste gespeicherter DataAsset-Änderungen gelesen werden konnte.';
+
+  @override
+  String get managedProblemsScopeGameTitle => 'Spieleinrichtung';
+
+  @override
+  String get managedProblemsScopeGameDescription =>
+      'Zeigt, ob eine Spielinstallation für begrenzte schreibgeschützte Werkzeuge konfiguriert ist.';
+
+  @override
+  String get managedProblemsScopeCompilerTitle => 'Quelltext- & Compilerbelege';
+
+  @override
+  String get managedProblemsScopeCompilerDescription =>
+      'Compilerprüfungen laufen nur, wenn du sie für eine exakte Entität ausdrücklich öffnest und startest.';
+
+  @override
+  String get managedProblemsScopeBuildTitle => 'Verwalteter Projekt-Build';
+
+  @override
+  String get managedProblemsScopeBuildDescription =>
+      'Ein vollständiger Build-Pfad für verwaltete NPC-, Quest-, Dialog- und DataAsset-Änderungen ist noch nicht verfügbar.';
+
+  @override
+  String get managedProblemsScopeRuntimeTitle => 'Verhalten im Spiel';
+
+  @override
+  String get managedProblemsScopeRuntimeDescription =>
+      'Es wird keine allgemeine Laufzeit-, Spielstand-, Bereitstellungs- oder Bereinigungsqualifikation behauptet.';
+
+  @override
+  String get managedProblemsReadinessClear => 'In diesem Bereich geprüft';
+
+  @override
+  String get managedProblemsReadinessIssues => 'Braucht Aufmerksamkeit';
+
+  @override
+  String get managedProblemsReadinessUnavailable => 'Prüfung nicht verfügbar';
+
+  @override
+  String get managedProblemsReadinessNotEvaluated => 'Nicht geprüft';
+
+  @override
+  String get managedProblemsReadinessBlocked => 'Build-Pfad nicht verfügbar';
+
+  @override
+  String get managedProblemsReadinessUnqualified => 'Laufzeit unqualifiziert';
+
+  @override
+  String get managedProblemsEvidenceContent =>
+      'Exakter aktueller Projektinhalt';
+
+  @override
+  String get managedProblemsEvidenceDataAssets =>
+      'Exaktes aktuelles DataAsset-Register';
+
+  @override
+  String get managedProblemsEvidenceConfiguration =>
+      'Aktuelle App-Konfiguration';
+
+  @override
+  String get managedProblemsEvidenceUnavailable =>
+      'Belegquelle nicht verfügbar';
+
+  @override
+  String get managedProblemsEvidenceBoundary => 'Bekannte Funktionsgrenze';
+
+  @override
+  String get managedProblemsForeignReferenceTitle =>
+      'Referenz zeigt in ein anderes Projekt';
+
+  @override
+  String get managedProblemsMissingEntityTitle =>
+      'Verknüpfter Projektinhalt fehlt';
+
+  @override
+  String get managedProblemsEntityKindTitle =>
+      'Verknüpfter Projektinhalt hat den falschen Typ';
+
+  @override
+  String get managedProblemsMissingAssetTitle =>
+      'Verknüpfte Projektdatei fehlt';
+
+  @override
+  String get managedProblemsAssetLengthTitle =>
+      'Verknüpfte Projektdatei hat eine unerwartete Größe';
+
+  @override
+  String get managedProblemsAssetTypeTitle =>
+      'Verknüpfte Projektdatei hat einen unerwarteten Typ';
+
+  @override
+  String get managedProblemsGameSetupTitle =>
+      'Spielinstallation ist nicht konfiguriert';
+
+  @override
+  String get managedProblemsDataAssetRegistryTitle =>
+      'DataAsset-Änderungen konnten nicht geprüft werden';
+
+  @override
+  String get managedProblemsDataAssetOfflineTitle =>
+      'DataAsset-Änderung ist nur ein Entwurf';
+
+  @override
+  String managedProblemsEntityReferenceDescription(String source) {
+    return 'Öffne $source und repariere diese exakte Projektinhalt-Verknüpfung.';
+  }
+
+  @override
+  String managedProblemsAssetReferenceDescription(String source) {
+    return 'Öffne $source und repariere diese exakte Projektdatei-Verknüpfung.';
+  }
+
+  @override
+  String get managedProblemsDataAssetRegistryDescription =>
+      'Aktualisiere den exakten aktuellen Projektstand. Bis diese Quelle verfügbar ist, wird keine Aussage über gespeicherte DataAsset-Änderungen getroffen.';
+
+  @override
+  String managedProblemsDataAssetOfflineDescription(String targetPath) {
+    return 'Die gespeicherte Änderung für $targetPath kann unter DataAsset-Änderungen geprüft werden, aber noch nicht durch einen verwalteten Projekt-Build ausgegeben oder als im Spiel funktionsfähig bezeichnet werden.';
+  }
 }

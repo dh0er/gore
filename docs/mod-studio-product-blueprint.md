@@ -128,6 +128,21 @@ recognizes only exact Human/Scavenger/Wolf Footstep presets and one reviewed
 `FeetTextureSize` X/Y field. The guided form preserves Z/W and labels the values
 as raw asset units; neither gameplay effect nor units are qualified.
 
+Usability checkpoint addendum (2026-07-15): **Validate & Test** now contains
+bounded **Problems & Readiness V1**. It searches and filters exact-current
+reference problems, game-configuration state, and DataAsset-registry/stage
+limits, then routes to the exact source entity or asset and the relevant
+workspace. Compiler evidence remains **Not evaluated**, managed build remains
+**Blocked**, and runtime remains **Unqualified**; there is no aggregate Ready
+verdict and the view performs no compiler check, lowering, deployment, or
+gameplay proof. **Project > Close** releases the coordinator-owned current
+session without deleting project data. Add, Manage, and Resolve Voice actions
+also fail closed until the current projection contains an intact
+Voice-authorable `DialogLine` with its resolved same-project
+`LocalizationEntry`; Add and Resolve separately require a configured game.
+This gate prevents a dead-end dialog, but a fresh R3 project still lacks the
+author-facing create/adopt workflow for that line/localization pair.
+
 "Complete" does not mean exposing every Unreal file type. It means every
 advertised operation is semantic, reversible, deterministic, inspectable, and
 qualified for the selected game version. Unknown game-source/property
@@ -664,6 +679,19 @@ release gates. Subjective "works on my machine" testing is insufficient.
 This blueprint maps to the detailed Phase 0-7 roadmap in the architecture
 specification:
 
+**Immediate checkpoint order (2026-07-15): usability and completion take
+precedence over new breadth.** Problems & Readiness V1, honest action gates,
+compact project chrome, and Project Close form the landed baseline. Next,
+complete an existing-line/localization/Voice offline journey including an
+author-facing create-or-adopt prerequisite and reopen verification; then build,
+reopen, and verify one reviewed managed DataAsset stage; then finish safe
+project fundamentals such as deletion, undo/history, export, and recovery;
+then deepen the existing NPC and Quest journeys; and only then complete general
+managed build/release and qualified test paths. Broad World or level authoring
+does not start while these primary workflows still strand authors or lack an
+honest end-to-end result. Until that gate is met, World remains a visible,
+truthful unavailable surface.
+
 1. **Finish the managed phase-one substrate:** the owned R3 working directory,
    serialized session, strict bounded open/import, Ogg AssetStore I/O, exact
    revision/head publication, repair, full reopen, and first Voice transaction
@@ -701,7 +729,8 @@ specification:
    availability/start/success/failure transitions, natural dialog selection,
    journal, rewards/knowledge/effects, persistence, save/reload, uninstall, and
    clean undeploy. NPC spawn success does not qualify any of these behaviors.
-8. **Content breadth:** qualify new items, routines, spawn groups, and wider
+8. **Content breadth, only after the usability gate above:** qualify new items,
+   routines, spawn groups, and wider
    quest patterns; implement cooked package/reference/collection creation; only
    then add advanced world/visual/cinematic paths whose actual runtime chains
    are known.

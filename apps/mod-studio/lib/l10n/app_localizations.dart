@@ -800,6 +800,18 @@ abstract class AppLocalizations {
   /// **'Managed revision-3 project'**
   String get projectManagedRevision3Title;
 
+  /// No description provided for @projectClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close project'**
+  String get projectClose;
+
+  /// No description provided for @projectCloseFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project could not be closed: {error}'**
+  String projectCloseFailed(String error);
+
   /// No description provided for @projectManagedRevision3IdentityOnly.
   ///
   /// In en, this message translates to:
@@ -1445,8 +1457,14 @@ abstract class AppLocalizations {
   /// No description provided for @managedActionAddVoiceTakeDescription.
   ///
   /// In en, this message translates to:
-  /// **'Import an Ogg Vorbis recording into this project without deploying it.'**
+  /// **'Import an Ogg Vorbis recording for an existing project dialog line without deploying it.'**
   String get managedActionAddVoiceTakeDescription;
+
+  /// No description provided for @managedActionAddVoiceTakeRequiresDialogLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Create or repair a dialog line with one valid localization entry before using Voice tools.'**
+  String get managedActionAddVoiceTakeRequiresDialogLine;
 
   /// No description provided for @managedActionManageVoiceTakesTitle.
   ///
@@ -2287,6 +2305,420 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Reference unresolved'**
   String get managedStoryWorkbenchReferenceUnresolvedLabel;
+
+  /// No description provided for @managedProblemsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems & readiness'**
+  String get managedProblemsTitle;
+
+  /// No description provided for @managedProblemsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'See what needs attention and open the exact affected project content.'**
+  String get managedProblemsDescription;
+
+  /// No description provided for @managedProblemsScopeNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Every status covers only its named scope. A clear reference check does not mean the mod can be built or tested in-game.'**
+  String get managedProblemsScopeNotice;
+
+  /// No description provided for @managedProblemsRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh problems'**
+  String get managedProblemsRefresh;
+
+  /// No description provided for @managedProblemsPartialTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Some checks are unavailable'**
+  String get managedProblemsPartialTitle;
+
+  /// No description provided for @managedProblemsDataAssetsUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits could not be checked. Other exact project findings are still shown.'**
+  String get managedProblemsDataAssetsUnavailable;
+
+  /// No description provided for @managedProblemsOverviewHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Readiness by area'**
+  String get managedProblemsOverviewHeading;
+
+  /// No description provided for @managedProblemsSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search problems'**
+  String get managedProblemsSearchLabel;
+
+  /// No description provided for @managedProblemsClearSearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear problem search'**
+  String get managedProblemsClearSearch;
+
+  /// No description provided for @managedProblemsListHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems'**
+  String get managedProblemsListHeading;
+
+  /// No description provided for @managedProblemsEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No modeled structural problems found'**
+  String get managedProblemsEmptyTitle;
+
+  /// No description provided for @managedProblemsEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact checks currently modeled by Mod Studio found nothing to repair.'**
+  String get managedProblemsEmptyDescription;
+
+  /// No description provided for @managedProblemsEmptyBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler evidence was not evaluated, the full managed build is unavailable, and runtime behavior remains unqualified.'**
+  String get managedProblemsEmptyBoundary;
+
+  /// No description provided for @managedProblemsFilteredEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No matching problems'**
+  String get managedProblemsFilteredEmptyTitle;
+
+  /// No description provided for @managedProblemsFilteredEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Change the search or category filter to see other findings.'**
+  String get managedProblemsFilteredEmptyDescription;
+
+  /// No description provided for @managedProblemsSelectTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a problem'**
+  String get managedProblemsSelectTitle;
+
+  /// No description provided for @managedProblemsSelectDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a finding to see what it means and the safest available next action.'**
+  String get managedProblemsSelectDescription;
+
+  /// No description provided for @managedProblemsDetailHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Problem details'**
+  String get managedProblemsDetailHeading;
+
+  /// No description provided for @managedProblemsCloseDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Close problem details'**
+  String get managedProblemsCloseDetail;
+
+  /// No description provided for @managedProblemsCategoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Area'**
+  String get managedProblemsCategoryLabel;
+
+  /// No description provided for @managedProblemsSeverityLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Attention'**
+  String get managedProblemsSeverityLabel;
+
+  /// No description provided for @managedProblemsSourceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence'**
+  String get managedProblemsSourceLabel;
+
+  /// No description provided for @managedProblemsOpenSourceEntity.
+  ///
+  /// In en, this message translates to:
+  /// **'Open source content'**
+  String get managedProblemsOpenSourceEntity;
+
+  /// No description provided for @managedProblemsOpenReferencedAsset.
+  ///
+  /// In en, this message translates to:
+  /// **'Open referenced asset'**
+  String get managedProblemsOpenReferencedAsset;
+
+  /// No description provided for @managedProblemsOpenDataAssetEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'Open DataAsset edits'**
+  String get managedProblemsOpenDataAssetEdits;
+
+  /// No description provided for @managedProblemsActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact target could not be opened. Refresh the project problems and try again.'**
+  String get managedProblemsActionFailed;
+
+  /// No description provided for @managedProblemsActionProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the exact project target'**
+  String get managedProblemsActionProgress;
+
+  /// No description provided for @managedProblemsCategoryReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'References'**
+  String get managedProblemsCategoryReferences;
+
+  /// No description provided for @managedProblemsCategorySetup.
+  ///
+  /// In en, this message translates to:
+  /// **'Setup'**
+  String get managedProblemsCategorySetup;
+
+  /// No description provided for @managedProblemsCategoryDataAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAssets'**
+  String get managedProblemsCategoryDataAssets;
+
+  /// No description provided for @managedProblemsSeverityInformation.
+  ///
+  /// In en, this message translates to:
+  /// **'Information'**
+  String get managedProblemsSeverityInformation;
+
+  /// No description provided for @managedProblemsSeverityWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedProblemsSeverityWarning;
+
+  /// No description provided for @managedProblemsSeverityBlocking.
+  ///
+  /// In en, this message translates to:
+  /// **'Blocks this scope'**
+  String get managedProblemsSeverityBlocking;
+
+  /// No description provided for @managedProblemsScopeReferencesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference integrity'**
+  String get managedProblemsScopeReferencesTitle;
+
+  /// No description provided for @managedProblemsScopeReferencesDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Checks exact links between current project content and assets.'**
+  String get managedProblemsScopeReferencesDescription;
+
+  /// No description provided for @managedProblemsScopeDataAssetsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edit registry'**
+  String get managedProblemsScopeDataAssetsTitle;
+
+  /// No description provided for @managedProblemsScopeDataAssetsDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Checks whether the exact current list of saved DataAsset edits could be read.'**
+  String get managedProblemsScopeDataAssetsDescription;
+
+  /// No description provided for @managedProblemsScopeGameTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game setup'**
+  String get managedProblemsScopeGameTitle;
+
+  /// No description provided for @managedProblemsScopeGameDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Shows whether a game installation is configured for bounded read-only tools.'**
+  String get managedProblemsScopeGameDescription;
+
+  /// No description provided for @managedProblemsScopeCompilerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Source & compiler evidence'**
+  String get managedProblemsScopeCompilerTitle;
+
+  /// No description provided for @managedProblemsScopeCompilerDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Compiler checks run only when you explicitly open and start them for one exact entity.'**
+  String get managedProblemsScopeCompilerDescription;
+
+  /// No description provided for @managedProblemsScopeBuildTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Managed project build'**
+  String get managedProblemsScopeBuildTitle;
+
+  /// No description provided for @managedProblemsScopeBuildDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'A complete build path for managed NPC, Quest, dialog, and DataAsset edits is not available yet.'**
+  String get managedProblemsScopeBuildDescription;
+
+  /// No description provided for @managedProblemsScopeRuntimeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'In-game behavior'**
+  String get managedProblemsScopeRuntimeTitle;
+
+  /// No description provided for @managedProblemsScopeRuntimeDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'No general runtime, save, deployment, or cleanup qualification is claimed.'**
+  String get managedProblemsScopeRuntimeDescription;
+
+  /// No description provided for @managedProblemsReadinessClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Checked within this scope'**
+  String get managedProblemsReadinessClear;
+
+  /// No description provided for @managedProblemsReadinessIssues.
+  ///
+  /// In en, this message translates to:
+  /// **'Needs attention'**
+  String get managedProblemsReadinessIssues;
+
+  /// No description provided for @managedProblemsReadinessUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Check unavailable'**
+  String get managedProblemsReadinessUnavailable;
+
+  /// No description provided for @managedProblemsReadinessNotEvaluated.
+  ///
+  /// In en, this message translates to:
+  /// **'Not evaluated'**
+  String get managedProblemsReadinessNotEvaluated;
+
+  /// No description provided for @managedProblemsReadinessBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Build path unavailable'**
+  String get managedProblemsReadinessBlocked;
+
+  /// No description provided for @managedProblemsReadinessUnqualified.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime unqualified'**
+  String get managedProblemsReadinessUnqualified;
+
+  /// No description provided for @managedProblemsEvidenceContent.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current project content'**
+  String get managedProblemsEvidenceContent;
+
+  /// No description provided for @managedProblemsEvidenceDataAssets.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current DataAsset registry'**
+  String get managedProblemsEvidenceDataAssets;
+
+  /// No description provided for @managedProblemsEvidenceConfiguration.
+  ///
+  /// In en, this message translates to:
+  /// **'Current app configuration'**
+  String get managedProblemsEvidenceConfiguration;
+
+  /// No description provided for @managedProblemsEvidenceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Evidence source unavailable'**
+  String get managedProblemsEvidenceUnavailable;
+
+  /// No description provided for @managedProblemsEvidenceBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Known capability boundary'**
+  String get managedProblemsEvidenceBoundary;
+
+  /// No description provided for @managedProblemsForeignReferenceTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference points to another project'**
+  String get managedProblemsForeignReferenceTitle;
+
+  /// No description provided for @managedProblemsMissingEntityTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project content is missing'**
+  String get managedProblemsMissingEntityTitle;
+
+  /// No description provided for @managedProblemsEntityKindTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project content has the wrong type'**
+  String get managedProblemsEntityKindTitle;
+
+  /// No description provided for @managedProblemsMissingAssetTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file is missing'**
+  String get managedProblemsMissingAssetTitle;
+
+  /// No description provided for @managedProblemsAssetLengthTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file has an unexpected size'**
+  String get managedProblemsAssetLengthTitle;
+
+  /// No description provided for @managedProblemsAssetTypeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Linked project file has an unexpected type'**
+  String get managedProblemsAssetTypeTitle;
+
+  /// No description provided for @managedProblemsGameSetupTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Game installation is not configured'**
+  String get managedProblemsGameSetupTitle;
+
+  /// No description provided for @managedProblemsDataAssetRegistryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edits could not be checked'**
+  String get managedProblemsDataAssetRegistryTitle;
+
+  /// No description provided for @managedProblemsDataAssetOfflineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'DataAsset edit is draft-only'**
+  String get managedProblemsDataAssetOfflineTitle;
+
+  /// No description provided for @managedProblemsEntityReferenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open {source} and repair this exact project-content link.'**
+  String managedProblemsEntityReferenceDescription(String source);
+
+  /// No description provided for @managedProblemsAssetReferenceDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open {source} and repair this exact project-file link.'**
+  String managedProblemsAssetReferenceDescription(String source);
+
+  /// No description provided for @managedProblemsDataAssetRegistryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh the exact current project. No conclusion is drawn about saved DataAsset edits until this source is available.'**
+  String get managedProblemsDataAssetRegistryDescription;
+
+  /// No description provided for @managedProblemsDataAssetOfflineDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved edit for {targetPath} can be reviewed in DataAsset edits, but it cannot be emitted by a managed project build or claimed as working in-game yet.'**
+  String managedProblemsDataAssetOfflineDescription(String targetPath);
 }
 
 class _AppLocalizationsDelegate

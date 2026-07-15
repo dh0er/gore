@@ -1073,6 +1073,288 @@ void main() {
     expect(await controller.openEntityById('missing'), isFalse);
   });
 
+  testWidgets(
+    'controller buffers a pre-mount entity and opens its Problems section',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      final controller = Revision3ContentLibraryController(
+        projectIdentity: const Revision3ContentProjectIdentity(
+          projectRoot: 'managed-root',
+          projectId: _projectId,
+        ),
+      );
+      bool? resolved;
+      final opening = controller.openEntityProblemsById(_questId);
+      unawaited(opening.then((value) => resolved = value));
+      await tester.pump();
+      expect(resolved, isNull, reason: 'the request waits for lazy mounting');
+
+      await _pumpLoadedLibrary(tester, controller: controller);
+
+      expect(await opening, isTrue);
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(
+                Key(
+                  'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+                ),
+              ),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byType(BottomSheet),
+        findsNothing,
+        reason:
+            'wide Content keeps exact controller targets in its details pane',
+      );
+    },
+  );
+
+  testWidgets(
+    'compact pre-mount Problems target opens its exact sheet without blocking',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(560, 760));
+      final controller = Revision3ContentLibraryController(
+        projectIdentity: const Revision3ContentProjectIdentity(
+          projectRoot: 'managed-root',
+          projectId: _projectId,
+        ),
+      );
+      bool? resolved;
+      final opening = controller.openEntityProblemsById(_questId);
+      unawaited(opening.then((value) => resolved = value));
+
+      await _pumpLoadedLibrary(tester, controller: controller);
+
+      expect(
+        resolved,
+        isTrue,
+        reason: 'opening the modal must not wait for the user to dismiss it',
+      );
+      expect(find.byType(BottomSheet), findsOneWidget);
+      expect(
+        find.byKey(ValueKey('revision3-content-entity-details-$_questId')),
+        findsOneWidget,
+      );
+      final problemsTab = find.byKey(
+        Key(
+          'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+        ),
+      );
+      expect(problemsTab, findsOneWidget);
+      expect(tester.widget<ChoiceChip>(problemsTab).selected, isTrue);
+      expect(
+        find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(await opening, isTrue);
+    },
+  );
+
+  testWidgets('compact controller asset target opens its exact sheet', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(560, 760));
+    final controller = Revision3ContentLibraryController();
+    await _pumpLoadedLibrary(tester, controller: controller);
+    expect(find.byType(BottomSheet), findsNothing);
+
+    bool? resolved;
+    final opening = controller.openAssetBySha256(_artifactSha);
+    unawaited(opening.then((value) => resolved = value));
+    await tester.pumpAndSettle();
+
+    expect(resolved, isTrue);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('revision3-content-asset-details-$_artifactSha')),
+      findsOneWidget,
+    );
+    expect(await opening, isTrue);
+  });
+
+  testWidgets('same-project remount buffers and opens an exact compact target', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(560, 760));
+    final controller = Revision3ContentLibraryController(
+      projectIdentity: const Revision3ContentProjectIdentity(
+        projectRoot: 'managed-root',
+        projectId: _projectId,
+      ),
+    );
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    await tester.pumpAndSettle();
+    bool? resolved;
+    final opening = controller.openEntityProblemsById(_npcId);
+    unawaited(opening.then((value) => resolved = value));
+    await tester.pump();
+    expect(
+      resolved,
+      isNull,
+      reason: 'a detached same-project request waits for the lazy remount',
+    );
+
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    expect(resolved, isTrue);
+    expect(find.byType(BottomSheet), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('revision3-content-entity-details-$_npcId')),
+      findsOneWidget,
+    );
+    final problemsTab = find.byKey(
+      Key(
+        'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_npcId',
+      ),
+    );
+    expect(problemsTab, findsOneWidget);
+    expect(tester.widget<ChoiceChip>(problemsTab).selected, isTrue);
+    expect(await opening, isTrue);
+  });
+
+  testWidgets('controller buffers a pre-mount exact asset target', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final opening = controller.openAssetBySha256(_artifactSha);
+
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    expect(await opening, isTrue);
+    expect(
+      find.byKey(ValueKey('revision3-content-asset-details-$_artifactSha')),
+      findsOneWidget,
+    );
+    expect(
+      controller.projectIdentity,
+      const Revision3ContentProjectIdentity(
+        projectRoot: 'managed-root',
+        projectId: _projectId,
+      ),
+    );
+  });
+
+  testWidgets('controller reports a missing pre-mount exact target', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final opening = controller.openEntityById(_missingId);
+
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    expect(await opening, isFalse);
+    expect(
+      find.byKey(ValueKey('revision3-content-entity-details-$_missingId')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('newest pre-mount controller target supersedes the older one', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final superseded = controller.openEntityById(_npcId);
+    final opening = controller.openAssetBySha256(_assetSha);
+
+    expect(await superseded, isFalse);
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    expect(await opening, isTrue);
+    expect(
+      find.byKey(ValueKey('revision3-content-asset-details-$_assetSha')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('requested Story section must be supported by the exact entity', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    await _pumpLoadedLibrary(tester, controller: controller);
+    expect(await controller.openEntityById(_questId), isTrue);
+    await tester.pump();
+
+    expect(
+      await controller.openEntityById(
+        _moduleId,
+        storySection: Revision3StoryWorkbenchSection.problemsChecks,
+      ),
+      isFalse,
+    );
+    await tester.pump();
+    expect(
+      find.byKey(ValueKey('revision3-content-entity-details-$_questId')),
+      findsOneWidget,
+      reason: 'an unsupported target does not disturb the current selection',
+    );
+  });
+
+  testWidgets('project-bound pre-mount controller rejects another project', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController(
+      projectIdentity: const Revision3ContentProjectIdentity(
+        projectRoot: 'another-root',
+        projectId: _projectId,
+      ),
+    );
+    final opening = controller.openEntityById(_questId);
+
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    expect(await opening, isFalse);
+    final remountOpening = controller.openEntityById(_questId);
+    bool? remountResult;
+    remountOpening.then((resolved) => remountResult = resolved);
+    await tester.pump();
+
+    expect(
+      remountResult,
+      isNull,
+      reason:
+          'the rejected library must not consume a request for the bound project',
+    );
+    controller.dispose();
+    expect(await remountOpening, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  test(
+    'disposing a pre-mount controller cancels and permanently closes it',
+    () async {
+      final controller = Revision3ContentLibraryController();
+      final opening = controller.openEntityById(_questId);
+
+      controller.dispose();
+
+      expect(await opening, isFalse);
+      expect(await controller.openAssetBySha256(_assetSha), isFalse);
+    },
+  );
+
   testWidgets('controller resolves pending navigation against reloaded index', (
     tester,
   ) async {
@@ -1185,6 +1467,17 @@ void main() {
     newProjectOpen.complete(_fixture());
     await tester.pumpAndSettle();
     expect(calls, 3);
+    final oldProjectOpening = controller.openEntityById(_questId);
+    bool? oldProjectResult;
+    oldProjectOpening.then((resolved) => oldProjectResult = resolved);
+    await tester.pump();
+    expect(
+      oldProjectResult,
+      isNull,
+      reason: 'a controller must keep waiting for its bound project',
+    );
+    controller.dispose();
+    expect(await oldProjectOpening, isFalse);
   });
 
   testWidgets('controller replacement and dispose leave no stale binding', (
@@ -1218,12 +1511,42 @@ void main() {
 
     rebuild(() => controller = second);
     await tester.pump();
-    expect(await first.openEntityById(_questId), isFalse);
+    final firstRemount = first.openEntityById(_questId);
+    bool? firstResult;
+    firstRemount.then((resolved) => firstResult = resolved);
+    await tester.pump();
+    expect(
+      firstResult,
+      isNull,
+      reason: 'the detached controller must not forward into its replacement',
+    );
     expect(await second.openEntityById(_questId), isTrue);
     await tester.pump();
 
     await tester.pumpWidget(const MaterialApp(home: SizedBox()));
-    expect(await second.openEntityById(_npcId), isFalse);
+    final secondRemount = second.openEntityById(_npcId);
+    bool? secondResult;
+    secondRemount.then((resolved) => secondResult = resolved);
+    await tester.pump();
+    expect(secondResult, isNull);
+    first.dispose();
+    second.dispose();
+    expect(await firstRemount, isFalse);
+    expect(await secondRemount, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('explicit controller dispose clears an attached binding', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    controller.dispose();
+
+    expect(await controller.openEntityById(_questId), isFalse);
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
     expect(tester.takeException(), isNull);
   });
 

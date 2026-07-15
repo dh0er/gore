@@ -88,6 +88,8 @@ final class Revision3ProjectDashboardAction {
     required this.description,
     required this.onPressed,
     this.controlKey,
+    this.enabledFor,
+    this.disabledReason,
   }) : assert(id != '');
 
   final String id;
@@ -96,6 +98,15 @@ final class Revision3ProjectDashboardAction {
   final String description;
   final VoidCallback? onPressed;
   final Key? controlKey;
+
+  /// Optional content-aware gate evaluated only after the exact-current
+  /// project index has loaded.
+  ///
+  /// Keeping the action visible makes an unavailable workflow discoverable,
+  /// while [disabledReason] explains the concrete prerequisite instead of
+  /// presenting a button that can only fail in its first dialog.
+  final bool Function(Revision3ContentIndex index)? enabledFor;
+  final String? disabledReason;
 }
 
 /// Content-first overview for one exact managed revision-3 checkpoint.
@@ -303,13 +314,21 @@ class _DashboardContent extends StatelessWidget {
               const SizedBox(height: 24),
               _SectionHeading(copy.createHeading),
               const SizedBox(height: 10),
-              _ActionGrid(actions: createActions, availableWidth: contentWidth),
+              _ActionGrid(
+                index: index,
+                actions: createActions,
+                availableWidth: contentWidth,
+              ),
             ],
             if (toolActions.isNotEmpty) ...[
               const SizedBox(height: 24),
               _SectionHeading(copy.toolsHeading),
               const SizedBox(height: 10),
-              _ActionGrid(actions: toolActions, availableWidth: contentWidth),
+              _ActionGrid(
+                index: index,
+                actions: toolActions,
+                availableWidth: contentWidth,
+              ),
             ],
           ],
         ),
@@ -704,8 +723,13 @@ class _StatusGrid extends StatelessWidget {
 }
 
 class _ActionGrid extends StatelessWidget {
-  const _ActionGrid({required this.actions, required this.availableWidth});
+  const _ActionGrid({
+    required this.index,
+    required this.actions,
+    required this.availableWidth,
+  });
 
+  final Revision3ContentIndex index;
   final List<Revision3ProjectDashboardAction> actions;
   final double availableWidth;
 
@@ -721,48 +745,70 @@ class _ActionGrid extends StatelessWidget {
       runSpacing: 12,
       children: [
         for (final action in actions)
-          SizedBox(
-            width: tileWidth,
-            child: Semantics(
-              button: true,
-              enabled: action.onPressed != null,
-              label: action.title,
-              hint: action.description,
-              child: Opacity(
-                opacity: action.onPressed == null ? 0.56 : 1,
-                child: Card(
-                  margin: EdgeInsets.zero,
-                  clipBehavior: Clip.antiAlias,
-                  child: InkWell(
-                    key:
-                        action.controlKey ??
-                        Key('revision3-project-dashboard-action-${action.id}'),
-                    onTap: action.onPressed,
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(minHeight: 132),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(action.icon),
-                            const SizedBox(height: 10),
-                            Text(
-                              action.title,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 5),
-                            Text(action.description),
-                          ],
-                        ),
+          _DashboardActionTile(index: index, action: action, width: tileWidth),
+      ],
+    );
+  }
+}
+
+class _DashboardActionTile extends StatelessWidget {
+  const _DashboardActionTile({
+    required this.index,
+    required this.action,
+    required this.width,
+  });
+
+  final Revision3ContentIndex index;
+  final Revision3ProjectDashboardAction action;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    final contentGateOpen = action.enabledFor?.call(index) ?? true;
+    final enabled = action.onPressed != null && contentGateOpen;
+    final effectiveDescription = !enabled && action.disabledReason != null
+        ? action.disabledReason!
+        : action.description;
+    return SizedBox(
+      width: width,
+      child: Semantics(
+        button: true,
+        enabled: enabled,
+        label: action.title,
+        hint: effectiveDescription,
+        child: Opacity(
+          opacity: enabled ? 1 : 0.56,
+          child: Card(
+            margin: EdgeInsets.zero,
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              key:
+                  action.controlKey ??
+                  Key('revision3-project-dashboard-action-${action.id}'),
+              onTap: enabled ? action.onPressed : null,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: 132),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(action.icon),
+                      const SizedBox(height: 10),
+                      Text(
+                        action.title,
+                        style: Theme.of(context).textTheme.titleMedium,
                       ),
-                    ),
+                      const SizedBox(height: 5),
+                      Text(effectiveDescription),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-      ],
+        ),
+      ),
     );
   }
 }

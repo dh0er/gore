@@ -32,43 +32,172 @@ typedef Revision3NpcSourceInspector =
       Revision3ContentEntity npc,
     );
 
-/// Programmatic navigation into an attached [Revision3ContentLibrary].
-///
-/// Targets are deliberately accepted only as exact stable identifiers. The
-/// library resolves every request against its currently loaded exact project
-/// index; requests made while that index is reopening wait for the new index.
-/// A missing target, a project switch, or a detached controller resolves to
-/// `false` without retaining a stale content object.
-class Revision3ContentLibraryController {
-  Object? _attachment;
-  Future<bool> Function(String entityId)? _openEntityById;
-  Future<bool> Function(String sha256)? _openAssetBySha256;
+/// Exact identity of a managed project that may host a content library.
+@immutable
+final class Revision3ContentProjectIdentity {
+  const Revision3ContentProjectIdentity({
+    required this.projectRoot,
+    required this.projectId,
+  });
 
-  /// Opens the entity with exactly [entityId].
-  Future<bool> openEntityById(String entityId) {
-    final open = _openEntityById;
-    return open == null ? Future<bool>.value(false) : open(entityId);
+  final String projectRoot;
+  final String projectId;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Revision3ContentProjectIdentity &&
+          projectRoot == other.projectRoot &&
+          projectId == other.projectId;
+
+  @override
+  int get hashCode => Object.hash(projectRoot, projectId);
+}
+
+/// Programmatic navigation into an exact managed-project content library.
+///
+/// One request may be issued before the library is mounted. This is intended
+/// for lazy UI navigation: start the request, mount the matching Content
+/// surface, and then await its result. A newer request buffered while unmounted
+/// supersedes the older one. After a detach, that request resolves only if the
+/// same bound project mounts again. The controller never follows a library
+/// across projects.
+class Revision3ContentLibraryController {
+  Revision3ContentLibraryController({
+    Revision3ContentProjectIdentity? projectIdentity,
+  }) {
+    _projectIdentity = projectIdentity;
   }
+
+  Object? _attachment;
+  Revision3ContentProjectIdentity? _projectIdentity;
+  Future<bool> Function(
+    String entityId, {
+    Revision3StoryWorkbenchSection? storySection,
+  })?
+  _openEntityById;
+  Future<bool> Function(String sha256)? _openAssetBySha256;
+  _PendingContentNavigation? _bufferedNavigation;
+  final Set<_PendingContentNavigation> _forwardedNavigations = {};
+  bool _disposed = false;
+
+  /// The project supplied at construction or bound by the first attachment.
+  Revision3ContentProjectIdentity? get projectIdentity => _projectIdentity;
+
+  /// Opens the entity with exactly [entityId] and, when requested, its exact
+  /// supported Story Workbench [storySection].
+  Future<bool> openEntityById(
+    String entityId, {
+    Revision3StoryWorkbenchSection? storySection,
+  }) => _request(
+    _PendingContentNavigation(
+      _PendingContentTargetKind.entity,
+      entityId,
+      storySection: storySection,
+    ),
+  );
+
+  /// Opens an exact Quest/NPC entity directly on Problems & checks.
+  Future<bool> openEntityProblemsById(String entityId) => openEntityById(
+    entityId,
+    storySection: Revision3StoryWorkbenchSection.problemsChecks,
+  );
 
   /// Opens the asset with exactly [sha256].
-  Future<bool> openAssetBySha256(String sha256) {
-    final open = _openAssetBySha256;
-    return open == null ? Future<bool>.value(false) : open(sha256);
+  Future<bool> openAssetBySha256(String sha256) => _request(
+    _PendingContentNavigation(_PendingContentTargetKind.asset, sha256),
+  );
+
+  /// Permanently releases this controller and resolves outstanding requests
+  /// to `false`. A disposed controller cannot attach again.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachment = null;
+    _openEntityById = null;
+    _openAssetBySha256 = null;
+    _cancelControllerNavigations();
   }
 
-  void _attach(
+  Future<bool> _request(_PendingContentNavigation navigation) {
+    if (_disposed || navigation.exactId.isEmpty) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    if (_attachment != null) return _forward(navigation);
+    final superseded = _bufferedNavigation;
+    _bufferedNavigation = navigation;
+    if (superseded != null && !superseded.result.isCompleted) {
+      superseded.result.complete(false);
+    }
+    return navigation.result.future;
+  }
+
+  Future<bool> _forward(_PendingContentNavigation navigation) {
+    Future<bool> Function()? operation;
+    switch (navigation.kind) {
+      case _PendingContentTargetKind.entity:
+        final open = _openEntityById;
+        if (open != null) {
+          operation = () =>
+              open(navigation.exactId, storySection: navigation.storySection);
+        }
+        break;
+      case _PendingContentTargetKind.asset:
+        final open = _openAssetBySha256;
+        if (open != null) operation = () => open(navigation.exactId);
+        break;
+    }
+    if (operation == null) {
+      navigation.result.complete(false);
+      return navigation.result.future;
+    }
+    _forwardedNavigations.add(navigation);
+    Future<bool>.sync(operation).then(
+      (resolved) => _completeForwarded(navigation, resolved),
+      onError: (_, _) => _completeForwarded(navigation, false),
+    );
+    return navigation.result.future;
+  }
+
+  void _completeForwarded(_PendingContentNavigation navigation, bool resolved) {
+    _forwardedNavigations.remove(navigation);
+    if (!navigation.result.isCompleted) navigation.result.complete(resolved);
+  }
+
+  bool _attach(
     Object attachment, {
-    required Future<bool> Function(String entityId) openEntityById,
+    required Revision3ContentProjectIdentity projectIdentity,
+    required Future<bool> Function(
+      String entityId, {
+      Revision3StoryWorkbenchSection? storySection,
+    })
+    openEntityById,
     required Future<bool> Function(String sha256) openAssetBySha256,
   }) {
+    if (_disposed ||
+        (_projectIdentity != null && _projectIdentity != projectIdentity) ||
+        (_attachment != null && !identical(_attachment, attachment))) {
+      final buffered = _bufferedNavigation;
+      _bufferedNavigation = null;
+      if (buffered != null && !buffered.result.isCompleted) {
+        buffered.result.complete(false);
+      }
+      return false;
+    }
     assert(
       _attachment == null || identical(_attachment, attachment),
       'A Revision3ContentLibraryController can only be attached to one '
       'content library at a time.',
     );
+    _projectIdentity ??= projectIdentity;
     _attachment = attachment;
     _openEntityById = openEntityById;
     _openAssetBySha256 = openAssetBySha256;
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null) _forward(buffered);
+    return true;
   }
 
   void _detach(Object attachment) {
@@ -76,6 +205,31 @@ class Revision3ContentLibraryController {
     _attachment = null;
     _openEntityById = null;
     _openAssetBySha256 = null;
+    _cancelControllerNavigations();
+  }
+
+  void _projectChanged(
+    Object attachment,
+    Revision3ContentProjectIdentity projectIdentity,
+  ) {
+    if (!identical(_attachment, attachment) ||
+        _projectIdentity == projectIdentity) {
+      return;
+    }
+    _detach(attachment);
+  }
+
+  void _cancelControllerNavigations() {
+    final buffered = _bufferedNavigation;
+    _bufferedNavigation = null;
+    if (buffered != null && !buffered.result.isCompleted) {
+      buffered.result.complete(false);
+    }
+    final forwarded = _forwardedNavigations.toList(growable: false);
+    _forwardedNavigations.clear();
+    for (final navigation in forwarded) {
+      if (!navigation.result.isCompleted) navigation.result.complete(false);
+    }
   }
 }
 
@@ -84,10 +238,11 @@ enum _ContentMode { entities, assets }
 enum _PendingContentTargetKind { entity, asset }
 
 class _PendingContentNavigation {
-  _PendingContentNavigation(this.kind, this.exactId);
+  _PendingContentNavigation(this.kind, this.exactId, {this.storySection});
 
   final _PendingContentTargetKind kind;
   final String exactId;
+  final Revision3StoryWorkbenchSection? storySection;
   final Completer<bool> result = Completer<bool>();
 }
 
@@ -164,6 +319,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   String? _selectedAssetSha256;
   final Map<String, Revision3StoryWorkbenchSection> _storySections = {};
   final List<_PendingContentNavigation> _pendingNavigations = [];
+  bool? _entitiesUseDetailsSheet;
+  bool? _assetsUseDetailsSheet;
+  int _exactPresentationEpoch = 0;
 
   @override
   void initState() {
@@ -176,7 +334,11 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   @override
   void didUpdateWidget(covariant Revision3ContentLibrary oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller)) {
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    if (controllerChanged) {
       _cancelPendingNavigations();
       oldWidget.controller?._detach(this);
       _attachController(widget.controller);
@@ -193,11 +355,16 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       }
       if (changedProject) {
         _cancelPendingNavigations();
+        if (!controllerChanged) {
+          widget.controller?._projectChanged(this, _projectIdentity);
+        }
         _search.clear();
         _mode = _ContentMode.entities;
         _kind = null;
         _selectedEntityId = null;
         _selectedAssetSha256 = null;
+        _entitiesUseDetailsSheet = null;
+        _assetsUseDetailsSheet = null;
         _storySections.clear();
       }
       _reload(clearCurrent: true);
@@ -206,6 +373,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
 
   @override
   void dispose() {
+    _exactPresentationEpoch++;
     _cancelPendingNavigations();
     widget.controller?._detach(this);
     _search
@@ -216,49 +384,81 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
 
   void _searchChanged() => setState(() {});
 
+  Revision3ContentProjectIdentity get _projectIdentity =>
+      Revision3ContentProjectIdentity(
+        projectRoot: widget.projectRoot,
+        projectId: widget.projectId,
+      );
+
   void _attachController(Revision3ContentLibraryController? controller) {
     controller?._attach(
       this,
+      projectIdentity: _projectIdentity,
       openEntityById: _openEntityById,
       openAssetBySha256: _openAssetBySha256,
     );
   }
 
-  Future<bool> _openEntityById(String entityId) =>
-      _openExactTarget(_PendingContentTargetKind.entity, entityId);
+  Future<bool> _openEntityById(
+    String entityId, {
+    Revision3StoryWorkbenchSection? storySection,
+  }) => _openExactTarget(
+    _PendingContentTargetKind.entity,
+    entityId,
+    storySection: storySection,
+  );
 
   Future<bool> _openAssetBySha256(String sha256) =>
       _openExactTarget(_PendingContentTargetKind.asset, sha256);
 
   Future<bool> _openExactTarget(
     _PendingContentTargetKind kind,
-    String exactId,
-  ) {
+    String exactId, {
+    Revision3StoryWorkbenchSection? storySection,
+  }) {
     if (!mounted || exactId.isEmpty) return Future<bool>.value(false);
-    if (_loading) {
-      final pending = _PendingContentNavigation(kind, exactId);
+    if (_loading || (_index == null && _error == null)) {
+      final pending = _PendingContentNavigation(
+        kind,
+        exactId,
+        storySection: storySection,
+      );
       _pendingNavigations.add(pending);
       return pending.result.future;
     }
     if (_error != null) return Future<bool>.value(false);
     final index = _index;
     if (index == null) return Future<bool>.value(false);
-    return Future<bool>.value(_resolveExactTarget(index, kind, exactId));
+    return Future<bool>.value(
+      _resolveExactTarget(index, kind, exactId, storySection: storySection),
+    );
   }
 
   bool _resolveExactTarget(
     Revision3ContentIndex index,
     _PendingContentTargetKind kind,
-    String exactId,
-  ) {
+    String exactId, {
+    Revision3StoryWorkbenchSection? storySection,
+  }) {
     switch (kind) {
       case _PendingContentTargetKind.entity:
-        if (index.entityById(exactId) == null) return false;
-        _selectEntity(index, exactId);
+        final entity = index.entityById(exactId);
+        if (entity == null) return false;
+        if (storySection != null &&
+            (!_isStoryDraft(entity) ||
+                !Revision3StoryEntityWorkbench.supportsSection(
+                  entity,
+                  storySection,
+                ))) {
+          return false;
+        }
+        _selectEntity(index, exactId, storySection: storySection);
+        _scheduleExactDetailsPresentation(index, kind, exactId);
         return true;
       case _PendingContentTargetKind.asset:
         if (index.assetBySha256(exactId) == null) return false;
         _selectAsset(index, exactId);
+        _scheduleExactDetailsPresentation(index, kind, exactId);
         return true;
     }
   }
@@ -269,7 +469,12 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     for (final navigation in pending) {
       final resolved =
           mounted &&
-          _resolveExactTarget(index, navigation.kind, navigation.exactId);
+          _resolveExactTarget(
+            index,
+            navigation.kind,
+            navigation.exactId,
+            storySection: navigation.storySection,
+          );
       navigation.result.complete(resolved);
     }
   }
@@ -283,6 +488,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   }
 
   Future<void> _reload({bool clearCurrent = false}) async {
+    _exactPresentationEpoch++;
     final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
@@ -337,13 +543,18 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     return index.assets.firstOrNull?.sha256;
   }
 
-  void _selectEntity(Revision3ContentIndex index, String entityId) {
+  void _selectEntity(
+    Revision3ContentIndex index,
+    String entityId, {
+    Revision3StoryWorkbenchSection? storySection,
+  }) {
     if (index.entityById(entityId) == null) return;
     if (_search.text.isNotEmpty) _search.clear();
     setState(() {
       _mode = _ContentMode.entities;
       _kind = null;
       _selectedEntityId = entityId;
+      if (storySection != null) _storySections[entityId] = storySection;
     });
   }
 
@@ -353,6 +564,41 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     setState(() {
       _mode = _ContentMode.assets;
       _selectedAssetSha256 = sha256;
+    });
+  }
+
+  void _scheduleExactDetailsPresentation(
+    Revision3ContentIndex index,
+    _PendingContentTargetKind kind,
+    String exactId,
+  ) {
+    final epoch = ++_exactPresentationEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          epoch != _exactPresentationEpoch ||
+          !identical(_index, index)) {
+        return;
+      }
+      switch (kind) {
+        case _PendingContentTargetKind.entity:
+          if (_mode != _ContentMode.entities ||
+              _selectedEntityId != exactId ||
+              _entitiesUseDetailsSheet != true) {
+            return;
+          }
+          final entity = index.entityById(exactId);
+          if (entity != null) {
+            unawaited(_showEntityDetailsSheet(index, entity));
+          }
+        case _PendingContentTargetKind.asset:
+          if (_mode != _ContentMode.assets ||
+              _selectedAssetSha256 != exactId ||
+              _assetsUseDetailsSheet != true) {
+            return;
+          }
+          final asset = index.assetBySha256(exactId);
+          if (asset != null) unawaited(_showAssetDetailsSheet(index, asset));
+      }
     });
   }
 
@@ -416,66 +662,14 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       builder: (context, constraints) {
         final useDetailsSheet =
             constraints.maxWidth < 900 || constraints.maxHeight < 430;
+        _entitiesUseDetailsSheet = useDetailsSheet;
         final list = _EntityList(
           entities: visible,
           selectedId: selected?.id,
           onSelected: (entity) async {
-            setState(() => _selectedEntityId = entity.id);
+            _selectEntity(index, entity.id);
             if (useDetailsSheet) {
-              final editAction = await _showDetailsSheet<_EntityToolAction>(
-                context,
-                semanticsLabel: '${entity.kind.displayName} details',
-                child: _buildEntityDetails(
-                  index: index,
-                  entity: entity,
-                  onOpenEntity: (entityId) {
-                    Navigator.of(context).pop();
-                    _selectEntity(index, entityId);
-                  },
-                  onOpenAsset: (sha256) {
-                    Navigator.of(context).pop();
-                    _selectAsset(index, sha256);
-                  },
-                  onEditQuestOutline: widget.editQuestOutline == null
-                      ? null
-                      : () async => Navigator.of(
-                          context,
-                        ).pop(_EntityToolAction.questOutline),
-                  onEditQuestContext: widget.editQuestContext == null
-                      ? null
-                      : () async => Navigator.of(
-                          context,
-                        ).pop(_EntityToolAction.questContext),
-                  onEditQuestTransitions: widget.editQuestTransitions == null
-                      ? null
-                      : () async => Navigator.of(
-                          context,
-                        ).pop(_EntityToolAction.questTransitions),
-                  onInspectQuestSource: widget.inspectQuestSource == null
-                      ? null
-                      : () async => Navigator.of(
-                          context,
-                        ).pop(_EntityToolAction.questSourceInspection),
-                  onInspectNpcSource: widget.inspectNpcSource == null
-                      ? null
-                      : () async => Navigator.of(
-                          context,
-                        ).pop(_EntityToolAction.npcProfile),
-                ),
-              );
-              if (!mounted || editAction == null) return;
-              switch (editAction) {
-                case _EntityToolAction.questOutline:
-                  await widget.editQuestOutline?.call(index, entity);
-                case _EntityToolAction.questContext:
-                  await widget.editQuestContext?.call(index, entity);
-                case _EntityToolAction.questTransitions:
-                  await widget.editQuestTransitions?.call(index, entity);
-                case _EntityToolAction.questSourceInspection:
-                  await widget.inspectQuestSource?.call(index, entity);
-                case _EntityToolAction.npcProfile:
-                  await widget.inspectNpcSource?.call(index, entity);
-              }
+              await _showEntityDetailsSheet(index, entity);
             }
           },
         );
@@ -518,6 +712,63 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         );
       },
     );
+  }
+
+  Future<void> _showEntityDetailsSheet(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity,
+  ) async {
+    if (!mounted || !identical(_index, index)) return;
+    final editAction = await _showDetailsSheet<_EntityToolAction>(
+      context,
+      semanticsLabel: '${entity.kind.displayName} details',
+      child: _buildEntityDetails(
+        index: index,
+        entity: entity,
+        onOpenEntity: (entityId) {
+          Navigator.of(context).pop();
+          _selectEntity(index, entityId);
+        },
+        onOpenAsset: (sha256) {
+          Navigator.of(context).pop();
+          _selectAsset(index, sha256);
+        },
+        onEditQuestOutline: widget.editQuestOutline == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.questOutline),
+        onEditQuestContext: widget.editQuestContext == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.questContext),
+        onEditQuestTransitions: widget.editQuestTransitions == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.questTransitions),
+        onInspectQuestSource: widget.inspectQuestSource == null
+            ? null
+            : () async => Navigator.of(
+                context,
+              ).pop(_EntityToolAction.questSourceInspection),
+        onInspectNpcSource: widget.inspectNpcSource == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.npcProfile),
+      ),
+    );
+    if (!mounted || !identical(_index, index) || editAction == null) return;
+    switch (editAction) {
+      case _EntityToolAction.questOutline:
+        await widget.editQuestOutline?.call(index, entity);
+      case _EntityToolAction.questContext:
+        await widget.editQuestContext?.call(index, entity);
+      case _EntityToolAction.questTransitions:
+        await widget.editQuestTransitions?.call(index, entity);
+      case _EntityToolAction.questSourceInspection:
+        await widget.inspectQuestSource?.call(index, entity);
+      case _EntityToolAction.npcProfile:
+        await widget.inspectNpcSource?.call(index, entity);
+    }
   }
 
   Widget _buildEntityDetails({
@@ -605,30 +856,19 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         visible.firstOrNull;
     return LayoutBuilder(
       builder: (context, constraints) {
+        final useDetailsSheet = constraints.maxWidth < 900;
+        _assetsUseDetailsSheet = useDetailsSheet;
         final list = _AssetList(
           assets: visible,
           selectedSha256: selected?.sha256,
           onSelected: (asset) {
-            setState(() => _selectedAssetSha256 = asset.sha256);
-            if (constraints.maxWidth < 900) {
-              unawaited(
-                _showDetailsSheet<void>(
-                  context,
-                  semanticsLabel: '${asset.assetClass.displayName} details',
-                  child: _AssetDetails(
-                    index: index,
-                    asset: asset,
-                    onOpenEntity: (entityId) {
-                      Navigator.of(context).pop();
-                      _selectEntity(index, entityId);
-                    },
-                  ),
-                ),
-              );
+            _selectAsset(index, asset.sha256);
+            if (useDetailsSheet) {
+              unawaited(_showAssetDetailsSheet(index, asset));
             }
           },
         );
-        if (constraints.maxWidth < 900) return list;
+        if (useDetailsSheet) return list;
         return Row(
           children: [
             Expanded(flex: 3, child: list),
@@ -647,6 +887,25 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           ],
         );
       },
+    );
+  }
+
+  Future<void> _showAssetDetailsSheet(
+    Revision3ContentIndex index,
+    Revision3ContentAsset asset,
+  ) async {
+    if (!mounted || !identical(_index, index)) return;
+    await _showDetailsSheet<void>(
+      context,
+      semanticsLabel: '${asset.assetClass.displayName} details',
+      child: _AssetDetails(
+        index: index,
+        asset: asset,
+        onOpenEntity: (entityId) {
+          Navigator.of(context).pop();
+          _selectEntity(index, entityId);
+        },
+      ),
     );
   }
 

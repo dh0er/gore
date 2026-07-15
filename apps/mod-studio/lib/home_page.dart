@@ -55,6 +55,8 @@ import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_project_dashboard.dart';
+import 'project/revision3_project_problems.dart';
+import 'project/revision3_project_problems_view.dart';
 import 'project/revision3_project_section_page.dart';
 import 'project/revision3_project_workspace.dart';
 import 'project/revision3_scoped_content_browser.dart';
@@ -362,6 +364,16 @@ class _HomePageState extends ConsumerState<HomePage>
       await _saveLegacyProjectAs(coordinator);
     } catch (e) {
       _snack('Save failed: $e');
+    }
+  });
+
+  Future<void> _closeProject() => _runProjectAction(() async {
+    final l10n = AppLocalizations.of(context);
+    if (!await _confirmDiscardIfDirty()) return;
+    try {
+      await ref.read(currentProjectCoordinatorProvider.notifier).closeCurrent();
+    } catch (e) {
+      _snack(l10n.projectCloseFailed('$e'));
     }
   });
 
@@ -765,6 +777,8 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _saveProject();
                 case 'saveAs':
                   await _saveProjectAs();
+                case 'close':
+                  await _closeProject();
                 case 'storyCreate':
                   await _openStoryWorkspace(StoryWorkspaceFlowMode.create);
                 case 'storyOpen':
@@ -808,6 +822,14 @@ class _HomePageState extends ConsumerState<HomePage>
                       ? l10n.projectVerifyCurrentHead
                       : 'Save project',
                 ),
+              ),
+              PopupMenuItem(
+                key: const Key('project-close'),
+                value: 'close',
+                enabled:
+                    !_projectActionBusy &&
+                    currentProject is! NoCurrentProjectState,
+                child: Text(l10n.projectClose),
               ),
               PopupMenuItem(
                 key: const Key('project-save-as'),
@@ -1407,7 +1429,7 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 }
 
-class _ManagedRevision3ProjectView extends StatelessWidget {
+class _ManagedRevision3ProjectView extends StatefulWidget {
   const _ManagedRevision3ProjectView({
     required this.project,
     required this.gameRoot,
@@ -1489,15 +1511,126 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   final Revision3ManagedCompilerPublisher checkManagedCompiler;
 
   @override
+  State<_ManagedRevision3ProjectView> createState() =>
+      _ManagedRevision3ProjectViewState();
+}
+
+class _ManagedRevision3ProjectViewState
+    extends State<_ManagedRevision3ProjectView> {
+  late Revision3ContentLibraryController _contentLibraryController;
+
+  ManagedRevision3CurrentProjectState get project => widget.project;
+  String? get gameRoot => widget.gameRoot;
+  Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
+  Revision3ContentIndexLoader get loadContentIndex => widget.loadContentIndex;
+  Revision3BaseGameContentCatalogLoader get loadBaseGameCatalog =>
+      widget.loadBaseGameCatalog;
+  Revision3VoiceTechnicalPublisher get publishVoiceTake =>
+      widget.publishVoiceTake;
+  Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
+      widget.publishVoiceTakeSelection;
+  Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
+      widget.publishVoiceTarget;
+  Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
+  Revision3VoiceBuildParentDirectoryPicker get pickVoiceBuildParent =>
+      widget.pickVoiceBuildParent;
+  Revision3DataAssetStageLoader get loadDataAssetStages =>
+      widget.loadDataAssetStages;
+  Revision3InstalledPackageIndexLoader get loadInstalledPackageIndex =>
+      widget.loadInstalledPackageIndex;
+  Revision3InstalledDataAssetInspector get inspectInstalledDataAsset =>
+      widget.inspectInstalledDataAsset;
+  InstalledDataAssetSemanticStagePublisher
+  get publishInstalledDataAssetSemanticEdit =>
+      widget.publishInstalledDataAssetSemanticEdit;
+  ReviewedInstalledDataAssetStagePublisher
+  get publishReviewedInstalledDataAssetEdit =>
+      widget.publishReviewedInstalledDataAssetEdit;
+  Revision3DataAssetStagePublisher get publishDataAssetStage =>
+      widget.publishDataAssetStage;
+  DataAssetSemanticStagePublisher get publishDataAssetSemanticEdit =>
+      widget.publishDataAssetSemanticEdit;
+  Revision3DataAssetStageRemover get removeDataAssetStage =>
+      widget.removeDataAssetStage;
+  Revision3DataAssetPatchReceiptPicker? get pickDataAssetPatchReceipt =>
+      widget.pickDataAssetPatchReceipt;
+  DataAssetInspector? get inspectDataAssetSemanticEdit =>
+      widget.inspectDataAssetSemanticEdit;
+  DataAssetFilePicker? get pickDataAssetSemanticUasset =>
+      widget.pickDataAssetSemanticUasset;
+  DataAssetFilePicker? get pickDataAssetSemanticUsmap =>
+      widget.pickDataAssetSemanticUsmap;
+  DataAssetExtractReceiptPicker? get pickDataAssetExtractReceipt =>
+      widget.pickDataAssetExtractReceipt;
+  DataAssetExtractReceiptInspector get inspectDataAssetExtractReceipt =>
+      widget.inspectDataAssetExtractReceipt;
+  Revision3NpcCatalogLoader get loadNpcCatalog => widget.loadNpcCatalog;
+  Revision3NpcArchetypeChooser? get chooseNpcArchetype =>
+      widget.chooseNpcArchetype;
+  Revision3NpcDraftPublisher get publishNpcDraft => widget.publishNpcDraft;
+  Revision3QuestCatalogLoader get loadQuestCatalog => widget.loadQuestCatalog;
+  Revision3QuestDraftPublisher get publishQuestDraft =>
+      widget.publishQuestDraft;
+  Revision3QuestOutlineEditPublisher get editQuestOutline =>
+      widget.editQuestOutline;
+  Revision3QuestTransitionsSeedLoader get loadQuestTransitionsSeed =>
+      widget.loadQuestTransitionsSeed;
+  Revision3QuestTransitionsTechnicalPublisher get editQuestTransitions =>
+      widget.editQuestTransitions;
+  Revision3QuestContextSeedLoader get loadQuestContextSeed =>
+      widget.loadQuestContextSeed;
+  Revision3QuestContextTechnicalPublisher get editQuestContext =>
+      widget.editQuestContext;
+  Revision3QuestSourceInspectionLoader get inspectQuestSource =>
+      widget.inspectQuestSource;
+  Revision3NpcSourceInspectionLoader get inspectNpcSource =>
+      widget.inspectNpcSource;
+  Revision3ManagedCompilerPublisher get checkManagedCompiler =>
+      widget.checkManagedCompiler;
+
+  Revision3ContentProjectIdentity get _contentProjectIdentity =>
+      Revision3ContentProjectIdentity(
+        projectRoot: project.root.path,
+        projectId: project.projectId,
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    _contentLibraryController = Revision3ContentLibraryController(
+      projectIdentity: _contentProjectIdentity,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ManagedRevision3ProjectView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.project.root.path == project.root.path &&
+        oldWidget.project.projectId == project.projectId) {
+      return;
+    }
+    _contentLibraryController.dispose();
+    _contentLibraryController = Revision3ContentLibraryController(
+      projectIdentity: _contentProjectIdentity,
+    );
+  }
+
+  @override
+  void dispose() {
+    _contentLibraryController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     return Column(
       key: const Key('managed-revision3-project-view'),
       children: [
         Card(
-          margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          margin: const EdgeInsets.fromLTRB(12, 8, 12, 6),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 10),
+            padding: const EdgeInsets.fromLTRB(16, 8, 10, 2),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -1508,28 +1641,26 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                       children: [
                         Text(
                           l10n.projectManagedRevision3Title,
-                          style: Theme.of(context).textTheme.headlineSmall,
+                          style: Theme.of(context).textTheme.titleMedium,
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          project.requiresReopen
-                              ? l10n.managedProjectRecoveryContentLocked
-                              : l10n.managedProjectSubtitle,
-                        ),
+                        if (project.requiresReopen) ...[
+                          const SizedBox(height: 2),
+                          Text(l10n.managedProjectRecoveryContentLocked),
+                        ],
                       ],
                     );
-                    final settings = OutlinedButton.icon(
+                    final settings = IconButton.outlined(
                       key: const Key('managed-open-settings'),
                       onPressed: () => unawaited(_openSettings(context)),
+                      tooltip: l10n.managedActionSettingsTitle,
                       icon: const Icon(Icons.settings_outlined),
-                      label: Text(l10n.managedActionSettingsTitle),
                     );
-                    if (constraints.maxWidth < 680) {
+                    if (constraints.maxWidth < 500) {
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           identity,
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 6),
                           Align(
                             alignment: Alignment.centerLeft,
                             child: settings,
@@ -1580,6 +1711,8 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                 ],
                 ExpansionTile(
                   key: const Key('managed-project-technical-details'),
+                  dense: true,
+                  visualDensity: VisualDensity.compact,
                   tilePadding: EdgeInsets.zero,
                   childrenPadding: const EdgeInsets.only(top: 4),
                   title: Text(l10n.managedProjectTechnicalDetails),
@@ -1754,6 +1887,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     libraryLabel: l10n.managedContentWorkspaceBrowseLabel,
     dataAssetsLabel: l10n.managedContentWorkspaceVerifiedEditsLabel,
     library: _ManagedRevision3GlobalContentHost(
+      contentLibraryController: _contentLibraryController,
       sourceIdentity: Revision3GlobalContentSearchSourceIdentity(
         project: '${project.root.path}\u0000${project.projectId}',
         thisMod:
@@ -2162,105 +2296,120 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     AppLocalizations l10n,
   ) {
     final gameConfigured = gameRoot != null;
-    return Revision3ProjectSectionPage(
-      sectionId: 'localization-voice',
-      icon: Icons.record_voice_over_outlined,
-      title: l10n.managedWorkspaceLocalizationVoiceLabel,
-      description: l10n.managedSectionLocalizationVoiceDescription,
-      notice: gameConfigured
-          ? null
-          : l10n.managedDashboardMissingGameDescription,
-      statusHeading: l10n.managedSectionStatusHeading,
-      statusCards: [
-        Revision3ProjectSectionStatusCard(
-          id: 'managed-localization',
-          icon: Icons.translate_outlined,
-          title: l10n.managedCapabilityPlanned,
+    return _ManagedRevision3VoiceCatalogGate(
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectHeadCanonicalJson: project.head.canonicalJson,
+      load: loadContentIndex,
+      builder: (context, availability) {
+        final intactVoiceLine = availability.hasIntactVoiceLine;
+        final voiceLineDescription = switch (availability.status) {
+          _ManagedVoiceCatalogGateStatus.loading =>
+            l10n.managedDashboardLoading,
+          _ManagedVoiceCatalogGateStatus.unavailable =>
+            l10n.managedDashboardLoadErrorDescription,
+          _ManagedVoiceCatalogGateStatus.loaded =>
+            intactVoiceLine
+                ? l10n.managedActionAddVoiceTakeDescription
+                : l10n.managedActionAddVoiceTakeRequiresDialogLine,
+        };
+        final gameAndLineDescription = !gameConfigured
+            ? l10n.managedDashboardMissingGameDescription
+            : voiceLineDescription;
+        return Revision3ProjectSectionPage(
+          sectionId: 'localization-voice',
+          icon: Icons.record_voice_over_outlined,
+          title: l10n.managedWorkspaceLocalizationVoiceLabel,
           description: l10n.managedSectionLocalizationVoiceDescription,
-        ),
-      ],
-      actionHeading: l10n.managedSectionActionsHeading,
-      actionCards: [
-        Revision3ProjectSectionActionCard(
-          id: 'add-voice-take',
-          icon: Icons.mic_none_outlined,
-          title: l10n.managedActionAddVoiceTakeTitle,
-          description: l10n.managedActionAddVoiceTakeDescription,
-          badge: l10n.managedCapabilityPartial,
-          onPressed: gameConfigured
-              ? () => unawaited(_openVoiceWizard(context))
+          notice: !gameConfigured
+              ? l10n.managedDashboardMissingGameDescription
+              : availability.status == _ManagedVoiceCatalogGateStatus.loaded &&
+                    !intactVoiceLine
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
+              : availability.status ==
+                    _ManagedVoiceCatalogGateStatus.unavailable
+              ? l10n.managedDashboardLoadErrorDescription
               : null,
-        ),
-        Revision3ProjectSectionActionCard(
-          id: 'manage-voice-takes',
-          icon: Icons.library_music_outlined,
-          title: l10n.managedActionManageVoiceTakesTitle,
-          description: l10n.managedActionManageVoiceTakesDescription,
-          badge: l10n.managedCapabilityAvailable,
-          onPressed: () => unawaited(_openVoiceTakeSelection(context)),
-        ),
-        Revision3ProjectSectionActionCard(
-          id: 'resolve-voice-target',
-          icon: Icons.link_outlined,
-          title: l10n.managedActionResolveVoiceTargetTitle,
-          description: l10n.managedActionResolveVoiceTargetDescription,
-          badge: l10n.managedCapabilityPartial,
-          onPressed: gameConfigured
-              ? () => unawaited(_openVoiceTargetResolver(context))
-              : null,
-        ),
-      ],
+          statusHeading: l10n.managedSectionStatusHeading,
+          statusCards: [
+            Revision3ProjectSectionStatusCard(
+              id: 'managed-localization',
+              icon: Icons.translate_outlined,
+              title: l10n.managedCapabilityPlanned,
+              description: l10n.managedSectionLocalizationVoiceDescription,
+            ),
+          ],
+          actionHeading: l10n.managedSectionActionsHeading,
+          actionCards: [
+            Revision3ProjectSectionActionCard(
+              id: 'add-voice-take',
+              icon: Icons.mic_none_outlined,
+              title: l10n.managedActionAddVoiceTakeTitle,
+              description: gameAndLineDescription,
+              badge: l10n.managedCapabilityPartial,
+              onPressed: gameConfigured && intactVoiceLine
+                  ? () => unawaited(_openVoiceWizard(context))
+                  : null,
+            ),
+            Revision3ProjectSectionActionCard(
+              id: 'manage-voice-takes',
+              icon: Icons.library_music_outlined,
+              title: l10n.managedActionManageVoiceTakesTitle,
+              description: intactVoiceLine
+                  ? l10n.managedActionManageVoiceTakesDescription
+                  : voiceLineDescription,
+              badge: l10n.managedCapabilityAvailable,
+              onPressed: intactVoiceLine
+                  ? () => unawaited(_openVoiceTakeSelection(context))
+                  : null,
+            ),
+            Revision3ProjectSectionActionCard(
+              id: 'resolve-voice-target',
+              icon: Icons.link_outlined,
+              title: l10n.managedActionResolveVoiceTargetTitle,
+              description: gameConfigured && intactVoiceLine
+                  ? l10n.managedActionResolveVoiceTargetDescription
+                  : gameAndLineDescription,
+              badge: l10n.managedCapabilityPartial,
+              onPressed: gameConfigured && intactVoiceLine
+                  ? () => unawaited(_openVoiceTargetResolver(context))
+                  : null,
+            ),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildValidateTestSection(
     BuildContext context,
     AppLocalizations l10n,
-  ) => Revision3ProjectSectionPage(
-    sectionId: 'validate-test',
-    icon: Icons.fact_check_outlined,
-    title: l10n.managedWorkspaceValidateTestLabel,
-    description: l10n.managedSectionValidateTestDescription,
-    statusHeading: l10n.managedSectionStatusHeading,
-    statusCards: [
-      Revision3ProjectSectionStatusCard(
-        id: 'reference-integrity',
-        icon: Icons.account_tree_outlined,
-        title: l10n.managedDashboardReferenceIntegrityTitle,
-        description: l10n.managedActionBrowseProjectContentDescription,
-      ),
-      Revision3ProjectSectionStatusCard(
-        id: 'runtime-test',
-        icon: Icons.science_outlined,
-        title: l10n.managedDashboardRuntimeUnqualifiedTitle,
-        description: l10n.managedDashboardRuntimeUnqualifiedDescription,
-        severity: Revision3ProjectSectionStatusSeverity.warning,
-      ),
-    ],
-    actionHeading: l10n.managedSectionActionsHeading,
-    actionCards: [
-      Revision3ProjectSectionActionCard(
-        id: 'verify-current-head',
-        icon: Icons.verified_user_outlined,
-        title: l10n.projectVerifyCurrentHead,
-        description: l10n.managedSectionValidateTestDescription,
-        badge: l10n.managedCapabilityAvailable,
-        onPressed: () => unawaited(verifyCurrentHead()),
-      ),
-      Revision3ProjectSectionActionCard(
-        id: 'inspect-references',
-        icon: Icons.account_tree_outlined,
-        title: l10n.managedDashboardReferenceIntegrityTitle,
-        description: l10n.managedActionBrowseProjectContentDescription,
-        badge: l10n.managedCapabilityAvailable,
-        onPressed: () => Revision3ProjectWorkspace.navigate(
-          context,
-          const Revision3ProjectWorkspaceLocation(
-            Revision3ProjectWorkspaceSection.content,
-          ),
+  ) => Revision3ProjectProblemsView(
+    projectId: project.projectId,
+    projectRevision: project.projectRevision,
+    loadContent: loadContentIndex,
+    loadDataAssetStages: loadDataAssetStages,
+    gameConfigured: gameRoot != null,
+    copy: _projectProblemsCopy(l10n),
+    actions: Revision3ProjectProblemsActions(
+      openEntity: (entityId) => _openProblemEntity(context, entityId: entityId),
+      openAsset: (assetSha256) =>
+          _openProblemAsset(context, assetSha256: assetSha256),
+      openDataAssetStage: (_) => Revision3ProjectWorkspace.navigate(
+        context,
+        const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.content,
+          secondary: 'data-assets',
         ),
       ),
-    ],
+      openSettings: () => Revision3ProjectWorkspace.navigate(
+        context,
+        const Revision3ProjectWorkspaceLocation(
+          Revision3ProjectWorkspaceSection.settingsExpert,
+        ),
+      ),
+      verifyCurrentProject: verifyCurrentHead,
+    ),
   );
 
   Widget _buildReleaseSection(BuildContext context, AppLocalizations l10n) =>
@@ -2313,6 +2462,16 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
 
   Widget _buildDashboard(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
+    Revision3ContentIndex? evaluatedVoiceIndex;
+    var evaluatedVoiceAvailable = false;
+    bool voiceAvailable(Revision3ContentIndex index) {
+      if (!identical(evaluatedVoiceIndex, index)) {
+        evaluatedVoiceIndex = index;
+        evaluatedVoiceAvailable = _hasIntactVoiceLine(index);
+      }
+      return evaluatedVoiceAvailable;
+    }
+
     VoidCallback? requiresGame(Future<void> Function(BuildContext) action) =>
         gameConfigured ? () => unawaited(action(context)) : null;
 
@@ -2381,16 +2540,35 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
           icon: Icons.record_voice_over_outlined,
           title: l10n.managedActionAddVoiceTakeTitle,
           description: l10n.managedActionAddVoiceTakeDescription,
+          disabledReason: gameConfigured
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
+              : l10n.managedDashboardMissingGameDescription,
+          enabledFor: voiceAvailable,
           onPressed: requiresGame(_openVoiceWizard),
         ),
       ],
       toolActions: [
+        Revision3ProjectDashboardAction(
+          id: 'review-problems',
+          controlKey: const Key('managed-review-problems'),
+          icon: Icons.rule_folder_outlined,
+          title: l10n.managedProblemsTitle,
+          description: l10n.managedProblemsDescription,
+          onPressed: () => Revision3ProjectWorkspace.navigate(
+            context,
+            const Revision3ProjectWorkspaceLocation(
+              Revision3ProjectWorkspaceSection.validateTest,
+            ),
+          ),
+        ),
         Revision3ProjectDashboardAction(
           id: 'manage-voice-takes',
           controlKey: const Key('managed-manage-voice-takes'),
           icon: Icons.library_music_outlined,
           title: l10n.managedActionManageVoiceTakesTitle,
           description: l10n.managedActionManageVoiceTakesDescription,
+          disabledReason: l10n.managedActionAddVoiceTakeRequiresDialogLine,
+          enabledFor: voiceAvailable,
           onPressed: () => unawaited(_openVoiceTakeSelection(context)),
         ),
         Revision3ProjectDashboardAction(
@@ -2399,6 +2577,10 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
           icon: Icons.link_outlined,
           title: l10n.managedActionResolveVoiceTargetTitle,
           description: l10n.managedActionResolveVoiceTargetDescription,
+          disabledReason: gameConfigured
+              ? l10n.managedActionAddVoiceTakeRequiresDialogLine
+              : l10n.managedDashboardMissingGameDescription,
+          enabledFor: voiceAvailable,
           onPressed: requiresGame(_openVoiceTargetResolver),
         ),
         Revision3ProjectDashboardAction(
@@ -2407,6 +2589,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
           icon: Icons.inventory_2_outlined,
           title: l10n.managedActionBuildVoiceBundleTitle,
           description: l10n.managedActionBuildVoiceBundleDescription,
+          disabledReason: l10n.managedDashboardMissingGameDescription,
           onPressed: requiresGame(_openVoiceBuild),
         ),
         Revision3ProjectDashboardAction(
@@ -2759,12 +2942,366 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     );
   }
 
+  Future<void> _openProblemEntity(
+    BuildContext context, {
+    required String entityId,
+  }) async {
+    final openProblems = _contentLibraryController.openEntityProblemsById(
+      entityId,
+    );
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+      ),
+    );
+    if (await openProblems ||
+        await _contentLibraryController.openEntityById(entityId)) {
+      return;
+    }
+    throw StateError('The exact project entity is no longer available.');
+  }
+
+  Future<void> _openProblemAsset(
+    BuildContext context, {
+    required String assetSha256,
+  }) async {
+    final openAsset = _contentLibraryController.openAssetBySha256(assetSha256);
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+      ),
+    );
+    if (await openAsset) return;
+    throw StateError('The exact project asset is no longer available.');
+  }
+
   Future<void> _openSettings(BuildContext context) =>
       _showModStudioSettingsDialog(context);
 }
 
+bool _hasIntactVoiceLine(Revision3ContentIndex index) {
+  try {
+    return Revision3VoiceCatalog.fromContentIndex(index).lines.isNotEmpty;
+  } catch (_) {
+    return false;
+  }
+}
+
+enum _ManagedVoiceCatalogGateStatus { loading, loaded, unavailable }
+
+typedef _ManagedVoiceCatalogGateBuilder =
+    Widget Function(
+      BuildContext context,
+      ({_ManagedVoiceCatalogGateStatus status, bool hasIntactVoiceLine})
+      availability,
+    );
+
+/// Resolves the Voice prerequisite from the exact-current content projection.
+///
+/// This deliberately fails closed: stale, mismatched, or unavailable content
+/// must never leave an author-facing Voice action enabled just because an
+/// earlier project revision contained an intact Voice-authorable line.
+class _ManagedRevision3VoiceCatalogGate extends StatefulWidget {
+  const _ManagedRevision3VoiceCatalogGate({
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+    required this.load,
+    required this.builder,
+  });
+
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+  final Revision3ContentIndexLoader load;
+  final _ManagedVoiceCatalogGateBuilder builder;
+
+  @override
+  State<_ManagedRevision3VoiceCatalogGate> createState() =>
+      _ManagedRevision3VoiceCatalogGateState();
+}
+
+class _ManagedRevision3VoiceCatalogGateState
+    extends State<_ManagedRevision3VoiceCatalogGate> {
+  _ManagedVoiceCatalogGateStatus _status =
+      _ManagedVoiceCatalogGateStatus.loading;
+  bool _intactVoiceLineAvailable = false;
+  int _loadEpoch = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload(notify: false);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ManagedRevision3VoiceCatalogGate oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.projectId == widget.projectId &&
+        oldWidget.projectRevision == widget.projectRevision &&
+        oldWidget.projectHeadCanonicalJson == widget.projectHeadCanonicalJson) {
+      return;
+    }
+    _reload(notify: false);
+  }
+
+  @override
+  void dispose() {
+    _loadEpoch++;
+    super.dispose();
+  }
+
+  void _reload({required bool notify}) {
+    final epoch = ++_loadEpoch;
+    final expectedProjectId = widget.projectId;
+    final expectedProjectRevision = widget.projectRevision;
+    final loader = widget.load;
+
+    void markLoading() {
+      _status = _ManagedVoiceCatalogGateStatus.loading;
+      _intactVoiceLineAvailable = false;
+    }
+
+    if (notify) {
+      setState(markLoading);
+    } else {
+      markLoading();
+    }
+
+    unawaited(() async {
+      try {
+        final index = await loader();
+        if (!mounted || epoch != _loadEpoch) return;
+        if (index.projectId != expectedProjectId ||
+            index.projectRevision != expectedProjectRevision) {
+          setState(() {
+            _status = _ManagedVoiceCatalogGateStatus.unavailable;
+            _intactVoiceLineAvailable = false;
+          });
+          return;
+        }
+        setState(() {
+          _status = _ManagedVoiceCatalogGateStatus.loaded;
+          _intactVoiceLineAvailable = _hasIntactVoiceLine(index);
+        });
+      } catch (_) {
+        if (!mounted || epoch != _loadEpoch) return;
+        setState(() {
+          _status = _ManagedVoiceCatalogGateStatus.unavailable;
+          _intactVoiceLineAvailable = false;
+        });
+      }
+    }());
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(context, (
+    status: _status,
+    hasIntactVoiceLine: _intactVoiceLineAvailable,
+  ));
+}
+
+Revision3ProjectProblemsCopy _projectProblemsCopy(AppLocalizations l10n) =>
+    Revision3ProjectProblemsCopy(
+      title: l10n.managedProblemsTitle,
+      description: l10n.managedProblemsDescription,
+      scopeNotice: l10n.managedProblemsScopeNotice,
+      refreshTooltip: l10n.managedProblemsRefresh,
+      loadingSemanticsLabel: l10n.managedDashboardLoading,
+      loadErrorSemanticsLabel: l10n.managedDashboardLoadError,
+      loadErrorTitle: l10n.managedDashboardLoadError,
+      loadErrorDescription: l10n.managedDashboardLoadErrorDescription,
+      retryLabel: l10n.managedDashboardRetry,
+      partialTitle: l10n.managedProblemsPartialTitle,
+      dataAssetsUnavailableDescription:
+          l10n.managedProblemsDataAssetsUnavailable,
+      overviewHeading: l10n.managedProblemsOverviewHeading,
+      scopeTitle: (scope) => _projectProblemScopeTitle(l10n, scope),
+      scopeDescription: (scope) => _projectProblemScopeDescription(l10n, scope),
+      readinessName: (readiness) =>
+          _projectProblemReadinessName(l10n, readiness),
+      evidenceName: (evidence) => _projectProblemEvidenceName(l10n, evidence),
+      problemTitle: (problem) => _projectProblemTitle(l10n, problem),
+      problemDescription: (problem) =>
+          _projectProblemDescription(l10n, problem),
+      categoryName: (category) => _projectProblemCategoryName(l10n, category),
+      severityName: (severity) => _projectProblemSeverityName(l10n, severity),
+      searchLabel: l10n.managedProblemsSearchLabel,
+      clearSearchTooltip: l10n.managedProblemsClearSearch,
+      filterAllLabel: l10n.changesAll,
+      listHeading: l10n.managedProblemsListHeading,
+      emptyTitle: l10n.managedProblemsEmptyTitle,
+      emptyDescription: l10n.managedProblemsEmptyDescription,
+      emptyBoundaryDescription: l10n.managedProblemsEmptyBoundary,
+      filteredEmptyTitle: l10n.managedProblemsFilteredEmptyTitle,
+      filteredEmptyDescription: l10n.managedProblemsFilteredEmptyDescription,
+      selectProblemTitle: l10n.managedProblemsSelectTitle,
+      selectProblemDescription: l10n.managedProblemsSelectDescription,
+      detailHeading: l10n.managedProblemsDetailHeading,
+      closeDetailTooltip: l10n.managedProblemsCloseDetail,
+      categoryLabel: l10n.managedProblemsCategoryLabel,
+      severityLabel: l10n.managedProblemsSeverityLabel,
+      sourceLabel: l10n.managedProblemsSourceLabel,
+      openEntityLabel: l10n.managedProblemsOpenSourceEntity,
+      openAssetLabel: l10n.managedProblemsOpenReferencedAsset,
+      openDataAssetStageLabel: l10n.managedProblemsOpenDataAssetEdits,
+      openSettingsLabel: l10n.managedActionSettingsTitle,
+      verifyCurrentProjectLabel: l10n.projectVerifyCurrentHead,
+      actionFailedMessage: l10n.managedProblemsActionFailed,
+      actionInProgressSemanticsLabel: l10n.managedProblemsActionProgress,
+    );
+
+String _projectProblemCategoryName(
+  AppLocalizations l10n,
+  Revision3ProjectProblemCategory category,
+) => switch (category) {
+  Revision3ProjectProblemCategory.references =>
+    l10n.managedProblemsCategoryReferences,
+  Revision3ProjectProblemCategory.setup => l10n.managedProblemsCategorySetup,
+  Revision3ProjectProblemCategory.dataAssets =>
+    l10n.managedProblemsCategoryDataAssets,
+};
+
+String _projectProblemSeverityName(
+  AppLocalizations l10n,
+  Revision3ProjectProblemSeverity severity,
+) => switch (severity) {
+  Revision3ProjectProblemSeverity.information =>
+    l10n.managedProblemsSeverityInformation,
+  Revision3ProjectProblemSeverity.warning =>
+    l10n.managedProblemsSeverityWarning,
+  Revision3ProjectProblemSeverity.blocking =>
+    l10n.managedProblemsSeverityBlocking,
+};
+
+String _projectProblemScopeTitle(
+  AppLocalizations l10n,
+  Revision3ProjectProblemScope scope,
+) => switch (scope) {
+  Revision3ProjectProblemScope.referenceIntegrity =>
+    l10n.managedProblemsScopeReferencesTitle,
+  Revision3ProjectProblemScope.dataAssetRegistry =>
+    l10n.managedProblemsScopeDataAssetsTitle,
+  Revision3ProjectProblemScope.gameConfiguration =>
+    l10n.managedProblemsScopeGameTitle,
+  Revision3ProjectProblemScope.compilerEvidence =>
+    l10n.managedProblemsScopeCompilerTitle,
+  Revision3ProjectProblemScope.managedBuild =>
+    l10n.managedProblemsScopeBuildTitle,
+  Revision3ProjectProblemScope.runtime => l10n.managedProblemsScopeRuntimeTitle,
+};
+
+String _projectProblemScopeDescription(
+  AppLocalizations l10n,
+  Revision3ProjectProblemScope scope,
+) => switch (scope) {
+  Revision3ProjectProblemScope.referenceIntegrity =>
+    l10n.managedProblemsScopeReferencesDescription,
+  Revision3ProjectProblemScope.dataAssetRegistry =>
+    l10n.managedProblemsScopeDataAssetsDescription,
+  Revision3ProjectProblemScope.gameConfiguration =>
+    l10n.managedProblemsScopeGameDescription,
+  Revision3ProjectProblemScope.compilerEvidence =>
+    l10n.managedProblemsScopeCompilerDescription,
+  Revision3ProjectProblemScope.managedBuild =>
+    l10n.managedProblemsScopeBuildDescription,
+  Revision3ProjectProblemScope.runtime =>
+    l10n.managedProblemsScopeRuntimeDescription,
+};
+
+String _projectProblemReadinessName(
+  AppLocalizations l10n,
+  Revision3ProjectProblemReadiness readiness,
+) => switch (readiness) {
+  Revision3ProjectProblemReadiness.clear => l10n.managedProblemsReadinessClear,
+  Revision3ProjectProblemReadiness.issues =>
+    l10n.managedProblemsReadinessIssues,
+  Revision3ProjectProblemReadiness.unavailable =>
+    l10n.managedProblemsReadinessUnavailable,
+  Revision3ProjectProblemReadiness.notEvaluated =>
+    l10n.managedProblemsReadinessNotEvaluated,
+  Revision3ProjectProblemReadiness.blocked =>
+    l10n.managedProblemsReadinessBlocked,
+  Revision3ProjectProblemReadiness.unqualified =>
+    l10n.managedProblemsReadinessUnqualified,
+};
+
+String _projectProblemEvidenceName(
+  AppLocalizations l10n,
+  Revision3ProjectProblemEvidence evidence,
+) => switch (evidence) {
+  Revision3ProjectProblemEvidence.exactContentIndex =>
+    l10n.managedProblemsEvidenceContent,
+  Revision3ProjectProblemEvidence.exactDataAssetRegistry =>
+    l10n.managedProblemsEvidenceDataAssets,
+  Revision3ProjectProblemEvidence.configurationState =>
+    l10n.managedProblemsEvidenceConfiguration,
+  Revision3ProjectProblemEvidence.sourceUnavailable =>
+    l10n.managedProblemsEvidenceUnavailable,
+  Revision3ProjectProblemEvidence.capabilityBoundary =>
+    l10n.managedProblemsEvidenceBoundary,
+};
+
+String _projectProblemTitle(
+  AppLocalizations l10n,
+  Revision3ProjectProblem problem,
+) => switch (problem.code) {
+  Revision3ProjectProblemCode.foreignEntityReference =>
+    l10n.managedProblemsForeignReferenceTitle,
+  Revision3ProjectProblemCode.missingEntityReference =>
+    l10n.managedProblemsMissingEntityTitle,
+  Revision3ProjectProblemCode.entityKindMismatch =>
+    l10n.managedProblemsEntityKindTitle,
+  Revision3ProjectProblemCode.missingAssetReference =>
+    l10n.managedProblemsMissingAssetTitle,
+  Revision3ProjectProblemCode.assetByteLengthMismatch =>
+    l10n.managedProblemsAssetLengthTitle,
+  Revision3ProjectProblemCode.assetMediaTypeMismatch =>
+    l10n.managedProblemsAssetTypeTitle,
+  Revision3ProjectProblemCode.gameNotConfigured =>
+    l10n.managedProblemsGameSetupTitle,
+  Revision3ProjectProblemCode.dataAssetRegistryUnavailable =>
+    l10n.managedProblemsDataAssetRegistryTitle,
+  Revision3ProjectProblemCode.dataAssetStageOfflineOnly =>
+    l10n.managedProblemsDataAssetOfflineTitle,
+};
+
+String _projectProblemDescription(
+  AppLocalizations l10n,
+  Revision3ProjectProblem problem,
+) {
+  final details = problem.details;
+  if (details is Revision3EntityReferenceProblemDetails) {
+    final source = details.sourceDisplayName.trim().isEmpty
+        ? l10n.managedProblemsCategoryReferences
+        : details.sourceDisplayName;
+    return l10n.managedProblemsEntityReferenceDescription(source);
+  }
+  if (details is Revision3AssetReferenceProblemDetails) {
+    final source = details.sourceDisplayName.trim().isEmpty
+        ? l10n.managedProblemsCategoryReferences
+        : details.sourceDisplayName;
+    return l10n.managedProblemsAssetReferenceDescription(source);
+  }
+  if (details is Revision3DataAssetStageProblemDetails) {
+    return l10n.managedProblemsDataAssetOfflineDescription(details.targetPath);
+  }
+  return switch (problem.code) {
+    Revision3ProjectProblemCode.gameNotConfigured =>
+      l10n.managedDashboardMissingGameDescription,
+    Revision3ProjectProblemCode.dataAssetRegistryUnavailable =>
+      l10n.managedProblemsDataAssetRegistryDescription,
+    Revision3ProjectProblemCode.dataAssetStageOfflineOnly =>
+      l10n.managedProblemsScopeNotice,
+    _ => l10n.managedProblemsScopeNotice,
+  };
+}
+
 class _ManagedRevision3GlobalContentHost extends StatefulWidget {
   const _ManagedRevision3GlobalContentHost({
+    required this.contentLibraryController,
     required this.sourceIdentity,
     required this.loadThisMod,
     required this.loadBaseGame,
@@ -2772,6 +3309,7 @@ class _ManagedRevision3GlobalContentHost extends StatefulWidget {
     required this.builder,
   });
 
+  final Revision3ContentLibraryController contentLibraryController;
   final Revision3GlobalContentSearchSourceIdentity sourceIdentity;
   final Revision3GlobalThisModContentLoader loadThisMod;
   final Revision3GlobalBaseGameContentLoader loadBaseGame;
@@ -2790,7 +3328,6 @@ class _ManagedRevision3GlobalContentHost extends StatefulWidget {
 
 class _ManagedRevision3GlobalContentHostState
     extends State<_ManagedRevision3GlobalContentHost> {
-  final _contentLibraryController = Revision3ContentLibraryController();
   late final Revision3GlobalContentSearchController _globalSearchController;
 
   @override
@@ -2824,7 +3361,7 @@ class _ManagedRevision3GlobalContentHostState
   @override
   Widget build(BuildContext context) => widget.builder(
     context,
-    _contentLibraryController,
+    widget.contentLibraryController,
     _globalSearchController,
   );
 }

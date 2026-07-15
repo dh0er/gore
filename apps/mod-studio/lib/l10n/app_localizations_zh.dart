@@ -374,6 +374,14 @@ class AppLocalizationsZh extends AppLocalizations {
   String get projectManagedRevision3Title => 'Managed revision-3 project';
 
   @override
+  String get projectClose => 'Close project';
+
+  @override
+  String projectCloseFailed(String error) {
+    return 'Project could not be closed: $error';
+  }
+
+  @override
   String get projectManagedRevision3IdentityOnly =>
       'This shell currently exposes verified project identity only. Ctrl+S reopens and verifies the exact current head; legacy editors, Build/Deploy, and Save As are unavailable.';
 
@@ -744,6 +752,10 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get managedActionAddVoiceTakeDescription =>
       '将 Ogg Vorbis 录音导入此项目，但不进行部署。';
+
+  @override
+  String get managedActionAddVoiceTakeRequiresDialogLine =>
+      'Create or repair a dialog line with one valid localization entry before using Voice tools.';
 
   @override
   String get managedActionManageVoiceTakesTitle => '管理语音录音';
@@ -1210,6 +1222,248 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchReferenceUnresolvedLabel => '引用未解析';
+
+  @override
+  String get managedProblemsTitle => 'Problems & readiness';
+
+  @override
+  String get managedProblemsDescription =>
+      'See what needs attention and open the exact affected project content.';
+
+  @override
+  String get managedProblemsScopeNotice =>
+      'Every status covers only its named scope. A clear reference check does not mean the mod can be built or tested in-game.';
+
+  @override
+  String get managedProblemsRefresh => 'Refresh problems';
+
+  @override
+  String get managedProblemsPartialTitle => 'Some checks are unavailable';
+
+  @override
+  String get managedProblemsDataAssetsUnavailable =>
+      'DataAsset edits could not be checked. Other exact project findings are still shown.';
+
+  @override
+  String get managedProblemsOverviewHeading => 'Readiness by area';
+
+  @override
+  String get managedProblemsSearchLabel => 'Search problems';
+
+  @override
+  String get managedProblemsClearSearch => 'Clear problem search';
+
+  @override
+  String get managedProblemsListHeading => 'Problems';
+
+  @override
+  String get managedProblemsEmptyTitle =>
+      'No modeled structural problems found';
+
+  @override
+  String get managedProblemsEmptyDescription =>
+      'The exact checks currently modeled by Mod Studio found nothing to repair.';
+
+  @override
+  String get managedProblemsEmptyBoundary =>
+      'Compiler evidence was not evaluated, the full managed build is unavailable, and runtime behavior remains unqualified.';
+
+  @override
+  String get managedProblemsFilteredEmptyTitle => 'No matching problems';
+
+  @override
+  String get managedProblemsFilteredEmptyDescription =>
+      'Change the search or category filter to see other findings.';
+
+  @override
+  String get managedProblemsSelectTitle => 'Select a problem';
+
+  @override
+  String get managedProblemsSelectDescription =>
+      'Choose a finding to see what it means and the safest available next action.';
+
+  @override
+  String get managedProblemsDetailHeading => 'Problem details';
+
+  @override
+  String get managedProblemsCloseDetail => 'Close problem details';
+
+  @override
+  String get managedProblemsCategoryLabel => 'Area';
+
+  @override
+  String get managedProblemsSeverityLabel => 'Attention';
+
+  @override
+  String get managedProblemsSourceLabel => 'Evidence';
+
+  @override
+  String get managedProblemsOpenSourceEntity => 'Open source content';
+
+  @override
+  String get managedProblemsOpenReferencedAsset => 'Open referenced asset';
+
+  @override
+  String get managedProblemsOpenDataAssetEdits => 'Open DataAsset edits';
+
+  @override
+  String get managedProblemsActionFailed =>
+      'The exact target could not be opened. Refresh the project problems and try again.';
+
+  @override
+  String get managedProblemsActionProgress =>
+      'Opening the exact project target';
+
+  @override
+  String get managedProblemsCategoryReferences => 'References';
+
+  @override
+  String get managedProblemsCategorySetup => 'Setup';
+
+  @override
+  String get managedProblemsCategoryDataAssets => 'DataAssets';
+
+  @override
+  String get managedProblemsSeverityInformation => 'Information';
+
+  @override
+  String get managedProblemsSeverityWarning => 'Needs attention';
+
+  @override
+  String get managedProblemsSeverityBlocking => 'Blocks this scope';
+
+  @override
+  String get managedProblemsScopeReferencesTitle => 'Reference integrity';
+
+  @override
+  String get managedProblemsScopeReferencesDescription =>
+      'Checks exact links between current project content and assets.';
+
+  @override
+  String get managedProblemsScopeDataAssetsTitle => 'DataAsset edit registry';
+
+  @override
+  String get managedProblemsScopeDataAssetsDescription =>
+      'Checks whether the exact current list of saved DataAsset edits could be read.';
+
+  @override
+  String get managedProblemsScopeGameTitle => 'Game setup';
+
+  @override
+  String get managedProblemsScopeGameDescription =>
+      'Shows whether a game installation is configured for bounded read-only tools.';
+
+  @override
+  String get managedProblemsScopeCompilerTitle => 'Source & compiler evidence';
+
+  @override
+  String get managedProblemsScopeCompilerDescription =>
+      'Compiler checks run only when you explicitly open and start them for one exact entity.';
+
+  @override
+  String get managedProblemsScopeBuildTitle => 'Managed project build';
+
+  @override
+  String get managedProblemsScopeBuildDescription =>
+      'A complete build path for managed NPC, Quest, dialog, and DataAsset edits is not available yet.';
+
+  @override
+  String get managedProblemsScopeRuntimeTitle => 'In-game behavior';
+
+  @override
+  String get managedProblemsScopeRuntimeDescription =>
+      'No general runtime, save, deployment, or cleanup qualification is claimed.';
+
+  @override
+  String get managedProblemsReadinessClear => 'Checked within this scope';
+
+  @override
+  String get managedProblemsReadinessIssues => 'Needs attention';
+
+  @override
+  String get managedProblemsReadinessUnavailable => 'Check unavailable';
+
+  @override
+  String get managedProblemsReadinessNotEvaluated => 'Not evaluated';
+
+  @override
+  String get managedProblemsReadinessBlocked => 'Build path unavailable';
+
+  @override
+  String get managedProblemsReadinessUnqualified => 'Runtime unqualified';
+
+  @override
+  String get managedProblemsEvidenceContent => 'Exact current project content';
+
+  @override
+  String get managedProblemsEvidenceDataAssets =>
+      'Exact current DataAsset registry';
+
+  @override
+  String get managedProblemsEvidenceConfiguration =>
+      'Current app configuration';
+
+  @override
+  String get managedProblemsEvidenceUnavailable =>
+      'Evidence source unavailable';
+
+  @override
+  String get managedProblemsEvidenceBoundary => 'Known capability boundary';
+
+  @override
+  String get managedProblemsForeignReferenceTitle =>
+      'Reference points to another project';
+
+  @override
+  String get managedProblemsMissingEntityTitle =>
+      'Linked project content is missing';
+
+  @override
+  String get managedProblemsEntityKindTitle =>
+      'Linked project content has the wrong type';
+
+  @override
+  String get managedProblemsMissingAssetTitle =>
+      'Linked project file is missing';
+
+  @override
+  String get managedProblemsAssetLengthTitle =>
+      'Linked project file has an unexpected size';
+
+  @override
+  String get managedProblemsAssetTypeTitle =>
+      'Linked project file has an unexpected type';
+
+  @override
+  String get managedProblemsGameSetupTitle =>
+      'Game installation is not configured';
+
+  @override
+  String get managedProblemsDataAssetRegistryTitle =>
+      'DataAsset edits could not be checked';
+
+  @override
+  String get managedProblemsDataAssetOfflineTitle =>
+      'DataAsset edit is draft-only';
+
+  @override
+  String managedProblemsEntityReferenceDescription(String source) {
+    return 'Open $source and repair this exact project-content link.';
+  }
+
+  @override
+  String managedProblemsAssetReferenceDescription(String source) {
+    return 'Open $source and repair this exact project-file link.';
+  }
+
+  @override
+  String get managedProblemsDataAssetRegistryDescription =>
+      'Refresh the exact current project. No conclusion is drawn about saved DataAsset edits until this source is available.';
+
+  @override
+  String managedProblemsDataAssetOfflineDescription(String targetPath) {
+    return 'The saved edit for $targetPath can be reviewed in DataAsset edits, but it cannot be emitted by a managed project build or claimed as working in-game yet.';
+  }
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
