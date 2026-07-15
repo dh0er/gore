@@ -301,6 +301,11 @@ void main() {
     expect(find.text('Relationship'), findsOneWidget);
     expect(pagination, findsOneWidget);
     expect(
+      find.textContaining('Target-GlobalId'),
+      findsNothing,
+      reason: 'event NPC ids stay hidden while object ids are disabled',
+    );
+    expect(
       tester.getTopLeft(relationship).dy,
       lessThan(tester.getTopLeft(pagination).dy),
     );
@@ -914,7 +919,7 @@ class _RelationshipEventsNotifier extends _RelationshipEditorNotifier {
     offset: offset,
     limit: limit,
     events: const [
-      MemoryEvent(index: 0, tags: ['Event.Test']),
+      MemoryEvent(index: 0, tags: ['Event.Test'], affected: 'Target-GlobalId'),
     ],
   );
 }

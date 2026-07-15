@@ -17,6 +17,7 @@ pub mod emit_all;
 pub(crate) mod generated_defaults;
 pub mod header;
 pub mod isa;
+pub mod knowledge_metadata;
 pub mod model;
 pub mod native_tag_map;
 pub mod npc_archetypes;

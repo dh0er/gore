@@ -295,8 +295,7 @@ class CrimeBreakdown {
   final int threat;
   final int other;
 
-  int get total =>
-      murder + assault + theft + trespassing + threat + other;
+  int get total => murder + assault + theft + trespassing + threat + other;
 }
 
 /// One guild's crime tally for the player, from `private.factions.list`.
@@ -381,28 +380,33 @@ class QuestStateChange {
   }
 }
 
-/// Pending knowledge add/remove → `private.typed.setAdd` / `setRemove`.
+/// Pending, value-addressed knowledge add/remove. The core resolves the
+/// character's knowledge set at save time and creates the map entry on the
+/// first add when necessary, so this never needs an immediate preparatory
+/// write just to discover a typed path.
 class KnowledgeEntryEdit {
-  const KnowledgeEntryEdit.add({required this.setPath, required this.entry})
+  const KnowledgeEntryEdit.add({required this.character, required this.entry})
     : isAdd = true;
-  const KnowledgeEntryEdit.remove({required this.setPath, required this.entry})
-    : isAdd = false;
+  const KnowledgeEntryEdit.remove({
+    required this.character,
+    required this.entry,
+  }) : isAdd = false;
 
-  final List<String> setPath;
+  final String character;
   final String entry;
   final bool isAdd;
 
   Map<String, Object?> toEditJson() {
     return {
-      'path': isAdd ? 'private.typed.setAdd' : 'private.typed.setRemove',
-      'value': {'path': setPath, 'value': entry},
+      'path': 'private.knowledge.setEntry',
+      'value': {'character': character, 'entry': entry, 'present': isAdd},
     };
   }
 }
 
-/// Structural memory-event edit → `private.typed.arrayRemove` /
-/// `arrayDuplicate`. Index-addressed, so the UI applies at most one per save
-/// round (indices shift after each structural change).
+/// Pending structural memory-event edit → `private.typed.arrayRemove` /
+/// `arrayDuplicate`. Index-addressed, so the UI queues at most one edit for a
+/// given character until the global Save has reparsed the file.
 class MemoryEventEdit {
   const MemoryEventEdit.remove({required this.arrayPath, required this.index})
     : isRemove = true;
@@ -414,6 +418,24 @@ class MemoryEventEdit {
   final List<String> arrayPath;
   final int index;
   final bool isRemove;
+
+  static MemoryEventEdit? fromEditJson(Map<String, Object?> json) {
+    final op = json['path'];
+    if (op != 'private.typed.arrayRemove' &&
+        op != 'private.typed.arrayDuplicate') {
+      return null;
+    }
+    final value = json['value'];
+    if (value is! Map) return null;
+    final rawPath = value['path'];
+    final index = value['index'];
+    if (rawPath is! List || index is! num) return null;
+    final path = rawPath.whereType<String>().toList();
+    if (path.length != rawPath.length) return null;
+    return op == 'private.typed.arrayRemove'
+        ? MemoryEventEdit.remove(arrayPath: path, index: index.toInt())
+        : MemoryEventEdit.duplicate(arrayPath: path, index: index.toInt());
+  }
 
   Map<String, Object?> toEditJson() {
     return {

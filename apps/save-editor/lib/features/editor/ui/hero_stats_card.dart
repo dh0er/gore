@@ -33,6 +33,7 @@ class HeroStatsCard extends StatefulWidget {
     this.fallback,
     this.transformCard,
     this.skillsSection,
+    this.attributeLabel,
   });
 
   final Future<HeroAttributesResult> Function() load;
@@ -68,6 +69,10 @@ class HeroStatsCard extends StatefulWidget {
   /// the same row style as attributes. Makes the Talente entry appear even when
   /// the save has no thieving attribute rows.
   final Widget? skillsSection;
+
+  /// Resolves raw save ids to player-facing names. The editor remains usable
+  /// without a localization catalog via [heroAttributeLabel].
+  final AttributeLabelResolver? attributeLabel;
 
   @override
   State<HeroStatsCard> createState() => _HeroStatsCardState();
@@ -193,14 +198,17 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
         if (text == null) continue;
         // A cleared field is almost certainly an accident.
         if (text.trim().isEmpty) {
-          final errMsg = l10n.attributeEmpty(attribute.id);
+          final errMsg = l10n.attributeEmpty(_displayLabel(attribute));
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
         }
         final value = double.tryParse(text.trim());
         if (value == null) {
-          final errMsg = l10n.attributeInvalidNumber(attribute.id, text);
+          final errMsg = l10n.attributeInvalidNumber(
+            _displayLabel(attribute),
+            text,
+          );
           setState(() => _error = errMsg);
           widget.onPendingChanged(const [], errMsg);
           return;
@@ -357,11 +365,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       final skills = isSkillsPane ? widget.skillsSection : null;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ?errorRow,
-          for (final a in attributes) _row(a),
-          ?skills,
-        ],
+        children: [?errorRow, for (final a in attributes) _row(a), ?skills],
       );
     }
 
@@ -399,6 +403,10 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
     };
   }
 
+  String _displayLabel(HeroAttribute attribute) =>
+      widget.attributeLabel?.call(attribute.id, attribute.setClass) ??
+      heroAttributeLabel(attribute.id);
+
   String _entryLabel(AppLocalizations l10n, _SidebarEntry entry) {
     return switch (entry) {
       _SidebarEntry.transform => l10n.heroEntryHeroTransform,
@@ -423,6 +431,11 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
 
   Widget _row(HeroAttribute attribute) {
     final duplicate = _attributes.where((a) => a.id == attribute.id).length > 1;
+    var label = _displayLabel(attribute);
+    if (duplicate) {
+      final setName = attribute.setClass.split('.').last;
+      label = '$label ($setName)';
+    }
     return _HeroAttributeRow(
       // Record key compares reloadKey by its own equality (identity for
       // SaveInspection, which has no == override), not by toString(), so a
@@ -430,7 +443,7 @@ class _HeroStatsCardState extends State<HeroStatsCard> {
       // rather than reusing stale field state from the previous load.
       key: ValueKey((widget.reloadKey, attribute.setClass, attribute.id)),
       attribute: attribute,
-      duplicate: duplicate,
+      label: label,
       editable: widget.editable,
       // Seed from pending text so edits made in other groups survive the
       // sidebar switch and are visible again when returning to this group.
@@ -450,7 +463,7 @@ class _HeroAttributeRow extends StatefulWidget {
   const _HeroAttributeRow({
     super.key,
     required this.attribute,
-    required this.duplicate,
+    required this.label,
     required this.editable,
     required this.onBaseChanged,
     required this.onCurrentChanged,
@@ -459,7 +472,7 @@ class _HeroAttributeRow extends StatefulWidget {
   });
 
   final HeroAttribute attribute;
-  final bool duplicate;
+  final String label;
   final bool editable;
   final ValueChanged<String> onBaseChanged;
   final ValueChanged<String> onCurrentChanged;
@@ -499,13 +512,6 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
     super.dispose();
   }
 
-  String get _label {
-    final label = heroAttributeLabel(widget.attribute.id);
-    if (!widget.duplicate) return label;
-    final setName = widget.attribute.setClass.split('.').last;
-    return '$label ($setName)';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -514,6 +520,10 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
         builder: (context, constraints) {
           final compact = constraints.maxWidth < 620;
           final baseField = TextField(
+            key: ValueKey(
+              'hero-attribute:${widget.attribute.setClass}:'
+              '${widget.attribute.id}:base',
+            ),
             controller: _baseController,
             enabled: widget.editable && widget.attribute.basePath != null,
             onChanged: widget.onBaseChanged,
@@ -522,10 +532,14 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeBase(_label),
+              labelText: AppLocalizations.of(context).attributeBaseValue,
             ),
           );
           final currentField = TextField(
+            key: ValueKey(
+              'hero-attribute:${widget.attribute.setClass}:'
+              '${widget.attribute.id}:current',
+            ),
             controller: _currentController,
             enabled: widget.editable && widget.attribute.currentPath != null,
             onChanged: widget.onCurrentChanged,
@@ -534,11 +548,11 @@ class _HeroAttributeRowState extends State<_HeroAttributeRow> {
               signed: true,
             ),
             decoration: InputDecoration(
-              labelText: AppLocalizations.of(context).attributeCurrent(_label),
+              labelText: AppLocalizations.of(context).attributeCurrentValue,
             ),
           );
           final rowLabel = Text(
-            _label,
+            widget.label,
             style: Theme.of(context).textTheme.labelLarge,
           );
           if (compact) {

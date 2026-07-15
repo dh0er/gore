@@ -261,6 +261,7 @@ class SaveSlot {
     this.persistentProfileId,
     this.screenshot,
     this.difficulty,
+    this.isExternal = false,
   });
 
   factory SaveSlot.fromJson(Map<String, Object?> json) {
@@ -285,6 +286,47 @@ class SaveSlot {
       persistentProfileId: (json['persistentProfileId'] as num?)?.toInt(),
       screenshot: ScreenshotSummary.maybeFromJson(json['screenshot']),
       difficulty: DifficultySettings.maybeFromJson(json['difficulty']),
+      isExternal: json['isExternal'] as bool? ?? false,
+    );
+  }
+
+  /// Build the sidebar entry for a save opened directly from an arbitrary
+  /// file. Detached saves deliberately carry no PersistentDataList profile:
+  /// an embedded numeric profile id is not proof that the file belongs to a
+  /// profile in the currently scanned game folder.
+  factory SaveSlot.fromInspection(
+    SaveInspection inspection, {
+    required bool isExternal,
+  }) {
+    final path = inspection.path ?? '';
+    final normalized = path.replaceAll('\\', '/');
+    final fileName = normalized.split('/').last;
+    final dot = fileName.lastIndexOf('.');
+    final slot = dot > 0 ? fileName.substring(0, dot) : fileName;
+    return SaveSlot(
+      path: path,
+      slot: slot.isEmpty ? 'external' : slot,
+      format: inspection.format,
+      fileSize: inspection.size,
+      sha1: inspection.sha1,
+      status: 'ok',
+      playerSaveName: inspection.playerSaveName,
+      persistentPlayerSaveName: isExternal
+          ? null
+          : inspection.persistentPlayerSaveName,
+      slotName: inspection.slotName,
+      compressionMethod: inspection.compressionMethod,
+      chunkCount: inspection.chunkCount,
+      chapterId: inspection.chapterId,
+      mapName: inspection.mapName,
+      timePlayedSeconds: inspection.timePlayedSeconds,
+      timeLoadedSeconds: inspection.timeLoadedSeconds,
+      quickSave: inspection.quickSave,
+      autoSave: inspection.autoSave,
+      persistentProfileId: isExternal ? null : inspection.persistentProfileId,
+      screenshot: inspection.screenshot,
+      difficulty: inspection.difficulty,
+      isExternal: isExternal,
     );
   }
 
@@ -308,6 +350,10 @@ class SaveSlot {
   final int? persistentProfileId;
   final ScreenshotSummary? screenshot;
   final DifficultySettings? difficulty;
+
+  /// True when this slot was opened directly and is not registered in the
+  /// scanned folder's PersistentDataList.sav.
+  final bool isExternal;
 
   String get displayName {
     final name = playerSaveName ?? persistentPlayerSaveName;

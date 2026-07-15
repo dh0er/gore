@@ -1,5 +1,10 @@
 import 'editor_models.dart';
 
+/// Presentation-only resolver shared by the hero, NPC, and legacy attribute
+/// editors. [setClass] is null for legacy summaries that do not expose the
+/// owning AttributeSet class.
+typedef AttributeLabelResolver = String Function(String id, String? setClass);
+
 /// One pending `private.typed.setValue` edit.
 class TypedValueEdit {
   const TypedValueEdit({required this.path, required this.value});

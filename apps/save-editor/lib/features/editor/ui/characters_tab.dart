@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/ui/actor_detail_header.dart';
 import 'package:goresave/features/editor/ui/attribute_detail.dart';
@@ -69,6 +70,7 @@ class CharactersTab extends ConsumerWidget {
     final selected = state.selectedActor;
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
 
     // Orphans have no actor-backed data: guard Attribute/Inventar/Ereignisse to
     // a clean empty state so they never issue an NPC load with the `orphan:`
@@ -111,7 +113,12 @@ class CharactersTab extends ConsumerWidget {
     final Widget knowledgeBody = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+          showObjectIds: showObjectIds,
+        ),
         Expanded(
           // Shared sub-tab layout (see class comment): outer padding around
           // the detail's Card, matching Attribute/Inventar.
@@ -154,6 +161,7 @@ class CharactersTab extends ConsumerWidget {
                 actor: selected,
                 locCatalog: locCatalog,
                 lang: lang,
+                showObjectIds: showObjectIds,
               ),
               Expanded(
                 child: selected.isPlayer && state.heroGlobalId == null
@@ -208,6 +216,7 @@ class CharactersTab extends ConsumerWidget {
             reloadKey: inspection,
             locCatalog: locCatalog,
             lang: lang,
+            showObjectIds: showObjectIds,
           ),
         ),
         const VerticalDivider(width: 1),

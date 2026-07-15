@@ -9,7 +9,14 @@ void main() {
     'info_diego_exit_gamestart_15_00': {'english': 'I will be going.'},
     'info_stt_311_fisk_exit': {'english': 'See you, Fisk.'},
     'info_npcexit': {'english': 'The NPC leaves.'},
+    'info_diego_othercamps_15_00': {
+      'english': 'Tell me about the other camps.',
+    },
+    'info_vlk_2_dielage_15_00': {'english': "What's life like here?"},
     'quest-banditscamp_banditstrust-name': {'english': 'The Bandits Trust'},
+    'quest-banditscamp_banditstrust-description': {
+      'english': 'Earn the trust of the bandits.',
+    },
     'quest-banditscamp_banditstrust_banditstrust_obj_back-name': {
       'english': 'Go back',
     },
@@ -49,13 +56,75 @@ void main() {
     });
 
     test('numeric node id → null', () {
-      expect(localizedKnowledgeEntry(catalog, lang, 'Topic_Diego_209799'), isNull);
-      expect(localizedKnowledgeEntry(catalog, lang, 'ChoiceDiego214558'), isNull);
+      expect(
+        localizedKnowledgeEntry(catalog, lang, 'Topic_Diego_209799'),
+        isNull,
+      );
+      expect(
+        localizedKnowledgeEntry(catalog, lang, 'ChoiceDiego214558'),
+        isNull,
+      );
+    });
+
+    test('exact cache caption key resolves numeric node ids', () {
+      expect(
+        localizedKnowledgeEntry(
+          catalog,
+          lang,
+          'Topic_Diego_209799',
+          locKey: 'INFO_DIEGO_OTHERCAMPS_15_00',
+        ),
+        'Tell me about the other camps.',
+      );
+      expect(
+        localizedKnowledgeEntry(
+          catalog,
+          lang,
+          'ChoiceDiego214558',
+          locKey: 'INFO_DIEGO_WARUMGEHOLFEN_15_00',
+        ),
+        'Why did you help me?',
+      );
+      expect(
+        localizedKnowledgeEntry(
+          catalog,
+          lang,
+          'Info_Whatslife',
+          locKey: 'Info_Vlk_2_DieLage_15_00',
+        ),
+        "What's life like here?",
+      );
+    });
+
+    test('missing exact caption falls back to safe name heuristics', () {
+      expect(
+        localizedKnowledgeEntry(
+          catalog,
+          lang,
+          'ChoiceDiegoExitGamestart',
+          locKey: 'MISSING_KEY',
+        ),
+        'I will be going.',
+      );
+    });
+
+    test('cache literal works without an extracted localization catalog', () {
+      expect(
+        localizedKnowledgeEntry(
+          const {},
+          lang,
+          'ChoiceAsghan144609',
+          caption: '[Forced Conversation]',
+        ),
+        '[Forced Conversation]',
+      );
     });
 
     test('empty catalog → null', () {
-      expect(localizedKnowledgeEntry(const {}, lang, 'ChoiceDiegoExitGamestart'),
-          isNull);
+      expect(
+        localizedKnowledgeEntry(const {}, lang, 'ChoiceDiegoExitGamestart'),
+        isNull,
+      );
     });
   });
 
@@ -80,6 +149,52 @@ void main() {
 
     test('unknown quest → null', () {
       expect(localizedQuestName(catalog, lang, 'Quest_Nope'), isNull);
+    });
+  });
+
+  group('localizedQuestDescription', () {
+    test('quest class id → quest-<body>-description', () {
+      expect(
+        localizedQuestDescription(
+          catalog,
+          lang,
+          'Quest_BanditsCamp_BANDITSTRUST',
+        ),
+        'Earn the trust of the bandits.',
+      );
+    });
+
+    test('unknown or empty quest → null', () {
+      expect(localizedQuestDescription(catalog, lang, 'Quest_Nope'), isNull);
+      expect(localizedQuestDescription(catalog, lang, ''), isNull);
+    });
+  });
+
+  group('readableKnowledgeEntry', () {
+    test('humanizes structured ids without exposing opaque hashes', () {
+      expect(readableKnowledgeEntry('Info_Whatslife'), 'Info Whatslife');
+      expect(readableKnowledgeEntry('ChoiceDiego214558'), 'Dialog choice');
+      expect(readableKnowledgeEntry('Topic_Jan_148468'), 'Dialog topic');
+    });
+
+    test('removes voiceline wrapper and localization suffix', () {
+      expect(
+        readableKnowledgeEntry('Voiceline_HelloWorld_AlkimiaLocalization'),
+        'Hello World',
+      );
+    });
+  });
+
+  group('readableQuestEntry', () {
+    test('humanizes camp, chapter, objective and numeric boundaries', () {
+      expect(
+        readableQuestEntry('Quest_OldCamp_OCCHAPTER1_BRINGLIST_OBJ_GETLIST'),
+        'Old Camp OC Chapter 1 Bringlist Objective Getlist',
+      );
+    });
+
+    test('preserves already readable player-facing text', () {
+      expect(readableQuestEntry('Das Alte Lager'), 'Das Alte Lager');
     });
   });
 }

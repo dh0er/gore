@@ -247,6 +247,14 @@ void main() {
     // Status badges: OldCamp hostile, NewCamp friendly.
     expect(find.text('Hostile'), findsOneWidget);
     expect(find.text('Friendly'), findsOneWidget);
+    final oldCampCenter = tester.getCenter(find.text('Old Camp'));
+    final hostileCenter = tester.getCenter(find.text('Hostile'));
+    expect(hostileCenter.dx, greaterThan(oldCampCenter.dx));
+    expect(
+      (hostileCenter.dy - oldCampCenter.dy).abs(),
+      lessThan(4),
+      reason: 'status badge should sit beside the faction title',
+    );
     // Crime-type breakdown for OldCamp (un-forgiven only, zero categories
     // omitted).
     expect(find.text('1 murder · 1 theft'), findsOneWidget);

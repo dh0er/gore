@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/npc_attributes.dart';
@@ -9,11 +10,13 @@ import 'package:goresave/features/editor/ui/hero_stats_card.dart';
 import 'package:goresave/features/editor/ui/npc_attributes_panel.dart';
 import 'package:goresave/features/editor/ui/skills_panel.dart';
 import 'package:goresave/l10n/app_localizations.dart';
+import 'package:goresave/loc/attribute_loc.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
 import 'package:goresave/providers/data_providers.dart';
 
 import '../domain/editor_notifier.dart';
-import '../domain/hero_attributes.dart' show TypedValueEdit;
+import '../domain/hero_attributes.dart'
+    show AttributeLabelResolver, TypedValueEdit;
 
 /// Reverse a stored per-NPC attribute registry entry back into the panel's
 /// [NpcTypedEdit] drafts so [NpcAttributesPanel] can resume from them on a
@@ -91,6 +94,9 @@ class AttributeDetail extends ConsumerWidget {
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
+    String attributeLabel(String id, String? setClass) =>
+        localizedAttributeName(locCatalog, lang, id, setClass: setClass);
 
     if (selected.isPlayer) {
       // Player → a shared header ("Player", no GlobalId) above the EXISTING
@@ -102,6 +108,7 @@ class AttributeDetail extends ConsumerWidget {
             actor: selected,
             locCatalog: locCatalog,
             lang: lang,
+            showObjectIds: showObjectIds,
           ),
           Expanded(
             child: _PrivatePanel(
@@ -112,6 +119,7 @@ class AttributeDetail extends ConsumerWidget {
               notifier: notifier,
               editable: editable,
               lockedBody: l10n.playerLockedBody,
+              attributeLabel: attributeLabel,
             ),
           ),
         ],
@@ -156,7 +164,12 @@ class AttributeDetail extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+          showObjectIds: showObjectIds,
+        ),
         Expanded(
           // Shared sub-tab layout (see CharactersTab): outer 20/top 8 →
           // one Card → inner 16 around the whole attribute editor.
@@ -186,6 +199,7 @@ class AttributeDetail extends ConsumerWidget {
                     pendingKey: 'skills:$npcId',
                     showRoster: false,
                   ),
+                  attributeLabel: attributeLabel,
                   // Resume from this NPC's queued attribute drafts on revisit:
                   // reverse the stored typed.setValue edits back into the panel's
                   // NpcTypedEdit drafts. Without this, returning to a previously
@@ -244,6 +258,7 @@ class _PrivatePanel extends StatelessWidget {
     required this.notifier,
     required this.editable,
     required this.lockedBody,
+    required this.attributeLabel,
   });
 
   final IconData icon;
@@ -253,6 +268,7 @@ class _PrivatePanel extends StatelessWidget {
   final EditorNotifier notifier;
   final bool editable;
   final String lockedBody;
+  final AttributeLabelResolver attributeLabel;
 
   /// The legacy attributes editor, flattened: the whole tab body sits inside
   /// ONE main card now, so the section renders bare (no inner Card).
@@ -262,6 +278,7 @@ class _PrivatePanel extends StatelessWidget {
       notifier: notifier,
       editable: editable,
       reloadKey: inspection,
+      attributeLabel: attributeLabel,
     );
   }
 
@@ -341,6 +358,7 @@ class _PrivatePanel extends StatelessWidget {
               editable: editable,
               reloadKey: inspection,
             ),
+            attributeLabel: attributeLabel,
           ),
         );
       }
@@ -656,12 +674,14 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
   const _PrivatePlayerAttributesEditor({
     required this.player,
     required this.notifier,
+    required this.attributeLabel,
     this.editable = true,
     this.reloadKey,
   });
 
   final PrivatePlayerSummary player;
   final EditorNotifier notifier;
+  final AttributeLabelResolver attributeLabel;
   final bool editable;
   final Object? reloadKey;
 
@@ -693,6 +713,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
                   .map(
                     (attribute) => _PrivatePlayerAttributeRow(
                       attribute: attribute,
+                      label: attributeLabel(attribute.id, null),
                       notifier: notifier,
                       editable: editable,
                       compact: compact,
@@ -711,6 +732,7 @@ class _PrivatePlayerAttributesEditor extends StatelessWidget {
 class _PrivatePlayerAttributeRow extends StatefulWidget {
   const _PrivatePlayerAttributeRow({
     required this.attribute,
+    required this.label,
     required this.notifier,
     required this.editable,
     required this.compact,
@@ -718,6 +740,7 @@ class _PrivatePlayerAttributeRow extends StatefulWidget {
   });
 
   final PrivatePlayerAttribute attribute;
+  final String label;
   final EditorNotifier notifier;
   final bool editable;
   final bool compact;
@@ -786,23 +809,25 @@ class _PrivatePlayerAttributeRowState
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final name = widget.attribute.id;
+    final name = widget.label;
     final baseField = TextField(
+      key: ValueKey('legacy-attribute:${widget.attribute.id}:base'),
       controller: _baseController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) => _updatePending(),
       decoration: InputDecoration(
-        labelText: l10n.attributeBase(name),
+        labelText: l10n.attributeBaseValue,
         errorText: _error,
       ),
     );
     final currentField = TextField(
+      key: ValueKey('legacy-attribute:${widget.attribute.id}:current'),
       controller: _currentController,
       enabled: widget.editable,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) => _updatePending(),
-      decoration: InputDecoration(labelText: l10n.attributeCurrent(name)),
+      decoration: InputDecoration(labelText: l10n.attributeCurrentValue),
     );
     final label = SizedBox(
       width: 116,

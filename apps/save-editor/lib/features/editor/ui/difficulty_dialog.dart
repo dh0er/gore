@@ -143,18 +143,20 @@ class ProfileDifficultyChip extends StatelessWidget {
             color: enabled ? color : theme.colorScheme.onSurfaceVariant,
           ),
           const SizedBox(width: 6),
-          Text(
-            label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            softWrap: false,
-            style: theme.textTheme.labelLarge?.copyWith(
-              fontWeight: FontWeight.w600,
-              color: enabled
-                  ? (known
-                        ? color.withValues(alpha: 0.95)
-                        : theme.colorScheme.onSurface)
-                  : theme.colorScheme.onSurfaceVariant,
+          Flexible(
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: enabled
+                    ? (known
+                          ? color.withValues(alpha: 0.95)
+                          : theme.colorScheme.onSurface)
+                    : theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
         ],

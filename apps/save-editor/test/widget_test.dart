@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 void main() {
   testWidgets('renders editor shell with fake save data', (tester) async {
@@ -22,6 +25,9 @@ void main() {
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
           ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
+          ),
         ],
         child: const GoresaveApp(),
       ),
@@ -36,9 +42,21 @@ void main() {
     // Header pills summarise chapter and time played for the save.
     expect(find.text('Chapter 1'), findsOneWidget);
     expect(find.text('1h 56m'), findsOneWidget);
-    expect(find.text('Profile 0'), findsOneWidget);
+    expect(find.text('Profile 0'), findsWidgets);
     // The profile header carries the difficulty chip (profile-wide difficulty).
     expect(find.text('Custom'), findsAtLeastNWidgets(1));
+    // The profile menu is available even with one profile and always ends in
+    // the detached-save file action.
+    await tester.tap(find.byTooltip('Switch profile'));
+    await tester.pumpAndSettle();
+    expect(find.text('Open file'), findsOneWidget);
+    await tester.tapAt(const Offset(900, 500));
+    await tester.pumpAndSettle();
+
+    // Every registered save exposes its authoritative profile association on
+    // Overview (the fake fixture has profile 0 selected).
+    expect(find.text('Save profile'), findsOneWidget);
+    expect(find.byType(DropdownButtonFormField<int>), findsOneWidget);
 
     // The header shows the save's screenshot on the Overview tab.
     expect(find.bySemanticsLabel('Screenshot for G1R-001'), findsWidgets);
@@ -117,11 +135,20 @@ void main() {
       scrollable: find.byType(Scrollable).last,
     );
     expect(find.text('Health'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Health base'), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Health current'), findsOneWidget);
-    await tester.enterText(find.widgetWithText(TextField, 'Health base'), '77');
+    expect(
+      find.byKey(const ValueKey('legacy-attribute:Health:base')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('legacy-attribute:Health:current')),
+      findsOneWidget,
+    );
     await tester.enterText(
-      find.widgetWithText(TextField, 'Health current'),
+      find.byKey(const ValueKey('legacy-attribute:Health:base')),
+      '77',
+    );
+    await tester.enterText(
+      find.byKey(const ValueKey('legacy-attribute:Health:current')),
       '66',
     );
     await tester.pump();
@@ -287,7 +314,7 @@ void main() {
     // Factions remains alongside Quests in this sidebar.
     expect(find.text('Factions'), findsOneWidget);
     // Quests detail loads and shows the fake quest name.
-    expect(find.text('SLEEPER'), findsOneWidget);
+    expect(find.text('Sleeper'), findsOneWidget);
 
     // Search quests — filter is inside the Quests detail's TextField.
     await tester.enterText(
@@ -296,7 +323,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('SLEEPER'), findsOneWidget);
+    expect(find.text('Sleeper'), findsOneWidget);
 
     // Two TabBars now exist in the tree: the scrollable top-level bar and the
     // Charaktere tab's inner sub-tab bar (kept alive off-screen). Drag the
@@ -388,10 +415,26 @@ void main() {
     await tester.tap(find.text('Advanced (debug)'));
     await tester.pumpAndSettle();
 
-    // Codec self-test status (the fake core reports a ready codec) and the raw
-    // inspection JSON of the loaded save both appear.
+    // Codec status and the ID preference appear, but the raw JSON remains
+    // collapsed until explicitly opened.
     expect(find.text('Codec ready'), findsOneWidget);
     expect(find.text('Inspection JSON'), findsOneWidget);
+    expect(find.text('Show object IDs'), findsOneWidget);
+    expect(find.textContaining('"format"'), findsNothing);
+    final objectIdsToggle = find.ancestor(
+      of: find.text('Show object IDs'),
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isFalse);
+
+    await tester.tap(find.text('Show object IDs'));
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<SwitchListTile>(objectIdsToggle).value, isTrue);
+
+    await tester.tap(find.text('Inspection JSON'));
+    await tester.pumpAndSettle();
+
     expect(find.textContaining('"format"'), findsOneWidget);
   });
 
@@ -537,6 +580,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),

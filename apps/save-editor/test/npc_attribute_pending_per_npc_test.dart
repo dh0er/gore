@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// Regression test for the phantom cross-NPC edit bug: NPC attribute pending
 /// edits must be keyed PER-NPC (`npc.attributes:$id`) so that editing NPC-A,
@@ -21,6 +24,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -46,9 +52,12 @@ void main() {
       // an empty loc catalog the row subtitle shows the raw GlobalId.
       await tester.tap(find.text('Lizard-A'));
       await tester.pumpAndSettle();
-      expect(find.widgetWithText(TextField, 'Health base'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('npc-attribute:Health:base')),
+        findsOneWidget,
+      );
       await tester.enterText(
-        find.widgetWithText(TextField, 'Health base'),
+        find.byKey(const ValueKey('npc-attribute:Health:base')),
         '111',
       );
       await tester.pump();
@@ -64,7 +73,7 @@ void main() {
       expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
       final bField = tester.widget<EditableText>(
         find.descendant(
-          of: find.widgetWithText(TextField, 'Health base'),
+          of: find.byKey(const ValueKey('npc-attribute:Health:base')),
           matching: find.byType(EditableText),
         ),
       );
@@ -72,7 +81,7 @@ void main() {
 
       // Edit NPC-B's Health base. Now there are two pending edits (A + B).
       await tester.enterText(
-        find.widgetWithText(TextField, 'Health base'),
+        find.byKey(const ValueKey('npc-attribute:Health:base')),
         '222',
       );
       await tester.pump();
@@ -104,58 +113,50 @@ void main() {
       // NPC-B's edit kept value 222.
       expect((bEdit['value'] as Map)['value'], 222.0);
       // Both target the BaseValue leaf of their own NPC.
-      expect(
-        ((aEdit['value'] as Map)['path'] as List).last,
-        'BaseValue',
-      );
-      expect(
-        ((bEdit['value'] as Map)['path'] as List).last,
-        'BaseValue',
-      );
+      expect(((aEdit['value'] as Map)['path'] as List).last, 'BaseValue');
+      expect(((bEdit['value'] as Map)['path'] as List).last, 'BaseValue');
     },
   );
 
-  testWidgets(
-    'selecting an NPC with no edits leaves no stale pending entry',
-    (tester) async {
-      final core = _NpcCoreService();
-      await pumpApp(tester, core);
+  testWidgets('selecting an NPC with no edits leaves no stale pending entry', (
+    tester,
+  ) async {
+    final core = _NpcCoreService();
+    await pumpApp(tester, core);
 
-      await tester.tap(find.widgetWithText(Tab, 'Characters'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.widgetWithText(Tab, 'Attributes'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Characters'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(Tab, 'Attributes'));
+    await tester.pumpAndSettle();
 
-      // Edit NPC-A (1 pending), then visit NPC-B but make NO edit.
-      await tester.tap(find.text('Lizard-A'));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-        find.widgetWithText(TextField, 'Health base'),
-        '111',
-      );
-      await tester.pump();
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Edit NPC-A (1 pending), then visit NPC-B but make NO edit.
+    await tester.tap(find.text('Lizard-A'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('npc-attribute:Health:base')),
+      '111',
+    );
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-      await tester.tap(find.text('Lizard-B'));
-      await tester.pumpAndSettle();
+    await tester.tap(find.text('Lizard-B'));
+    await tester.pumpAndSettle();
 
-      // Visiting B without editing must not add a pending entry for B; the count
-      // stays at 1 (only A's edit).
-      expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+    // Visiting B without editing must not add a pending entry for B; the count
+    // stays at 1 (only A's edit).
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
 
-      // Saving writes exactly A's one edit.
-      await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
-      await tester.pumpAndSettle();
+    // Saving writes exactly A's one edit.
+    await tester.tap(find.widgetWithText(FilledButton, 'Save (1)'));
+    await tester.pumpAndSettle();
 
-      final write = core.requests.lastWhere((r) => r.command == 'write_save');
-      final edits = (write.payload['edits'] as List)
-          .cast<Map<String, Object?>>();
-      expect(edits, hasLength(1));
-      final value = edits.single['value'] as Map<String, Object?>;
-      expect((value['path'] as List).cast<String>(), contains('{Lizard-A}'));
-      expect(value['value'], 111.0);
-    },
-  );
+    final write = core.requests.lastWhere((r) => r.command == 'write_save');
+    final edits = (write.payload['edits'] as List).cast<Map<String, Object?>>();
+    expect(edits, hasLength(1));
+    final value = edits.single['value'] as Map<String, Object?>;
+    expect((value['path'] as List).cast<String>(), contains('{Lizard-A}'));
+    expect(value['value'], 111.0);
+  });
 }
 
 class _RecordedRequest {
@@ -249,11 +250,7 @@ class _NpcCoreService implements GoresaveCoreService {
               'decompressedSize': 9,
               'stringCount': 1,
               'strings': ['Hero'],
-              'typedParse': {
-                'status': 'ok',
-                'propertyCount': 1,
-                'maxDepth': 1,
-              },
+              'typedParse': {'status': 'ok', 'propertyCount': 1, 'maxDepth': 1},
               'player': {
                 'saveVersionNumber': 17,
                 'currentWorld': 'WORLD',

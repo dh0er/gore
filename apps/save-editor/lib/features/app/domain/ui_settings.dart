@@ -16,6 +16,7 @@ class UiSettings {
     this.windowMaximized = false,
     this.autoUpdateCheck = true,
     this.locExtractPrompted = false,
+    this.showObjectIds = false,
     this.appLocale,
   });
 
@@ -45,6 +46,7 @@ class UiSettings {
       windowMaximized: json['windowMaximized'] == true,
       autoUpdateCheck: json['autoUpdateCheck'] != false,
       locExtractPrompted: json['locExtractPrompted'] == true,
+      showObjectIds: json['showObjectIds'] == true,
     );
   }
 
@@ -63,6 +65,11 @@ class UiSettings {
   /// the manual Settings button stays available regardless.
   final bool locExtractPrompted;
 
+  /// Whether technical object identifiers are shown alongside localized names.
+  /// Kept off by default so normal editor views stay focused on player-facing
+  /// labels; individual panels consume [showObjectIdsProvider] when rendering.
+  final bool showObjectIds;
+
   /// Selected UI + game-text language code (one of [kGameLangs]). Drives both
   /// the MaterialApp locale and which extracted game-text names (items, NPCs,
   /// knowledge) are shown. Null means "never chosen" — the app then follows the
@@ -76,6 +83,7 @@ class UiSettings {
     bool? windowMaximized,
     bool? autoUpdateCheck,
     bool? locExtractPrompted,
+    bool? showObjectIds,
     String? appLocale,
   }) {
     return UiSettings(
@@ -85,6 +93,7 @@ class UiSettings {
       windowMaximized: windowMaximized ?? this.windowMaximized,
       autoUpdateCheck: autoUpdateCheck ?? this.autoUpdateCheck,
       locExtractPrompted: locExtractPrompted ?? this.locExtractPrompted,
+      showObjectIds: showObjectIds ?? this.showObjectIds,
       appLocale: appLocale ?? this.appLocale,
     );
   }
@@ -103,6 +112,7 @@ class UiSettings {
     'windowMaximized': windowMaximized,
     'autoUpdateCheck': autoUpdateCheck,
     'locExtractPrompted': locExtractPrompted,
+    'showObjectIds': showObjectIds,
     'appLocale': ?appLocale,
   };
 }
@@ -232,6 +242,26 @@ final autoUpdateCheckProvider =
     StateNotifierProvider<AutoUpdateCheckNotifier, bool>((ref) {
       return AutoUpdateCheckNotifier(ref.watch(uiSettingsStoreProvider));
     });
+
+/// Controls whether editor panels render technical NPC, item, knowledge and
+/// quest identifiers. Persisted in [UiSettings] and intentionally disabled by
+/// default; panels can watch this provider without depending on the settings
+/// file implementation.
+final showObjectIdsProvider =
+    StateNotifierProvider<ShowObjectIdsNotifier, bool>((ref) {
+      return ShowObjectIdsNotifier(ref.watch(uiSettingsStoreProvider));
+    });
+
+class ShowObjectIdsNotifier extends StateNotifier<bool> {
+  ShowObjectIdsNotifier(this._store) : super(_store.read().showObjectIds);
+
+  final UiSettingsStore _store;
+
+  void set(bool enabled) {
+    state = enabled;
+    _store.write(_store.read().copyWith(showObjectIds: enabled));
+  }
+}
 
 class AutoUpdateCheckNotifier extends StateNotifier<bool> {
   AutoUpdateCheckNotifier(this._store) : super(_store.read().autoUpdateCheck);

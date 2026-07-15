@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/actor.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_categories.dart';
@@ -89,6 +90,7 @@ class InventoryDetail extends ConsumerWidget {
     final selected = actor;
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
 
     final Widget body;
     if (selected.isPlayer) {
@@ -115,7 +117,12 @@ class InventoryDetail extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        ActorDetailHeader(actor: selected, locCatalog: locCatalog, lang: lang),
+        ActorDetailHeader(
+          actor: selected,
+          locCatalog: locCatalog,
+          lang: lang,
+          showObjectIds: showObjectIds,
+        ),
         Expanded(child: body),
       ],
     );
@@ -570,6 +577,7 @@ class _PrivateInventorySummaryCardState
     final l10n = AppLocalizations.of(context);
     final lang = ref.watch(currentGameLangProvider);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     final inventory = widget.inventory;
     final query = _query.trim().toLowerCase();
     final items = inventory.items.where((item) {
@@ -593,7 +601,9 @@ class _PrivateInventorySummaryCardState
     // raw internal id.
     String nameOf(PrivateInventoryItem item) =>
         localizedGameName(locCatalog, lang, item.id) ??
-        (item.id.isEmpty ? item.path : item.id);
+        itemDisplayNameFromId(
+          item.id.isEmpty ? _itemDisplayFromPath(item.path) : item.id,
+        );
     final groups = groupInventoryItems(items, displayNameOf: nameOf);
 
     // Keep the current category selected if it still has items, else fall
@@ -610,10 +620,10 @@ class _PrivateInventorySummaryCardState
     // an empty query browses by the selected category.
     final searching = query.isNotEmpty;
     final shownItems = searching
-        ? (items
-            ..sort(
-              (a, b) => nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase()),
-            ))
+        ? (items..sort(
+            (a, b) =>
+                nameOf(a).toLowerCase().compareTo(nameOf(b).toLowerCase()),
+          ))
         : (selectedGroup?.items ?? const <PrivateInventoryItem>[]);
 
     final hasItems = inventory.items.isNotEmpty;
@@ -732,8 +742,9 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.add,
                 icon: Icons.add_circle_outline,
-                title: _itemDisplayFromPath(add.path),
+                title: itemDisplayNameFromId(_itemDisplayFromPath(add.path)),
                 subtitle: l10n.pendingAddSubtitle(add.count),
+                technicalId: showObjectIds ? add.path : null,
                 cancelTooltip: l10n.cancelPendingAdd,
                 onCancel: () {
                   setState(() => _pendingAdds.remove(add));
@@ -746,8 +757,15 @@ class _PrivateInventorySummaryCardState
               _PendingStructuralRow(
                 tone: _PendingTone.remove,
                 icon: Icons.delete_outline,
-                title: _itemDisplayFromPath(_pendingRemovePath!),
+                title: itemDisplayNameFromId(
+                  _itemDisplayFromPath(_pendingRemovePath!),
+                ),
                 subtitle: l10n.pendingRemovalSubtitle,
+                technicalId: showObjectIds
+                    ? (_pendingRemove!.id.isEmpty
+                          ? _pendingRemove!.path
+                          : '${_pendingRemove!.id}\n${_pendingRemove!.path}')
+                    : null,
                 cancelTooltip: l10n.cancelPendingRemoval,
                 onCancel: _undoRemove,
               ),
@@ -758,7 +776,9 @@ class _PrivateInventorySummaryCardState
                 tone: _PendingTone.remove,
                 icon: Icons.settings_backup_restore,
                 title: l10n.pendingResetTitle,
-                subtitle: l10n.pendingResetSubtitle(_pendingResetLevel ?? 'Gothic'),
+                subtitle: l10n.pendingResetSubtitle(
+                  _pendingResetLevel ?? 'Gothic',
+                ),
                 cancelTooltip: l10n.cancelPendingReset,
                 onCancel: _undoReset,
               ),
@@ -839,14 +859,7 @@ class _PrivateInventorySummaryCardState
                                           children: [
                                             Flexible(
                                               child: Text(
-                                                localizedGameName(
-                                                      locCatalog,
-                                                      lang,
-                                                      item.id,
-                                                    ) ??
-                                                    (item.id.isEmpty
-                                                        ? item.path
-                                                        : item.id),
+                                                nameOf(item),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,
                                               ),
@@ -882,7 +895,9 @@ class _PrivateInventorySummaryCardState
                                           ],
                                         ),
                                         subtitle:
-                                            item.path.isEmpty &&
+                                            (!showObjectIds ||
+                                                    (item.id.isEmpty &&
+                                                        item.path.isEmpty)) &&
                                                 item.upgrades.isEmpty
                                             ? null
                                             : Column(
@@ -890,7 +905,17 @@ class _PrivateInventorySummaryCardState
                                                     CrossAxisAlignment.start,
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
-                                                  if (item.path.isNotEmpty)
+                                                  if (showObjectIds &&
+                                                      item.id.isNotEmpty)
+                                                    Text(
+                                                      item.id,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  if (showObjectIds &&
+                                                      item.path.isNotEmpty &&
+                                                      item.path != item.id)
                                                     Text(
                                                       item.path,
                                                       maxLines: 1,
@@ -1097,6 +1122,7 @@ class _PendingStructuralRow extends StatelessWidget {
     required this.onCancel,
     required this.cancelTooltip,
     required this.tone,
+    this.technicalId,
   });
 
   final IconData icon;
@@ -1105,6 +1131,7 @@ class _PendingStructuralRow extends StatelessWidget {
   final VoidCallback onCancel;
   final String cancelTooltip;
   final _PendingTone tone;
+  final String? technicalId;
 
   @override
   Widget build(BuildContext context) {
@@ -1128,9 +1155,23 @@ class _PendingStructuralRow extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
           style: TextStyle(color: fg),
         ),
-        subtitle: Text(
-          subtitle,
-          style: TextStyle(color: fg.withValues(alpha: 0.8)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(subtitle, style: TextStyle(color: fg.withValues(alpha: 0.8))),
+            if (technicalId?.trim().isNotEmpty == true)
+              Text(
+                technicalId!,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: fg.withValues(alpha: 0.72),
+                  fontFamily: 'Consolas',
+                  fontSize: 11,
+                ),
+              ),
+          ],
         ),
         trailing: IconButton(
           icon: const Icon(Icons.close),

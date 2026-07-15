@@ -128,6 +128,18 @@ abstract class AppLocalizations {
   /// **'Diagnostics & raw data for bug reports'**
   String get debugSectionSubtitle;
 
+  /// No description provided for @showObjectIdsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Show object IDs'**
+  String get showObjectIdsTitle;
+
+  /// No description provided for @showObjectIdsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.'**
+  String get showObjectIdsSubtitle;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
@@ -698,6 +710,48 @@ abstract class AppLocalizations {
   /// **'Switch profile'**
   String get switchProfile;
 
+  /// No description provided for @openSaveFile.
+  ///
+  /// In en, this message translates to:
+  /// **'Open file'**
+  String get openSaveFile;
+
+  /// No description provided for @externalSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Externally opened save'**
+  String get externalSave;
+
+  /// No description provided for @saveProfileTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Save profile'**
+  String get saveProfileTitle;
+
+  /// No description provided for @saveProfileDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Assign this save to a different game profile. The save and profile index are backed up together.'**
+  String get saveProfileDescription;
+
+  /// No description provided for @saveProfileExternalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.'**
+  String get saveProfileExternalHint;
+
+  /// No description provided for @saveProfileNoProfiles.
+  ///
+  /// In en, this message translates to:
+  /// **'No editable game profiles were found in PersistentDataList.sav.'**
+  String get saveProfileNoProfiles;
+
+  /// No description provided for @saveProfileSelect.
+  ///
+  /// In en, this message translates to:
+  /// **'Select profile'**
+  String get saveProfileSelect;
+
   /// No description provided for @rescanSaveFolder.
   ///
   /// In en, this message translates to:
@@ -919,6 +973,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{name} current'**
   String attributeCurrent(String name);
+
+  /// Generic label for an attribute's base-value input; the attribute name is shown beside the field.
+  ///
+  /// In en, this message translates to:
+  /// **'Base value'**
+  String get attributeBaseValue;
+
+  /// Generic label for an attribute's current-value input; the attribute name is shown beside the field.
+  ///
+  /// In en, this message translates to:
+  /// **'Current value'**
+  String get attributeCurrentValue;
 
   /// No description provided for @inventoryTitle.
   ///
@@ -1571,8 +1637,14 @@ abstract class AppLocalizations {
   /// No description provided for @removeMemoryEventBody.
   ///
   /// In en, this message translates to:
-  /// **'Remove this memory event? A backup is written first.'**
+  /// **'Queue this memory event for removal? The save file is changed only when you press Save.'**
   String get removeMemoryEventBody;
+
+  /// No description provided for @memoryEventRemovalQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Event removal queued — press Save to apply it.'**
+  String get memoryEventRemovalQueued;
 
   /// No description provided for @duplicateEvent.
   ///
@@ -1589,8 +1661,14 @@ abstract class AppLocalizations {
   /// No description provided for @duplicateMemoryEventBody.
   ///
   /// In en, this message translates to:
-  /// **'Duplicate this memory event? A backup is written first.'**
+  /// **'Queue a duplicate of this memory event? The save file is changed only when you press Save.'**
   String get duplicateMemoryEventBody;
+
+  /// No description provided for @memoryEventDuplicationQueued.
+  ///
+  /// In en, this message translates to:
+  /// **'Event duplication queued — press Save to apply it.'**
+  String get memoryEventDuplicationQueued;
 
   /// No description provided for @selectCharacterFromList.
   ///
@@ -2671,6 +2749,174 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Entry {number}'**
   String glossarySegmentEntry(int number);
+
+  /// No description provided for @questJournalAll.
+  ///
+  /// In en, this message translates to:
+  /// **'All quests'**
+  String get questJournalAll;
+
+  /// No description provided for @questJournalOldCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Old Camp'**
+  String get questJournalOldCamp;
+
+  /// No description provided for @questJournalNewCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'New Camp'**
+  String get questJournalNewCamp;
+
+  /// No description provided for @questJournalSwampCamp.
+  ///
+  /// In en, this message translates to:
+  /// **'Swamp Camp'**
+  String get questJournalSwampCamp;
+
+  /// No description provided for @questJournalColony.
+  ///
+  /// In en, this message translates to:
+  /// **'The Colony'**
+  String get questJournalColony;
+
+  /// No description provided for @questJournalCompleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Completed'**
+  String get questJournalCompleted;
+
+  /// No description provided for @questJournalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'In-game journal view. Internal and not-yet-started quest states remain available under All Data.'**
+  String get questJournalHint;
+
+  /// No description provided for @questJournalNoEntries.
+  ///
+  /// In en, this message translates to:
+  /// **'No journal quests match the current filters.'**
+  String get questJournalNoEntries;
+
+  /// No description provided for @glossaryTutorials.
+  ///
+  /// In en, this message translates to:
+  /// **'Tutorials'**
+  String get glossaryTutorials;
+
+  /// No description provided for @tutorialGateNote.
+  ///
+  /// In en, this message translates to:
+  /// **'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.'**
+  String get tutorialGateNote;
+
+  /// No description provided for @tutorialResetChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset tutorial changes'**
+  String get tutorialResetChanges;
+
+  /// No description provided for @tutorialNoGates.
+  ///
+  /// In en, this message translates to:
+  /// **'No tutorial unlock gates are available in this save.'**
+  String get tutorialNoGates;
+
+  /// No description provided for @tutorialGateUnlockCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{unlocked} of {total} tutorial gates unlocked'**
+  String tutorialGateUnlockCount(int unlocked, int total);
+
+  /// No description provided for @tutorialGateCombatBasics.
+  ///
+  /// In en, this message translates to:
+  /// **'Combat basics'**
+  String get tutorialGateCombatBasics;
+
+  /// No description provided for @tutorialGateCrafting.
+  ///
+  /// In en, this message translates to:
+  /// **'Crafting'**
+  String get tutorialGateCrafting;
+
+  /// No description provided for @tutorialGateCrime.
+  ///
+  /// In en, this message translates to:
+  /// **'Crime and consequences'**
+  String get tutorialGateCrime;
+
+  /// No description provided for @tutorialGateDrugs.
+  ///
+  /// In en, this message translates to:
+  /// **'Consumables and effects'**
+  String get tutorialGateDrugs;
+
+  /// No description provided for @tutorialGateLockpicking.
+  ///
+  /// In en, this message translates to:
+  /// **'Lockpicking'**
+  String get tutorialGateLockpicking;
+
+  /// No description provided for @tutorialGateMagic.
+  ///
+  /// In en, this message translates to:
+  /// **'Magic'**
+  String get tutorialGateMagic;
+
+  /// No description provided for @tutorialGateMap.
+  ///
+  /// In en, this message translates to:
+  /// **'Map'**
+  String get tutorialGateMap;
+
+  /// No description provided for @tutorialGateMeleeCombat.
+  ///
+  /// In en, this message translates to:
+  /// **'Melee combat'**
+  String get tutorialGateMeleeCombat;
+
+  /// No description provided for @tutorialGateNavigation.
+  ///
+  /// In en, this message translates to:
+  /// **'Movement and navigation'**
+  String get tutorialGateNavigation;
+
+  /// No description provided for @tutorialGatePerception.
+  ///
+  /// In en, this message translates to:
+  /// **'Perception'**
+  String get tutorialGatePerception;
+
+  /// No description provided for @tutorialGatePlayerProgression.
+  ///
+  /// In en, this message translates to:
+  /// **'Character progression'**
+  String get tutorialGatePlayerProgression;
+
+  /// No description provided for @tutorialGateRanged.
+  ///
+  /// In en, this message translates to:
+  /// **'Ranged combat'**
+  String get tutorialGateRanged;
+
+  /// No description provided for @tutorialGateRiding.
+  ///
+  /// In en, this message translates to:
+  /// **'Riding'**
+  String get tutorialGateRiding;
+
+  /// No description provided for @tutorialGateSleep.
+  ///
+  /// In en, this message translates to:
+  /// **'Sleeping'**
+  String get tutorialGateSleep;
+
+  /// No description provided for @tutorialGateTrading.
+  ///
+  /// In en, this message translates to:
+  /// **'Trading'**
+  String get tutorialGateTrading;
 }
 
 class _AppLocalizationsDelegate

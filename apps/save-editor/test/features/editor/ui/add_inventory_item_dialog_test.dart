@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/item_catalog.dart';
 import 'package:goresave/features/editor/ui/add_inventory_item_dialog.dart';
 
 import '../../../support/l10n_test_app.dart';
+import '../../../support/ui_settings_test_store.dart';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -31,10 +34,7 @@ const _ownedPath = '/Script/Angelscript.ItMi_AlreadyOwned';
 /// Wraps the dialog in a host that captures the pop result, so tests can
 /// assert on the returned [InventoryItemAdd].
 class _DialogHost extends StatefulWidget {
-  const _DialogHost({
-    required this.excludePaths,
-    required this.onResult,
-  });
+  const _DialogHost({required this.excludePaths, required this.onResult});
 
   final Set<String> excludePaths;
   final void Function(InventoryItemAdd?) onResult;
@@ -65,12 +65,20 @@ class _DialogHostState extends State<_DialogHost> {
 Widget _wrap({
   required Set<String> excludePaths,
   void Function(InventoryItemAdd?)? onResult,
+  bool showObjectIds = false,
 }) {
-  return wrapWithL10n(
-    Scaffold(
-      body: _DialogHost(
-        excludePaths: excludePaths,
-        onResult: onResult ?? (_) {},
+  return ProviderScope(
+    overrides: [
+      uiSettingsStoreProvider.overrideWithValue(
+        TestUiSettingsStore(showObjectIds: showObjectIds),
+      ),
+    ],
+    child: wrapWithL10n(
+      Scaffold(
+        body: _DialogHost(
+          excludePaths: excludePaths,
+          onResult: onResult ?? (_) {},
+        ),
       ),
     ),
   );
@@ -81,11 +89,26 @@ Widget _wrap({
 // ---------------------------------------------------------------------------
 
 void main() {
-  testWidgets('sidebar lists categories; selecting one shows its items',
-      (tester) async {
-    await tester.pumpWidget(
-      _wrap(excludePaths: {_ownedPath}),
-    );
+  testWidgets('item ids are hidden by default and shown when enabled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_wrap(excludePaths: const {}));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sword 01'), findsOneWidget);
+    expect(find.text('ItMw_Sword_01'), findsNothing);
+
+    await tester.pumpWidget(_wrap(excludePaths: const {}, showObjectIds: true));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Sword 01'), findsOneWidget);
+    expect(find.text('ItMw_Sword_01'), findsOneWidget);
+  });
+
+  testWidgets('sidebar lists categories; selecting one shows its items', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_wrap(excludePaths: {_ownedPath}));
     // Wait for dialog to open and FutureBuilder to resolve.
     await tester.pumpAndSettle();
 
@@ -108,8 +131,9 @@ void main() {
     expect(find.text('AlreadyOwned'), findsNothing);
   });
 
-  testWidgets('clearing search keeps the selection and reveals its category',
-      (tester) async {
+  testWidgets('clearing search keeps the selection and reveals its category', (
+    tester,
+  ) async {
     await tester.pumpWidget(_wrap(excludePaths: const {}));
     await tester.pumpAndSettle();
 
@@ -152,14 +176,12 @@ void main() {
     expect(find.text('Bread'), findsNothing);
   });
 
-  testWidgets('selecting an entry and tapping Add pops with InventoryItemAdd',
-      (tester) async {
+  testWidgets('selecting an entry and tapping Add pops with InventoryItemAdd', (
+    tester,
+  ) async {
     InventoryItemAdd? result;
     await tester.pumpWidget(
-      _wrap(
-        excludePaths: const {},
-        onResult: (r) => result = r,
-      ),
+      _wrap(excludePaths: const {}, onResult: (r) => result = r),
     );
     await tester.pumpAndSettle();
 
@@ -174,8 +196,11 @@ void main() {
     // The count field should appear (second TextField after the search field).
     // Default value is '1'.
     final allTextFields = find.byType(TextField);
-    expect(allTextFields, findsNWidgets(2),
-        reason: 'Search field + count field expected after selection');
+    expect(
+      allTextFields,
+      findsNWidgets(2),
+      reason: 'Search field + count field expected after selection',
+    );
     final countField = allTextFields.at(1);
 
     // Clear and enter 3.

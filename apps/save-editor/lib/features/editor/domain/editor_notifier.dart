@@ -195,6 +195,11 @@ class EditorState {
   }
 
   ProfileSummary? get activeProfile {
+    // A directly opened file is detached from this folder's
+    // PersistentDataList. Even if its embedded numeric id happens to match a
+    // local profile, that coincidence must never expose profile-wide difficulty
+    // editing for the wrong profile.
+    if (selectedSave?.isExternal == true) return null;
     // Same resolution as the save-list filter (effectiveProfileId), so the
     // header always describes the profile whose saves are listed.
     final targetProfileId = effectiveProfileId;
@@ -348,9 +353,8 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// then rescan on success. Returns true only when the core accepted the
   /// write; a rejected write sets `state.error` and returns false so callers
   /// can skip success-only follow-ups. The post-success `refresh()` rescans
-  /// saves AND profiles. Used by [restoreBackup] and [applyMemoryEventEdit];
-  /// the global [saveAllPending] orchestrates its writes inline so it can do a
-  /// slot write_save and a write_difficulty with a single trailing refresh.
+  /// saves AND profiles. Used by backup/profile operations; normal editor
+  /// changes go through the pending registry and [saveAllPending].
   Future<bool> _runWrite({
     required Map<String, Object?> payload,
     required String Function(Map<String, Object?> data) message,
@@ -387,7 +391,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   }) {
     // Re-entry guard: bail if a load is already in flight (a rescan or another
     // write), so this write + refresh cannot interleave editor-state updates
-    // with that work — mirrors saveAllPending / applyMemoryEventEdit. Set an
+    // with that work — mirrors saveAllPending. Set an
     // explicit error so the dialog explains why rather than showing a generic
     // failure.
     if (state.isLoading) {
@@ -573,7 +577,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         profileId == null ||
         state.profiles.length < 2 ||
         currentSave == null ||
-        currentSave.persistentProfileId == null ||
+        (!currentSave.isExternal && currentSave.persistentProfileId == null) ||
         currentSave.persistentProfileId == profileId;
 
     state = state.copyWith(selectedProfileId: profileId);
@@ -830,8 +834,51 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
+    // Memory-event remove/duplicate edits are index-addressed. The Events UI
+    // deliberately queues at most one per character, but validate the central
+    // registry as well so another surface cannot accidentally queue two edits
+    // for the same array and have the second target an index shifted by the
+    // first sub-write. Also reject a raw value edit inside that array: applying
+    // both would make it ambiguous whether the value edit belongs to the event
+    // being removed/duplicated or to its post-splice neighbour.
+    final structuralArrayPaths = <List<Object?>>[];
+    for (final keyed in allEdits) {
+      final op = keyed.edit['path'];
+      if (op != 'private.typed.arrayRemove' &&
+          op != 'private.typed.arrayDuplicate') {
+        continue;
+      }
+      final value = keyed.edit['value'];
+      final rawPath = value is Map ? value['path'] : null;
+      if (rawPath is! List) continue;
+      final path = List<Object?>.from(rawPath);
+      if (structuralArrayPaths.any((other) => _sameEditorPath(other, path))) {
+        state = state.copyWith(
+          error:
+              'More than one unsaved structural edit targets the same array '
+              '(${path.join(' › ')}). Save or reset the first change before '
+              'queuing another.',
+        );
+        return false;
+      }
+      structuralArrayPaths.add(path);
+    }
+    for (final arrayPath in structuralArrayPaths) {
+      final conflictingValuePath = typedPaths.where(
+        (path) => _editorPathIsPrefix(arrayPath, path),
+      );
+      if (conflictingValuePath.isEmpty) continue;
+      state = state.copyWith(
+        error:
+            'A structural event change and another unsaved All-data edit both '
+            'target ${arrayPath.join(' › ')}. Save or reset one of them '
+            'before continuing.',
+      );
+      return false;
+    }
+
     // Splicing structural edits (inventory, knowledge, glossary segments,
-    // NPC revive/relationship) insert or remove bytes mid-payload and shift every
+    // memory events, NPC revive/relationship) insert or remove bytes mid-payload and shift every
     // offset/index after the splice point; the core rejects a write that mixes
     // one with ANY peer edit. Mirror the core's list and give each splicing edit
     // its OWN write_save; everything else (fixed-size, in-place) batches into a
@@ -844,6 +891,9 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.inventory.removeItem',
       'private.inventory.reset',
       'private.knowledge.addCharacter',
+      'private.knowledge.setEntry',
+      'private.typed.arrayRemove',
+      'private.typed.arrayDuplicate',
       'private.glossary.setSegment',
       'private.npc.revive',
       'private.npc.setRelationship',
@@ -1139,6 +1189,88 @@ class EditorNotifier extends StateNotifier<EditorState> {
     await setSaveDir(selected);
   }
 
+  /// Open a detached Gothic save without changing the configured game save
+  /// folder. The picker is kept here (rather than in the widget) so all profile
+  /// menu call sites share the same file filter and loading guard.
+  Future<void> openSaveFile() async {
+    final file = await openFile(
+      acceptedTypeGroups: const [
+        XTypeGroup(label: 'Gothic savegame', extensions: ['sav']),
+      ],
+    );
+    if (file == null) return;
+    await loadExternalSave(file.path);
+  }
+
+  /// Testable/non-picker half of [openSaveFile]. The external entry is retained
+  /// across rescans and remains explicitly detached from folder profiles.
+  Future<void> loadExternalSave(String path) async {
+    if (state.isLoading) return;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes before opening another file.',
+      );
+      return;
+    }
+    final normalized = path.trim();
+    if (normalized.isEmpty || !normalized.toLowerCase().endsWith('.sav')) {
+      state = state.copyWith(error: 'Select a .sav savegame file.');
+      return;
+    }
+
+    SaveSlot? existing;
+    for (final save in state.saves) {
+      if (save.path == normalized) {
+        existing = save;
+        break;
+      }
+    }
+    // Picking a file that already belongs to the scanned folder is just an
+    // ordinary selection; retain its authoritative profile association.
+    if (existing != null && !existing.isExternal) {
+      await inspect(normalized);
+      return;
+    }
+    final placeholder = existing?.isExternal == true
+        ? existing!
+        : SaveSlot(
+            path: normalized,
+            slot: p.basenameWithoutExtension(normalized),
+            format: 'GSAV',
+            fileSize: 0,
+            sha1: '',
+            status: 'loading',
+            isExternal: true,
+          );
+    final saves = <SaveSlot>[
+      for (final save in state.saves)
+        if (save.path != normalized) save,
+      placeholder,
+    ];
+    _sortByPlaytimeDesc(saves);
+    state = state.copyWith(saves: saves);
+    await _inspect(normalized, clearWriteMessage: true);
+
+    final inspection = state.selectedPath == normalized
+        ? state.inspection
+        : null;
+    if (inspection == null || inspection.format != 'GSAV') {
+      final remaining = state.saves
+          .where((save) => save.path != normalized)
+          .toList(growable: false);
+      state = state.copyWith(
+        saves: remaining,
+        selectedPath: null,
+        clearInspection: true,
+        clearBackups: true,
+        error: inspection?.format == 'GSAV'
+            ? null
+            : 'The selected file is not a Gothic GSAV savegame.',
+      );
+    }
+  }
+
   Future<void> setSaveDir(String value) async {
     state = state.copyWith(
       saveDir: value,
@@ -1186,6 +1318,13 @@ class EditorNotifier extends StateNotifier<EditorState> {
           .whereType<Map>()
           .map((m) => SaveSlot.fromJson(m.cast<String, Object?>()))
           .toList();
+      // Directly opened saves are not part of scan_save_dir. Keep them as
+      // detached sidebar entries until the app/session or save folder changes.
+      for (final external in state.saves.where((save) => save.isExternal)) {
+        if (!saves.any((save) => save.path == external.path)) {
+          saves.add(external);
+        }
+      }
       _sortByPlaytimeDesc(saves);
       final rawProfiles = (data?['profiles'] as List?) ?? const [];
       final profiles = rawProfiles
@@ -1316,8 +1455,21 @@ class EditorNotifier extends StateNotifier<EditorState> {
       // A fresh inspection re-seeds every editor; drop the cached full NPC list
       // so the next list load re-fetches against the new save state.
       _invalidateNpcCache();
+      final inspection = SaveInspection.fromJson(data);
+      final selectedWasExternal = state.saves.any(
+        (save) => save.path == path && save.isExternal,
+      );
+      final refreshedSaves = selectedWasExternal
+          ? <SaveSlot>[
+              for (final save in state.saves)
+                if (save.path != path) save,
+              SaveSlot.fromInspection(inspection, isExternal: true),
+            ]
+          : state.saves;
+      if (selectedWasExternal) _sortByPlaytimeDesc(refreshedSaves);
       state = state.copyWith(
-        inspection: SaveInspection.fromJson(data),
+        inspection: inspection,
+        saves: refreshedSaves,
         // The fresh inspection re-seeds every editor, so discard all pending
         // edits — including any pending difficulty edit, which clearPendingEdits
         // also clears. The card re-seeds its controls from the new inspection's
@@ -1354,6 +1506,131 @@ class EditorNotifier extends StateNotifier<EditorState> {
     } finally {
       _loadFinished();
     }
+  }
+
+  /// Atomically assign the selected save to another game profile.
+  ///
+  /// Registered saves are moved between profiles in place. A detached save is
+  /// imported into the configured game save folder under a free `G1R-NNN`
+  /// slot first; the source file remains untouched. In both cases the core
+  /// updates the save and PersistentDataList.sav as one operation.
+  Future<bool> assignSelectedSaveToProfile(int profileId) async {
+    if (state.isLoading) return false;
+    if (state.hasUnsavedEdits) {
+      state = state.copyWith(
+        error:
+            'Save or reset your unsaved changes before changing the save profile.',
+      );
+      return false;
+    }
+    final save = state.selectedSave;
+    if (save == null) return false;
+    if (!state.profiles.any((profile) => profile.profileId == profileId)) {
+      state = state.copyWith(error: 'Profile $profileId was not found.');
+      return false;
+    }
+    if (!save.isExternal && save.persistentProfileId == profileId) return true;
+
+    final dir = state.saveDir;
+    if (dir.trim().isEmpty) {
+      state = state.copyWith(error: 'No save folder selected.');
+      return false;
+    }
+    final isWindowsStyle =
+        dir.contains('\\') || RegExp(r'^[A-Za-z]:').hasMatch(dir);
+    final ctx = isWindowsStyle ? p.Context(style: p.Style.windows) : p.posix;
+
+    final destinationPath = save.isExternal
+        ? _freeExternalImportPath(save, ctx)
+        : null;
+    if (save.isExternal && destinationPath == null) {
+      state = state.copyWith(
+        error:
+            'No free save slot is available in the game save folder '
+            '(G1R-001 through G1R-999).',
+      );
+      return false;
+    }
+
+    final previousSaves = state.saves;
+    final previousPath = state.selectedPath;
+    final previousSelection = state.selectedProfileId;
+    // Keep the freshly assigned save visible through the trailing rescan. For
+    // imports, remove the detached source before refresh so refresh() does not
+    // merge it back into the scanned folder list, and point selection at the
+    // destination that the core is about to create.
+    state = state.copyWith(
+      saves: save.isExternal
+          ? <SaveSlot>[
+              for (final candidate in state.saves)
+                if (candidate.path != save.path) candidate,
+            ]
+          : null,
+      selectedPath: save.isExternal ? destinationPath : _unchanged,
+      selectedProfileId: profileId,
+    );
+    final ok = await _runWrite(
+      command: 'assign_save_profile',
+      payload: {
+        'path': save.path,
+        'destinationPath': ?destinationPath,
+        'persistentPath': ctx.join(dir, 'PersistentDataList.sav'),
+        'profileId': profileId,
+        'backup': true,
+      },
+      message: (data) => save.isExternal
+          ? 'Save imported and assigned to profile $profileId'
+          : 'Save assigned to profile $profileId (paired backups created)',
+    );
+    if (!ok) {
+      // The command did not commit. Restore the detached entry and selection
+      // exactly as they were; copyWith intentionally preserves the core error
+      // set by _runWrite so the UI can still explain the failure.
+      state = state.copyWith(
+        saves: previousSaves,
+        selectedPath: previousPath,
+        selectedProfileId: previousSelection,
+      );
+    }
+    return ok;
+  }
+
+  String? _freeExternalImportPath(SaveSlot source, p.Context ctx) {
+    final occupiedSlots = state.saves
+        .where((save) => !save.isExternal)
+        .map((save) => save.slot.toUpperCase())
+        .toSet();
+    final occupiedPaths = state.saves
+        .where((save) => !save.isExternal)
+        .map((save) => ctx.normalize(save.path).toLowerCase())
+        .toSet();
+
+    bool available(String slot) {
+      final path = ctx.join(state.saveDir, '$slot.sav');
+      return !occupiedSlots.contains(slot) &&
+          !occupiedPaths.contains(ctx.normalize(path).toLowerCase()) &&
+          !File(path).existsSync();
+    }
+
+    // Preserve a conventional detached slot name when it is genuinely free;
+    // otherwise allocate the first free game slot deterministically.
+    final sourceStem = ctx.basenameWithoutExtension(source.path).toUpperCase();
+    final sourceMatch = RegExp(r'^G1R-(\d{3})$').firstMatch(sourceStem);
+    final sourceNumber = sourceMatch == null
+        ? null
+        : int.tryParse(sourceMatch.group(1)!);
+    if (sourceNumber != null &&
+        sourceNumber >= 1 &&
+        sourceNumber <= 999 &&
+        available(sourceStem)) {
+      return ctx.join(state.saveDir, '$sourceStem.sav');
+    }
+
+    for (var number = 1; number <= 999; number++) {
+      final slot = 'G1R-${number.toString().padLeft(3, '0')}';
+      if (available(slot)) return ctx.join(state.saveDir, '$slot.sav');
+    }
+    return null;
   }
 
   Future<void> refreshBackups() async {
@@ -1693,6 +1970,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'limit': limit,
       if (state != null && state.isNotEmpty) 'state': state,
       if (group != null && group.isNotEmpty) 'group': group,
+    }, onError: (message) => error = message);
+    if (data == null) return ProgressionQuestPage(error: error);
+    return ProgressionQuestPage.fromJson(data);
+  }
+
+  /// Load the tutorial unlock gates that the game presents from its glossary.
+  ///
+  /// The core deliberately exposes these separately from normal journal quests
+  /// and omits the structural `Quest_Tutorials` root. The response otherwise
+  /// uses the same shape as a quest page so the existing typed model and edit
+  /// intent can be reused without leaking tutorials back into the quest pane.
+  Future<ProgressionQuestPage> loadProgressionTutorials({
+    int offset = 0,
+    int limit = 100,
+  }) async {
+    String? error;
+    final data = await _queryProgression({
+      'section': 'tutorials',
+      'offset': offset,
+      'limit': limit,
     }, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
@@ -2075,91 +2372,28 @@ class EditorNotifier extends StateNotifier<EditorState> {
     return MemoryEventsPage.fromJson(data);
   }
 
-  /// Apply one structural progression edit (event remove/duplicate)
-  /// immediately, with backup. Index-addressed array edits must go one per
-  /// write round — indices shift after every structural change — so this is
-  /// intentionally not part of the pending-edit registry.
-  Future<bool> applyMemoryEventEdit(MemoryEventEdit edit) async {
-    final savePath = state.selectedPath;
-    if (savePath == null) {
-      state = state.copyWith(error: 'No save selected.');
-      return false;
-    }
-    if (state.isLoading) {
-      state = state.copyWith(
-        error: 'Another operation is in progress — try again when it finishes.',
-      );
-      return false;
-    }
-    // Guard on hasUnsavedEdits (pendingEdits OR a pending difficulty), matching
-    // selectProfile/refresh: removing or duplicating a memory event writes the
-    // file immediately and its success path re-seeds the editors, which would
-    // silently discard a pending difficulty edit just as it would pending edits.
-    if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'Save or reset your unsaved changes first — removing or '
-            'duplicating a memory event writes the file immediately and '
-            'would discard them.',
-      );
-      return false;
-    }
-    return _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': [edit.toEditJson()],
-      },
-      message: (data) => _backupMessage(
-        edit.isRemove ? 'Memory event removed' : 'Memory event duplicated',
-        data,
-      ),
+  static const _memoryEventPendingPrefix = 'progression.events:';
+
+  /// Queue one index-addressed event remove/duplicate for [character]. No file
+  /// is written here; [saveAllPending] gives the structural edit its own
+  /// reparsed sub-write when the user presses the global Save button. A second
+  /// draft for the same character replaces the first, which prevents stale
+  /// indices from accumulating for one memory array.
+  void setPendingMemoryEventEdit(String character, MemoryEventEdit edit) {
+    setPendingEdit(
+      '$_memoryEventPendingPrefix$character',
+      PendingSaveEdit(edits: [edit.toEditJson()]),
     );
   }
 
-  /// Insert a brand-new character into CharacterKnowledgeByUniqueName and write
-  /// the file immediately (with backup), then re-inspect so the new NPC's empty
-  /// Knowledge set is queryable for follow-on entry edits. Map insertions are
-  /// structural and applied one-at-a-time, so this is intentionally NOT a
-  /// pending edit. Returns true on success; on failure sets state.error and
-  /// returns false.
-  ///
-  /// Mirrors [applyMemoryEventEdit]: same no-save / isLoading / hasUnsavedEdits
-  /// guards (an immediate write + refresh re-seeds the editors and would discard
-  /// any unsaved pending edits), and the same _runWrite-then-refresh flow.
-  Future<bool> applyAddKnowledgeCharacter(String uniqueName) async {
-    final savePath = state.selectedPath;
-    if (savePath == null) {
-      state = state.copyWith(error: 'No save selected.');
-      return false;
-    }
-    if (state.isLoading) {
-      state = state.copyWith(
-        error: 'Another operation is in progress — try again when it finishes.',
-      );
-      return false;
-    }
-    if (state.hasUnsavedEdits) {
-      state = state.copyWith(
-        error:
-            'Save or reset your unsaved changes first — adding a character '
-            'writes the file immediately and would discard them.',
-      );
-      return false;
-    }
-    return _runWrite(
-      payload: {
-        'path': savePath,
-        'backup': true,
-        'edits': [
-          {
-            'path': 'private.knowledge.addCharacter',
-            'value': {'value': uniqueName.trim()},
-          },
-        ],
-      },
-      message: (data) => _backupMessage('Character added', data),
-    );
+  void clearPendingMemoryEventEdit(String character) {
+    clearPendingEdit('$_memoryEventPendingPrefix$character');
+  }
+
+  MemoryEventEdit? pendingMemoryEventEdit(String character) {
+    final pending = pendingEditFor('$_memoryEventPendingPrefix$character');
+    if (pending == null || pending.edits.length != 1) return null;
+    return MemoryEventEdit.fromEditJson(pending.edits.single);
   }
 
   /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
@@ -2358,6 +2592,14 @@ bool _sameEditorPath(List<Object?> left, List<Object?> right) {
   if (left.length != right.length) return false;
   for (var i = 0; i < left.length; i++) {
     if (left[i] != right[i]) return false;
+  }
+  return true;
+}
+
+bool _editorPathIsPrefix(List<Object?> prefix, List<Object?> path) {
+  if (prefix.length > path.length) return false;
+  for (var i = 0; i < prefix.length; i++) {
+    if (prefix[i] != path[i]) return false;
   }
   return true;
 }

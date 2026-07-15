@@ -535,6 +535,44 @@ fn execute_json_inner(input: &str) -> Result<Value, CoreError> {
             };
             Ok(write_difficulty_internal(&req, &targets, backup)?)
         }
+        "assign_save_profile" => {
+            let path = required_path(&payload)?;
+            let profile_id = payload
+                .get("profileId")
+                .and_then(Value::as_i64)
+                .and_then(|value| i32::try_from(value).ok())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest("missing or invalid payload.profileId".to_string())
+                })?;
+            let persistent_path = payload
+                .get("persistentPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .or_else(|| {
+                    path.parent()
+                        .map(|parent| parent.join("PersistentDataList.sav"))
+                })
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "cannot resolve PersistentDataList.sav for payload.path".to_string(),
+                    )
+                })?;
+            let backup = payload
+                .get("backup")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let destination_path = payload
+                .get("destinationPath")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            Ok(assign_save_profile(
+                &path,
+                destination_path.as_deref(),
+                &persistent_path,
+                profile_id,
+                backup,
+            )?)
+        }
         // Localized game text: extracted offline from the encrypted .lcache into
         // the shared `gore` dir (see gore_loc::loc_store). User-local only.
         "loc_status" => {
@@ -2685,6 +2723,612 @@ fn patch_profile_difficulty_bool(
     )
 }
 
+/// Return every profile id in `m_Profiles`, using the same missing-id fallback
+/// as the profile listing and difficulty writer.
+fn profile_ids(root: &properties::RootObject) -> Result<Vec<i32>, CoreError> {
+    let (_, profiles) = properties::find_property_by_name(root, "m_Profiles")
+        .ok_or_else(|| CoreError::Validation("m_Profiles was not found".to_string()))?;
+    let properties::PropertyValue::Array { elements } = &profiles.value else {
+        return Err(CoreError::Validation(
+            "m_Profiles is not an ArrayProperty".to_string(),
+        ));
+    };
+    let mut ids = Vec::with_capacity(elements.len());
+    for (index, element) in elements.iter().enumerate() {
+        let Some(props) = profile_element_properties(element) else {
+            continue;
+        };
+        let id = props
+            .iter()
+            .find_map(|property| match (&property.name[..], &property.value) {
+                ("m_ProfileId", properties::PropertyValue::Int(value)) => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(index as i32);
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
+/// Resolve one string-array property inside a specific profile.
+fn profile_array_path(
+    root: &properties::RootObject,
+    profile_id: i32,
+    name: &str,
+) -> Result<Option<Vec<String>>, CoreError> {
+    let (mut prefix, profile_properties) = profile_element(root, profile_id)
+        .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+    let Some((relative, property)) = properties::find_path_in_properties(profile_properties, name)
+    else {
+        return Ok(None);
+    };
+    if !matches!(property.value, properties::PropertyValue::Array { .. }) {
+        return Err(CoreError::Validation(format!(
+            "profile {profile_id} property {name} is not an ArrayProperty"
+        )));
+    }
+    prefix.extend(relative);
+    Ok(Some(prefix))
+}
+
+fn string_array_element_index(
+    root: &properties::RootObject,
+    path: &[String],
+    value: &str,
+) -> Result<Option<usize>, CoreError> {
+    let segments = properties::parse_path(path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments)?;
+    let properties::PropertyValue::Array { elements } = &chain.target.value else {
+        return Err(CoreError::Validation(format!(
+            "{} is not an ArrayProperty",
+            path.join(" › ")
+        )));
+    };
+    Ok(elements.iter().position(|element| {
+        matches!(
+            element,
+            properties::PropertyValue::Str(item) | properties::PropertyValue::Name(item)
+                if item == value
+        )
+    }))
+}
+
+fn profile_array_contains(
+    root: &properties::RootObject,
+    profile_id: i32,
+    name: &str,
+    value: &str,
+) -> Result<bool, CoreError> {
+    let Some(path) = profile_array_path(root, profile_id, name)? else {
+        return Ok(false);
+    };
+    Ok(string_array_element_index(root, &path, value)?.is_some())
+}
+
+/// Remove all occurrences of `slot` from one named array in every profile.
+/// Re-parses after each splice because all recorded offsets shift.
+fn remove_slot_from_all_profile_arrays(
+    data: &mut Vec<u8>,
+    profile_ids: &[i32],
+    array_name: &str,
+    slot: &str,
+) -> Result<(), CoreError> {
+    for &profile_id in profile_ids {
+        loop {
+            let root = parse_profile_file(data)?;
+            let Some(path) = profile_array_path(&root, profile_id, array_name)? else {
+                break;
+            };
+            let Some(index) = string_array_element_index(&root, &path, slot)? else {
+                break;
+            };
+            let segments = properties::parse_path(&path)?;
+            let chain = properties::resolve_chain(&root.properties, &segments)?;
+            let target = chain.target.clone();
+            let enclosing = chain.enclosing_size_fields.clone();
+            drop(root);
+            properties::patch_container(
+                data,
+                &target,
+                &enclosing,
+                &properties::ContainerEdit::ArrayRemove(index),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn add_slot_to_profile_array(
+    data: &mut Vec<u8>,
+    profile_id: i32,
+    array_name: &str,
+    slot: &str,
+) -> Result<(), CoreError> {
+    let root = parse_profile_file(data)?;
+    let path = profile_array_path(&root, profile_id, array_name)?.ok_or_else(|| {
+        CoreError::Validation(format!("profile {profile_id} has no {array_name} property"))
+    })?;
+    if string_array_element_index(&root, &path, slot)?.is_some() {
+        return Ok(());
+    }
+    let segments = properties::parse_path(&path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_container(
+        data,
+        &target,
+        &enclosing,
+        &properties::ContainerEdit::ArrayInsertBytes(properties::encode_fstring_value(slot)),
+    )
+}
+
+fn persistent_slot_profile_path(
+    root: &properties::RootObject,
+    slot: &str,
+) -> Result<Vec<String>, CoreError> {
+    let (mut path, public_data) = properties::find_property_by_name(root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    if !matches!(public_data.value, properties::PropertyValue::Map { .. }) {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a MapProperty".to_string(),
+        ));
+    }
+    path.push(format!("{{{slot}}}"));
+    path.push("m_ProfileId".to_string());
+    // Resolve now so a missing map entry or missing profile property produces a
+    // precise validation failure before any bytes are changed.
+    let segments = properties::parse_path(&path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments).map_err(|_| {
+        CoreError::Validation(format!(
+            "PersistentDataList.sav has no profile metadata for slot {slot}"
+        ))
+    })?;
+    if !matches!(chain.target.value, properties::PropertyValue::Int(_)) {
+        return Err(CoreError::Validation(format!(
+            "slot {slot} m_ProfileId is not an IntProperty"
+        )));
+    }
+    Ok(path)
+}
+
+fn set_persistent_slot_profile_id(
+    data: &mut Vec<u8>,
+    slot: &str,
+    profile_id: i32,
+) -> Result<(), CoreError> {
+    let root = parse_profile_file(data)?;
+    let path = persistent_slot_profile_path(&root, slot)?;
+    let segments = properties::parse_path(&path)?;
+    let chain = properties::resolve_chain(&root.properties, &segments)?;
+    let target = chain.target.clone();
+    drop(root);
+    properties::patch_scalar(
+        data.as_mut_slice(),
+        &target,
+        properties::ScalarValue::Int(profile_id),
+    )
+}
+
+fn persistent_slot_property_path(
+    root: &properties::RootObject,
+    slot: &str,
+    property_name: &str,
+) -> Result<Option<Vec<properties::PathSeg>>, CoreError> {
+    let (mut path, public_data) = properties::find_property_by_name(root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    if !matches!(public_data.value, properties::PropertyValue::Map { .. }) {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a MapProperty".to_string(),
+        ));
+    }
+    path.push(format!("{{{slot}}}"));
+    path.push(property_name.to_string());
+    let segments = properties::parse_path(&path)?;
+    Ok(properties::resolve_chain(&root.properties, &segments)
+        .ok()
+        .map(|_| segments))
+}
+
+fn patch_persistent_slot_string_if_present(
+    data: &mut Vec<u8>,
+    slot: &str,
+    property_name: &str,
+    value: &str,
+) -> Result<bool, CoreError> {
+    let root = parse_profile_file(data)?;
+    let Some(path) = persistent_slot_property_path(&root, slot, property_name)? else {
+        return Ok(false);
+    };
+    let chain = properties::resolve_chain(&root.properties, &path)?;
+    let target = chain.target.clone();
+    let enclosing = chain.enclosing_size_fields.clone();
+    drop(root);
+    properties::patch_string(data, &target, &enclosing, value)?;
+    Ok(true)
+}
+
+fn patch_persistent_slot_scalar_if_present(
+    data: &mut Vec<u8>,
+    slot: &str,
+    property_name: &str,
+    value: properties::ScalarValue,
+) -> Result<bool, CoreError> {
+    let root = parse_profile_file(data)?;
+    let Some(path) = persistent_slot_property_path(&root, slot, property_name)? else {
+        return Ok(false);
+    };
+    let chain = properties::resolve_chain(&root.properties, &path)?;
+    let target = chain.target.clone();
+    drop(root);
+    properties::patch_scalar(data.as_mut_slice(), &target, value)?;
+    Ok(true)
+}
+
+/// Register a previously detached slot by cloning the on-disk schema of one
+/// existing public-data map entry, then resetting every user-visible field we
+/// understand. Cloning preserves game-version-specific struct layout while
+/// fresh typed resolutions after insertion keep all size fields correct.
+fn insert_persistent_slot_metadata(
+    data: &mut Vec<u8>,
+    slot: &str,
+    player_save_name: &str,
+    profile_id: i32,
+) -> Result<(), CoreError> {
+    let (target, enclosing, mut entry_bytes, old_key) = {
+        let root = parse_profile_file(data)?;
+        let (path, map_prop) = properties::find_property_by_name(&root, "m_SavedGamesPublicData")
+            .ok_or_else(|| {
+            CoreError::Validation("m_SavedGamesPublicData was not found".to_string())
+        })?;
+        let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+            return Err(CoreError::Validation(
+                "m_SavedGamesPublicData is not a MapProperty".to_string(),
+            ));
+        };
+        let Some((key, _)) = entries.first() else {
+            return Err(CoreError::Validation(
+                "cannot register an external save because m_SavedGamesPublicData has no schema template"
+                    .to_string(),
+            ));
+        };
+        let old_key = map_key_string(key)
+            .ok_or_else(|| CoreError::Validation("public-data map key is not text".to_string()))?
+            .to_string();
+        let layout = properties::map_layout(data, map_prop)?;
+        let range = layout.entry_ranges.first().cloned().ok_or_else(|| {
+            CoreError::Validation("public-data map has no entry byte range".to_string())
+        })?;
+        let segments = properties::parse_path(&path)?;
+        let chain = properties::resolve_chain(&root.properties, &segments)?;
+        (
+            chain.target.clone(),
+            chain.enclosing_size_fields.clone(),
+            data[range].to_vec(),
+            old_key,
+        )
+    };
+    let old_key_bytes = properties::encode_fstring_value(&old_key);
+    if !entry_bytes.starts_with(&old_key_bytes) {
+        return Err(CoreError::Validation(
+            "public-data template key encoding was not recognized".to_string(),
+        ));
+    }
+    entry_bytes.splice(
+        0..old_key_bytes.len(),
+        properties::encode_fstring_value(slot),
+    );
+    properties::patch_container(
+        data,
+        &target,
+        &enclosing,
+        &properties::ContainerEdit::MapInsert { entry_bytes },
+    )?;
+
+    if !patch_persistent_slot_string_if_present(data, slot, "m_SlotName", slot)? {
+        return Err(CoreError::Validation(
+            "public-data template has no m_SlotName".to_string(),
+        ));
+    }
+    if !patch_persistent_slot_string_if_present(data, slot, "m_PlayerSaveName", player_save_name)? {
+        return Err(CoreError::Validation(
+            "public-data template has no m_PlayerSaveName".to_string(),
+        ));
+    }
+    set_persistent_slot_profile_id(data, slot, profile_id)?;
+    // Do not leak the cloned template save's metadata into the imported row.
+    let _ = patch_persistent_slot_string_if_present(data, slot, "m_MapName", "")?;
+    let _ = patch_persistent_slot_scalar_if_present(
+        data,
+        slot,
+        "m_ChapterID",
+        properties::ScalarValue::Int(0),
+    )?;
+    let _ = patch_persistent_slot_scalar_if_present(
+        data,
+        slot,
+        "m_TimePlayed",
+        properties::ScalarValue::Double(0.0),
+    )?;
+    let _ = patch_persistent_slot_scalar_if_present(
+        data,
+        slot,
+        "m_TimeLoaded",
+        properties::ScalarValue::Double(0.0),
+    )?;
+    let _ = patch_persistent_slot_scalar_if_present(
+        data,
+        slot,
+        "m_QuickSave",
+        properties::ScalarValue::Bool(false),
+    )?;
+    let _ = patch_persistent_slot_scalar_if_present(
+        data,
+        slot,
+        "m_AutoSave",
+        properties::ScalarValue::Bool(false),
+    )?;
+    Ok(())
+}
+
+/// Change the profile id embedded in the GSAV public payload when that field is
+/// present. The PersistentDataList remains authoritative; older/minimal saves
+/// without the public field are valid and simply return `false` here.
+fn set_save_public_profile_id(data: &mut Vec<u8>, profile_id: i32) -> Result<bool, CoreError> {
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "profile assignment is only available for GSAV save files".to_string(),
+        ));
+    }
+    let parts = split_gsav(data)?;
+    let version = parts.version;
+    let mut public_payload = parts.public_payload.to_vec();
+    let compressed_stream = parts.compressed_stream.to_vec();
+    let trailer = parts.trailer.to_vec();
+    let refs = scan_fstrings(&public_payload, 0);
+    let Some(index) = refs
+        .iter()
+        .position(|reference| reference.value == "m_ProfileId")
+    else {
+        return Ok(false);
+    };
+    let Some(offset) = i32_value_offset_at(&public_payload, &refs, index) else {
+        return Err(CoreError::Validation(
+            "save m_ProfileId is not a writable IntProperty".to_string(),
+        ));
+    };
+    public_payload[offset..offset + 4].copy_from_slice(&profile_id.to_le_bytes());
+    *data = build_gsav(version, &public_payload, &compressed_stream, &trailer);
+    Ok(true)
+}
+
+/// Atomically reassign a registered slot or import a detached save into a game
+/// profile. The game keeps the authoritative association in two places inside
+/// PersistentDataList.sav: the slot's `m_ProfileId` and each profile's
+/// slot-name arrays. Both are updated, along with the save's public slot/profile
+/// metadata. Existing slots and the companion file receive paired backups;
+/// imports leave the source untouched and back up the companion before the new
+/// target and companion are replaced transactionally.
+fn assign_save_profile(
+    save_path: &Path,
+    destination_path: Option<&Path>,
+    persistent_path: &Path,
+    profile_id: i32,
+    backup: bool,
+) -> Result<Value, CoreError> {
+    let target_path = destination_path.unwrap_or(save_path);
+    let importing = target_path != save_path;
+    if importing && target_path.exists() {
+        return Err(CoreError::InvalidRequest(format!(
+            "refusing to overwrite existing destination {}",
+            target_path.display()
+        )));
+    }
+    let slot = target_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| looks_slot_name(value))
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "{} is not a valid save-slot filename",
+                target_path.display()
+            ))
+        })?;
+    if !persistent_path.exists() {
+        return Err(CoreError::Validation(format!(
+            "PersistentDataList.sav was not found at {}",
+            persistent_path.display()
+        )));
+    }
+
+    let save_original = fs::read(save_path)?;
+    let save_parts = split_gsav(&save_original)?;
+    let public_summary = summarize_public_payload(save_parts.public_payload);
+    let player_save_name = public_summary
+        .player_save_name
+        .clone()
+        .unwrap_or_else(|| slot.to_string());
+    let persistent_original = fs::read(persistent_path)?;
+    let root = parse_profile_file(&persistent_original)?;
+    profile_element(&root, profile_id)
+        .ok_or_else(|| CoreError::Validation(format!("profile {profile_id} not found")))?;
+    let (_, public_data) = properties::find_property_by_name(&root, "m_SavedGamesPublicData")
+        .ok_or_else(|| CoreError::Validation("m_SavedGamesPublicData was not found".to_string()))?;
+    let properties::PropertyValue::Map { entries, .. } = &public_data.value else {
+        return Err(CoreError::Validation(
+            "m_SavedGamesPublicData is not a MapProperty".to_string(),
+        ));
+    };
+    let registered = entries
+        .iter()
+        .any(|(key, _)| map_key_string(key) == Some(slot));
+    if registered {
+        persistent_slot_profile_path(&root, slot)?;
+    }
+    let ids = profile_ids(&root)?;
+    // Preserve whether the slot participated in the quick/auto ring arrays.
+    // `m_SavedSlotsNames` always receives it in the destination profile.
+    let quick_member = registered
+        && ids.iter().try_fold(false, |found, &id| {
+            Ok::<_, CoreError>(found || profile_array_contains(&root, id, "m_QuickSaveName", slot)?)
+        })?;
+    let auto_member = registered
+        && ids.iter().try_fold(false, |found, &id| {
+            Ok::<_, CoreError>(found || profile_array_contains(&root, id, "m_AutoSaveName", slot)?)
+        })?;
+    drop(root);
+
+    let mut persistent_edited = persistent_original.clone();
+    if !registered {
+        insert_persistent_slot_metadata(
+            &mut persistent_edited,
+            slot,
+            &player_save_name,
+            profile_id,
+        )?;
+    }
+    for array_name in ["m_SavedSlotsNames", "m_QuickSaveName", "m_AutoSaveName"] {
+        remove_slot_from_all_profile_arrays(&mut persistent_edited, &ids, array_name, slot)?;
+    }
+    add_slot_to_profile_array(
+        &mut persistent_edited,
+        profile_id,
+        "m_SavedSlotsNames",
+        slot,
+    )?;
+    if quick_member {
+        add_slot_to_profile_array(&mut persistent_edited, profile_id, "m_QuickSaveName", slot)?;
+    }
+    if auto_member {
+        add_slot_to_profile_array(&mut persistent_edited, profile_id, "m_AutoSaveName", slot)?;
+    }
+    set_persistent_slot_profile_id(&mut persistent_edited, slot, profile_id)?;
+
+    let mut save_edited = save_original.clone();
+    // Minimal/older GSAV public payloads may not carry m_SlotName at all. In
+    // that case the target filename and PersistentDataList key remain the slot
+    // authority; only rewrite the field when it actually exists.
+    let public_slot_updated = public_summary
+        .slot_name
+        .as_deref()
+        .is_some_and(|current| current != slot);
+    if public_slot_updated {
+        replace_public_fstring(&mut save_edited, "m_SlotName", slot)?;
+    }
+    let public_profile_updated = set_save_public_profile_id(&mut save_edited, profile_id)?;
+
+    // Strict post-edit validation before backups or temp files are created.
+    let edited_root = parse_profile_file(&persistent_edited).map_err(|error| {
+        CoreError::Validation(format!(
+            "profile assignment produced an invalid PersistentDataList.sav: {error}"
+        ))
+    })?;
+    let profile_path = persistent_slot_profile_path(&edited_root, slot)?;
+    let profile_segments = properties::parse_path(&profile_path)?;
+    let profile_chain = properties::resolve_chain(&edited_root.properties, &profile_segments)?;
+    if profile_chain.target.value != properties::PropertyValue::Int(profile_id) {
+        return Err(CoreError::Validation(format!(
+            "slot {slot} did not retain profile {profile_id}"
+        )));
+    }
+    for &id in &ids {
+        let should_contain = id == profile_id;
+        if profile_array_contains(&edited_root, id, "m_SavedSlotsNames", slot)? != should_contain {
+            return Err(CoreError::Validation(format!(
+                "slot {slot} membership is inconsistent for profile {id}"
+            )));
+        }
+    }
+    inspect_bytes(&save_edited, None, false)?;
+    let edited_parts = split_gsav(&save_edited)?;
+    let edited_public = summarize_public_payload(edited_parts.public_payload);
+    if public_slot_updated && edited_public.slot_name.as_deref() != Some(slot) {
+        return Err(CoreError::Validation(
+            "save did not retain its public m_SlotName".to_string(),
+        ));
+    }
+    if public_profile_updated && edited_public.profile_id != Some(profile_id) {
+        return Err(CoreError::Validation(
+            "save did not retain its public m_ProfileId".to_string(),
+        ));
+    }
+
+    let bytes_changed =
+        importing || save_edited != save_original || persistent_edited != persistent_original;
+    if !bytes_changed {
+        return Ok(json!({
+            "path": target_path,
+            "sourcePath": save_path,
+            "persistentPath": persistent_path,
+            "profileId": profile_id,
+            "imported": false,
+            "bytesChanged": false,
+            "publicSlotUpdated": public_slot_updated,
+            "publicProfileUpdated": public_profile_updated,
+            "backupPath": Value::Null,
+            "persistentBackupPath": Value::Null,
+        }));
+    }
+
+    let (backup_path, persistent_backup_path) = if backup {
+        if importing {
+            (
+                None,
+                Some(create_unique_backup_avoiding(
+                    persistent_path,
+                    &existing_foreign_backup_suffixes(persistent_path),
+                )?),
+            )
+        } else {
+            let suffix = shared_backup_suffix(&[target_path, persistent_path]);
+            (
+                Some(create_backup_with_suffix(target_path, &suffix)?),
+                Some(create_backup_with_suffix(persistent_path, &suffix)?),
+            )
+        }
+    } else {
+        (None, None)
+    };
+
+    let save_tmp = target_path.with_extension("sav.tmp-goresave");
+    let persistent_tmp = persistent_path.with_extension("sav.tmp-goresave");
+    fs::write(&save_tmp, &save_edited)?;
+    fs::write(&persistent_tmp, &persistent_edited)?;
+    inspect_save(&save_tmp, false)?;
+    parse_profile_file(&fs::read(&persistent_tmp)?).map_err(|error| {
+        CoreError::Validation(format!(
+            "staged PersistentDataList.sav did not validate: {error}"
+        ))
+    })?;
+
+    let save_pending = begin_replace(target_path, &save_tmp)?;
+    match begin_replace(persistent_path, &persistent_tmp) {
+        Ok(persistent_pending) => {
+            persistent_pending.commit();
+            save_pending.commit();
+        }
+        Err(error) => {
+            save_pending.rollback();
+            return Err(error);
+        }
+    }
+    invalidate_decoded_payload_cache(target_path);
+
+    Ok(json!({
+        "path": target_path,
+        "sourcePath": save_path,
+        "persistentPath": persistent_path,
+        "profileId": profile_id,
+        "imported": importing,
+        "bytesChanged": true,
+        "publicSlotUpdated": public_slot_updated,
+        "publicProfileUpdated": public_profile_updated,
+        "backupPath": backup_path,
+        "persistentBackupPath": persistent_backup_path,
+    }))
+}
+
 fn read_i32_after_property(payload: &[u8], refs: &[FStringRef], name: &str) -> Option<i32> {
     let name_idx = refs.iter().position(|r| r.value == name)?;
     read_i32_property_at(payload, refs, name_idx)
@@ -2944,6 +3588,9 @@ fn inspect_private_payload(
                     // map; needs only a decodable typed parse (no inventory
                     // main_container gating).
                     "private.knowledge.addCharacter",
+                    // Value-addressed entry toggle. A first add creates the
+                    // missing map entry and set member atomically.
+                    "private.knowledge.setEntry",
                 ]);
                 // Hero skill edits (retarget / unlearn / learn a GameplayEffect
                 // in the hero's ActiveEffects array) — only when that target
@@ -3428,7 +4075,8 @@ fn search_typed_properties(
 }
 
 /// Structured progression queries over the decoded private payload. Sections:
-/// "quests" (QuestDataByClass entries with setValue-addressable state paths),
+/// "quests" (journal QuestDataByClass entries with setValue-addressable state
+/// paths), "tutorials" (the in-game glossary's tutorial leaves),
 /// "glossary" (the creature/location quest trees joined with the Hero's
 /// document-segment unlock events), "knowledge" (per-NPC dialog knowledge
 /// sets), "events" (per-character memorized event arrays). Uses the shared
@@ -3521,6 +4169,14 @@ fn query_progression(
     let root = properties::parse_private_root(&decoded)?;
     match section {
         "quests" => progression_quests(
+            &root,
+            &query,
+            state_filter.as_deref(),
+            group_filter.as_deref(),
+            offset,
+            limit,
+        ),
+        "tutorials" => progression_tutorials(
             &root,
             &query,
             state_filter.as_deref(),
@@ -3985,6 +4641,23 @@ fn glossary_category_for_group(group: &str) -> Option<&'static str> {
 
 fn is_glossary_quest_group(group: &str) -> bool {
     glossary_category_for_group(group).is_some()
+}
+
+/// Tutorials are persisted in `QuestDataByClass`, but the game presents them
+/// under the glossary rather than in the quest journal. The `Quest_Tutorials`
+/// entry is only the subtree root; actual tutorial pages use
+/// `Quest_Tutorials_Tut_*`.
+fn is_tutorial_quest_group(group: &str) -> bool {
+    group == "Tutorials"
+}
+
+fn is_tutorial_quest_leaf(class_path: &str) -> bool {
+    class_path
+        .rsplit('.')
+        .next()
+        .unwrap_or(class_path)
+        .strip_prefix("Quest_Tutorials_Tut_")
+        .is_some_and(|name| !name.is_empty())
 }
 
 /// Render an Unreal soft-class reference without losing its asset/class name.
@@ -4506,6 +5179,51 @@ fn progression_quests(
     offset: usize,
     limit: usize,
 ) -> Result<Value, CoreError> {
+    progression_quest_page(
+        root,
+        "quests",
+        query,
+        state_filter,
+        group_filter,
+        offset,
+        limit,
+        |_, group| !is_glossary_quest_group(group) && !is_tutorial_quest_group(group),
+    )
+}
+
+fn progression_tutorials(
+    root: &properties::RootObject,
+    query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    progression_quest_page(
+        root,
+        "tutorials",
+        query,
+        state_filter,
+        group_filter,
+        offset,
+        limit,
+        |class_path, _| is_tutorial_quest_leaf(class_path),
+    )
+}
+
+/// Build the shared `ProgressionQuestPage` JSON shape for either journal
+/// quests or tutorial leaves. Keeping filtering in one pipeline guarantees
+/// identical state/group faceting, paging, edit paths, and writability.
+fn progression_quest_page(
+    root: &properties::RootObject,
+    section: &str,
+    query: &str,
+    state_filter: Option<&str>,
+    group_filter: Option<&str>,
+    offset: usize,
+    limit: usize,
+    include: impl Fn(&str, &str) -> bool,
+) -> Result<Value, CoreError> {
     let (base_path, map_prop) = properties::find_property_by_name(root, "QuestDataByClass")
         .ok_or_else(|| {
             CoreError::Parse("QuestDataByClass not found in the decoded payload".to_string())
@@ -4541,7 +5259,7 @@ fn progression_quests(
             .unwrap_or("unknown")
             .to_string();
         let (id, group, name) = quest_id_group_name(class_path);
-        if is_glossary_quest_group(&group) {
+        if !include(class_path, &group) {
             continue;
         }
         all.push(Entry {
@@ -4621,7 +5339,7 @@ fn progression_quests(
         })
         .collect::<Vec<_>>();
     Ok(json!({
-        "section": "quests",
+        "section": section,
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -4924,10 +5642,13 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
     if let Some((_, prop)) = properties::find_property_by_name(root, "QuestDataByClass") {
         if let properties::PropertyValue::Map { entries, .. } = &prop.value {
             for (key, value) in entries {
-                let is_glossary = map_key_string(key)
-                    .map(quest_id_group_name)
-                    .is_some_and(|(_, group, _)| is_glossary_quest_group(&group));
-                if is_glossary {
+                let is_non_journal =
+                    map_key_string(key)
+                        .map(quest_id_group_name)
+                        .is_some_and(|(_, group, _)| {
+                            is_glossary_quest_group(&group) || is_tutorial_quest_group(&group)
+                        });
+                if is_non_journal {
                     continue;
                 }
                 quest_total += 1;
@@ -4976,6 +5697,7 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
         "private.typed.arrayRemove",
         "private.typed.arrayDuplicate",
         "private.knowledge.addCharacter",
+        "private.knowledge.setEntry",
     ];
     if glossary_set_segment_writable(root) {
         writable.push("private.glossary.setSegment");
@@ -5790,6 +6512,9 @@ fn apply_private_edits(
                     .to_string();
                 Ok(PrivateEdit::KnowledgeAddCharacter(name))
             }
+            "private.knowledge.setEntry" => {
+                parse_private_knowledge_set_entry_edit(edit).map(PrivateEdit::KnowledgeSetEntry)
+            }
             // Value-addressed skill edit (resolves its target by skill base,
             // never a stale index, and re-parses per edit), so a batch of
             // them applies safely even when some are structural
@@ -5854,6 +6579,7 @@ fn apply_private_edits(
                     | PrivateEdit::InventoryRemoveItem(_)
                     | PrivateEdit::InventoryReset(_)
                     | PrivateEdit::KnowledgeAddCharacter(_)
+                    | PrivateEdit::KnowledgeSetEntry(_)
                     | PrivateEdit::NpcRevive(_)
                     | PrivateEdit::NpcRelationship(_)
                     | PrivateEdit::GlossarySetSegment(_)
@@ -5863,7 +6589,8 @@ fn apply_private_edits(
     if splicing_structural_edits >= 1 && edit_specs.len() > 1 {
         return Err(CoreError::UnsupportedEdit(
             "a write containing private.inventory.addItem, private.inventory.removeItem, \
-             private.inventory.reset, private.knowledge.addCharacter, private.npc.revive, \
+             private.inventory.reset, private.knowledge.addCharacter, private.knowledge.setEntry, \
+             private.npc.revive, \
              private.npc.setRelationship, or private.glossary.setSegment \
              must contain no other edits — the structural splice (slot-array, map insert, or \
              memory-event removal) shifts the byte offsets and array indices later edits \
@@ -6037,8 +6764,58 @@ enum PrivateEdit {
     NpcRelationship(PrivateNpcRelationshipEdit),
     GlossarySetSegment(PrivateGlossarySetSegmentEdit),
     KnowledgeAddCharacter(String),
+    KnowledgeSetEntry(PrivateKnowledgeSetEntryEdit),
     FactionsForgive(PrivateFactionsForgiveEdit),
     SkillSet(skills::SkillSetEdit),
+}
+
+/// Value-addressed dialog-knowledge intent. Unlike the generic typed set op,
+/// this carries the stable character key and can create that character's map
+/// entry before adding the first member.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PrivateKnowledgeSetEntryEdit {
+    character: String,
+    entry: String,
+    present: bool,
+}
+
+fn parse_private_knowledge_set_entry_edit(
+    edit: &Edit,
+) -> Result<PrivateKnowledgeSetEntryEdit, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.knowledge.setEntry value must be an object".to_string())
+    })?;
+    let required_text = |field: &str| -> Result<String, CoreError> {
+        let text = value
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "private.knowledge.setEntry requires a non-empty string value.{field}"
+                ))
+            })?;
+        if text.len() > 1024 {
+            return Err(CoreError::InvalidRequest(format!(
+                "private.knowledge.setEntry value.{field} is too long"
+            )));
+        }
+        Ok(text.to_string())
+    };
+    let present = value
+        .get("present")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.knowledge.setEntry requires boolean value.present".to_string(),
+            )
+        })?;
+    Ok(PrivateKnowledgeSetEntryEdit {
+        character: required_text("character")?,
+        entry: required_text("entry")?,
+        present,
+    })
 }
 
 /// `private.factions.forgive` edit: `value = { guild: String }`. Forgives every
@@ -7001,6 +7778,9 @@ fn apply_private_edit_to_payload(
         PrivateEdit::KnowledgeAddCharacter(name) => {
             apply_private_knowledge_add_character_to_payload(payload, name)
         }
+        PrivateEdit::KnowledgeSetEntry(edit) => {
+            apply_private_knowledge_set_entry_to_payload(payload, edit)
+        }
         PrivateEdit::FactionsForgive(edit) => factions::apply_forgive(payload, &edit.guild),
     }
 }
@@ -7452,6 +8232,106 @@ fn apply_private_knowledge_add_character_to_payload(
             _ => None,
         })
         .ok_or_else(|| CoreError::Parse("post-insert validation failed".to_string()))?;
+    *payload = patched;
+    Ok(())
+}
+
+/// Resolve a character's knowledge set and whether it contains [entry]. Names
+/// use Unreal's case-insensitive semantics, while the returned path preserves
+/// the stored map-key spelling required by the typed resolver.
+fn knowledge_entry_snapshot(
+    payload: &[u8],
+    character: &str,
+    entry: &str,
+) -> Result<(bool, bool, Option<Vec<properties::PathSeg>>), CoreError> {
+    let root = properties::parse_private_root(payload)?;
+    let (mut base_path, map_prop) =
+        properties::find_property_by_name(&root, "CharacterKnowledgeByUniqueName").ok_or_else(
+            || CoreError::Parse("CharacterKnowledgeByUniqueName not found".to_string()),
+        )?;
+    let properties::PropertyValue::Map { entries, .. } = &map_prop.value else {
+        return Err(CoreError::Parse(
+            "CharacterKnowledgeByUniqueName is not a map".to_string(),
+        ));
+    };
+    let Some((stored_name, value)) = entries.iter().find_map(|(key, value)| {
+        let name = map_key_string(key)?;
+        name.eq_ignore_ascii_case(character)
+            .then_some((name.to_string(), value))
+    }) else {
+        return Ok((false, false, None));
+    };
+    let Some(properties::PropertyValue::Set { elements, .. }) = struct_member(value, "Knowledge")
+    else {
+        return Err(CoreError::Parse(format!(
+            "character {stored_name:?} has no Knowledge set"
+        )));
+    };
+    let contains = elements.iter().any(|element| match element {
+        properties::PropertyValue::Name(value) | properties::PropertyValue::Str(value) => {
+            value.eq_ignore_ascii_case(entry)
+        }
+        _ => false,
+    });
+    base_path.push(format!("{{{stored_name}}}"));
+    base_path.push("Knowledge".to_string());
+    Ok((true, contains, Some(properties::parse_path(&base_path)?)))
+}
+
+/// Apply one value-addressed knowledge intent atomically. A first add performs
+/// the map insertion and set insertion on a scratch payload with a fresh parse
+/// between splices; the caller receives bytes only after the semantic
+/// postcondition and strict parse both succeed.
+fn apply_private_knowledge_set_entry_to_payload(
+    payload: &mut Vec<u8>,
+    edit: &PrivateKnowledgeSetEntryEdit,
+) -> Result<(), CoreError> {
+    let mut patched = payload.clone();
+    let (mut has_character, mut contains, mut set_path) =
+        knowledge_entry_snapshot(&patched, &edit.character, &edit.entry)?;
+
+    // Desired-state semantics make retries safe when an external writer has
+    // already applied the same intent.
+    if edit.present == contains && (has_character || !edit.present) {
+        return Ok(());
+    }
+    if edit.present && !has_character {
+        apply_private_knowledge_add_character_to_payload(&mut patched, &edit.character)?;
+        (has_character, contains, set_path) =
+            knowledge_entry_snapshot(&patched, &edit.character, &edit.entry)?;
+    }
+    if !has_character {
+        // Removing from a character with no knowledge is already satisfied.
+        return Ok(());
+    }
+    if edit.present != contains {
+        apply_private_typed_container_edit_to_payload(
+            &mut patched,
+            &PrivateTypedContainerEdit {
+                path: set_path.ok_or_else(|| {
+                    CoreError::Parse("knowledge set path could not be resolved".to_string())
+                })?,
+                edit: if edit.present {
+                    properties::ContainerEdit::SetAdd(edit.entry.clone())
+                } else {
+                    properties::ContainerEdit::SetRemove(edit.entry.clone())
+                },
+            },
+        )?;
+    }
+
+    let (_, final_contains, _) = knowledge_entry_snapshot(&patched, &edit.character, &edit.entry)?;
+    if final_contains != edit.present {
+        return Err(CoreError::Validation(format!(
+            "knowledge entry postcondition failed for {:?} / {:?}",
+            edit.character, edit.entry
+        )));
+    }
+    properties::parse_private_root(&patched).map_err(|err| {
+        CoreError::Parse(format!(
+            "knowledge set-entry produced an inconsistent payload: {err}"
+        ))
+    })?;
     *payload = patched;
     Ok(())
 }
@@ -10001,6 +10881,269 @@ mod tests {
         data.extend_from_slice(&persistent_profiles_property_block());
         data.extend_from_slice(&fstring("None")); // property-list terminator, then EOF
         data
+    }
+
+    fn strict_string_array_property(name: &str, values: &[&str]) -> Vec<u8> {
+        let mut descriptor = 1u32.to_le_bytes().to_vec();
+        descriptor.extend_from_slice(&fstring("StrProperty"));
+        let mut body = (values.len() as u32).to_le_bytes().to_vec();
+        for value in values {
+            body.extend_from_slice(&fstring(value));
+        }
+        inv_tagged(name, "ArrayProperty", &descriptor, 0, &body)
+    }
+
+    fn assignment_profile_props(id: i32, saved: &[&str], quick: &[&str], auto: &[&str]) -> Vec<u8> {
+        let mut props = profile_props(id, if id == 0 { "Custom" } else { "Easy" }, false);
+        props.extend_from_slice(&strict_string_array_property("m_QuickSaveName", quick));
+        props.extend_from_slice(&strict_string_array_property("m_AutoSaveName", auto));
+        props.extend_from_slice(&strict_string_array_property("m_SavedSlotsNames", saved));
+        props
+    }
+
+    fn assignment_persistent_data_list(slot: &str, source_profile: i32) -> Vec<u8> {
+        let mut slot_value = str_property("m_SlotName", slot);
+        slot_value.extend_from_slice(&str_property("m_PlayerSaveName", "Assignment test"));
+        slot_value.extend_from_slice(&int_property("m_ProfileId", source_profile));
+        slot_value.extend_from_slice(&fstring("None"));
+
+        let mut map_body = 0u32.to_le_bytes().to_vec(); // num_to_remove
+        map_body.extend_from_slice(&1u32.to_le_bytes()); // count
+        map_body.extend_from_slice(&fstring(slot));
+        map_body.extend_from_slice(&slot_value);
+        let mut map_descriptor = 2u32.to_le_bytes().to_vec();
+        map_descriptor.extend_from_slice(&fstring("StrProperty"));
+        map_descriptor.extend_from_slice(&0u32.to_le_bytes()); // key flags
+        map_descriptor.extend_from_slice(&fstring("StructProperty"));
+        map_descriptor.extend_from_slice(&inv_struct_descriptor("SaveGamePublicData"));
+        let public_data = inv_tagged(
+            "m_SavedGamesPublicData",
+            "MapProperty",
+            &map_descriptor,
+            0,
+            &map_body,
+        );
+
+        let profile0_slots = (source_profile == 0).then_some([slot]);
+        let profile1_slots = (source_profile == 1).then_some([slot]);
+        let profile0_values = profile0_slots
+            .as_ref()
+            .map_or(&[][..], |values| &values[..]);
+        let profile1_values = profile1_slots
+            .as_ref()
+            .map_or(&[][..], |values| &values[..]);
+        let mut profile_body = 2u32.to_le_bytes().to_vec();
+        let mut p0 = assignment_profile_props(0, profile0_values, profile0_values, &[]);
+        p0.extend_from_slice(&fstring("None"));
+        let mut p1 = assignment_profile_props(1, profile1_values, profile1_values, &[]);
+        p1.extend_from_slice(&fstring("None"));
+        profile_body.extend_from_slice(&p0);
+        profile_body.extend_from_slice(&p1);
+
+        let mut profiles = diff_tag("m_Profiles", "ArrayProperty");
+        profiles.extend_from_slice(&1u32.to_le_bytes());
+        profiles.extend_from_slice(&fstring("StructProperty"));
+        profiles.extend_from_slice(&1u32.to_le_bytes());
+        profiles.extend_from_slice(&fstring("ProfileEntry"));
+        profiles.extend_from_slice(&1u32.to_le_bytes());
+        profiles.extend_from_slice(&fstring("/Script/G1R"));
+        profiles.extend_from_slice(&diff_header(profile_body.len() as u32, 0));
+        profiles.extend_from_slice(&profile_body);
+
+        let mut object = fstring("/Script/G1R.PersistentDataList");
+        object.push(0);
+        object.extend_from_slice(&public_data);
+        object.extend_from_slice(&profiles);
+        object.extend_from_slice(&fstring("None"));
+        object.extend_from_slice(&0u32.to_le_bytes());
+        let mut data = b"GVAS".to_vec();
+        data.extend_from_slice(&[0u8; 24]);
+        data.extend_from_slice(&object);
+        data
+    }
+
+    fn public_payload_with_profile(name: &str, profile_id: i32) -> Vec<u8> {
+        let mut payload = public_payload(name);
+        let terminator_len = fstring("None").len();
+        payload.truncate(payload.len() - terminator_len);
+        payload.extend_from_slice(&int_property("m_ProfileId", profile_id));
+        payload.extend_from_slice(&fstring("None"));
+        payload
+    }
+
+    #[test]
+    fn assign_save_profile_updates_slot_membership_and_paired_backups() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        fs::write(
+            &save_path,
+            build_gsav(
+                2,
+                &public_payload_with_profile("Assignment test", 0),
+                &minimal_stream(),
+                &[0, 0, 0, 0],
+            ),
+        )
+        .unwrap();
+        fs::write(&persistent_path, assignment_persistent_data_list(slot, 0)).unwrap();
+
+        let response = assign_save_profile(&save_path, None, &persistent_path, 1, true).unwrap();
+        assert_eq!(response["profileId"], 1);
+        assert_eq!(response["bytesChanged"], true);
+        assert!(Path::new(response["backupPath"].as_str().unwrap()).exists());
+        assert!(Path::new(response["persistentBackupPath"].as_str().unwrap()).exists());
+
+        let written_persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written_persistent).unwrap();
+        let path = persistent_slot_profile_path(&root, slot).unwrap();
+        let property =
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+        assert_eq!(property.value, properties::PropertyValue::Int(1));
+        assert!(!profile_array_contains(&root, 0, "m_SavedSlotsNames", slot).unwrap());
+        assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", slot).unwrap());
+        assert!(!profile_array_contains(&root, 0, "m_QuickSaveName", slot).unwrap());
+        assert!(profile_array_contains(&root, 1, "m_QuickSaveName", slot).unwrap());
+
+        let written_save = fs::read(&save_path).unwrap();
+        let parts = split_gsav(&written_save).unwrap();
+        assert_eq!(
+            summarize_public_payload(parts.public_payload).profile_id,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn assign_save_profile_registers_an_unlisted_slot() {
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-099.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent = assignment_persistent_data_list("G1R-006", 0);
+        fs::write(&save_path, &save).unwrap();
+        fs::write(&persistent_path, &persistent).unwrap();
+
+        let response = assign_save_profile(&save_path, None, &persistent_path, 1, true).unwrap();
+        assert_eq!(response["imported"], false);
+        assert_eq!(response["profileId"], 1);
+        assert!(Path::new(response["backupPath"].as_str().unwrap()).exists());
+        assert!(Path::new(response["persistentBackupPath"].as_str().unwrap()).exists());
+
+        let written_persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written_persistent).unwrap();
+        let path = persistent_slot_profile_path(&root, "G1R-099").unwrap();
+        let property =
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+        assert_eq!(property.value, properties::PropertyValue::Int(1));
+        assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", "G1R-099").unwrap());
+
+        let written_save = fs::read(&save_path).unwrap();
+        let parts = split_gsav(&written_save).unwrap();
+        assert_eq!(
+            summarize_public_payload(parts.public_payload).profile_id,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn assign_save_profile_imports_without_touching_source_or_pairing_foreign_backup() {
+        let dir = tempdir().unwrap();
+        let game_dir = dir.path().join("SaveGames");
+        fs::create_dir_all(&game_dir).unwrap();
+        let source_path = dir.path().join("detached.sav");
+        let destination_path = game_dir.join("G1R-007.sav");
+        let persistent_path = game_dir.join("PersistentDataList.sav");
+        let source = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        fs::write(&source_path, &source).unwrap();
+        fs::write(
+            &persistent_path,
+            assignment_persistent_data_list("G1R-006", 0),
+        )
+        .unwrap();
+
+        // A standalone PersistentDataList backup must not reuse a suffix owned
+        // by another slot: restore pairs slot + companion solely by suffix. Seed
+        // a small time window to make the collision deterministic even across a
+        // slow CI scheduling boundary.
+        let backup_dir = game_dir.join("goresave_backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let foreign_suffixes = (now.saturating_sub(30)..=now + 30)
+            .map(|timestamp| timestamp.to_string())
+            .collect::<Vec<_>>();
+        for suffix in &foreign_suffixes {
+            fs::write(
+                backup_dir.join(format!("G1R-006.sav.bak.{suffix}")),
+                &source,
+            )
+            .unwrap();
+        }
+
+        let response = assign_save_profile(
+            &source_path,
+            Some(&destination_path),
+            &persistent_path,
+            1,
+            true,
+        )
+        .unwrap();
+        assert_eq!(response["imported"], true);
+        assert_eq!(response["path"], destination_path.display().to_string());
+        assert!(response["backupPath"].is_null());
+        let persistent_backup =
+            Path::new(response["persistentBackupPath"].as_str().unwrap()).to_path_buf();
+        assert!(persistent_backup.exists());
+        let persistent_prefix = backup_file_prefix(&persistent_path).unwrap();
+        let persistent_backup_name = persistent_backup
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap();
+        let persistent_suffix = persistent_backup_name
+            .strip_prefix(&persistent_prefix)
+            .unwrap();
+        assert!(
+            !foreign_suffixes
+                .iter()
+                .any(|suffix| suffix == persistent_suffix)
+        );
+        let foreign_backup = backup_dir.join(format!("G1R-006.sav.bak.{now}"));
+        assert!(
+            prepare_paired_persistent_data_list_restore(
+                &game_dir.join("G1R-006.sav"),
+                &foreign_backup,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(fs::read(&source_path).unwrap(), source);
+
+        let imported = fs::read(&destination_path).unwrap();
+        let parts = split_gsav(&imported).unwrap();
+        assert_eq!(
+            summarize_public_payload(parts.public_payload).profile_id,
+            Some(1)
+        );
+        let written_persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written_persistent).unwrap();
+        let path = persistent_slot_profile_path(&root, "G1R-007").unwrap();
+        let property =
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+        assert_eq!(property.value, properties::PropertyValue::Int(1));
+        assert!(profile_array_contains(&root, 1, "m_SavedSlotsNames", "G1R-007").unwrap());
     }
 
     #[test]
@@ -13285,6 +14428,46 @@ mod tests {
     }
 
     #[test]
+    fn knowledge_set_entry_is_atomic_value_addressed_and_idempotent() {
+        let mut payload = build_knowledge_map_payload(&["OC_STT_Diego"]);
+        let add_existing = PrivateKnowledgeSetEntryEdit {
+            character: "oc_stt_diego".to_string(),
+            entry: "Topic_Diego_209799".to_string(),
+            present: true,
+        };
+        apply_private_knowledge_set_entry_to_payload(&mut payload, &add_existing).unwrap();
+        // Re-applying the desired state is a no-op, not a duplicate error.
+        let once = payload.clone();
+        apply_private_knowledge_set_entry_to_payload(&mut payload, &add_existing).unwrap();
+        assert_eq!(payload, once);
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        let diego = progression_knowledge(&root, "", Some("OC_STT_Diego"), 0, 10).unwrap();
+        assert_eq!(diego["entries"], json!(["Topic_Diego_209799"]));
+
+        let add_first = PrivateKnowledgeSetEntryEdit {
+            character: "OC_TEST_New".to_string(),
+            entry: "Info_Whatslife".to_string(),
+            present: true,
+        };
+        apply_private_knowledge_set_entry_to_payload(&mut payload, &add_first).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let created = progression_knowledge(&root, "", Some("OC_TEST_New"), 0, 10).unwrap();
+        assert_eq!(created["entries"], json!(["Info_Whatslife"]));
+
+        let remove = PrivateKnowledgeSetEntryEdit {
+            present: false,
+            ..add_existing
+        };
+        apply_private_knowledge_set_entry_to_payload(&mut payload, &remove).unwrap();
+        apply_private_knowledge_set_entry_to_payload(&mut payload, &remove).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        let diego = progression_knowledge(&root, "", Some("OC_STT_Diego"), 0, 10).unwrap();
+        assert_eq!(diego["entries"], json!([]));
+        assert_eq!(root.consumed, payload.len());
+    }
+
+    #[test]
     #[ignore = "needs GORESAVE_PAYLOAD_BIN=<a decompressed host.bin>"]
     fn add_character_roundtrips_on_real_payload() {
         let path = std::env::var("GORESAVE_PAYLOAD_BIN").expect("set GORESAVE_PAYLOAD_BIN");
@@ -14510,6 +15693,33 @@ mod tests {
         payload
     }
 
+    fn tutorial_progression_payload() -> Vec<u8> {
+        let quest_map = quest_map_property(&[
+            (
+                "/Script/Angelscript.Quest_OldCamp_SLEEPER",
+                "EQuestState::Running",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials",
+                "EQuestState::Available",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics",
+                "EQuestState::Succeeded",
+            ),
+            (
+                "/Script/Angelscript.Quest_Tutorials_Tut_Movement",
+                "EQuestState::Running",
+            ),
+        ]);
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&quest_map);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
     fn progression_fixture(
         file_name: &str,
         private_payload: Vec<u8>,
@@ -14881,6 +16091,76 @@ mod tests {
         let overview = summarize_private_progression_overview(Some(&root));
         assert_eq!(overview["questTotal"], 1);
         assert_eq!(overview["questStates"], json!({ "Running": 1 }));
+    }
+
+    #[test]
+    fn tutorials_have_their_own_page_and_are_excluded_from_quests_and_overview() {
+        let private_payload = tutorial_progression_payload();
+        let root = properties::parse_private_root(&private_payload).unwrap();
+        let (_dir, path, backend) = progression_fixture("G1R-tutorials.sav", private_payload);
+
+        let quests =
+            query_progression(&path, &json!({ "section": "quests" }), Some(&backend)).unwrap();
+        assert_eq!(quests["total"], 1);
+        assert_eq!(quests["quests"][0]["group"], "OldCamp");
+        assert_eq!(quests["groupCounts"], json!({ "OldCamp": 1 }));
+        assert_eq!(quests["stateCounts"], json!({ "Running": 1 }));
+
+        let overview = summarize_private_progression_overview(Some(&root));
+        assert_eq!(overview["questTotal"], 1);
+        assert_eq!(overview["questStates"], json!({ "Running": 1 }));
+
+        let tutorials =
+            query_progression(&path, &json!({ "section": "tutorials" }), Some(&backend)).unwrap();
+        assert_eq!(tutorials["section"], "tutorials");
+        assert_eq!(tutorials["total"], 2);
+        assert_eq!(tutorials["count"], 2);
+        assert_eq!(
+            tutorials["stateCounts"],
+            json!({ "Running": 1, "Succeeded": 1 })
+        );
+        assert_eq!(tutorials["groupCounts"], json!({ "Tutorials": 2 }));
+        assert!(
+            tutorials["quests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|quest| { quest["questClass"] != "/Script/Angelscript.Quest_Tutorials" })
+        );
+
+        let combat = &tutorials["quests"][0];
+        assert_eq!(
+            combat["questClass"],
+            "/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics"
+        );
+        assert_eq!(combat["id"], "Quest_Tutorials_Tut_CombatBasics");
+        assert_eq!(combat["group"], "Tutorials");
+        assert_eq!(combat["name"], "Tut_CombatBasics");
+        assert_eq!(combat["currentState"], "EQuestState::Succeeded");
+        assert_eq!(
+            combat["statePath"],
+            json!([
+                "QuestDataByClass",
+                "{/Script/Angelscript.Quest_Tutorials_Tut_CombatBasics}",
+                "CurrentState"
+            ])
+        );
+        assert_eq!(combat["writable"], true);
+
+        // Tutorial pages use the same faceted state filtering as quest pages.
+        let succeeded = query_progression(
+            &path,
+            &json!({ "section": "tutorials", "state": "Succeeded" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(succeeded["total"], 1);
+        assert_eq!(succeeded["quests"][0]["name"], "Tut_CombatBasics");
+        assert_eq!(
+            succeeded["stateCounts"],
+            json!({ "Running": 1, "Succeeded": 1 })
+        );
+        assert_eq!(succeeded["groupCounts"], json!({ "Tutorials": 1 }));
     }
 
     fn glossary_segment_edit(

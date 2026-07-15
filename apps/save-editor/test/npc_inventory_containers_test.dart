@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:goresave/features/app/ui/goresave_app.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_settings_store.dart';
 import 'package:goresave/providers/data_providers.dart';
+
+import 'support/ui_settings_test_store.dart';
 
 /// An NPC inventory surfaces multiple containers (MainContainer + the equipped
 /// MeleeSlot weapon + the ore Pouch). The card must (a) show every container's
@@ -21,6 +24,9 @@ void main() {
           coreServiceProvider.overrideWithValue(core),
           editorSettingsStoreProvider.overrideWithValue(
             const NoopEditorSettingsStore(),
+          ),
+          uiSettingsStoreProvider.overrideWithValue(
+            TestUiSettingsStore(showObjectIds: true),
           ),
         ],
         child: const GoresaveApp(),
@@ -47,7 +53,10 @@ void main() {
     // A flat search across all categories surfaces every container's row at once
     // (the weapon, the ore, and the MainContainer apple). All appear as normal
     // rows; the confusing per-container badges were removed.
-    await tester.enterText(find.widgetWithText(TextField, 'Filter items'), 'It');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Filter items'),
+      'It',
+    );
     await tester.pumpAndSettle();
 
     // The weapon + ore rows are present (by their ids — no loc catalog in test).
@@ -59,15 +68,19 @@ void main() {
     expect(find.text('Pouch'), findsNothing);
   });
 
-  testWidgets('a count edit on the Pouch ore echoes containerType + slotId',
-      (tester) async {
+  testWidgets('a count edit on the Pouch ore echoes containerType + slotId', (
+    tester,
+  ) async {
     final core = _MultiContainerNpcInventoryCoreService();
     await pumpApp(tester, core);
     await openNpcInventory(tester);
 
     // Flat list (search) shows every row; edit the Pouch ore row to 99. The row
     // is found by the ore's id since there is no longer a container badge.
-    await tester.enterText(find.widgetWithText(TextField, 'Filter items'), 'It');
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Filter items'),
+      'It',
+    );
     await tester.pumpAndSettle();
 
     final oreField = find.descendant(
@@ -85,8 +98,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final write = core.requests.lastWhere((r) => r.command == 'write_save');
-    final edits =
-        (write.payload['edits'] as List).cast<Map<String, Object?>>();
+    final edits = (write.payload['edits'] as List).cast<Map<String, Object?>>();
     expect(edits, hasLength(1));
     final value = edits.single['value'] as Map<String, Object?>;
     expect(value['count'], 99);

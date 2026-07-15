@@ -15,6 +15,13 @@ class AppLocalizationsEn extends AppLocalizations {
   String get debugSectionSubtitle => 'Diagnostics & raw data for bug reports';
 
   @override
+  String get showObjectIdsTitle => 'Show object IDs';
+
+  @override
+  String get showObjectIdsSubtitle =>
+      'Show technical NPC, item, dialogue knowledge, and quest IDs in the editor.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -308,6 +315,30 @@ class AppLocalizationsEn extends AppLocalizations {
   String get switchProfile => 'Switch profile';
 
   @override
+  String get openSaveFile => 'Open file';
+
+  @override
+  String get externalSave => 'Externally opened save';
+
+  @override
+  String get saveProfileTitle => 'Save profile';
+
+  @override
+  String get saveProfileDescription =>
+      'Assign this save to a different game profile. The save and profile index are backed up together.';
+
+  @override
+  String get saveProfileExternalHint =>
+      'Select a profile to import this file into the game\'s save folder and register it there. The original file remains unchanged.';
+
+  @override
+  String get saveProfileNoProfiles =>
+      'No editable game profiles were found in PersistentDataList.sav.';
+
+  @override
+  String get saveProfileSelect => 'Select profile';
+
+  @override
   String get rescanSaveFolder => 'Rescan save folder';
 
   @override
@@ -439,6 +470,12 @@ class AppLocalizationsEn extends AppLocalizations {
   String attributeCurrent(String name) {
     return '$name current';
   }
+
+  @override
+  String get attributeBaseValue => 'Base value';
+
+  @override
+  String get attributeCurrentValue => 'Current value';
 
   @override
   String get inventoryTitle => 'Inventory';
@@ -814,7 +851,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get removeMemoryEventBody =>
-      'Remove this memory event? A backup is written first.';
+      'Queue this memory event for removal? The save file is changed only when you press Save.';
+
+  @override
+  String get memoryEventRemovalQueued =>
+      'Event removal queued — press Save to apply it.';
 
   @override
   String get duplicateEvent => 'Duplicate event';
@@ -824,7 +865,11 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get duplicateMemoryEventBody =>
-      'Duplicate this memory event? A backup is written first.';
+      'Queue a duplicate of this memory event? The save file is changed only when you press Save.';
+
+  @override
+  String get memoryEventDuplicationQueued =>
+      'Event duplication queued — press Save to apply it.';
 
   @override
   String get selectCharacterFromList => 'Select a character from the list';
@@ -1469,4 +1514,94 @@ class AppLocalizationsEn extends AppLocalizations {
   String glossarySegmentEntry(int number) {
     return 'Entry $number';
   }
+
+  @override
+  String get questJournalAll => 'All quests';
+
+  @override
+  String get questJournalOldCamp => 'Old Camp';
+
+  @override
+  String get questJournalNewCamp => 'New Camp';
+
+  @override
+  String get questJournalSwampCamp => 'Swamp Camp';
+
+  @override
+  String get questJournalColony => 'The Colony';
+
+  @override
+  String get questJournalCompleted => 'Completed';
+
+  @override
+  String get questJournalHint =>
+      'In-game journal view. Internal and not-yet-started quest states remain available under All Data.';
+
+  @override
+  String get questJournalNoEntries =>
+      'No journal quests match the current filters.';
+
+  @override
+  String get glossaryTutorials => 'Tutorials';
+
+  @override
+  String get tutorialGateNote =>
+      'These rows control saved tutorial unlock gates. A gate does not necessarily map one-to-one to an individual in-game tutorial page.';
+
+  @override
+  String get tutorialResetChanges => 'Reset tutorial changes';
+
+  @override
+  String get tutorialNoGates =>
+      'No tutorial unlock gates are available in this save.';
+
+  @override
+  String tutorialGateUnlockCount(int unlocked, int total) {
+    return '$unlocked of $total tutorial gates unlocked';
+  }
+
+  @override
+  String get tutorialGateCombatBasics => 'Combat basics';
+
+  @override
+  String get tutorialGateCrafting => 'Crafting';
+
+  @override
+  String get tutorialGateCrime => 'Crime and consequences';
+
+  @override
+  String get tutorialGateDrugs => 'Consumables and effects';
+
+  @override
+  String get tutorialGateLockpicking => 'Lockpicking';
+
+  @override
+  String get tutorialGateMagic => 'Magic';
+
+  @override
+  String get tutorialGateMap => 'Map';
+
+  @override
+  String get tutorialGateMeleeCombat => 'Melee combat';
+
+  @override
+  String get tutorialGateNavigation => 'Movement and navigation';
+
+  @override
+  String get tutorialGatePerception => 'Perception';
+
+  @override
+  String get tutorialGatePlayerProgression => 'Character progression';
+
+  @override
+  String get tutorialGateRanged => 'Ranged combat';
+
+  @override
+  String get tutorialGateRiding => 'Riding';
+
+  @override
+  String get tutorialGateSleep => 'Sleeping';
+
+  @override
+  String get tutorialGateTrading => 'Trading';
 }
