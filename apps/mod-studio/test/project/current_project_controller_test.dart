@@ -11,6 +11,7 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
@@ -894,6 +895,188 @@ void main() {
         throwsA(isA<Revision3DialogLocalizationReadRequiresReopenException>()),
       );
       expect(managed.dialogLocalizationReadCalls, 1);
+    },
+  );
+
+  test(
+    'localization edit binds exact seed and publication then refreshes the visible checkpoint',
+    () async {
+      const projectId = '19191919191919191919191919191919';
+      const localizationId = '29292929292929292929292929292929';
+      const locId = 'GORE_EDITABLE_TEXT';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-localization-edit'),
+        projectIdValue: projectId,
+        projectRevision: 23,
+        head: _head(23),
+        onDialogLocalizationEditSeed: (lease, id, revision, identity) {
+          expect(id, localizationId);
+          expect(revision, 4);
+          expect(identity, locId);
+          return _controllerDialogLocalizationEditSeed(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            localizationId: id,
+            localizationRevision: revision,
+            locId: identity,
+          );
+        },
+        onDialogLocalizationEditPublish: (lease, _) {
+          lease.projectRevision++;
+          lease.head = _head(24);
+          return Revision3DialogLocalizationEditPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            localizationId: localizationId,
+            localizationRevision: 5,
+            addedLocales: const <String>[],
+            removedLocales: const <String>[],
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.readCurrentRevision3DialogLocalizationEditSeed(
+          expectedRoot: 'another-root',
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          localizationId: localizationId,
+          expectedLocalizationRevision: 4,
+          expectedLocId: locId,
+        ),
+        throwsA(isA<Revision3DialogLocalizationEditStaleCheckpointException>()),
+      );
+      expect(managed.dialogLocalizationEditSeedCalls, 0);
+      final seed = await coordinator
+          .readCurrentRevision3DialogLocalizationEditSeed(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            localizationId: localizationId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: locId,
+          );
+      expect(seed.locales.map((locale) => locale.text), <String>[
+        'Bleib stehen!',
+        'Stop right there!',
+      ]);
+      final plan = await _controllerDialogLocalizationEditPlan(
+        head: visible.head,
+        projectId: projectId,
+        projectRevision: 23,
+        localizationId: localizationId,
+        localizationRevision: 4,
+        locId: locId,
+      );
+
+      final publication = await coordinator
+          .prepareAndPublishCurrentRevision3DialogLocalizationEdit(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: plan,
+          );
+
+      expect(publication.projectRevision, 24);
+      expect(publication.localizationRevision, 5);
+      expect(managed.dialogLocalizationEditSeedCalls, 1);
+      expect(managed.dialogLocalizationEditPublishCalls, 1);
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, 24);
+      expect(current.head.canonicalJson, _head(24).canonicalJson);
+      expect(current.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'localization edit maps Voice conflict without poisoning then locks a poisoned lease',
+    () async {
+      const projectId = '20202020202020202020202020202020';
+      const localizationId = '30303030303030303030303030303030';
+      const locId = 'GORE_LOCKED_TEXT';
+      var attempts = 0;
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-localization-edit-errors'),
+        projectIdValue: projectId,
+        projectRevision: 25,
+        head: _head(25),
+        onDialogLocalizationEditPublish: (lease, _) {
+          attempts++;
+          if (attempts == 1) {
+            throw const ModFfiException(
+              command:
+                  'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+              code:
+                  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_VOICE_CONFLICT',
+              message: 'fake Voice candidate protects this text',
+            );
+          }
+          lease.requiresReopenValue = true;
+          throw StateError('injected localization-edit integrity failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      final plan = await _controllerDialogLocalizationEditPlan(
+        head: visible.head,
+        projectId: projectId,
+        projectRevision: visible.projectRevision,
+        localizationId: localizationId,
+        localizationRevision: 4,
+        locId: locId,
+      );
+      Future<Revision3DialogLocalizationEditPublication> publish() =>
+          coordinator.prepareAndPublishCurrentRevision3DialogLocalizationEdit(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            plan: plan,
+          );
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3DialogLocalizationEditLockedVoiceTextException>()),
+      );
+      expect(managed.dialogLocalizationEditPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3DialogLocalizationEditRequiresReopenException>()),
+      );
+      expect(managed.dialogLocalizationEditPublishCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3DialogLocalizationEditRequiresReopenException>()),
+      );
+      expect(managed.dialogLocalizationEditPublishCalls, 2);
     },
   );
 
@@ -4275,11 +4458,24 @@ typedef _DialogLocalizationReadHook =
       int expectedLocalizationRevision,
       String expectedLocId,
     );
+typedef _DialogLocalizationEditSeedHook =
+    FutureOr<AuthoringRevision3DialogLocalizationEditSeed> Function(
+      _FakeManagedLease lease,
+      String localizationId,
+      int expectedLocalizationRevision,
+      String expectedLocId,
+    );
+typedef _DialogLocalizationEditPublishHook =
+    FutureOr<Revision3DialogLocalizationEditPublication> Function(
+      _FakeManagedLease lease,
+      Revision3DialogLocalizationEditTechnicalPlan plan,
+    );
 
 final class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
-        ManagedRevision3DialogLocalizationReadLease {
+        ManagedRevision3DialogLocalizationReadLease,
+        ManagedRevision3DialogLocalizationEditLease {
   _FakeManagedLease({
     required this.root,
     required this.projectIdValue,
@@ -4290,6 +4486,8 @@ final class _FakeManagedLease
     this.onQuestInspection,
     this.onNpcInspection,
     this.onDialogLocalizationRead,
+    this.onDialogLocalizationEditSeed,
+    this.onDialogLocalizationEditPublish,
     this.onManagedCompilerCheck,
     this.onNpcPublish,
     this.onDialogLinePublish,
@@ -4330,6 +4528,8 @@ final class _FakeManagedLease
   final _QuestInspectionHook? onQuestInspection;
   final _NpcInspectionHook? onNpcInspection;
   final _DialogLocalizationReadHook? onDialogLocalizationRead;
+  final _DialogLocalizationEditSeedHook? onDialogLocalizationEditSeed;
+  final _DialogLocalizationEditPublishHook? onDialogLocalizationEditPublish;
   final _ManagedCompilerCheckHook? onManagedCompilerCheck;
   final _NpcPublishHook? onNpcPublish;
   final _DialogLinePublishHook? onDialogLinePublish;
@@ -4367,6 +4567,8 @@ final class _FakeManagedLease
   final List<String> dialogLocalizationReadIds = <String>[];
   final List<int> dialogLocalizationReadRevisions = <int>[];
   final List<String> dialogLocalizationReadLocIds = <String>[];
+  int dialogLocalizationEditSeedCalls = 0;
+  int dialogLocalizationEditPublishCalls = 0;
   int managedCompilerCheckCalls = 0;
   final List<AuthoringRevision3ManagedCompilerEntityKind>
   managedCompilerCheckKinds = <AuthoringRevision3ManagedCompilerEntityKind>[];
@@ -4485,6 +4687,39 @@ final class _FakeManagedLease
       expectedLocalizationRevision,
       expectedLocId,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationEditSeedCalls++;
+    final read = onDialogLocalizationEditSeed;
+    if (read == null) {
+      throw StateError('fake managed lease has no localization-edit reader');
+    }
+    return read(
+      this,
+      localizationId,
+      expectedLocalizationRevision,
+      expectedLocId,
+    );
+  }
+
+  @override
+  Future<Revision3DialogLocalizationEditPublication>
+  prepareAndPublishDialogLocalizationEditV1({
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  }) async {
+    dialogLocalizationEditPublishCalls++;
+    final publish = onDialogLocalizationEditPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no localization-edit publisher');
+    }
+    return publish(this, plan);
   }
 
   @override
@@ -5074,6 +5309,166 @@ _controllerDialogLocalizationReadResult({
     },
     request: request,
   );
+}
+
+Revision3ContentIndex _controllerDialogLocalizationEditIndex({
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'project_name': 'Controller localization edit',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 1,
+      'sha256': List<String>.filled(64, '5').join(),
+    },
+  },
+  'authoring_locales': <Object?>['de', 'en'],
+  'entity_counts': <String, Object?>{'localization_entry': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': localizationId,
+      'kind': 'localization_entry',
+      'display_name': 'Asghan warning',
+      'revision': localizationRevision,
+      'origin': <String, Object?>{'type': 'new', 'authored_runtime_id': locId},
+      'summary': <String, Object?>{
+        'kind': 'localization_entry',
+        'data': <String, Object?>{
+          'loc_id': locId,
+          'locales': <Object?>['de', 'en'],
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[],
+});
+
+AuthoringRevision3DialogLocalizationEditSeed
+_controllerDialogLocalizationEditSeed({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) {
+  final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
+    expectedHead: head,
+    localizationId: localizationId,
+    expectedLocalizationRevision: localizationRevision,
+    expectedLocId: locId,
+  );
+  return AuthoringRevision3DialogLocalizationEditSeed.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'read_only',
+      'head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'localization_id': localizationId,
+      'localization_revision': localizationRevision,
+      'loc_id': locId,
+      'locales': <Object?>[
+        <String, Object?>{
+          'locale': 'de',
+          'text': 'Bleib stehen!',
+          'voice_slot_present': false,
+          'candidate_count': 0,
+        },
+        <String, Object?>{
+          'locale': 'en',
+          'text': 'Stop right there!',
+          'voice_slot_present': false,
+          'candidate_count': 0,
+        },
+      ],
+      'line_backlinks': <Object?>[],
+      'content_authority': 'read_only_exact_current_localization_edit_seed',
+      'build_status': 'not_evaluated',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_applicable',
+    },
+    request: request,
+  );
+}
+
+Future<Revision3DialogLocalizationEditTechnicalPlan>
+_controllerDialogLocalizationEditPlan({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) async {
+  final index = _controllerDialogLocalizationEditIndex(
+    projectId: projectId,
+    projectRevision: projectRevision,
+    localizationId: localizationId,
+    localizationRevision: localizationRevision,
+    locId: locId,
+  );
+  final exact = _controllerDialogLocalizationEditSeed(
+    head: head,
+    projectId: projectId,
+    projectRevision: projectRevision,
+    localizationId: localizationId,
+    localizationRevision: localizationRevision,
+    locId: locId,
+  );
+  late Revision3DialogLocalizationEditTechnicalPlan captured;
+  final service = Revision3DialogLocalizationEditAuthoringService(
+    loadContentIndex: () async => index,
+    loadExactSeed:
+        ({
+          required expectedProjectId,
+          required expectedProjectRevision,
+          required localizationId,
+          required expectedLocalizationRevision,
+          required expectedLocId,
+        }) async => exact,
+    publishTechnicalPlan:
+        ({
+          required expectedProjectId,
+          required expectedProjectRevision,
+          required plan,
+        }) async {
+          captured = plan;
+          return Revision3DialogLocalizationEditPublication(
+            projectId: expectedProjectId,
+            projectRevision: expectedProjectRevision + 1,
+            localizationId: localizationId,
+            localizationRevision: localizationRevision + 1,
+            addedLocales: const <String>[],
+            removedLocales: const <String>[],
+          );
+        },
+  );
+  final catalog = await service.loadCatalog();
+  final seed = await service.loadSeed(
+    catalog: catalog,
+    choice: catalog.choices.single,
+  );
+  await service.publish(
+    seed: seed,
+    input: Revision3DialogLocalizationEditInput(
+      texts: const <String, String>{
+        'de': 'Geänderter Text.',
+        'en': 'Changed text.',
+      },
+    ),
+  );
+  return captured;
 }
 
 AuthoringRevision3DataAssetPackageIndexResult

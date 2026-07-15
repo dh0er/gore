@@ -10,6 +10,7 @@ import '../core/mod_ffi.dart';
 import 'managed_project_lock.dart';
 import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
+import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
@@ -72,6 +73,14 @@ final class ManagedRevision3CompilerSelectionStaleException
     extends ManagedProjectSessionException {
   const ManagedRevision3CompilerSelectionStaleException()
     : super('the selected compiler target is stale for the exact project');
+}
+
+/// The editor plan no longer names the exact entity generation owned by this
+/// still-healthy session. Refreshing the content index/seed is sufficient.
+final class ManagedRevision3DialogLocalizationEditStaleException
+    extends ManagedProjectSessionException {
+  const ManagedRevision3DialogLocalizationEditStaleException()
+    : super('the selected dialog localization is stale for the exact project');
 }
 
 /// Evidence from one compiler-only check plus the app-side post-call Store
@@ -299,6 +308,32 @@ final class ManagedRevision3DialogLineEntryCheckpoint {
   final String localizationId;
   final AuthoringRevision3DialogLocalizationAction localizationAction;
   final String? voiceSlotId;
+}
+
+/// One exact authored LocalizationEntry replacement returned only after native
+/// preparation, full candidate reopen, fixed-head CAS publication, and a full
+/// published reopen. It grants no topic, build, runtime, game, save, or native
+/// publication authority.
+final class ManagedRevision3DialogLocalizationEditCheckpoint {
+  const ManagedRevision3DialogLocalizationEditCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.localizationId,
+    required this.localizationRevision,
+    required this.addedLocales,
+    required this.removedLocales,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String localizationId;
+  final int localizationRevision;
+  final List<String> addedLocales;
+  final List<String> removedLocales;
 }
 
 /// One imported VoiceTake returned only after its native candidate was fully reopened,
@@ -652,6 +687,22 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String expectedLocId,
   });
 
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  });
+
+  Future<AuthoringRevision3DialogLocalizationEditPreparation>
+  prepareDialogLocalizationEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLocalizationEditRequestV1 request,
+  });
+
   Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
     required String root,
     required String gameRoot,
@@ -953,6 +1004,34 @@ final class ModFfiManagedRevision3AuthoringStore
     localizationId: localizationId,
     expectedLocalizationRevision: expectedLocalizationRevision,
     expectedLocId: expectedLocId,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => ffi.authoringStoreReadRevision3DialogLocalizationEditSeedV1(
+    root: root,
+    expectedHead: expectedHead,
+    localizationId: localizationId,
+    expectedLocalizationRevision: expectedLocalizationRevision,
+    expectedLocId: expectedLocId,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditPreparation>
+  prepareDialogLocalizationEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLocalizationEditRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3DialogLocalizationEditV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
   );
 
   @override
@@ -1994,6 +2073,150 @@ class ManagedRevision3AuthoringProjectSession {
     operation: 'readDialogLocalizationV1',
     handleReadError: _core._throwRevision3DialogLocalizationReadError,
   );
+
+  /// Read one complete exact-current authored LocalizationEntry plus the
+  /// bounded DialogLine/VoiceSlot facts needed to edit its locale texts.
+  /// This operation prepares and publishes nothing.
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _core.readExact<AuthoringRevision3DialogLocalizationEditSeed>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 localization-edit seed has no exact project identity',
+        );
+      }
+      final result = await _store.readDialogLocalizationEditSeedV1(
+        root: root.path,
+        expectedHead: basis.head,
+        localizationId: localizationId,
+        expectedLocalizationRevision: expectedLocalizationRevision,
+        expectedLocId: expectedLocId,
+      );
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          result.localizationId != localizationId ||
+          result.localizationRevision != expectedLocalizationRevision ||
+          result.locId != expectedLocId ||
+          result.contentAuthority !=
+              AuthoringRevision3DialogLocalizationEditContentAuthority
+                  .readOnlyExactCurrentLocalizationEditSeed ||
+          result.buildStatus !=
+              AuthoringRevision3DialogLocalizationEditSeedBuildStatus
+                  .notEvaluated ||
+          result.runtimeStatus !=
+              AuthoringRevision3DialogLocalizationEditRuntimeStatus
+                  .runtimeUnqualified ||
+          result.publicationStatus !=
+              AuthoringRevision3DialogLocalizationEditSeedPublicationStatus
+                  .notApplicable) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 localization-edit seed disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'readDialogLocalizationEditSeedV1',
+    handleReadError: _core._throwRevision3DialogLocalizationEditReadError,
+  );
+
+  /// Replace the locale/text map of one exact authored LocalizationEntry.
+  /// The typed request is rebound to the latest project JSON only inside the
+  /// serialized managed lane before native prepares an unpublished candidate.
+  Future<ManagedRevision3DialogLocalizationEditCheckpoint>
+  prepareAndPublishDialogLocalizationEditV1({
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3DialogLocalizationEditCheckpoint
+      >(
+        operation: 'prepareAndPublishDialogLocalizationEditV1',
+        handlePrepareError:
+            _core._throwRevision3DialogLocalizationEditPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 localization-edit transaction has no exact project identity',
+            );
+          }
+          if (plan.expectedHead.canonicalJson != basis.head.canonicalJson) {
+            throw const ManagedRevision3DialogLocalizationEditStaleException();
+          }
+          final request =
+              AuthoringRevision3DialogLocalizationEditRequestV1.forProject(
+                expectedHead: basis.head,
+                currentProjectJson: basis.projectJson,
+                localizationId: plan.localizationId,
+                expectedLocalizationRevision: plan.expectedLocalizationRevision,
+                expectedLocId: plan.expectedLocId,
+                texts: plan.texts,
+              );
+          final prepared = await _store.prepareDialogLocalizationEditV1(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          final currentTexts = _revision3DialogLocalizationTexts(
+            basis.projectJson,
+            localizationId: plan.localizationId,
+            expectedLocalizationRevision: plan.expectedLocalizationRevision,
+            expectedLocId: plan.expectedLocId,
+          );
+          final expectedAdded = plan.texts.keys
+              .where((locale) => !currentTexts.containsKey(locale))
+              .toList(growable: false);
+          final expectedRemoved = currentTexts.keys
+              .where((locale) => !plan.texts.containsKey(locale))
+              .toList(growable: false);
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.localizationId != plan.localizationId ||
+              prepared.localizationRevision !=
+                  plan.expectedLocalizationRevision + 1 ||
+              !_sameStrings(prepared.addedLocales, expectedAdded) ||
+              !_sameStrings(prepared.removedLocales, expectedRemoved) ||
+              prepared.buildStatus !=
+                  AuthoringRevision3DialogLocalizationEditBuildStatus.blocked ||
+              prepared.runtimeStatus !=
+                  AuthoringRevision3DialogLocalizationEditRuntimeStatus
+                      .runtimeUnqualified ||
+              prepared.topicAuthority !=
+                  AuthoringRevision3DialogLocalizationEditTopicAuthority
+                      .notGranted ||
+              prepared.publicationStatus !=
+                  AuthoringRevision3DialogLocalizationEditPublicationStatus
+                      .notSupported) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 localization-edit preparation disagrees with its exact session basis or plan',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3DialogLocalizationEditCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3DialogLocalizationEditCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              localizationId: prepared.localizationId,
+              localizationRevision: prepared.localizationRevision,
+              addedLocales: prepared.addedLocales,
+              removedLocales: prepared.removedLocales,
+            ),
+          );
+        },
+      );
 
   /// Import and publish one revision-3 Ogg-backed VoiceTake for an existing line/locale.
   ///
@@ -3982,6 +4205,84 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3DialogLocalizationEditReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationEditReadErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is ManagedRevision3DialogLocalizationEditStaleException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 localization-edit seed could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3DialogLocalizationEditPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationEditPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is ManagedRevision3DialogLocalizationEditStaleException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 localization edit could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoicePrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_HEAD_CONFLICT') {
@@ -4483,6 +4784,58 @@ bool _sameDraftContentSeal(
   AuthoringDraftContentSeal right,
 ) => left.byteLength == right.byteLength && left.sha256 == right.sha256;
 
+Map<String, String> _revision3DialogLocalizationTexts(
+  String projectJson, {
+  required String localizationId,
+  required int expectedLocalizationRevision,
+  required String expectedLocId,
+}) {
+  try {
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final entities = (project['entities'] as Map).cast<String, Object?>();
+    final rawEntity = entities[localizationId];
+    if (rawEntity is! Map) {
+      throw const ManagedRevision3DialogLocalizationEditStaleException();
+    }
+    final entity = rawEntity.cast<String, Object?>();
+    final origin = (entity['origin'] as Map).cast<String, Object?>();
+    final payload = (entity['payload'] as Map).cast<String, Object?>();
+    final data = (payload['data'] as Map).cast<String, Object?>();
+    if (entity['id'] != localizationId ||
+        entity['revision'] != expectedLocalizationRevision ||
+        origin['type'] != 'new' ||
+        payload['kind'] != 'localization_entry' ||
+        data['loc_id'] != expectedLocId) {
+      throw const ManagedRevision3DialogLocalizationEditStaleException();
+    }
+    final rawTexts = (data['texts'] as Map).cast<String, Object?>();
+    return Map<String, String>.unmodifiable(
+      rawTexts.map((locale, text) {
+        if (text is! String) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 localization text is not a string',
+          );
+        }
+        return MapEntry(locale, text);
+      }),
+    );
+  } on ManagedProjectSessionException {
+    rethrow;
+  } catch (_) {
+    throw const ManagedProjectVerificationException(
+      'revision-3 localization edit could not bind its exact project entity',
+    );
+  }
+}
+
+bool _sameStrings(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
+}
+
 bool _revision3QuestPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_ARTIFACT_FAILED',
   'AUTHORING_REVISION3_QUEST_CAPABILITY_FAILED',
@@ -4712,6 +5065,44 @@ bool _revision3DialogLocalizationReadErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
 }.contains(code);
+
+bool _revision3DialogLocalizationEditReadErrorIsRetryable(String code) =>
+    const {
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_BACKLINK_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_IDENTITY_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_LOCALE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_NOT_FOUND',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_ORIGIN_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_PROJECT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_RESPONSE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_SIGNED_WIRE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TARGET_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TEXT_LIMIT',
+    }.contains(code);
+
+bool _revision3DialogLocalizationEditPrepareErrorIsRetryable(String code) =>
+    const {
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_IDENTITY_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_INPUT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_LOCALE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_NO_CHANGES',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_NOT_FOUND',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_ORIGIN_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_PROJECT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_PROJECT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REQUEST_INVALID',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REQUEST_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REQUEST_REJECTED',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_RESPONSE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_SIGNED_WIRE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TARGET_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TEXT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_VOICE_CONFLICT',
+    }.contains(code);
 
 bool _revision3VoicePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_GAME_ROOT_UNAVAILABLE',

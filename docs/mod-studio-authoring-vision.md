@@ -220,6 +220,17 @@ workspace lazily mounts pages, preserves the selected primary destination,
 per-section secondary route, and mounted page state across revisions of the
 same project, and resets to Home when project identity changes.
 
+This shell is implemented scaffolding, not proof that its present navigation
+and card-heavy landing pages are the final UX. The compact Legacy tabs remain
+the minimum discoverability and task-efficiency baseline for workflows that
+already work there. Do not retire or hide one of those useful workflows until
+its managed equivalent is at least as direct and capable. The destinations
+above define stable product responsibilities; related responsibilities may be
+presented together in one productive workspace through progressive disclosure
+instead of multiplying dashboards, cards, and modal launchers. Major changes
+to that presentation require user review before they become the product
+direction.
+
 Home still loads the exact current `Revision3ContentIndex`, shows friendly
 project metadata and Draft status, counts NPCs, Quests, Dialog, Voice, assets,
 and unresolved references, and groups the already bounded actions. Story
@@ -1261,11 +1272,12 @@ discovery, rendering, selection, persistence, or spawning.
 Current execution priority is **completion before expansion**. Problems &
 Readiness V1 and honest prerequisite gates are the first landed usability
 checkpoint. Project-local dialog-line/localization creation or exact managed
-reuse and full reopen are now the landed V1 prerequisite, not vanilla adoption.
-The immediate queue remains: (1) complete the rest of that line/localization/
-Voice offline journey; (2) build, reopen, and verify one reviewed managed
-DataAsset stage; (3) finish project deletion, undo/history, export, and
-recovery, with Close already landed; (4) make the existing NPC and Quest
+reuse plus direct full-text/locale editing and full reopen are now landed
+bounded slices, not vanilla adoption. The immediate queue remains: (1) complete
+the rest of that line/localization/Voice offline journey, especially semantic
+line/slot relationships and production tooling; (2) build, reopen, and verify
+one reviewed managed DataAsset stage; (3) finish project deletion, undo/history,
+export, and recovery, with Close already landed; (4) make the existing NPC and Quest
 surfaces coherent authoring journeys; and (5) complete honest managed build/
 release and qualified test paths. Broad World or level authoring remains frozen
 until these workflows are usable end to end. World may stay visible as an
@@ -1313,11 +1325,16 @@ reuse one exact currently unused managed localization. Reuse now includes a
 bounded, read-only, exact-head localization preview and permits only locales
 with non-whitespace text; publication rechecks the same exact entity. The
 optional speaker value remains a label and grants no NPC binding. This closes
-the former fresh-project dead end, but it does not adopt vanilla data or
-complete this phase: the new line remains build-blocked and runtime-unqualified,
-and still needs the separate Voice-take preview, installed-target, production,
-deployment, and qualified audible-runtime journey. It creates no topic or
-AngelScript.
+the former fresh-project dead end. Localization & Voice also now provides a
+direct search/list/editor workspace for the complete bounded text map of intact
+project-owned localizations. It hides technical identity, shows shared-line
+backlinks, preserves VoiceSlot locales, locks candidate-backed transcripts, and
+publishes only the exact localization/project revision delta through the
+managed session. These slices do not adopt vanilla data or complete this phase:
+the new line remains build-blocked and runtime-unqualified and still needs the
+separate Voice-take preview, installed-target, production, deployment, and
+qualified audible-runtime journey. It creates no topic or AngelScript; bulk
+translation/review, history, and semantic line/slot editing also remain.
 
 ### Phase 2: unified browser, references, templates, and history
 
@@ -1407,7 +1424,10 @@ later milestone with its own package and runtime proofs.
 
 Reaching this research phase does not override the usability gate above. Broad
 World or level authoring begins only after the existing managed workflows meet
-their completion criteria.
+their completion criteria. Meeting those criteria is not automatic authority
+to continue: first stop at a clean, pushed core-Studio checkpoint, present the
+usable workflows for user review, and wait for explicit approval before any
+World or level implementation begins.
 
 ### Phase 7: production-scale authoring
 
@@ -1543,6 +1563,19 @@ The optional speaker input is metadata only and must never imply an NPC/topic
 binding. The result remains explicitly build-blocked, runtime-unqualified,
 topic-not-granted, and free of game/save access; this gate proves neither
 AngelScript nor playable dialog.
+
+The direct project-text editor has an additional bounded acceptance gate. It
+must load complete texts rather than reuse previews, expose no technical
+identity in normal UI, survive responsive and asynchronous selection changes,
+and publish only after reopening the exact current catalog and seed. Native,
+FFI, DTO, session, coordinator, domain, and widget tests must reject stale
+head/project/target/entity/LocID state, base-origin or wrong-kind targets,
+non-canonical/duplicate/over-budget locale maps, no-op and unrelated deltas,
+VoiceSlot removal/blanking, candidate-backed transcript changes, failed CAS,
+ambiguous publication, and malformed published reopen. A successful edit may
+advance only the project and localization revisions, replace that text map, and
+union newly introduced global authoring locales. It still grants no build,
+deployment, topic, runtime, game, or save authority.
 
 1. From one line selected by visible speaker/text, the UI/domain test uses the
    automatically derived German and English language slots and resolves them to

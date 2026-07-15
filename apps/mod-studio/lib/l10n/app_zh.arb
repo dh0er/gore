@@ -144,7 +144,7 @@
   "managedWorkspaceSettingsExpertLabel": "设置与专家工具",
   "managedSectionStoryDescription": "NPC、任务与对话。",
   "managedSectionWorldDescription": "世界放置及相关工作流程尚在规划中。",
-  "managedSectionLocalizationVoiceDescription": "语音制作工具现已可用；托管项目中的本地化编辑仍在规划中。",
+  "managedSectionLocalizationVoiceDescription": "在同一处编写和翻译项目对话，然后继续处理语音。",
   "managedSectionValidateTestDescription": "验证项目及检查点的精确完整性；不代表已完成运行时测试。",
   "managedSectionBuildReleaseDescription": "语音包现已可用；完整可玩构建和部署尚不可用。",
   "managedSectionSettingsExpertDescription": "设置现已可用；专家工具尚未集成。",

@@ -144,7 +144,7 @@
   "managedWorkspaceSettingsExpertLabel": "Ustawienia i tryb ekspercki",
   "managedSectionStoryDescription": "NPC, zadania i dialogi.",
   "managedSectionWorldDescription": "Rozmieszczanie w świecie i powiązane procesy są planowane.",
-  "managedSectionLocalizationVoiceDescription": "Narzędzia do produkcji głosów są dostępne; edycja lokalizacji w zarządzanym projekcie jest planowana.",
+  "managedSectionLocalizationVoiceDescription": "Pisz i tłumacz dialogi projektu w jednym miejscu, a potem przejdź do pracy nad głosami.",
   "managedSectionValidateTestDescription": "Sprawdza dokładną integralność projektu i punkty kontrolne; nie potwierdza testu w czasie działania.",
   "managedSectionBuildReleaseDescription": "Pakiety głosowe są dostępne; pełne grywalne kompilacje i wdrażanie nie są dostępne.",
   "managedSectionSettingsExpertDescription": "Ustawienia są dostępne; narzędzia eksperckie nie są jeszcze zintegrowane.",

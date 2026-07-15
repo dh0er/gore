@@ -1151,8 +1151,188 @@ abstract class AppLocalizations {
   /// No description provided for @managedSectionLocalizationVoiceDescription.
   ///
   /// In en, this message translates to:
-  /// **'Voice production tools are available; managed localization editing is planned.'**
+  /// **'Write and translate project dialog in one place, then continue with voice work.'**
   String get managedSectionLocalizationVoiceDescription;
+
+  /// No description provided for @managedLocalizationProjectTextsLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Project texts'**
+  String get managedLocalizationProjectTextsLabel;
+
+  /// No description provided for @managedLocalizationSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search project texts'**
+  String get managedLocalizationSearchLabel;
+
+  /// No description provided for @managedLocalizationRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh'**
+  String get managedLocalizationRefresh;
+
+  /// No description provided for @managedLocalizationEmptyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No project text yet'**
+  String get managedLocalizationEmptyTitle;
+
+  /// No description provided for @managedLocalizationEmptyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Create a dialog line to start writing and translating text.'**
+  String get managedLocalizationEmptyDescription;
+
+  /// No description provided for @managedLocalizationLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project texts could not be opened'**
+  String get managedLocalizationLoadFailed;
+
+  /// No description provided for @managedLocalizationSelectText.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a project text to edit'**
+  String get managedLocalizationSelectText;
+
+  /// No description provided for @managedLocalizationLanguagesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Languages'**
+  String get managedLocalizationLanguagesLabel;
+
+  /// No description provided for @managedLocalizationUsedByLines.
+  ///
+  /// In en, this message translates to:
+  /// **'Used by dialog lines'**
+  String get managedLocalizationUsedByLines;
+
+  /// No description provided for @managedLocalizationNoLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Not used by a dialog line yet'**
+  String get managedLocalizationNoLine;
+
+  /// No description provided for @managedLocalizationSpeakerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Speaker label'**
+  String get managedLocalizationSpeakerLabel;
+
+  /// No description provided for @managedLocalizationAddLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Add language'**
+  String get managedLocalizationAddLanguage;
+
+  /// No description provided for @managedLocalizationRemoveLanguage.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove language'**
+  String get managedLocalizationRemoveLanguage;
+
+  /// No description provided for @managedLocalizationLanguageHint.
+  ///
+  /// In en, this message translates to:
+  /// **'For example de, en, or pt-BR'**
+  String get managedLocalizationLanguageHint;
+
+  /// No description provided for @managedLocalizationLanguageExists.
+  ///
+  /// In en, this message translates to:
+  /// **'This language is already present.'**
+  String get managedLocalizationLanguageExists;
+
+  /// No description provided for @managedLocalizationAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'Add'**
+  String get managedLocalizationAdd;
+
+  /// No description provided for @managedLocalizationSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Project text saved'**
+  String get managedLocalizationSaved;
+
+  /// No description provided for @managedLocalizationVoiceLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'This text has recorded voice takes, so its transcript is locked in this editor.'**
+  String get managedLocalizationVoiceLocked;
+
+  /// No description provided for @managedLocalizationVoiceSlotRemovalLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'This language is connected to a Voice slot and cannot be removed here.'**
+  String get managedLocalizationVoiceSlotRemovalLocked;
+
+  /// No description provided for @managedLocalizationMinimumLanguageLocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep at least one language for this project text.'**
+  String get managedLocalizationMinimumLanguageLocked;
+
+  /// No description provided for @managedLocalizationSharedNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'This project text is shared. Saving changes updates every listed dialog line.'**
+  String get managedLocalizationSharedNotice;
+
+  /// No description provided for @managedLocalizationOfflineNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Changes are saved only to this managed project. Build and in-game behavior remain separate.'**
+  String get managedLocalizationOfflineNotice;
+
+  /// No description provided for @managedLocalizationUnsavedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard unsaved changes?'**
+  String get managedLocalizationUnsavedTitle;
+
+  /// No description provided for @managedLocalizationUnsavedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'You changed this project text. Switching now would discard those edits.'**
+  String get managedLocalizationUnsavedDescription;
+
+  /// No description provided for @managedLocalizationDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard changes'**
+  String get managedLocalizationDiscard;
+
+  /// No description provided for @managedLocalizationKeepEditing.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep editing'**
+  String get managedLocalizationKeepEditing;
+
+  /// No description provided for @managedLocalizationStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this text was open. Refresh and try again.'**
+  String get managedLocalizationStale;
+
+  /// No description provided for @managedLocalizationReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The project must be reopened before text editing can continue.'**
+  String get managedLocalizationReopen;
+
+  /// No description provided for @managedLocalizationInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Check that every language and dialog text is valid and not empty.'**
+  String get managedLocalizationInvalid;
+
+  /// No description provided for @managedLocalizationSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project text could not be saved.'**
+  String get managedLocalizationSaveFailed;
 
   /// No description provided for @managedSectionValidateTestDescription.
   ///

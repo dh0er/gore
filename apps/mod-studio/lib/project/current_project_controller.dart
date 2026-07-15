@@ -12,6 +12,7 @@ import 'managed_project_session.dart';
 import 'project_controller.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
+import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
@@ -142,6 +143,15 @@ bool _revision3DialogLocalizationReadErrorIsStale(String code) => const {
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_IDENTITY_CONFLICT',
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_NOT_FOUND',
   'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+}.contains(code);
+
+bool _revision3DialogLocalizationEditErrorIsStale(String code) => const {
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_IDENTITY_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_NOT_FOUND',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_ORIGIN_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_REVISION_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_TARGET_CONFLICT',
 }.contains(code);
 
 final class Revision3ManagedCompilerCheckRequiresReopenException
@@ -341,6 +351,22 @@ abstract interface class ManagedRevision3DialogLocalizationReadLease {
   });
 }
 
+/// Optional exact-current capability for full authored-text editing. Keeping
+/// it narrow avoids granting unrelated managed lease fakes mutation authority.
+abstract interface class ManagedRevision3DialogLocalizationEditLease {
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  });
+
+  Future<Revision3DialogLocalizationEditPublication>
+  prepareAndPublishDialogLocalizationEditV1({
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  });
+}
+
 typedef ManagedRevision3CurrentProjectOpener =
     Future<ManagedRevision3CurrentProjectLease> Function(Directory root);
 
@@ -447,7 +473,8 @@ final class ProjectSessionLegacyCurrentProjectLease
 final class _ManagedRevision3SessionLease
     implements
         ManagedRevision3CurrentProjectLease,
-        ManagedRevision3DialogLocalizationReadLease {
+        ManagedRevision3DialogLocalizationReadLease,
+        ManagedRevision3DialogLocalizationEditLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -495,6 +522,18 @@ final class _ManagedRevision3SessionLease
     required int expectedLocalizationRevision,
     required String expectedLocId,
   }) => _session.readDialogLocalizationV1(
+    localizationId: localizationId,
+    expectedLocalizationRevision: expectedLocalizationRevision,
+    expectedLocId: expectedLocId,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _session.readDialogLocalizationEditSeedV1(
     localizationId: localizationId,
     expectedLocalizationRevision: expectedLocalizationRevision,
     expectedLocId: expectedLocId,
@@ -724,6 +763,24 @@ final class _ManagedRevision3SessionLease
       localizationAction: checkpoint.localizationAction,
       voiceSlotId: checkpoint.voiceSlotId,
       locale: plan.locale,
+    );
+  }
+
+  @override
+  Future<Revision3DialogLocalizationEditPublication>
+  prepareAndPublishDialogLocalizationEditV1({
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishDialogLocalizationEditV1(
+      plan: plan,
+    );
+    return Revision3DialogLocalizationEditPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      localizationId: checkpoint.localizationId,
+      localizationRevision: checkpoint.localizationRevision,
+      addedLocales: checkpoint.addedLocales,
+      removedLocales: checkpoint.removedLocales,
     );
   }
 
@@ -1484,6 +1541,183 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3DialogLocalizationReadRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read a complete exact-current authored text plus the bounded DialogLine
+  /// and VoiceSlot facts required by the Localization & Voice workbench.
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readCurrentRevision3DialogLocalizationEditSeed({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'localization editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogLocalizationEditRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogLocalizationEditStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3DialogLocalizationEditLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit dialog localization',
+      );
+    }
+    final editor = lease as ManagedRevision3DialogLocalizationEditLease;
+    try {
+      final result = await editor.readDialogLocalizationEditSeedV1(
+        localizationId: localizationId,
+        expectedLocalizationRevision: expectedLocalizationRevision,
+        expectedLocId: expectedLocId,
+      );
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.localizationId != localizationId ||
+          result.localizationRevision != expectedLocalizationRevision ||
+          result.locId != expectedLocId) {
+        throw const Revision3DialogLocalizationEditStaleCheckpointException();
+      }
+      return result;
+    } on ManagedRevision3DialogLocalizationEditStaleException catch (
+      _,
+      stackTrace
+    ) {
+      Error.throwWithStackTrace(
+        const Revision3DialogLocalizationEditStaleCheckpointException(),
+        stackTrace,
+      );
+    } on ModFfiException catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationEditErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one exact authored LocalizationEntry text-map edit through the
+  /// app-wide project lane. The managed lease rebinds current_project_json and
+  /// performs native prepare, full reopen, head CAS, and published reopen.
+  Future<Revision3DialogLocalizationEditPublication>
+  prepareAndPublishCurrentRevision3DialogLocalizationEdit({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'localization editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogLocalizationEditRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        plan.expectedHead.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogLocalizationEditStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3DialogLocalizationEditLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot edit dialog localization',
+      );
+    }
+    final editor = lease as ManagedRevision3DialogLocalizationEditLease;
+    try {
+      final publication = await editor
+          .prepareAndPublishDialogLocalizationEditV1(plan: plan);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.localizationId != plan.localizationId ||
+          publication.localizationRevision !=
+              plan.expectedLocalizationRevision + 1) {
+        throw const CurrentProjectCoordinatorException(
+          'published localization edit disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } on ManagedRevision3DialogLocalizationEditStaleException catch (
+      _,
+      stackTrace
+    ) {
+      Error.throwWithStackTrace(
+        const Revision3DialogLocalizationEditStaleCheckpointException(),
+        stackTrace,
+      );
+    } on ModFfiException catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationEditErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_LOCALIZATION_EDIT_VOICE_CONFLICT') {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditLockedVoiceTextException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationEditRequiresReopenException(),
           stackTrace,
         );
       }

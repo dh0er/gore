@@ -606,7 +606,113 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedSectionLocalizationVoiceDescription =>
-      'Werkzeuge für die Sprachproduktion sind verfügbar; die Lokalisierungsbearbeitung im verwalteten Projekt ist geplant.';
+      'Schreibe und übersetze Projektdialoge an einem Ort und arbeite anschließend direkt an der Sprachausgabe weiter.';
+
+  @override
+  String get managedLocalizationProjectTextsLabel => 'Projekttexte';
+
+  @override
+  String get managedLocalizationSearchLabel => 'Projekttexte durchsuchen';
+
+  @override
+  String get managedLocalizationRefresh => 'Aktualisieren';
+
+  @override
+  String get managedLocalizationEmptyTitle => 'Noch keine Projekttexte';
+
+  @override
+  String get managedLocalizationEmptyDescription =>
+      'Erstelle eine Dialogzeile, um Text zu schreiben und zu übersetzen.';
+
+  @override
+  String get managedLocalizationLoadFailed =>
+      'Projekttexte konnten nicht geöffnet werden';
+
+  @override
+  String get managedLocalizationSelectText =>
+      'Wähle einen Projekttext zum Bearbeiten aus';
+
+  @override
+  String get managedLocalizationLanguagesLabel => 'Sprachen';
+
+  @override
+  String get managedLocalizationUsedByLines => 'Von Dialogzeilen verwendet';
+
+  @override
+  String get managedLocalizationNoLine => 'Noch keiner Dialogzeile zugeordnet';
+
+  @override
+  String get managedLocalizationSpeakerLabel => 'Sprecherbezeichnung';
+
+  @override
+  String get managedLocalizationAddLanguage => 'Sprache hinzufügen';
+
+  @override
+  String get managedLocalizationRemoveLanguage => 'Sprache entfernen';
+
+  @override
+  String get managedLocalizationLanguageHint =>
+      'Zum Beispiel de, en oder pt-BR';
+
+  @override
+  String get managedLocalizationLanguageExists =>
+      'Diese Sprache ist bereits vorhanden.';
+
+  @override
+  String get managedLocalizationAdd => 'Hinzufügen';
+
+  @override
+  String get managedLocalizationSaved => 'Projekttext gespeichert';
+
+  @override
+  String get managedLocalizationVoiceLocked =>
+      'Für diesen Text gibt es bereits Sprachaufnahmen. Deshalb ist der Text in diesem Editor gesperrt.';
+
+  @override
+  String get managedLocalizationVoiceSlotRemovalLocked =>
+      'Diese Sprache ist mit einem Voice-Slot verknüpft und kann hier nicht entfernt werden.';
+
+  @override
+  String get managedLocalizationMinimumLanguageLocked =>
+      'Behalte mindestens eine Sprache für diesen Projekttext.';
+
+  @override
+  String get managedLocalizationSharedNotice =>
+      'Dieser Projekttext wird gemeinsam verwendet. Speichern aktualisiert jede aufgeführte Dialogzeile.';
+
+  @override
+  String get managedLocalizationOfflineNotice =>
+      'Änderungen werden nur in diesem verwalteten Projekt gespeichert. Build und Verhalten im Spiel bleiben getrennte Schritte.';
+
+  @override
+  String get managedLocalizationUnsavedTitle =>
+      'Ungespeicherte Änderungen verwerfen?';
+
+  @override
+  String get managedLocalizationUnsavedDescription =>
+      'Du hast diesen Projekttext geändert. Beim Wechseln gehen diese Änderungen verloren.';
+
+  @override
+  String get managedLocalizationDiscard => 'Änderungen verwerfen';
+
+  @override
+  String get managedLocalizationKeepEditing => 'Weiter bearbeiten';
+
+  @override
+  String get managedLocalizationStale =>
+      'Das Projekt wurde geändert, während dieser Text geöffnet war. Aktualisiere die Ansicht und versuche es erneut.';
+
+  @override
+  String get managedLocalizationReopen =>
+      'Das Projekt muss neu geöffnet werden, bevor du Projekttexte weiter bearbeiten kannst.';
+
+  @override
+  String get managedLocalizationInvalid =>
+      'Prüfe, ob jede Sprache und jeder Dialogtext gültig und nicht leer ist.';
+
+  @override
+  String get managedLocalizationSaveFailed =>
+      'Der Projekttext konnte nicht gespeichert werden.';
 
   @override
   String get managedSectionValidateTestDescription =>

@@ -40,6 +40,7 @@ import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_dialog_line_authoring.dart';
 import 'project/revision3_dialog_line_dialog.dart';
+import 'project/revision3_dialog_localization_authoring.dart';
 import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
@@ -64,6 +65,7 @@ import 'project/revision3_project_workspace.dart';
 import 'project/revision3_scoped_content_browser.dart';
 import 'project/revision3_settings_expert_page.dart';
 import 'project/revision3_installed_content_browser.dart';
+import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
@@ -245,6 +247,11 @@ class HomePage extends ConsumerStatefulWidget {
 class _HomePageState extends ConsumerState<HomePage>
     with WidgetsBindingObserver {
   bool _projectActionBusy = false;
+  bool _managedWorkspaceDirty = false;
+
+  void _onManagedWorkspaceDirtyChanged(bool dirty) {
+    _managedWorkspaceDirty = dirty;
+  }
 
   @override
   void initState() {
@@ -391,31 +398,43 @@ class _HomePageState extends ConsumerState<HomePage>
   // Unsaved = there is staged content AND it differs from the last saved/loaded project, so a
   // project that was just saved doesn't prompt to discard on New/Open.
   bool _hasUnsavedEdits() {
-    if (ref.read(currentProjectCoordinatorProvider)
-        is! LegacyCurrentProjectState) {
-      return false;
-    }
-    return hasUnsavedChanges(ref);
+    return switch (ref.read(currentProjectCoordinatorProvider)) {
+      LegacyCurrentProjectState() => hasUnsavedChanges(ref),
+      ManagedRevision3CurrentProjectState() => _managedWorkspaceDirty,
+      NoCurrentProjectState() => false,
+    };
   }
 
   /// Confirm before discarding staged (unsaved) edits. Returns true to proceed.
   Future<bool> _confirmDiscardIfDirty() async {
     if (!_hasUnsavedEdits()) return true;
+    final managed =
+        ref.read(currentProjectCoordinatorProvider)
+            is ManagedRevision3CurrentProjectState;
+    final l10n = AppLocalizations.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Discard unsaved changes?'),
-        content: const Text(
-          'You have staged edits that are not saved to a project. Continue and discard them?',
+        title: Text(
+          managed
+              ? l10n.managedLocalizationUnsavedTitle
+              : 'Discard unsaved changes?',
+        ),
+        content: Text(
+          managed
+              ? l10n.managedLocalizationUnsavedDescription
+              : 'You have staged edits that are not saved to a project. Continue and discard them?',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
+            child: Text(
+              managed ? l10n.managedLocalizationKeepEditing : 'Cancel',
+            ),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Discard'),
+            child: Text(managed ? l10n.managedLocalizationDiscard : 'Discard'),
           ),
         ],
       ),
@@ -896,6 +915,7 @@ class _HomePageState extends ConsumerState<HomePage>
         ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
           project: currentProject,
           gameRoot: gameRoot,
+          onDialogLocalizationDirtyChanged: _onManagedWorkspaceDirtyChanged,
           verifyCurrentHead: _saveProject,
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
@@ -930,6 +950,38 @@ class _HomePageState extends ConsumerState<HomePage>
                   throw const Revision3DialogLineEntryStaleCheckpointException();
                 }
               },
+          loadDialogLocalizationEditSeed:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required localizationId,
+                required expectedLocalizationRevision,
+                required expectedLocId,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .readCurrentRevision3DialogLocalizationEditSeed(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: currentProject.head,
+                    localizationId: localizationId,
+                    expectedLocalizationRevision: expectedLocalizationRevision,
+                    expectedLocId: expectedLocId,
+                  ),
+          publishDialogLocalizationEdit:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .prepareAndPublishCurrentRevision3DialogLocalizationEdit(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: currentProject.head,
+                    plan: plan,
+                  ),
           publishDialogLine:
               ({
                 required expectedProjectId,
@@ -1476,10 +1528,13 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   const _ManagedRevision3ProjectView({
     required this.project,
     required this.gameRoot,
+    required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
     required this.loadBaseGameCatalog,
     required this.readDialogLocalization,
+    required this.loadDialogLocalizationEditSeed,
+    required this.publishDialogLocalizationEdit,
     required this.publishDialogLine,
     required this.publishVoiceTake,
     required this.publishVoiceTakeSelection,
@@ -1517,10 +1572,15 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
 
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
+  final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
   final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
   final Revision3DialogLineEntryLocalizationReader readDialogLocalization;
+  final Revision3DialogLocalizationEditSeedLoader
+  loadDialogLocalizationEditSeed;
+  final Revision3DialogLocalizationEditTechnicalPublisher
+  publishDialogLocalizationEdit;
   final Revision3DialogLineEntryTechnicalPublisher publishDialogLine;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
@@ -1574,6 +1634,10 @@ class _ManagedRevision3ProjectViewState
       widget.loadBaseGameCatalog;
   Revision3DialogLineEntryLocalizationReader get readDialogLocalization =>
       widget.readDialogLocalization;
+  Revision3DialogLocalizationEditSeedLoader
+  get loadDialogLocalizationEditSeed => widget.loadDialogLocalizationEditSeed;
+  Revision3DialogLocalizationEditTechnicalPublisher
+  get publishDialogLocalizationEdit => widget.publishDialogLocalizationEdit;
   Revision3DialogLineEntryTechnicalPublisher get publishDialogLine =>
       widget.publishDialogLine;
   Revision3VoiceTechnicalPublisher get publishVoiceTake =>
@@ -2354,24 +2418,16 @@ class _ManagedRevision3ProjectViewState
       load: loadContentIndex,
       builder: (context, availability) {
         final intactVoiceLine = availability.hasIntactVoiceLine;
-        final voiceLineDescription = switch (availability.status) {
-          _ManagedVoiceCatalogGateStatus.loading =>
-            l10n.managedDashboardLoading,
-          _ManagedVoiceCatalogGateStatus.unavailable =>
-            l10n.managedDashboardLoadErrorDescription,
-          _ManagedVoiceCatalogGateStatus.loaded =>
-            intactVoiceLine
-                ? l10n.managedActionAddVoiceTakeDescription
-                : l10n.managedActionAddVoiceTakeRequiresDialogLine,
-        };
-        final gameAndLineDescription = !gameConfigured
-            ? l10n.managedDashboardMissingGameDescription
-            : voiceLineDescription;
-        return Revision3ProjectSectionPage(
-          sectionId: 'localization-voice',
-          icon: Icons.record_voice_over_outlined,
-          title: l10n.managedWorkspaceLocalizationVoiceLabel,
-          description: l10n.managedSectionLocalizationVoiceDescription,
+        return Revision3LocalizationVoiceWorkspace(
+          projectId: project.projectId,
+          projectRevision: project.projectRevision,
+          service: Revision3DialogLocalizationEditAuthoringService(
+            loadContentIndex: availability.loadContentIndex,
+            loadExactSeed: loadDialogLocalizationEditSeed,
+            publishTechnicalPlan: publishDialogLocalizationEdit,
+          ),
+          copy: _localizationVoiceWorkspaceCopy(l10n),
+          onDirtyChanged: widget.onDialogLocalizationDirtyChanged,
           notice: !gameConfigured
               ? l10n.managedDashboardMissingGameDescription
               : availability.status == _ManagedVoiceCatalogGateStatus.loaded &&
@@ -2381,62 +2437,18 @@ class _ManagedRevision3ProjectViewState
                     _ManagedVoiceCatalogGateStatus.unavailable
               ? l10n.managedDashboardLoadErrorDescription
               : null,
-          statusHeading: l10n.managedSectionStatusHeading,
-          statusCards: [
-            Revision3ProjectSectionStatusCard(
-              id: 'managed-localization',
-              icon: Icons.translate_outlined,
-              title: l10n.managedCapabilityPartial,
-              description: l10n.managedActionNewDialogLineDescription,
-            ),
-          ],
-          actionHeading: l10n.managedSectionActionsHeading,
-          actionCards: [
-            Revision3ProjectSectionActionCard(
-              id: 'add-dialog-line',
-              icon: Icons.add_comment_outlined,
-              title: l10n.managedActionNewDialogLineTitle,
-              description: l10n.managedActionNewDialogLineDescription,
-              badge: l10n.managedCapabilityAvailable,
-              onPressed: project.requiresReopen
-                  ? null
-                  : () => unawaited(_openDialogLineEntry(context)),
-            ),
-            Revision3ProjectSectionActionCard(
-              id: 'add-voice-take',
-              icon: Icons.mic_none_outlined,
-              title: l10n.managedActionAddVoiceTakeTitle,
-              description: gameAndLineDescription,
-              badge: l10n.managedCapabilityPartial,
-              onPressed: gameConfigured && intactVoiceLine
-                  ? () => unawaited(_openVoiceWizard(context))
-                  : null,
-            ),
-            Revision3ProjectSectionActionCard(
-              id: 'manage-voice-takes',
-              icon: Icons.library_music_outlined,
-              title: l10n.managedActionManageVoiceTakesTitle,
-              description: intactVoiceLine
-                  ? l10n.managedActionManageVoiceTakesDescription
-                  : voiceLineDescription,
-              badge: l10n.managedCapabilityAvailable,
-              onPressed: intactVoiceLine
-                  ? () => unawaited(_openVoiceTakeSelection(context))
-                  : null,
-            ),
-            Revision3ProjectSectionActionCard(
-              id: 'resolve-voice-target',
-              icon: Icons.link_outlined,
-              title: l10n.managedActionResolveVoiceTargetTitle,
-              description: gameConfigured && intactVoiceLine
-                  ? l10n.managedActionResolveVoiceTargetDescription
-                  : gameAndLineDescription,
-              badge: l10n.managedCapabilityPartial,
-              onPressed: gameConfigured && intactVoiceLine
-                  ? () => unawaited(_openVoiceTargetResolver(context))
-                  : null,
-            ),
-          ],
+          onCreateDialogLine: project.requiresReopen
+              ? null
+              : () => _openDialogLineEntry(context),
+          onAddVoiceTake: gameConfigured && intactVoiceLine
+              ? () => _openVoiceWizard(context)
+              : null,
+          onManageVoiceTakes: intactVoiceLine
+              ? () => _openVoiceTakeSelection(context)
+              : null,
+          onResolveVoiceTarget: gameConfigured && intactVoiceLine
+              ? () => _openVoiceTargetResolver(context)
+              : null,
         );
       },
     );
@@ -3135,6 +3147,54 @@ Revision3DialogLineEntryDialogCopy _dialogLineEntryCopy(
   addRecording: l10n.managedDialogLineAddRecording,
 );
 
+Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
+  AppLocalizations l10n,
+) => Revision3LocalizationVoiceWorkspaceCopy(
+  title: l10n.managedWorkspaceLocalizationVoiceLabel,
+  description: l10n.managedSectionLocalizationVoiceDescription,
+  projectTextsLabel: l10n.managedLocalizationProjectTextsLabel,
+  searchLabel: l10n.managedLocalizationSearchLabel,
+  refreshLabel: l10n.managedLocalizationRefresh,
+  newLineLabel: l10n.managedActionNewDialogLineTitle,
+  addVoiceLabel: l10n.managedActionAddVoiceTakeTitle,
+  manageVoiceLabel: l10n.managedActionManageVoiceTakesTitle,
+  resolveVoiceLabel: l10n.managedActionResolveVoiceTargetTitle,
+  loadingLabel: l10n.managedDialogLineLoading,
+  emptyTitle: l10n.managedLocalizationEmptyTitle,
+  emptyDescription: l10n.managedLocalizationEmptyDescription,
+  loadFailedTitle: l10n.managedLocalizationLoadFailed,
+  retryLabel: l10n.managedDialogLineRetry,
+  selectTextLabel: l10n.managedLocalizationSelectText,
+  languagesLabel: l10n.managedLocalizationLanguagesLabel,
+  usedByLinesLabel: l10n.managedLocalizationUsedByLines,
+  noLineLabel: l10n.managedLocalizationNoLine,
+  speakerLabel: l10n.managedLocalizationSpeakerLabel,
+  addLanguageLabel: l10n.managedLocalizationAddLanguage,
+  removeLanguageLabel: l10n.managedLocalizationRemoveLanguage,
+  languageCodeLabel: l10n.managedDialogLineLocaleLabel,
+  languageCodeHint: l10n.managedLocalizationLanguageHint,
+  languageExistsMessage: l10n.managedLocalizationLanguageExists,
+  dialogTextLabel: l10n.managedDialogLineTextLabel,
+  addLabel: l10n.managedLocalizationAdd,
+  cancelLabel: l10n.managedDialogLineCancel,
+  saveLabel: l10n.managedDialogLineSave,
+  savingLabel: l10n.managedDialogLineSaving,
+  savedLabel: l10n.managedLocalizationSaved,
+  voiceLockedLabel: l10n.managedLocalizationVoiceLocked,
+  voiceSlotRemovalLockedLabel: l10n.managedLocalizationVoiceSlotRemovalLocked,
+  minimumLanguageLockedLabel: l10n.managedLocalizationMinimumLanguageLocked,
+  sharedTextNotice: l10n.managedLocalizationSharedNotice,
+  offlineNotice: l10n.managedLocalizationOfflineNotice,
+  unsavedTitle: l10n.managedLocalizationUnsavedTitle,
+  unsavedDescription: l10n.managedLocalizationUnsavedDescription,
+  discardLabel: l10n.managedLocalizationDiscard,
+  keepEditingLabel: l10n.managedLocalizationKeepEditing,
+  staleMessage: l10n.managedLocalizationStale,
+  reopenMessage: l10n.managedLocalizationReopen,
+  invalidInputMessage: l10n.managedLocalizationInvalid,
+  genericFailureMessage: l10n.managedLocalizationSaveFailed,
+);
+
 bool _hasIntactVoiceLine(Revision3ContentIndex index) {
   try {
     return Revision3VoiceCatalog.fromContentIndex(index).lines.isNotEmpty;
@@ -3148,7 +3208,11 @@ enum _ManagedVoiceCatalogGateStatus { loading, loaded, unavailable }
 typedef _ManagedVoiceCatalogGateBuilder =
     Widget Function(
       BuildContext context,
-      ({_ManagedVoiceCatalogGateStatus status, bool hasIntactVoiceLine})
+      ({
+        _ManagedVoiceCatalogGateStatus status,
+        bool hasIntactVoiceLine,
+        Revision3ContentIndexLoader loadContentIndex,
+      })
       availability,
     );
 
@@ -3182,6 +3246,7 @@ class _ManagedRevision3VoiceCatalogGateState
   _ManagedVoiceCatalogGateStatus _status =
       _ManagedVoiceCatalogGateStatus.loading;
   bool _intactVoiceLineAvailable = false;
+  Future<Revision3ContentIndex>? _currentLoad;
   int _loadEpoch = 0;
 
   @override
@@ -3212,6 +3277,8 @@ class _ManagedRevision3VoiceCatalogGateState
     final expectedProjectId = widget.projectId;
     final expectedProjectRevision = widget.projectRevision;
     final loader = widget.load;
+    final currentLoad = Future<Revision3ContentIndex>.sync(loader);
+    _currentLoad = currentLoad;
 
     void markLoading() {
       _status = _ManagedVoiceCatalogGateStatus.loading;
@@ -3226,7 +3293,7 @@ class _ManagedRevision3VoiceCatalogGateState
 
     unawaited(() async {
       try {
-        final index = await loader();
+        final index = await currentLoad;
         if (!mounted || epoch != _loadEpoch) return;
         if (index.projectId != expectedProjectId ||
             index.projectRevision != expectedProjectRevision) {
@@ -3250,10 +3317,21 @@ class _ManagedRevision3VoiceCatalogGateState
     }());
   }
 
+  Future<Revision3ContentIndex> _loadExactCurrent() {
+    if (_status == _ManagedVoiceCatalogGateStatus.unavailable) {
+      _reload(notify: true);
+    }
+    return _currentLoad ??
+        Future<Revision3ContentIndex>.error(
+          StateError('managed Voice content load is unavailable'),
+        );
+  }
+
   @override
   Widget build(BuildContext context) => widget.builder(context, (
     status: _status,
     hasIntactVoiceLine: _intactVoiceLineAvailable,
+    loadContentIndex: _loadExactCurrent,
   ));
 }
 

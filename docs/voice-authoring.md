@@ -10,33 +10,38 @@ The older compatibility-project Voice editor and deployment engine remain a
 separate path. Managed-R3 content is never silently copied into that project or
 treated as deployed compatibility state.
 
-## Visible Home workflow
+## Visible Studio workflow
 
-With a managed revision-3 project open, Home exposes one guided V1 prerequisite
-flow plus four separate Voice actions. The prerequisite and take-selection
-flows are project-only. Import, installed-target resolution, and bundle
-construction additionally need a Gothic 1 Remake installation configured in
-Settings.
+With a managed revision-3 project open, **Localization & Voice** is a direct
+search/list/editor workspace rather than a capability-card landing page. It
+keeps project text, language editing, the guided line action, and the bounded
+Voice authoring actions in steps 1–5 together. Text/line and take-selection
+flows are project-only. Import and installed-target resolution additionally
+need a Gothic 1 Remake installation configured in Settings. Bundle construction
+remains a separate **Build & Release** action and needs that installation too.
 
-1. The **guided dialog-line V1** flow lets a fresh project create the minimum
+1. **Project texts** searches exact project-owned localization entries and opens
+   their complete multilingual text maps inline. Its bounded edit contract is
+   described below.
+2. The **guided dialog-line V1** flow lets a fresh project create the minimum
    managed line/localization structure needed by the Voice tools. Its narrow
    contract and limits are described below.
-2. **Add Voice take** imports one real local Ogg for an existing dialog line and
+3. **Add Voice take** imports one real local Ogg for an existing dialog line and
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-3. **Manage Voice takes** searches existing dialog lines and lets the author
+4. **Manage Voice takes** searches existing dialog lines and lets the author
    select one already retained Approved candidate for an existing locale slot,
    or explicitly clear its current selection. It imports, removes, and changes
    no take or media asset, and it needs no game path.
-4. **Resolve Voice target** inspects the exact installed locale archive for one
+5. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-5. **Build Voice bundle** evaluates every current Voice slot and either shows
-   all structured blockers without creating output, or writes one sealed
-   voice-only bundle into a brand-new folder selected by the author. This is an
-   offline build; the dialog has no deployment action.
+6. Under **Build & Release**, **Build Voice bundle** evaluates every current
+   Voice slot and either shows all structured blockers without creating output,
+   or writes one sealed voice-only bundle into a brand-new folder selected by
+   the author. This is an offline build; the dialog has no deployment action.
 
 All authoring actions reload or bind the exact current project checkpoint. A
 stale dialog, changed project identity, changed canonical head, or session
@@ -47,6 +52,43 @@ The normal UI never asks for entity IDs, archive paths, member names, hashes,
 CAS paths, or bundle internals. A full Voice slot remains eligible for target
 resolution even though its candidate-capacity limit correctly prevents adding
 another take.
+
+## Project-text editor V1
+
+The managed workspace discovers only intact project-owned
+`LocalizationEntry` entities with `origin.type == new`. A friendly opaque list
+key keeps entity IDs and LocIDs out of normal presentation. Selecting a row
+performs a separate exact-current Store read and returns the complete bounded
+text for every locale, not the older 512-byte reuse preview. Shared
+`DialogLine` backlinks and speaker labels are shown so the author can see the
+scope of a text change before saving.
+
+One save replaces the complete locale/text map for that exact entry. The edit
+is bound to the fixed head, project identity/revision/target, entity identity
+and revision, and LocID. Only the project revision, localization revision,
+localization texts, and newly introduced global authoring locales may change;
+removing a text locale does not erase the project's global authoring-locale
+history. The native transaction rejects no-ops, non-canonical/duplicate
+locales, invalid or over-budget text, origin/identity drift, and every unrelated
+candidate delta. The prepare route accepts no game root, publishes nothing,
+fully reopens its immutable candidate, and repeats the fixed-head guard. The
+serialized managed session alone may publish by guarded CAS and then fully
+reopen the published project.
+
+A locale attached to a `VoiceSlot` cannot be removed or blanked. If recorded
+candidate takes exist for that slot, its transcript is also locked until the
+take relationship can be changed through a separately supported workflow. The
+current editor never guesses how to retime or rebind recorded audio. At least
+one language remains on every project text. New and previously written text
+cannot silently become blank. Stale selection, publication disagreement, or
+uncertain session state fails closed and asks for refresh/reopen instead of
+applying a guessed edit.
+
+This editor changes only the managed project. It grants no topic, AngelScript,
+NPC/speaker binding, build, deployment, runtime, game-installation, or save-game
+authority. It is the first direct multilingual editing slice, not yet bulk
+translation production, provenance/rebase, vanilla adoption, or a complete
+conversation graph editor.
 
 ## Fresh-project dialog-line prerequisite V1
 
@@ -256,8 +298,9 @@ The managed-R3 workflow still does not provide:
   adopting vanilla dialog/localization identities;
 - topic registration, AngelScript generation, conditions/effects, or a
   playable dialog path for a newly authored managed line; or
-- a complete dialog/localization editor with edit/delete/clone, bulk language
-  production, history, and provenance/rebase workflows.
+- localization delete/clone, line/slot relationship editing, bulk language
+  production, history, and provenance/rebase workflows, or a complete
+  conversation graph editor.
 
 This closes the fresh-project project-local prerequisite and retains the
 managed existing-member target and offline build foundation. It does not

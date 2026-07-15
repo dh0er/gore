@@ -144,7 +144,7 @@
   "managedWorkspaceSettingsExpertLabel": "Ajustes y modo experto",
   "managedSectionStoryDescription": "NPC, misiones y diálogos.",
   "managedSectionWorldDescription": "La colocación en el mundo y sus flujos de trabajo están planificados.",
-  "managedSectionLocalizationVoiceDescription": "Las herramientas de producción de voz están disponibles; la edición de localización en proyectos gestionados está planificada.",
+  "managedSectionLocalizationVoiceDescription": "Escribe y traduce diálogos del proyecto en un solo lugar y continúa después con las voces.",
   "managedSectionValidateTestDescription": "Verifica la integridad exacta del proyecto y sus puntos de control; no implica una prueba en ejecución.",
   "managedSectionBuildReleaseDescription": "Los paquetes de voces están disponibles; las compilaciones jugables completas y el despliegue no lo están.",
   "managedSectionSettingsExpertDescription": "Los ajustes están disponibles; las herramientas expertas aún no están integradas.",

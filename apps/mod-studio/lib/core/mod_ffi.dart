@@ -20,6 +20,7 @@ export '../dataasset/domain/reviewed_dataasset_schema.dart';
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
+part '../project/revision3_dialog_localization_edit.dart';
 part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
@@ -620,6 +621,38 @@ class ModFfi {
     final response = await _call(command, request._payload(root));
     try {
       return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+        response,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Read one exact-current authored LocalizationEntry together with the
+  /// bounded DialogLine and VoiceSlot facts needed by a safe text editor.
+  ///
+  /// This is read-only and grants no build, runtime, or publication authority.
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  authoringStoreReadRevision3DialogLocalizationEditSeedV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    const command =
+        'authoring_store_read_revision3_dialog_localization_edit_seed_v1';
+    _authoringRevision3Path(root, 'root');
+    final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
+      expectedHead: expectedHead,
+      localizationId: localizationId,
+      expectedLocalizationRevision: expectedLocalizationRevision,
+      expectedLocId: expectedLocId,
+    );
+    final response = await _call(command, request._payload(root));
+    try {
+      return AuthoringRevision3DialogLocalizationEditSeed.fromJson(
         response,
         request: request,
       );
@@ -1410,6 +1443,51 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3DialogLineEntryPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare an exact managed LocalizationEntry text-map replacement without
+  /// publishing the fixed project head.
+  ///
+  /// The native transaction fully reopens the immutable candidate. No game
+  /// root, build, runtime, deployment, or native publication authority crosses
+  /// this boundary.
+  Future<AuthoringRevision3DialogLocalizationEditPreparation>
+  authoringStorePrepareRevision3DialogLocalizationEditV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLocalizationEditRequestV1 request,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_dialog_localization_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3RequestString(
+      request.canonicalJson,
+      'dialogLocalizationEditRequestJson',
+      _maxAuthoringRevision3DialogLocalizationEditRequestBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'localization_edit_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3DialogLocalizationEditPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

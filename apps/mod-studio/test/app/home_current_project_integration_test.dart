@@ -24,6 +24,7 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
@@ -662,6 +663,111 @@ void main() {
   );
 
   testWidgets(
+    'dirty managed project text guards Open and Close without losing the draft',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = '91919191919191919191919191919191';
+      const localizationId = '92929292929292929292929292929292';
+      const localizationRevision = 4;
+      const locId = 'GORE_ASGHAN_DIRTY_GUARD';
+      const draft = 'Ungespeicherter Asghan-Text';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\managed-localization-dirty'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _dialogLocalizationEditIndex(
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          localizationId: localizationId,
+          localizationRevision: localizationRevision,
+          locId: locId,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, requestedId, requestedRevision, requestedLocId) {
+              expect(requestedId, localizationId);
+              expect(requestedRevision, localizationRevision);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: requestedId,
+                localizationRevision: requestedRevision,
+                locId: requestedLocId,
+              );
+            },
+        onDialogLocalizationEditPublish: (_, _) =>
+            throw StateError('dirty-guard test must not publish the draft'),
+      );
+      var pickerCalls = 0;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async {
+          pickerCalls++;
+          return r'C:\mods\replacement-managed-project';
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+      expect(managed.dialogLocalizationEditSeedCalls, 1);
+
+      final textField = find.byKey(const Key('revision3-localization-text-de'));
+      expect(textField, findsOneWidget);
+      final l10n = AppLocalizations.of(tester.element(textField));
+      await tester.enterText(textField, draft);
+      await tester.pump();
+
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('openManagedRevision3');
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(pickerCalls, 0);
+      expect(managed.closeCalls, 0);
+      await tester.tap(
+        find.widgetWithText(TextButton, l10n.managedLocalizationKeepEditing),
+      );
+      await tester.pumpAndSettle();
+
+      expect(pickerCalls, 0);
+      expect(managed.closeCalls, 0);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      expect(tester.widget<TextField>(textField).controller!.text, draft);
+
+      tester
+          .widget<PopupMenuButton<String>>(
+            find.byKey(const Key('project-menu')),
+          )
+          .onSelected!('close');
+      await tester.pumpAndSettle();
+
+      expect(find.text(l10n.managedLocalizationUnsavedTitle), findsOneWidget);
+      expect(managed.closeCalls, 0);
+      await tester.tap(
+        find.widgetWithText(FilledButton, l10n.managedLocalizationDiscard),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.closeCalls, 1);
+      expect(managed.dialogLocalizationEditPublishCalls, 0);
+      expect(coordinator.state, isA<NoCurrentProjectState>());
+      expect(
+        find.byKey(const Key('managed-revision3-project-view')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
     'managed content scopes stay lazy and show setup without game evidence',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -1097,39 +1203,22 @@ void main() {
         const Key('revision3-project-workspace-nav-localization-voice'),
       );
       expect(
-        find.byKey(
-          const Key('revision3-project-section-localization-voice-page'),
-        ),
+        find.byKey(const Key('revision3-localization-voice-workspace')),
         findsOneWidget,
       );
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+        key: const Key('revision3-localization-add-voice'),
         enabled: false,
       );
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'manage-voice-takes',
+        key: const Key('revision3-localization-manage-voice'),
         enabled: false,
       );
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'resolve-voice-target',
-        enabled: false,
-      );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'localization-voice',
-        actionId: 'manage-voice-takes',
-        enabled: false,
-      );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'localization-voice',
-        actionId: 'resolve-voice-target',
+        key: const Key('revision3-localization-resolve-voice'),
         enabled: false,
       );
 
@@ -2785,26 +2874,18 @@ void main() {
 
       await _navigateManagedLocalizationVoice(tester);
 
-      final sectionAction = _managedSectionAction(
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+      final sectionAction = find.byKey(
+        const Key('revision3-localization-add-voice'),
       );
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+        key: const Key('revision3-localization-add-voice'),
         enabled: false,
       );
       final sectionPrerequisite = AppLocalizations.of(
         tester.element(sectionAction),
       ).managedActionAddVoiceTakeRequiresDialogLine;
-      expect(
-        find.descendant(
-          of: sectionAction,
-          matching: find.text(sectionPrerequisite),
-        ),
-        findsOneWidget,
-      );
+      expect(find.text(sectionPrerequisite), findsOneWidget);
       expect(tester.takeException(), isNull);
       expect(managed.voicePublishCalls, 0);
     },
@@ -2849,22 +2930,19 @@ void main() {
 
     await _navigateManagedLocalizationVoice(tester);
 
-    _expectManagedSectionAction(
+    _expectLocalizationVoiceAction(
       tester,
-      sectionId: 'localization-voice',
-      actionId: 'add-voice-take',
+      key: const Key('revision3-localization-add-voice'),
       enabled: true,
     );
-    _expectManagedSectionAction(
+    _expectLocalizationVoiceAction(
       tester,
-      sectionId: 'localization-voice',
-      actionId: 'manage-voice-takes',
+      key: const Key('revision3-localization-manage-voice'),
       enabled: true,
     );
-    _expectManagedSectionAction(
+    _expectLocalizationVoiceAction(
       tester,
-      sectionId: 'localization-voice',
-      actionId: 'resolve-voice-target',
+      key: const Key('revision3-localization-resolve-voice'),
       enabled: true,
     );
     expect(tester.takeException(), isNull);
@@ -2915,17 +2993,12 @@ void main() {
       }
 
       await _navigateManagedLocalizationVoice(tester);
-      for (final actionId in const <String>[
-        'add-voice-take',
-        'manage-voice-takes',
-        'resolve-voice-target',
+      for (final key in const <Key>[
+        Key('revision3-localization-add-voice'),
+        Key('revision3-localization-manage-voice'),
+        Key('revision3-localization-resolve-voice'),
       ]) {
-        _expectManagedSectionAction(
-          tester,
-          sectionId: 'localization-voice',
-          actionId: actionId,
-          enabled: false,
-        );
+        _expectLocalizationVoiceAction(tester, key: key, enabled: false);
       }
       expect(find.byType(Revision3VoiceTakeDialog), findsNothing);
       expect(find.byType(Revision3VoiceTakeSelectionDialog), findsNothing);
@@ -2992,10 +3065,9 @@ void main() {
       await _navigateManagedLocalizationVoice(tester, settle: false);
       await tester.pump();
       expect(contentRead, 2);
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+        key: const Key('revision3-localization-add-voice'),
         enabled: false,
       );
 
@@ -3015,10 +3087,9 @@ void main() {
         await tester.pump();
       }
       expect(contentRead, 4);
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+        key: const Key('revision3-localization-add-voice'),
         enabled: false,
       );
 
@@ -3026,10 +3097,9 @@ void main() {
         _contentIndex(projectId: managed.projectId, revision: 8),
       );
       await tester.pumpAndSettle();
-      _expectManagedSectionAction(
+      _expectLocalizationVoiceAction(
         tester,
-        sectionId: 'localization-voice',
-        actionId: 'add-voice-take',
+        key: const Key('revision3-localization-add-voice'),
         enabled: false,
       );
 
@@ -4241,6 +4311,24 @@ void _expectManagedSectionAction(
   expect(tester.widget<InkWell>(inkWell).onTap, enabled ? isNotNull : isNull);
 }
 
+void _expectLocalizationVoiceAction(
+  WidgetTester tester, {
+  required Key key,
+  required bool enabled,
+}) {
+  final action = find.byKey(key);
+  expect(action, findsOneWidget);
+  final button = find.descendant(
+    of: action,
+    matching: find.byType(OutlinedButton),
+  );
+  expect(button, findsOneWidget);
+  expect(
+    tester.widget<OutlinedButton>(button).onPressed,
+    enabled ? isNotNull : isNull,
+  );
+}
+
 Future<void> _tapManagedSectionAction(
   WidgetTester tester, {
   required String sectionId,
@@ -4316,11 +4404,24 @@ typedef _DialogLocalizationReadCallback =
       int expectedLocalizationRevision,
       String expectedLocId,
     );
+typedef _DialogLocalizationEditSeedCallback =
+    FutureOr<AuthoringRevision3DialogLocalizationEditSeed> Function(
+      _FakeManagedLease lease,
+      String localizationId,
+      int expectedLocalizationRevision,
+      String expectedLocId,
+    );
+typedef _DialogLocalizationEditPublishCallback =
+    FutureOr<Revision3DialogLocalizationEditPublication> Function(
+      _FakeManagedLease lease,
+      Revision3DialogLocalizationEditTechnicalPlan plan,
+    );
 
 final class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
-        ManagedRevision3DialogLocalizationReadLease {
+        ManagedRevision3DialogLocalizationReadLease,
+        ManagedRevision3DialogLocalizationEditLease {
   _FakeManagedLease({
     required this.root,
     required this.projectId,
@@ -4339,6 +4440,8 @@ final class _FakeManagedLease
     this.onQuestContextSeed,
     this.onQuestContextPublish,
     this.onDialogLocalizationRead,
+    this.onDialogLocalizationEditSeed,
+    this.onDialogLocalizationEditPublish,
     this.onDialogLinePublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
@@ -4433,6 +4536,8 @@ final class _FakeManagedLease
   )?
   onQuestContextPublish;
   final _DialogLocalizationReadCallback? onDialogLocalizationRead;
+  final _DialogLocalizationEditSeedCallback? onDialogLocalizationEditSeed;
+  final _DialogLocalizationEditPublishCallback? onDialogLocalizationEditPublish;
   final Revision3DialogLineEntryPublication Function(
     _FakeManagedLease lease,
     Revision3DialogLineEntryTechnicalPlan plan,
@@ -4504,6 +4609,8 @@ final class _FakeManagedLease
   int questContextSeedCalls = 0;
   int questContextPublishCalls = 0;
   int dialogLocalizationReadCalls = 0;
+  int dialogLocalizationEditSeedCalls = 0;
+  int dialogLocalizationEditPublishCalls = 0;
   int dialogLinePublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
@@ -4549,6 +4656,39 @@ final class _FakeManagedLease
       expectedLocalizationRevision,
       expectedLocId,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationEditSeed>
+  readDialogLocalizationEditSeedV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationEditSeedCalls++;
+    final read = onDialogLocalizationEditSeed;
+    if (read == null) {
+      throw StateError('fake managed lease has no localization-edit reader');
+    }
+    return read(
+      this,
+      localizationId,
+      expectedLocalizationRevision,
+      expectedLocId,
+    );
+  }
+
+  @override
+  Future<Revision3DialogLocalizationEditPublication>
+  prepareAndPublishDialogLocalizationEditV1({
+    required Revision3DialogLocalizationEditTechnicalPlan plan,
+  }) async {
+    dialogLocalizationEditPublishCalls++;
+    final publish = onDialogLocalizationEditPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no localization-edit publisher');
+    }
+    return publish(this, plan);
   }
 
   @override
@@ -4959,6 +5099,94 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+Revision3ContentIndex _dialogLocalizationEditIndex({
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'project_name': 'Home localization edit',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 1,
+      'sha256': List<String>.filled(64, '5').join(),
+    },
+  },
+  'authoring_locales': <Object?>['de', 'en'],
+  'entity_counts': <String, Object?>{'localization_entry': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': localizationId,
+      'kind': 'localization_entry',
+      'display_name': 'Asghan warning',
+      'revision': localizationRevision,
+      'origin': <String, Object?>{'type': 'new', 'authored_runtime_id': locId},
+      'summary': <String, Object?>{
+        'kind': 'localization_entry',
+        'data': <String, Object?>{
+          'loc_id': locId,
+          'locales': <Object?>['de', 'en'],
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[],
+});
+
+AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
+  required _FakeManagedLease lease,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) {
+  final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
+    expectedHead: lease.head,
+    localizationId: localizationId,
+    expectedLocalizationRevision: localizationRevision,
+    expectedLocId: locId,
+  );
+  return AuthoringRevision3DialogLocalizationEditSeed.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'read_only',
+      'head_json': lease.head.canonicalJson,
+      'project_id': lease.projectId,
+      'project_revision': lease.projectRevision,
+      'localization_id': localizationId,
+      'localization_revision': localizationRevision,
+      'loc_id': locId,
+      'locales': <Object?>[
+        <String, Object?>{
+          'locale': 'de',
+          'text': 'Bleib stehen!',
+          'voice_slot_present': false,
+          'candidate_count': 0,
+        },
+        <String, Object?>{
+          'locale': 'en',
+          'text': 'Stop right there!',
+          'voice_slot_present': false,
+          'candidate_count': 0,
+        },
+      ],
+      'line_backlinks': <Object?>[],
+      'content_authority': 'read_only_exact_current_localization_edit_seed',
+      'build_status': 'not_evaluated',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_applicable',
+    },
+    request: request,
+  );
+}
 
 AuthoringRevision3DialogLocalizationReadResult _dialogLocalizationReadResult({
   required _FakeManagedLease lease,

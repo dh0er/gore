@@ -94,6 +94,13 @@
 //!   either creates or exactly reuses its managed localization, then fully reopens an immutable
 //!   unpublished revision-3 checkpoint. It accepts no game root and grants no topic, build,
 //!   runtime, deployment, save, or fixed-head publication authority.
+//! - `authoring_store_read_revision3_dialog_localization_edit_seed_v1` fully reopens one exact
+//!   current managed LocalizationEntry twice and returns its complete bounded texts plus only the
+//!   DialogLine/VoiceSlot impact facts needed by the editor.
+//!   `authoring_store_prepare_revision3_dialog_localization_edit_v1` applies one exact pure text-
+//!   map edit and fully reopens an immutable unpublished candidate. Neither route accepts a game
+//!   or save path, mutates the fixed head, or grants topic, build, runtime, or publication
+//!   authority. The closed preview-V1 and content-index-V1 wires remain unchanged.
 //! - `authoring_store_prepare_revision3_voice_take_v1` binds one existing dialog line and exact
 //!   locale to one unresolved VoiceSlot, imports one validated Ogg VoiceTake into immutable CAS,
 //!   and fully reopens an unpublished candidate. It never selects an unapproved take, resolves a
@@ -167,6 +174,7 @@ mod authoring;
 mod authoring_content_revision3;
 mod authoring_dataasset_package_index_revision3;
 mod authoring_dataasset_revision3;
+mod authoring_dialog_localization_edit_revision3;
 mod authoring_dialog_localization_revision3;
 mod authoring_dialog_revision3;
 mod authoring_drafts;
@@ -247,6 +255,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dataasset_edit_v1",
     "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_dialog_line_v1",
+    "authoring_store_prepare_revision3_dialog_localization_edit_v1",
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
     "authoring_store_prepare_revision3_quest_context_edit_v1",
@@ -260,6 +269,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
     "authoring_store_read_revision3_dataasset_package_index_v1",
+    "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
     "authoring_store_read_revision3_dialog_localization_v1",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
@@ -553,6 +563,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_dialog_line_v1" => {
             Some(authoring_dialog_revision3::prepare_revision3_dialog_line_v1_raw)
         }
+        "authoring_store_prepare_revision3_dialog_localization_edit_v1" => Some(
+            authoring_dialog_localization_edit_revision3::prepare_revision3_dialog_localization_edit_v1_raw,
+        ),
         "authoring_store_prepare_revision3_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_installed_dataasset_edit_v1_raw,
         ),
@@ -591,6 +604,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_read_revision3_dataasset_package_index_v1" => Some(
             authoring_dataasset_package_index_revision3::read_revision3_dataasset_package_index_v1_raw,
+        ),
+        "authoring_store_read_revision3_dialog_localization_edit_seed_v1" => Some(
+            authoring_dialog_localization_edit_revision3::read_revision3_dialog_localization_edit_seed_v1_raw,
         ),
         "authoring_store_read_revision3_dialog_localization_v1" => Some(
             authoring_dialog_localization_revision3::read_revision3_dialog_localization_v1_raw,
@@ -1662,6 +1678,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_dialog_line_v1",
+                    "authoring_store_prepare_revision3_dialog_localization_edit_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
@@ -1675,6 +1692,7 @@ mod tests {
                     "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
                     "authoring_store_read_revision3_dataasset_package_index_v1",
+                    "authoring_store_read_revision3_dialog_localization_edit_seed_v1",
                     "authoring_store_read_revision3_dialog_localization_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
@@ -1776,6 +1794,10 @@ mod tests {
             .any(|command| command == "authoring_store_prepare_revision3_dataasset_stage_v1"));
         assert!(commands
             .iter()
+            .any(|command| command
+                == "authoring_store_prepare_revision3_dialog_localization_edit_v1"));
+        assert!(commands
+            .iter()
             .any(|command| command == "authoring_store_prepare_revision3_npc_draft_v1"));
         assert!(commands
             .iter()
@@ -1812,6 +1834,10 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_dataasset_package_index_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command
+                == "authoring_store_read_revision3_dialog_localization_edit_seed_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_dialog_localization_v1"));

@@ -144,7 +144,7 @@
   "managedWorkspaceSettingsExpertLabel": "設定とエキスパート",
   "managedSectionStoryDescription": "NPC、クエスト、会話。",
   "managedSectionWorldDescription": "ワールドへの配置と関連ワークフローは今後対応予定です。",
-  "managedSectionLocalizationVoiceDescription": "音声制作ツールは利用できます。管理プロジェクトでのローカライズ編集は今後対応予定です。",
+  "managedSectionLocalizationVoiceDescription": "プロジェクトの台詞の作成と翻訳を一か所で行い、そのまま音声作業へ進めます。",
   "managedSectionValidateTestDescription": "プロジェクトの完全性とチェックポイントを厳密に検証します。実行時テストを保証するものではありません。",
   "managedSectionBuildReleaseDescription": "音声バンドルは利用できますが、完全にプレイ可能なビルドとデプロイは利用できません。",
   "managedSectionSettingsExpertDescription": "設定は利用できますが、エキスパートツールはまだ統合されていません。",

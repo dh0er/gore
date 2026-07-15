@@ -144,7 +144,7 @@
   "managedWorkspaceSettingsExpertLabel": "Impostazioni e modalità esperta",
   "managedSectionStoryDescription": "PNG, missioni e dialoghi.",
   "managedSectionWorldDescription": "Il posizionamento nel mondo e i relativi flussi di lavoro sono pianificati.",
-  "managedSectionLocalizationVoiceDescription": "Gli strumenti di produzione vocale sono disponibili; la modifica delle localizzazioni nel progetto gestito è pianificata.",
+  "managedSectionLocalizationVoiceDescription": "Scrivi e traduci i dialoghi del progetto in un unico posto, quindi continua con le voci.",
   "managedSectionValidateTestDescription": "Verifica l’integrità esatta del progetto e i checkpoint; non attesta test in esecuzione.",
   "managedSectionBuildReleaseDescription": "I bundle vocali sono disponibili; le build giocabili complete e la distribuzione non lo sono.",
   "managedSectionSettingsExpertDescription": "Le impostazioni sono disponibili; gli strumenti esperti non sono ancora integrati.",

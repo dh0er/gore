@@ -23,6 +23,7 @@ mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_dialog;
+mod story_transaction_revision3_dialog_localization_edit;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
@@ -193,6 +194,16 @@ pub use story_transaction_revision3_dialog::{
     MAX_REVISION3_DIALOG_LOCALIZATION_TEXT_BYTES_V1,
     MAX_REVISION3_DIALOG_LOCALIZATION_TEXT_TOTAL_BYTES_V1,
     MAX_REVISION3_DIALOG_SPEAKER_HINT_BYTES_V1,
+};
+pub use story_transaction_revision3_dialog_localization_edit::{
+    apply_revision3_dialog_localization_edit_transaction_v1,
+    Revision3DialogLocalizationEditBuildStatusV1, Revision3DialogLocalizationEditConflictV1,
+    Revision3DialogLocalizationEditErrorV1, Revision3DialogLocalizationEditEvaluationV1,
+    Revision3DialogLocalizationEditOutcomeV1, Revision3DialogLocalizationEditPublicationStatusV1,
+    Revision3DialogLocalizationEditRejectionV1, Revision3DialogLocalizationEditRequestJsonErrorV1,
+    Revision3DialogLocalizationEditRequestV1, Revision3DialogLocalizationEditRuntimeStatusV1,
+    Revision3DialogLocalizationEditTopicAuthorityV1,
+    MAX_REVISION3_DIALOG_LOCALIZATION_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_npc::{
     apply_revision3_npc_draft_transaction_v1, Revision3NpcCatalogAuthorityV1,

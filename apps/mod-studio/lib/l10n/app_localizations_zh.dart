@@ -589,7 +589,110 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedSectionLocalizationVoiceDescription =>
-      '语音制作工具现已可用；托管项目中的本地化编辑仍在规划中。';
+      '在同一处编写和翻译项目对话，然后继续处理语音。';
+
+  @override
+  String get managedLocalizationProjectTextsLabel => 'Project texts';
+
+  @override
+  String get managedLocalizationSearchLabel => 'Search project texts';
+
+  @override
+  String get managedLocalizationRefresh => 'Refresh';
+
+  @override
+  String get managedLocalizationEmptyTitle => 'No project text yet';
+
+  @override
+  String get managedLocalizationEmptyDescription =>
+      'Create a dialog line to start writing and translating text.';
+
+  @override
+  String get managedLocalizationLoadFailed =>
+      'Project texts could not be opened';
+
+  @override
+  String get managedLocalizationSelectText => 'Select a project text to edit';
+
+  @override
+  String get managedLocalizationLanguagesLabel => 'Languages';
+
+  @override
+  String get managedLocalizationUsedByLines => 'Used by dialog lines';
+
+  @override
+  String get managedLocalizationNoLine => 'Not used by a dialog line yet';
+
+  @override
+  String get managedLocalizationSpeakerLabel => 'Speaker label';
+
+  @override
+  String get managedLocalizationAddLanguage => 'Add language';
+
+  @override
+  String get managedLocalizationRemoveLanguage => 'Remove language';
+
+  @override
+  String get managedLocalizationLanguageHint => 'For example de, en, or pt-BR';
+
+  @override
+  String get managedLocalizationLanguageExists =>
+      'This language is already present.';
+
+  @override
+  String get managedLocalizationAdd => 'Add';
+
+  @override
+  String get managedLocalizationSaved => 'Project text saved';
+
+  @override
+  String get managedLocalizationVoiceLocked =>
+      'This text has recorded voice takes, so its transcript is locked in this editor.';
+
+  @override
+  String get managedLocalizationVoiceSlotRemovalLocked =>
+      'This language is connected to a Voice slot and cannot be removed here.';
+
+  @override
+  String get managedLocalizationMinimumLanguageLocked =>
+      'Keep at least one language for this project text.';
+
+  @override
+  String get managedLocalizationSharedNotice =>
+      'This project text is shared. Saving changes updates every listed dialog line.';
+
+  @override
+  String get managedLocalizationOfflineNotice =>
+      'Changes are saved only to this managed project. Build and in-game behavior remain separate.';
+
+  @override
+  String get managedLocalizationUnsavedTitle => 'Discard unsaved changes?';
+
+  @override
+  String get managedLocalizationUnsavedDescription =>
+      'You changed this project text. Switching now would discard those edits.';
+
+  @override
+  String get managedLocalizationDiscard => 'Discard changes';
+
+  @override
+  String get managedLocalizationKeepEditing => 'Keep editing';
+
+  @override
+  String get managedLocalizationStale =>
+      'The project changed while this text was open. Refresh and try again.';
+
+  @override
+  String get managedLocalizationReopen =>
+      'The project must be reopened before text editing can continue.';
+
+  @override
+  String get managedLocalizationInvalid =>
+      'Check that every language and dialog text is valid and not empty.';
+
+  @override
+  String get managedLocalizationSaveFailed =>
+      'The project text could not be saved.';
 
   @override
   String get managedSectionValidateTestDescription =>
@@ -2046,7 +2149,7 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedSectionLocalizationVoiceDescription =>
-      '语音制作工具现已可用；托管项目中的本地化编辑仍在规划中。';
+      '在同一处编写和翻译项目对话，然后继续处理语音。';
 
   @override
   String get managedSectionValidateTestDescription =>

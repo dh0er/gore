@@ -270,6 +270,7 @@ void main() {
         'authoring_store_prepare_revision3_dataasset_edit_v1',
         'authoring_store_prepare_revision3_dataasset_stage_v1',
         'authoring_store_prepare_revision3_dialog_line_v1',
+        'authoring_store_prepare_revision3_dialog_localization_edit_v1',
         'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
         'authoring_store_prepare_revision3_npc_draft_v1',
         'authoring_store_prepare_revision3_quest_context_edit_v1',
@@ -283,6 +284,7 @@ void main() {
         'authoring_store_prepare_revision3_voice_target_v1',
         'authoring_store_read_revision3_content_index_v1',
         'authoring_store_read_revision3_dataasset_package_index_v1',
+        'authoring_store_read_revision3_dialog_localization_edit_seed_v1',
         'authoring_store_read_revision3_dialog_localization_v1',
       ],
     );
