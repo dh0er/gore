@@ -358,6 +358,20 @@ into `Script/`, launching the game, then restoring the install — itself. The
 install is resolved from `--game`, else the configured game path / Steam
 auto-detect.
 
+Before any staging, compile fails closed if the shipping game process is
+running, process inspection is unavailable, or a prior compile/recovery
+artifact exists. Compile, deploy, manager apply, and undeploy share the atomic
+`.gore-install-mutation.lock`, so two toolkit processes cannot mutate the same
+installation concurrently. Product compile entry points hold that ownership
+from deployment-aware pristine-cache selection through compiler use. They
+recheck the shipping process immediately before the first live-content or
+recovery write; this narrows but cannot eliminate a later launch race because
+the game does not participate in the toolkit lock. Keep the game closed for the
+whole operation. A confirmed compiler exit restores every touched path before
+releasing ownership. If process exit or exact restoration cannot be proved,
+recovery artifacts and cross-tool ownership are retained and no usable compile
+result is returned.
+
 ```sh
 # dump the vanilla modules as an editable .as tree:
 gore as emit-all "$GAME/G1R/Script/PrecompiledScript_Shipping.Cache" out_as/
@@ -378,6 +392,17 @@ the selected AMD64 executable has exactly one raw masked callback match and its 
 never installed into the game. A missing/changed/ambiguous signature, structural mismatch, or
 confirmed hook failure falls back to the unchanged generator; use `--no-diagnostics` for a silent
 explicit opt-out.
+
+Mod Studio's Scripts workspace exposes the same attempt as a bounded compiler
+report: diagnostics retain file/line/column/severity, fallback use is explicit,
+and install restoration is reported independently from compile success. The UI
+accepts a mini-cache only with `restored_exact` and only from the invocation's
+regular, marker-bound native staging child. Its app-scoped read-only safety
+state keeps Compile and Deploy blocked while the game runs, inspection is
+uncertain, or compiler/deploy recovery persists; only a fresh safe native probe
+clears the warning. Offline Build remains available, and Undeploy remains
+reachable so native recovery can decide safely. Recovery-required outcomes stay
+failed even if the compiler produced bytes.
 Compatibility can be audited without launching the game, including custom/non-Steam executables:
 
 ```sh

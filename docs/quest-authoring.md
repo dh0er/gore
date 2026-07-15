@@ -338,8 +338,31 @@ success. The operation remains `build_status: blocked`,
 `publication_status: not_supported` at the native boundary. It performs no
 compile, package, deployment, game-installation write, game launch, or save-file
 read/write. Outline V1 deliberately rejects a generator-V4 Quest rather than
-reordering titles while losing stable slot semantics. A future slot-aware
-Outline V2 must own that operation.
+reordering titles while losing stable slot semantics.
+
+### Managed revision-3 stable-slot outline edit V2
+
+Generator-V4 Quests use the adjacent stable-slot-aware Outline V2 transaction.
+The same **Name & objectives** dialog loads the exact-current transition seed,
+keeps every active objective slot exactly once, and moves each slot together
+with its edited title. Reordering presentation therefore preserves every
+condition/effect reference and the complete transition graph. The editor still
+cannot add/remove objectives or edit technical IDs, parent, giver, provenance,
+or runtime behavior.
+
+`apply_revision3_quest_outline_edit_transaction_v2` binds the project, Quest,
+owned ScriptModule, active slot set, `next_slot_ordinal`, and a domain-separated
+transition-plan seal. The prepare-only
+`authoring_store_prepare_revision3_quest_outline_edit_v2` repeats the full Store
+and exact-current closure checks, regenerates deterministically, fully reopens
+the immutable candidate, and verifies that only the display name, Quest title,
+objective titles/order, generated module bytes/seals, and the three revisions
+changed. Conditions, effects, active slots, next ordinal, and all unrelated
+entities must remain exact. Native code still returns only `blocked`,
+`runtime_unqualified`, `not_supported`, and never publishes the fixed head;
+the managed session uses the same repair-journal and exact-head byte-CAS lane as
+V1. No game root, compiler, build, deploy, game launch, or save access is part
+of V2.
 
 ### Managed revision-3 existing-Quest context edit V1
 
@@ -595,8 +618,9 @@ authoring, compile, build, deploy, runtime, or fixed-head authority.
 ## Mod Studio boundary
 
 Mod Studio now provides the bounded Draft wizard, count-preserving legacy
-outline edit, catalog-bound context edit, the V4 behavior table, and the
-read-only generated-source inspection described above. A synchronized
+outline edit, stable-slot-aware V4 outline edit, catalog-bound context edit, the
+V4 behavior table, and the read-only generated-source inspection described
+above. A synchronized
 transcript/general graph, journal/reward/item authoring, arbitrary source,
 complete diagnostics, build lowering, deployment, and runtime test workflow are
 not part of this slice. The deterministic generator itself does not invoke the
@@ -610,9 +634,13 @@ generator already completed, `UnavailableWithoutFallback` uses that result and
 does not start a second process. Invalid capture becomes `CaptureInvalid` and
 rejects an otherwise usable cache; an unconfirmed process exit remains
 fail-closed, preserves recovery state, and exposes no possibly live capture.
-This is the prerequisite for a future explicit **Run compiler check** action.
-It is not yet wired to the exact-current Quest FFI or Studio and therefore does
-not change any Quest readiness status in this document.
+The generic Scripts workspace now consumes that structured report: it requires
+an explicit close-game confirmation, shows compiler diagnostics and fallback
+status, accepts output only after an exact install restore, and surfaces retained
+recovery as the dominant failure state. This remains separate from managed
+Quest/NPC authoring. There is still no exact-current managed-Quest compiler
+command, so the report does not change any Quest readiness status in this
+document.
 
 Offline compiler/compose/reopen evidence now covers the listed lifecycle
 field/hook/handler/getter/call shapes, but not one exact renderer-produced

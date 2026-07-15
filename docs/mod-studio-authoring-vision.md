@@ -16,6 +16,38 @@ Related evidence and operating boundaries:
 - [Cooked DataAsset fixed-leaf workflow](dataasset-authoring.md)
 - [Offline AngelScript default patching](angelscript-default-patching.md)
 
+### Current implementation delta (2026-07-15)
+
+This checkpoint advances three previously partial rows below; these statements
+supersede older “not wired yet” wording where the matrix has not yet been
+consolidated:
+
+- **Name & objectives** is no longer disabled after a Quest receives generator-
+  V4 behavior. A native/Dart managed Outline V2 transaction keeps the active
+  objective-slot set, next ordinal, conditions, effects, identities, and all
+  unrelated entities exact while allowing display name, Quest title, objective
+  titles, and presentation order to change. Studio loads and carries the stable
+  slots invisibly and publishes only through the existing exact-head managed
+  checkpoint lane. This remains offline, build-blocked, runtime-unqualified,
+  and undeployed.
+- The generic Scripts workspace now consumes the compiler's bounded structured
+  report. It presents file/line/column/severity diagnostics, states when the
+  normal fallback was used, and accepts only a regular marker-bound mini under
+  the invocation's uniquely owned staging child after `restored_exact`. One
+  app-scoped read-only safety state keeps Compile and Deploy blocked across
+  source/mod changes while the game runs, inspection is uncertain, or compiler
+  or deploy recovery persists; only a fresh safe native probe clears it.
+  Compile, deploy, manager apply, and undeploy share one cross-tool install
+  mutation guard and recheck the process immediately before their first live-
+  content or recovery write. This narrows rather than eliminates a later game-
+  launch race because the game does not honor the toolkit lock. Managed Quest/
+  NPC compile/build integration is still missing.
+- Current-hotfix Viper and Asghan dialog candidates have deterministic copied-
+  cache remaps and offline parse/disassemble/decompile/undeploy evidence. Viper
+  still needs the controlled render-only live gate; Asghan still needs the
+  separate disposable-save state matrix. Neither offline result is gameplay
+  proof.
+
 ## 1. Product outcome
 
 A complete Mod Studio lets a non-technical author build a substantial mod in
