@@ -39,6 +39,7 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
     this.publish,
     this.publishReviewed,
     this.initialQuery = '',
+    this.initialTargetPath,
     super.key,
   });
 
@@ -48,6 +49,11 @@ class InstalledPackageBrowserDialog extends StatefulWidget {
   final InstalledDataAssetSemanticStagePublisher? publish;
   final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
   final String initialQuery;
+
+  /// Optional one-shot inspection intent. It is resolved by exact canonical
+  /// path against the freshly loaded snapshot; [initialQuery] remains only a
+  /// presentation filter and never authorizes a candidate.
+  final String? initialTargetPath;
 
   @override
   State<InstalledPackageBrowserDialog> createState() =>
@@ -64,6 +70,10 @@ class _InstalledPackageBrowserDialogState
   int? _inspectingOrdinal;
   Object? _inspectionError;
   int _inspectionEpoch = 0;
+  int _snapshotEpoch = 0;
+  bool _initialTargetResolutionScheduled = false;
+  bool _initialTargetResolved = false;
+  String? _initialTargetError;
 
   @override
   void initState() {
@@ -81,10 +91,13 @@ class _InstalledPackageBrowserDialogState
   void _refresh() {
     final next = _load();
     _inspectionEpoch += 1;
+    _snapshotEpoch += 1;
     setState(() {
       _snapshot = next;
       _inspectingOrdinal = null;
       _inspectionError = null;
+      _initialTargetResolutionScheduled = false;
+      _initialTargetError = null;
     });
   }
 
@@ -99,6 +112,7 @@ class _InstalledPackageBrowserDialogState
   @override
   void dispose() {
     _inspectionEpoch += 1;
+    _snapshotEpoch += 1;
     _debounce?.cancel();
     _search
       ..removeListener(_searchChanged)
@@ -143,6 +157,7 @@ class _InstalledPackageBrowserDialogState
                 retry: _refresh,
               );
             }
+            _scheduleInitialTargetResolution(result);
             return _buildResult(context, result);
           },
         ),
@@ -231,6 +246,20 @@ class _InstalledPackageBrowserDialogState
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
           SliverToBoxAdapter(
             child: _InstalledPackageInspectionError(error: _inspectionError!),
+          ),
+        ],
+        if (_initialTargetError != null) ...[
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+          SliverToBoxAdapter(
+            child: Card(
+              key: const Key('installed-package-initial-target-error'),
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                leading: const Icon(Icons.refresh_outlined),
+                title: const Text('Installed search result is no longer exact'),
+                subtitle: Text(_initialTargetError!),
+              ),
+            ),
           ),
         ],
         if (reviewedCandidates.isNotEmpty) ...[
@@ -479,6 +508,55 @@ class _InstalledPackageBrowserDialogState
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text('Copied $path')));
+  }
+
+  void _scheduleInitialTargetResolution(
+    AuthoringRevision3DataAssetPackageIndexResult snapshot,
+  ) {
+    final targetPath = widget.initialTargetPath;
+    if (targetPath == null ||
+        _initialTargetResolutionScheduled ||
+        _initialTargetResolved) {
+      return;
+    }
+    _initialTargetResolutionScheduled = true;
+    final snapshotEpoch = _snapshotEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || snapshotEpoch != _snapshotEpoch) return;
+      unawaited(_resolveInitialTarget(snapshot, targetPath));
+    });
+  }
+
+  Future<void> _resolveInitialTarget(
+    AuthoringRevision3DataAssetPackageIndexResult snapshot,
+    String targetPath,
+  ) async {
+    AuthoringRevision3DataAssetPackageCandidate? exact;
+    var ambiguous = false;
+    if (_isCanonicalGamePackagePath(targetPath)) {
+      for (final candidate in snapshot.index.candidates) {
+        if (candidate.targetPath != targetPath) continue;
+        if (exact != null) {
+          ambiguous = true;
+          break;
+        }
+        exact = candidate;
+      }
+    }
+    final inspectUnavailable = widget.inspect == null;
+    if (exact == null || ambiguous || inspectUnavailable) {
+      if (!mounted) return;
+      setState(() {
+        _initialTargetError = ambiguous
+            ? 'More than one package has this exact path. Refresh the installed snapshot before trying again.'
+            : inspectUnavailable
+            ? 'Exact inspection is unavailable in this browser. Return to the current project and try again.'
+            : 'The exact package path is missing from the fresh installed snapshot. Refresh the browser and search again.';
+      });
+      return;
+    }
+    _initialTargetResolved = true;
+    await _inspectCandidate(snapshot, exact);
   }
 
   Future<void> _inspectCandidate(

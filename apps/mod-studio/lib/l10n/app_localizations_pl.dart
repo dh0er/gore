@@ -1029,4 +1029,77 @@ class AppLocalizationsPl extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Nie udało się odczytać dokładnej zainstalowanej migawki. Nie zmieniono plików projektu, gry ani zapisów.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Przeszukaj wszystko';
+
+  @override
+  String get managedGlobalSearchTitle => 'Przeszukaj całą zawartość';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, zadanie, kwestia, zasób, ID lub ścieżka /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Szukaj';
+
+  @override
+  String get managedGlobalSearchClear => 'Wyczyść';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Wpisz zapytanie, aby niezależnie odczytać trzy źródła.';
+
+  @override
+  String get managedGlobalSearchNoResults => 'Brak wyników w tym źródle.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Odczytywanie dokładnego źródła…';
+
+  @override
+  String get managedGlobalSearchFailed => 'Nie udało się odczytać tego źródła.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Kompletne';
+
+  @override
+  String get managedGlobalSearchPartial => 'Częściowe';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Wyświetlono pierwsze 100 wyników. Zawęź wyszukiwanie.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Otwórz';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Utwórz szkic';
+
+  @override
+  String get managedGlobalSearchInspect => 'Sprawdź';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Zawartość moda';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Zasób moda';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Punkt wyjścia NPC';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Punkt wyjścia zadania';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Dowód dotyczący NPC';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Dokładny bieżący projekt';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Dokładne, z problemami';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Tego wyniku nie ma już w bieżącym projekcie. Wyszukaj ponownie.';
 }

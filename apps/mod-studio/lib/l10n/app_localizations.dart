@@ -1867,6 +1867,144 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The exact installed snapshot could not be read. No project, game, or save files were changed.'**
   String get managedInstalledBrowserErrorDescription;
+
+  /// No description provided for @managedGlobalSearchScopeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Search all'**
+  String get managedGlobalSearchScopeLabel;
+
+  /// No description provided for @managedGlobalSearchTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Search all content'**
+  String get managedGlobalSearchTitle;
+
+  /// No description provided for @managedGlobalSearchLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC, quest, line, asset, ID, or /Game path'**
+  String get managedGlobalSearchLabel;
+
+  /// No description provided for @managedGlobalSearchAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Search'**
+  String get managedGlobalSearchAction;
+
+  /// No description provided for @managedGlobalSearchClear.
+  ///
+  /// In en, this message translates to:
+  /// **'Clear'**
+  String get managedGlobalSearchClear;
+
+  /// No description provided for @managedGlobalSearchPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a search to read the three sources independently.'**
+  String get managedGlobalSearchPrompt;
+
+  /// No description provided for @managedGlobalSearchNoResults.
+  ///
+  /// In en, this message translates to:
+  /// **'No matches in this source.'**
+  String get managedGlobalSearchNoResults;
+
+  /// No description provided for @managedGlobalSearchLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact source…'**
+  String get managedGlobalSearchLoading;
+
+  /// No description provided for @managedGlobalSearchFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This source could not be read.'**
+  String get managedGlobalSearchFailed;
+
+  /// No description provided for @managedGlobalSearchComplete.
+  ///
+  /// In en, this message translates to:
+  /// **'Complete'**
+  String get managedGlobalSearchComplete;
+
+  /// No description provided for @managedGlobalSearchPartial.
+  ///
+  /// In en, this message translates to:
+  /// **'Partial'**
+  String get managedGlobalSearchPartial;
+
+  /// No description provided for @managedGlobalSearchTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'Showing the first 100 matches. Refine the search.'**
+  String get managedGlobalSearchTruncated;
+
+  /// No description provided for @managedGlobalSearchOpen.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get managedGlobalSearchOpen;
+
+  /// No description provided for @managedGlobalSearchCreateDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Create Draft'**
+  String get managedGlobalSearchCreateDraft;
+
+  /// No description provided for @managedGlobalSearchInspect.
+  ///
+  /// In en, this message translates to:
+  /// **'Inspect'**
+  String get managedGlobalSearchInspect;
+
+  /// No description provided for @managedGlobalSearchKindModEntity.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod content'**
+  String get managedGlobalSearchKindModEntity;
+
+  /// No description provided for @managedGlobalSearchKindModAsset.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod asset'**
+  String get managedGlobalSearchKindModAsset;
+
+  /// No description provided for @managedGlobalSearchKindBaseNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC starting point'**
+  String get managedGlobalSearchKindBaseNpc;
+
+  /// No description provided for @managedGlobalSearchKindBaseQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest starting point'**
+  String get managedGlobalSearchKindBaseQuest;
+
+  /// No description provided for @managedGlobalSearchKindExperimentalNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC evidence'**
+  String get managedGlobalSearchKindExperimentalNpc;
+
+  /// No description provided for @managedGlobalSearchReadinessExact.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact current project'**
+  String get managedGlobalSearchReadinessExact;
+
+  /// No description provided for @managedGlobalSearchReadinessProblems.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact, with problems'**
+  String get managedGlobalSearchReadinessProblems;
+
+  /// No description provided for @managedGlobalSearchResultStale.
+  ///
+  /// In en, this message translates to:
+  /// **'This result is no longer in the current project. Search again.'**
+  String get managedGlobalSearchResultStale;
 }
 
 class _AppLocalizationsDelegate

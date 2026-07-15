@@ -1032,4 +1032,77 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Не удалось прочитать точный снимок установленных пакетов. Файлы проекта, игры и сохранений не изменены.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Искать везде';
+
+  @override
+  String get managedGlobalSearchTitle => 'Поиск по всему содержимому';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, задание, реплика, ресурс, ID или путь /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Искать';
+
+  @override
+  String get managedGlobalSearchClear => 'Очистить';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Введите запрос для независимого поиска в трёх источниках.';
+
+  @override
+  String get managedGlobalSearchNoResults => 'В этом источнике совпадений нет.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Чтение точного источника…';
+
+  @override
+  String get managedGlobalSearchFailed => 'Не удалось прочитать этот источник.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Полностью';
+
+  @override
+  String get managedGlobalSearchPartial => 'Частично';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Показаны первые 100 совпадений. Уточните запрос.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Открыть';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Создать черновик';
+
+  @override
+  String get managedGlobalSearchInspect => 'Проверить';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Контент мода';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Ресурс мода';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Исходный NPC';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Исходное задание';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Данные NPC';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Точный текущий проект';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Точно, но с проблемами';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Этого результата больше нет в текущем проекте. Выполните поиск снова.';
 }

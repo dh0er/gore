@@ -152,21 +152,32 @@ collapsed as technical details, while the `requiresReopen` recovery gate remains
 outside the workspace. This shell grants no new game/save writes, deployment,
 project-wide build, or runtime authority.
 
-The Content Library now exposes explicit `This mod`, `Base game`, and
-`Installed` scopes and does not render a fake `Dependencies` scope before the
-managed dependency model exists. Scope pages mount only when visited, retain
-state across revisions of the same project, and reset when project identity
-changes. `Base game` currently presents one generation-consistent bounded
-NPC/Quest starting-point projection; broader static NPC evidence is search-only
-and grants no Draft action. `Installed` is a search-first, capped metadata view
-over the exact installed DataAsset package snapshot and hands an exact selected
-path to the existing inspector. This is the first scoped browser, not yet global
-cross-source search. DataAssets, archive members, scripts, textures, and
-generated artifacts may become searchable content types or Advanced details,
-but they do not become an ever-growing row of top-level format tabs. Editors
-still need resizable panes, document history, breadcrumbs, pinned/recent
-entities, and a command palette so a large project does not depend on repeatedly
-navigating one tree.
+The Content Library now exposes explicit `This mod`, `Base game`, `Installed`,
+and `Search all` scopes and does not render a fake `Dependencies` scope before
+the managed dependency model exists. Scope pages mount only when visited,
+retain state across revisions of the same project, and reset when project
+identity changes. `Base game` currently presents one generation-consistent
+bounded NPC/Quest starting-point projection; broader static NPC evidence is
+search-only and grants no Draft action. `Installed` is a search-first, capped
+metadata view over the exact installed DataAsset package snapshot and hands an
+exact selected path to the existing inspector.
+
+`Search all` is the first bounded global cross-source search slice. A nonempty
+explicit query loads `This mod`, `Base game`, and `Installed` independently and
+scans each resulting projection in memory; each source reports loading,
+complete, partial, or error state independently and retains at most 100
+results. Search is case/accent tolerant, while every available action carries
+the exact identity already owned by its source: open a current mod entity/asset,
+start a Base-game NPC/Quest Draft, or inspect an installed DataAsset target. The
+combined screen is not an atomic snapshot across all three sources, and a
+result does not imply a dependency, typed reference, backlink, or cross-source
+authoring authority.
+DataAssets, archive members, scripts, textures, and generated artifacts may
+become broader searchable content types or Advanced details, but they do not
+become an ever-growing row of top-level format tabs. Editors still need
+resizable panes, document history, breadcrumbs, pinned/recent entities, and a
+command palette so a large project does not depend on repeatedly navigating one
+tree.
 
 Default UI copy uses player- and author-facing concepts. The following are
 Advanced terms and must not be required to complete a normal workflow:
@@ -212,8 +223,8 @@ proof. It does not widen that evidence to adjacent use cases.
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
 | Managed R3 workspace shell | **Canonical eight-destination shell implemented; domain depth remains partial** | Managed R3 exposes Home, Content, Story, World, Localization & Voice, Validate & Test, Build & Release, and Settings & Expert through one responsive shell. DataAssets is a Content secondary view. Lazy-mounted pages preserve primary selection, per-section secondary routes, and page state across same-project revisions; a different project resets to Home. Story exposes bounded NPC/Quest Draft actions; Localization & Voice exposes take/selection/target actions; Validate can verify the exact head and inspect references; Build exposes only the sealed Voice bundle; and Settings is available. World authoring, runtime test, full managed build/deploy, and Expert tools remain visible but unavailable. The shell grants no game/save writes, deployment, general managed build, or runtime qualification. |
-| Project save/load | **Partial Studio paths; managed revision-3 create/open authoring shell proven** | The compatibility session still saves `.goremod` format 1, and the separate Story flow still owns a schema-revision-2 directory. The Project menu can now create a new managed R3 project from friendly name/version/author/locales plus an existing empty real directory. Creation authenticates one exact registered V1 or current Steam-build-`24169431` executable/Shipping/Binds triple, generates a secure nonzero project ID, builds canonical empty revision-3 JSON, publishes by absent-head CAS, fully reopens it, and adopts it only after exact identity/project-byte checks. Unknown or cross-paired generations fail closed. A valid head produced before a late create failure is reopened and recovered; a mismatched candidate is closed, while every nonempty or game-overlapping destination—including a prior lock-only scaffold—is rejected before generation hashing or native creation. A live current-install test created, read, closed, and reopened the empty project while proving the executable and both caches unchanged by length and SHA-256. The same coordinator opens existing R3 directories, drives Home and `Ctrl+S`, verifies exact-current heads, preserves dirty Legacy work on failed transitions, and surfaces `requiresReopen` and cleanup failures. While R3 is authoritative, legacy editors and Build/Deploy are hidden. Home exposes the strict semantic index and bounded Quest/NPC/Voice/DataAsset mutations through the same lease, but these remain offline/build-blocked except for the separately labelled Voice-only offline bundle. General semantic editors, migration/import/clone/Save As, full history/recovery UI, global/dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
-| Unified content browser | **First honest `This mod` / `Base game` / `Installed` scope host integrated; global breadth missing** | Content now keeps the exact-current project Library and verified DataAsset stages under one responsive browser host. Scope pages mount lazily, retain selection/state for the same project, and reset on a different project. `Base game` performs one generation-consistent Story/NPC evidence load, exposes curated NPC and Quest catalog starting points with exact wizard preselection, and reveals broader experimental NPC linkage only after search as inspect-only rows. Missing game setup performs no load and routes to Settings. `Installed` reads the exact managed package-index snapshot, requires a query, renders at most 100 matching DataAsset metadata candidates, and opens the existing exact inspector with the selected canonical path. It grants no package/edit/build/deploy/runtime/game-write authority by itself. No fake `Dependencies` scope exists. Items, dialog/localization, FMOD audio, textures, scripts, several Legacy tools, unified cross-source search, complete semantic NPC/Quest browsing, source-aware clone, collections, and one cross-domain editing workspace remain missing. |
+| Project save/load | **Partial Studio paths; managed revision-3 create/open authoring shell proven** | The compatibility session still saves `.goremod` format 1, and the separate Story flow still owns a schema-revision-2 directory. The Project menu can now create a new managed R3 project from friendly name/version/author/locales plus an existing empty real directory. Creation authenticates one exact registered V1 or current Steam-build-`24169431` executable/Shipping/Binds triple, generates a secure nonzero project ID, builds canonical empty revision-3 JSON, publishes by absent-head CAS, fully reopens it, and adopts it only after exact identity/project-byte checks. Unknown or cross-paired generations fail closed. A valid head produced before a late create failure is reopened and recovered; a mismatched candidate is closed, while every nonempty or game-overlapping destination—including a prior lock-only scaffold—is rejected before generation hashing or native creation. A live current-install test created, read, closed, and reopened the empty project while proving the executable and both caches unchanged by length and SHA-256. The same coordinator opens existing R3 directories, drives Home and `Ctrl+S`, verifies exact-current heads, preserves dirty Legacy work on failed transitions, and surfaces `requiresReopen` and cleanup failures. While R3 is authoritative, legacy editors and Build/Deploy are hidden. Home exposes the strict semantic index and bounded Quest/NPC/Voice/DataAsset mutations through the same lease, but these remain offline/build-blocked except for the separately labelled Voice-only offline bundle. General semantic editors, migration/import/clone/Save As, full history/recovery UI, dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
+| Unified content browser | **Bounded global cross-source search v1 integrated; semantic breadth remains partial** | Content keeps the exact-current project Library and verified DataAsset stages under one responsive, lazy scope host that resets on a different project. `Base game` exposes curated NPC/Quest starting points plus search-gated inspect-only experimental NPC evidence; missing setup performs no load and routes to Settings. `Installed` reads exact package-index metadata and opens the existing inspector by canonical path. `Search all` runs only after an explicit nonempty query, scans the three source projections independently in memory, and retains at most 100 rows per source with independent loading/complete/partial/error state. Results are case/accent tolerant and expose only exact same-source actions: open a current mod identity, create a Draft from one exact Base catalog identity, or inspect one exact installed target. The screen is not one atomic combined snapshot and grants no dependency, reference, backlink, package/edit/build/deploy/runtime/game-write, or cross-source mutation authority. No fake `Dependencies` scope exists. Items, dialog/localization, FMOD audio, textures, scripts, several Legacy tools, indexed/virtualized large-scale search, complete semantic NPC/Quest browsing, source-aware clone, collections, references, and one cross-domain editing workspace remain missing. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
 | Existing NPC edits | **Partial backend and source-sealed picker; semantic editor missing** | The visible schema-revision-2 Story flow now has a searchable, generation-bound NPC archetype catalog and picker. It selects a source-sealed catalog record and drives new-Draft creation, but it does not semantically edit an existing NPC entity or provide an end-to-end existing-NPC inspector. Generic CDO overrides remain a separate existing-class subset. |
 | New NPC identity | **Managed revision-3 Draft publication and first Guided wizard proven; build/spawn/runtime missing** | A new `CharacterDefinition` with a new `UniqueName`, a linked `AIAgentConfig`, and a linked `SpawnAIAgentDefinition` compile and compose as one additive AngelScript module while leaving visual/actor defaults inherited from Asghan-derived parents. The revision-3 core atomically inserts the closed NPC/module pair against an exact head/project/revision/target while consuming fresh Story+NPC catalog selection and a base-game-plus-current-project collision inventory for modules, paths, symbols, and pinned-catalog runtime IDs. It regenerates the complete existing NPC/Quest/module closure, preserves valid Quests, and fails on residual/drift/collisions. Strict Dart DTOs validate the exact native candidate; the managed R3 session publishes by guarded fixed-head byte CAS and full reopen. Home now exposes a Guided wizard that asks only for display name and a searchable qualified archetype, refreshes catalog evidence immediately before publication, derives and hides technical identities, rejects stale/reopen-required publication, and refreshes the visible checkpoint/content view. The separate schema-revision-2 Story Draft flow remains available. This is only a logical-clone shell: visuals, faction, stats, inventory, routine, dialog, quests, and placement are not authored. Every result remains build-blocked/runtime-unqualified/not spawned, with no production lowerer or runtime workflow. Class residence, discovery, effective visuals, distinct identity, spawning, dialog/quest separation, and persistence are not proven. Runtime-ID coverage is limited to the pinned catalog projection. Cooked-asset creation is required for genuinely new visual/content assets and for any registry or collection change the recovered chain actually requires, but is not currently proven mandatory for a logical NPC identity. See [NPC authoring](npc-authoring.md). |
@@ -264,20 +275,29 @@ workflow; it does not silently rebuild against a different version.
 
 ### 4.2 Unified content browser
 
-The first unified scope row is `This mod`, `Base game`, and `Installed`.
-`Installed` may identify named installed sources in result badges, but the
-Studio does not label them `Dependencies` until a real dependency model owns
-that relationship. The implemented first slice provides exact-current project
-content, a bounded generation-bound NPC/Quest starting-point catalog, and a
-search-first installed DataAsset metadata snapshot. It has source/readiness
-badges and bounded actions, but not one global query or every content kind.
+The first unified scope row is `This mod`, `Base game`, `Installed`, and
+`Search all`. `Installed` may identify named installed sources in result
+badges, but the Studio does not label them `Dependencies` until a real
+dependency model owns that relationship. The implemented source pages provide
+exact-current project content, a bounded generation-bound NPC/Quest
+starting-point catalog, and a search-first installed DataAsset metadata
+snapshot.
+
+The bounded `Search all` v1 adds one explicit, case/accent-tolerant query over
+those three projections. It loads each source independently, scans its
+projection in memory, caps retained rows at 100 per source, and preserves
+independent loading, complete, partial, and error states. Its buttons pass exact
+same-source identities to the already bounded open/create-Draft/inspect flows.
+It is not an atomic combined source snapshot, a dependency or reference index,
+an implicit background index, or coverage of every content kind.
 
 The complete browser makes every result carry a kind, display name, source
 badge, readiness/diagnostic badge, and change state. Technical identity and
 exact origin stay in Advanced details. Saved filters, collections, tags, and
 modules let authors organize a large mod by chapter, location, quest line,
-owner, or production status. Search becomes global and accent/case tolerant,
-and large result sets are virtualized and indexed.
+owner, or production status. Search becomes incrementally indexed and
+virtualized for large result sets while preserving the landed global query's
+exact source boundaries.
 Reference queries include:
 
 - uses this NPC/item/line/voice/asset;
@@ -1042,6 +1062,17 @@ canonical V2 snapshot
   -> reopen/inspect bundle and target manifest
 ```
 
+The `gore-as` diagnostics report path now also exposes a typed
+`InstallRestoreDisposition` independently from compiler success and captured
+diagnostics. It distinguishes a generator that was not started, an exactly
+restored installation, an unconfirmed process exit requiring recovery, and a
+restore/finalization failure with retained recovery artifacts. This is a safety
+foundation for callers of `CompileModuleReport` and `GameRunRegenReport`; it
+does not infer cleanup from a syntax-error string or treat compile success as
+proof of restoration. Managed Mod Studio FFI and UI do not yet consume this
+status, and managed Quest/NPC compile, diagnostics, build, or deploy flows are
+not complete.
+
 The current `BuildSpec` fields are deployment IR and receive these results:
 
 | V2 source | Existing `BuildSpec` target |
@@ -1150,8 +1181,9 @@ bundles—into one non-technical workflow.
 ### Phase 2: unified browser, references, templates, and history
 
 Move the existing item/localization/dialog/FMOD/texture/script domains behind
-the V2 graph. Add global search, source/readiness badges, dependency views,
-named transactions, undo/redo, checkpoints, clone preview, a multi-select table
+the V2 graph. Deepen the landed bounded global search into indexed, virtualized
+search plus dependency/reference views; add named transactions, undo/redo,
+checkpoints, clone preview, and a multi-select table
 editor, spreadsheet paste/import mapping, and transactional CSV. Complete the
 command palette, shortcuts, focus/accessibility audits, saved collections, and
 translation/voice coverage dashboard at this stage. Add isolated test profiles,

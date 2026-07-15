@@ -1023,4 +1023,77 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'The exact installed snapshot could not be read. No project, game, or save files were changed.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Search all';
+
+  @override
+  String get managedGlobalSearchTitle => 'Search all content';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, quest, line, asset, ID, or /Game path';
+
+  @override
+  String get managedGlobalSearchAction => 'Search';
+
+  @override
+  String get managedGlobalSearchClear => 'Clear';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Enter a search to read the three sources independently.';
+
+  @override
+  String get managedGlobalSearchNoResults => 'No matches in this source.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Reading exact source…';
+
+  @override
+  String get managedGlobalSearchFailed => 'This source could not be read.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Complete';
+
+  @override
+  String get managedGlobalSearchPartial => 'Partial';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Showing the first 100 matches. Refine the search.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Open';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Create Draft';
+
+  @override
+  String get managedGlobalSearchInspect => 'Inspect';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Mod content';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Mod asset';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'NPC starting point';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Quest starting point';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'NPC evidence';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Exact current project';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Exact, with problems';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'This result is no longer in the current project. Search again.';
 }

@@ -1032,6 +1032,80 @@ class AppLocalizationsPt extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Não foi possível ler o instantâneo instalado exato. Nenhum ficheiro de projeto, jogo ou gravação foi alterado.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Pesquisar tudo';
+
+  @override
+  String get managedGlobalSearchTitle => 'Pesquisar todo o conteúdo';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, missão, fala, recurso, ID ou caminho /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Pesquisar';
+
+  @override
+  String get managedGlobalSearchClear => 'Limpar';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Introduza uma pesquisa para consultar as três fontes de forma independente.';
+
+  @override
+  String get managedGlobalSearchNoResults =>
+      'Sem correspondências nesta fonte.';
+
+  @override
+  String get managedGlobalSearchLoading => 'A ler a fonte exata…';
+
+  @override
+  String get managedGlobalSearchFailed => 'Não foi possível ler esta fonte.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Completo';
+
+  @override
+  String get managedGlobalSearchPartial => 'Parcial';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'A mostrar as primeiras 100 correspondências. Refine a pesquisa.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Abrir';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Criar rascunho';
+
+  @override
+  String get managedGlobalSearchInspect => 'Inspecionar';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Conteúdo do mod';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Recurso do mod';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Ponto de partida de NPC';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Ponto de partida de missão';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Evidência de NPC';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Projeto atual exato';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Exato, com problemas';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Este resultado já não está no projeto atual. Pesquise novamente.';
 }
 
 /// The translations for Portuguese, as used in Brazil (`pt_BR`).
@@ -1973,4 +2047,78 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Não foi possível ler o instantâneo instalado exato. Nenhum arquivo do projeto, jogo ou save foi alterado.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Pesquisar tudo';
+
+  @override
+  String get managedGlobalSearchTitle => 'Pesquisar todo o conteúdo';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, missão, fala, recurso, ID ou caminho /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Pesquisar';
+
+  @override
+  String get managedGlobalSearchClear => 'Limpar';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Digite uma pesquisa para consultar as três fontes de forma independente.';
+
+  @override
+  String get managedGlobalSearchNoResults =>
+      'Nenhuma correspondência nesta fonte.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Lendo a fonte exata…';
+
+  @override
+  String get managedGlobalSearchFailed => 'Não foi possível ler esta fonte.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Completo';
+
+  @override
+  String get managedGlobalSearchPartial => 'Parcial';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Mostrando as primeiras 100 correspondências. Refine a pesquisa.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Abrir';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Criar rascunho';
+
+  @override
+  String get managedGlobalSearchInspect => 'Inspecionar';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Conteúdo do mod';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Recurso do mod';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Ponto de partida de NPC';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Ponto de partida de missão';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Evidência de NPC';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Projeto atual exato';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Exato, com problemas';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Este resultado não está mais no projeto atual. Pesquise novamente.';
 }

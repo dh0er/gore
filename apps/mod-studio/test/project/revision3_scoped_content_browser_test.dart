@@ -11,6 +11,7 @@ void main() {
     expect(find.text('THIS MOD BODY'), findsOneWidget);
     expect(find.text('BASE GAME BODY', skipOffstage: false), findsNothing);
     expect(find.text('INSTALLED BODY', skipOffstage: false), findsNothing);
+    expect(find.text('ALL SOURCES BODY', skipOffstage: false), findsNothing);
 
     await tester.tap(find.text('Base game'));
     await tester.pump();
@@ -27,6 +28,18 @@ void main() {
     expect(
       find.byKey(
         const Key('revision3-scoped-content-browser-page-installed'),
+        skipOffstage: false,
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Search all'));
+    await tester.pump();
+
+    expect(find.text('ALL SOURCES BODY'), findsOneWidget);
+    expect(
+      find.byKey(
+        const Key('revision3-scoped-content-browser-page-all-sources'),
         skipOffstage: false,
       ),
       findsOneWidget,
@@ -105,6 +118,43 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets('descendant can return to an exact presentation scope', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Revision3ScopedContentBrowser(
+            projectIdentity: 'project',
+            thisModLabel: 'This mod',
+            baseGameLabel: 'Base game',
+            installedLabel: 'Installed',
+            allSourcesLabel: 'Search all',
+            thisMod: const Text('THIS MOD TARGET'),
+            baseGame: const Text('BASE'),
+            installed: const Text('INSTALLED'),
+            allSources: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => Revision3ScopedContentBrowser.navigate(
+                  context,
+                  Revision3ScopedContentScope.thisMod,
+                ),
+                child: const Text('OPEN THIS MOD'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Search all'));
+    await tester.pump();
+    await tester.tap(find.text('OPEN THIS MOD'));
+    await tester.pump();
+
+    expect(find.text('THIS MOD TARGET'), findsOneWidget);
+  });
 }
 
 class _Harness extends StatefulWidget {
@@ -133,9 +183,11 @@ class _HarnessState extends State<_Harness> {
         thisModLabel: 'This mod',
         baseGameLabel: 'Base game',
         installedLabel: 'Installed',
+        allSourcesLabel: 'Search all',
         thisMod: _ScopeProbe(name: 'THIS MOD', revision: _revision),
         baseGame: _ScopeProbe(name: 'BASE GAME', revision: _revision),
         installed: _ScopeProbe(name: 'INSTALLED', revision: _revision),
+        allSources: _ScopeProbe(name: 'ALL SOURCES', revision: _revision),
       ),
     ),
   );

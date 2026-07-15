@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 /// Honest source scopes exposed by the unified managed-project content host.
-enum Revision3ScopedContentScope { thisMod, baseGame, installed }
+enum Revision3ScopedContentScope { thisMod, baseGame, installed, allSources }
 
 /// Presentation-only source host for the managed-project Content Library.
 ///
@@ -15,9 +15,11 @@ class Revision3ScopedContentBrowser extends StatefulWidget {
     required this.thisModLabel,
     required this.baseGameLabel,
     required this.installedLabel,
+    required this.allSourcesLabel,
     required this.thisMod,
     required this.baseGame,
     required this.installed,
+    required this.allSources,
     super.key,
   });
 
@@ -25,9 +27,28 @@ class Revision3ScopedContentBrowser extends StatefulWidget {
   final String thisModLabel;
   final String baseGameLabel;
   final String installedLabel;
+  final String allSourcesLabel;
   final Widget thisMod;
   final Widget baseGame;
   final Widget installed;
+  final Widget allSources;
+
+  /// Switches the nearest scoped browser to one of its already-authorized
+  /// presentation sources. Result identities still have to be reopened by the
+  /// destination page; changing the visible scope grants no content authority.
+  static void navigate(
+    BuildContext context,
+    Revision3ScopedContentScope scope,
+  ) {
+    final state = context
+        .findAncestorStateOfType<_Revision3ScopedContentBrowserState>();
+    if (state == null) {
+      throw FlutterError(
+        'Revision3ScopedContentBrowser.navigate requires a descendant context.',
+      );
+    }
+    state._select(scope);
+  }
 
   @override
   State<Revision3ScopedContentBrowser> createState() =>
@@ -108,6 +129,16 @@ class _Revision3ScopedContentBrowserState
                     ),
                   ),
                 ),
+                ButtonSegment(
+                  value: Revision3ScopedContentScope.allSources,
+                  icon: const Icon(Icons.manage_search_outlined),
+                  label: Text(
+                    widget.allSourcesLabel,
+                    key: const Key(
+                      'revision3-scoped-content-browser-nav-all-sources',
+                    ),
+                  ),
+                ),
               ],
               selected: {_selected},
               onSelectionChanged: (selection) => _select(selection.single),
@@ -126,6 +157,10 @@ class _Revision3ScopedContentBrowserState
               _buildPage(
                 Revision3ScopedContentScope.installed,
                 widget.installed,
+              ),
+              _buildPage(
+                Revision3ScopedContentScope.allSources,
+                widget.allSources,
               ),
             ],
           ),
@@ -154,4 +189,5 @@ String _scopeKey(Revision3ScopedContentScope scope) => switch (scope) {
   Revision3ScopedContentScope.thisMod => 'this-mod',
   Revision3ScopedContentScope.baseGame => 'base-game',
   Revision3ScopedContentScope.installed => 'installed',
+  Revision3ScopedContentScope.allSources => 'all-sources',
 };

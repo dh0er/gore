@@ -989,6 +989,75 @@ class AppLocalizationsZh extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       '无法读取精确的已安装快照。项目、游戏和存档文件均未更改。';
+
+  @override
+  String get managedGlobalSearchScopeLabel => '搜索全部';
+
+  @override
+  String get managedGlobalSearchTitle => '搜索所有内容';
+
+  @override
+  String get managedGlobalSearchLabel => 'NPC、任务、台词、资产、ID 或 /Game 路径';
+
+  @override
+  String get managedGlobalSearchAction => '搜索';
+
+  @override
+  String get managedGlobalSearchClear => '清除';
+
+  @override
+  String get managedGlobalSearchPrompt => '输入搜索内容以分别读取三个来源。';
+
+  @override
+  String get managedGlobalSearchNoResults => '此来源中无匹配项。';
+
+  @override
+  String get managedGlobalSearchLoading => '正在读取精确来源…';
+
+  @override
+  String get managedGlobalSearchFailed => '无法读取此来源。';
+
+  @override
+  String get managedGlobalSearchComplete => '完整';
+
+  @override
+  String get managedGlobalSearchPartial => '部分';
+
+  @override
+  String get managedGlobalSearchTruncated => '仅显示前 100 个匹配项。请缩小搜索范围。';
+
+  @override
+  String get managedGlobalSearchOpen => '打开';
+
+  @override
+  String get managedGlobalSearchCreateDraft => '创建草稿';
+
+  @override
+  String get managedGlobalSearchInspect => '检查';
+
+  @override
+  String get managedGlobalSearchKindModEntity => '模组内容';
+
+  @override
+  String get managedGlobalSearchKindModAsset => '模组资产';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'NPC 起点';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => '任务起点';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'NPC 证据';
+
+  @override
+  String get managedGlobalSearchReadinessExact => '精确的当前项目';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => '精确，但存在问题';
+
+  @override
+  String get managedGlobalSearchResultStale => '此结果已不在当前项目中。请重新搜索。';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -1886,4 +1955,73 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   @override
   String get managedInstalledBrowserErrorDescription =>
       '无法读取精确的已安装快照。项目、游戏和存档文件均未更改。';
+
+  @override
+  String get managedGlobalSearchScopeLabel => '搜索全部';
+
+  @override
+  String get managedGlobalSearchTitle => '搜索所有内容';
+
+  @override
+  String get managedGlobalSearchLabel => 'NPC、任务、台词、资产、ID 或 /Game 路径';
+
+  @override
+  String get managedGlobalSearchAction => '搜索';
+
+  @override
+  String get managedGlobalSearchClear => '清除';
+
+  @override
+  String get managedGlobalSearchPrompt => '输入搜索内容以分别读取三个来源。';
+
+  @override
+  String get managedGlobalSearchNoResults => '此来源中无匹配项。';
+
+  @override
+  String get managedGlobalSearchLoading => '正在读取精确来源…';
+
+  @override
+  String get managedGlobalSearchFailed => '无法读取此来源。';
+
+  @override
+  String get managedGlobalSearchComplete => '完整';
+
+  @override
+  String get managedGlobalSearchPartial => '部分';
+
+  @override
+  String get managedGlobalSearchTruncated => '仅显示前 100 个匹配项。请缩小搜索范围。';
+
+  @override
+  String get managedGlobalSearchOpen => '打开';
+
+  @override
+  String get managedGlobalSearchCreateDraft => '创建草稿';
+
+  @override
+  String get managedGlobalSearchInspect => '检查';
+
+  @override
+  String get managedGlobalSearchKindModEntity => '模组内容';
+
+  @override
+  String get managedGlobalSearchKindModAsset => '模组资产';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'NPC 起点';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => '任务起点';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'NPC 证据';
+
+  @override
+  String get managedGlobalSearchReadinessExact => '精确的当前项目';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => '精确，但存在问题';
+
+  @override
+  String get managedGlobalSearchResultStale => '此结果已不在当前项目中。请重新搜索。';
 }

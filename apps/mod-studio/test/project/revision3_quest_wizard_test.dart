@@ -51,10 +51,11 @@ void main() {
     expect(published?.giverCatalogId, _giverViper);
   });
 
-  testWidgets('unknown requested choices safely use trusted defaults', (
+  testWidgets('unknown requested choices require conscious replacements', (
     tester,
   ) async {
     await _setSurface(tester);
+    var loadCalls = 0;
     Revision3QuestDraftAuthoringInput? published;
     const unknownParent = 'parent-not-in-exact-catalog';
     const unknownGiver = 'giver-not-in-exact-catalog';
@@ -63,7 +64,10 @@ void main() {
       tester,
       initialParentCatalogId: unknownParent,
       initialGiverCatalogId: unknownGiver,
-      loadCatalog: (_) async => _catalog(includeAlternates: true),
+      loadCatalog: (_) async {
+        loadCalls += 1;
+        return _catalog(includeAlternates: true);
+      },
       publish: ({required gameRoot, required input}) async {
         published = input;
         return _publication();
@@ -71,15 +75,40 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Chapter One'), findsOneWidget);
-    expect(find.text('Asghan'), findsOneWidget);
+    final pickers = find.byType(DropdownButtonFormField<String>);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(pickers.first)
+          .initialValue,
+      isNull,
+    );
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(pickers.last).initialValue,
+      isNull,
+    );
+    expect(find.textContaining('no longer available'), findsOneWidget);
     expect(find.text(unknownParent), findsNothing);
     expect(find.text(unknownGiver), findsNothing);
 
     await _fillForm(tester);
     await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+    await tester.pump();
+
+    expect(published, isNull);
+    expect(loadCalls, 1);
+    expect(find.text('Choose a Quest family'), findsOneWidget);
+    expect(find.text('Choose a Quest giver'), findsOneWidget);
+
+    await _chooseDropdown(tester, index: 0, label: 'Chapter One');
+    await _chooseDropdown(tester, index: 1, label: 'Asghan');
+    expect(
+      find.byKey(const Key('revision3-quest-catalog-selection-warning')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('revision3-quest-submit')));
     await tester.pumpAndSettle();
 
+    expect(loadCalls, 2);
     expect(published?.parentCatalogId, _parentOne);
     expect(published?.giverCatalogId, _giverAsghan);
     expect(published?.parentCatalogId, isNot(unknownParent));
@@ -121,6 +150,45 @@ void main() {
     expect(find.text('Asghan'), findsOneWidget);
     expect(find.text('Chapter Two'), findsNothing);
     expect(find.text('Viper'), findsNothing);
+  });
+
+  testWidgets('refresh does not replace a vanished user choice', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    var catalog = _catalog(includeAlternates: true);
+
+    Widget wizard(String gameRoot) => MaterialApp(
+      home: Revision3QuestWizardDialog(
+        gameRoot: gameRoot,
+        loadCatalog: (_) async => catalog,
+        publish: ({required gameRoot, required input}) async => _publication(),
+      ),
+    );
+
+    await tester.pumpWidget(wizard(_gameRoot));
+    await tester.pumpAndSettle();
+    await _chooseDropdown(tester, index: 0, label: 'Chapter Two');
+    await _chooseDropdown(tester, index: 1, label: 'Viper');
+
+    catalog = _catalog();
+    await tester.pumpWidget(wizard(r'D:\Games\Gothic Remake'));
+    await tester.pumpAndSettle();
+
+    final pickers = find.byType(DropdownButtonFormField<String>);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(pickers.first)
+          .initialValue,
+      isNull,
+    );
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(pickers.last).initialValue,
+      isNull,
+    );
+    expect(find.textContaining('no longer available'), findsOneWidget);
+    expect(find.text(_parentTwo), findsNothing);
+    expect(find.text(_giverViper), findsNothing);
   });
 
   testWidgets(
@@ -185,9 +253,7 @@ void main() {
       tester,
       loadCatalog: (_) async {
         loadCalls += 1;
-        return loadCalls == 1
-            ? _catalog()
-            : _catalog(parentId: 'parent-two', parentName: 'Chapter Two');
+        return loadCalls == 1 ? _catalog(includeAlternates: true) : _catalog();
       },
       publish: ({required gameRoot, required input}) async {
         publishCalls += 1;
@@ -195,6 +261,8 @@ void main() {
       },
     );
     await tester.pumpAndSettle();
+    await _chooseDropdown(tester, index: 0, label: 'Chapter Two');
+    await _chooseDropdown(tester, index: 1, label: 'Viper');
     await _fillForm(tester);
 
     await tester.tap(find.byKey(const Key('revision3-quest-submit')));
@@ -202,12 +270,23 @@ void main() {
 
     expect(publishCalls, 0);
     expect(find.textContaining('game choices changed'), findsOneWidget);
-    final parentPicker = find.byType(DropdownButtonFormField<String>).first;
+    final pickers = find.byType(DropdownButtonFormField<String>);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(pickers.first)
+          .initialValue,
+      isNull,
+    );
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(pickers.last).initialValue,
+      isNull,
+    );
+    final parentPicker = pickers.first;
     await tester.ensureVisible(parentPicker);
     await tester.pumpAndSettle();
     await tester.tap(parentPicker);
     await tester.pumpAndSettle();
-    expect(find.text('Chapter Two'), findsOneWidget);
+    expect(find.text('Chapter One'), findsOneWidget);
     expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
   });
 

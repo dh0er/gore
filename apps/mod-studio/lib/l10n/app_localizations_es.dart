@@ -1038,4 +1038,78 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'No se pudo leer la instantánea instalada exacta. No se modificó ningún archivo del proyecto, juego o partida.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Buscar en todo';
+
+  @override
+  String get managedGlobalSearchTitle => 'Buscar en todo el contenido';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'PNJ, misión, línea, recurso, ID o ruta /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Buscar';
+
+  @override
+  String get managedGlobalSearchClear => 'Borrar';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Introduce una búsqueda para consultar las tres fuentes de forma independiente.';
+
+  @override
+  String get managedGlobalSearchNoResults =>
+      'No hay coincidencias en esta fuente.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Leyendo la fuente exacta…';
+
+  @override
+  String get managedGlobalSearchFailed => 'No se pudo leer esta fuente.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Completo';
+
+  @override
+  String get managedGlobalSearchPartial => 'Parcial';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Se muestran las primeras 100 coincidencias. Refina la búsqueda.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Abrir';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Crear borrador';
+
+  @override
+  String get managedGlobalSearchInspect => 'Inspeccionar';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Contenido del mod';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Recurso del mod';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Punto de partida de PNJ';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Punto de partida de misión';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Evidencia de PNJ';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Proyecto actual exacto';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Exacto, con problemas';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Este resultado ya no está en el proyecto actual. Vuelve a buscar.';
 }

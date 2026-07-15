@@ -22,6 +22,7 @@ import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_library.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
@@ -700,6 +701,160 @@ void main() {
       );
       expect(baseCatalogCalls, 0);
       expect(managed.dataAssetPackageIndexReadCalls, 0);
+    },
+  );
+
+  testWidgets(
+    'Search all stays lazy until submit and opens an exact This mod result',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_global_content_search_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const targetEntityId = '92929292929292929292929292929292';
+      var baseCatalogCalls = 0;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\global-content-search'),
+        projectId: '43434343434343434343434343434343',
+        projectRevision: 6,
+        head: _head(6),
+        contentIndexBuilder: (lease) => _globalSearchContentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          targetEntityId: targetEntityId,
+        ),
+        onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          return _homeDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadBaseGameCatalog: (_) async {
+          baseCatalogCalls++;
+          return _baseGameCatalog();
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final contentReadsBeforeOpeningContent = managed.contentReadCalls;
+      expect(contentReadsBeforeOpeningContent, greaterThanOrEqualTo(1));
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await _navigateManagedContent(tester);
+      expect(
+        find.byKey(
+          const Key('revision3-scoped-content-browser-nav-all-sources'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-scoped-content-browser-page-all-sources'),
+        ),
+        findsNothing,
+        reason: 'the fourth source page has not been visited yet',
+      );
+      final contentReadsBeforeGlobalSearch = managed.contentReadCalls;
+      expect(
+        contentReadsBeforeGlobalSearch,
+        greaterThanOrEqualTo(contentReadsBeforeOpeningContent),
+      );
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-scoped-content-browser-nav-all-sources'),
+      );
+      expect(
+        find.byKey(
+          const Key('revision3-scoped-content-browser-page-all-sources'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-global-content-search-empty-prompt')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const ValueKey<Object>((
+            'revision3-global-content-source',
+            Revision3GlobalContentSource.thisMod,
+          )),
+        ),
+        findsNothing,
+        reason: 'mounting Search all does not begin a search implicitly',
+      );
+      expect(managed.contentReadCalls, contentReadsBeforeGlobalSearch);
+      expect(baseCatalogCalls, 0);
+      expect(managed.dataAssetPackageIndexReadCalls, 0);
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-global-content-search-field')),
+        'asghan',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-global-content-search-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(managed.contentReadCalls, contentReadsBeforeGlobalSearch + 1);
+      expect(baseCatalogCalls, 1);
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
+      expect(find.text('Asghan Sentinel'), findsOneWidget);
+      expect(find.text('Asghan guard'), findsOneWidget);
+      expect(find.text('DA_Asghan'), findsOneWidget);
+      for (final source in Revision3GlobalContentSource.values) {
+        expect(
+          find.byKey(
+            ValueKey<Object>(('revision3-global-content-source', source)),
+          ),
+          findsOneWidget,
+        );
+      }
+
+      final openTarget = find.byKey(
+        const ValueKey<Object>((
+          'global-search-action',
+          Revision3GlobalContentActionKind.openThisModEntity,
+          targetEntityId,
+        )),
+      );
+      await tester.ensureVisible(openTarget);
+      await tester.tap(openTarget);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-scoped-content-browser-page-this-mod')),
+        findsOneWidget,
+      );
+      final targetTile = find.byKey(
+        const Key('revision3-content-entity-$targetEntityId'),
+      );
+      expect(targetTile, findsOneWidget);
+      expect(tester.widget<ListTile>(targetTile).selected, isTrue);
+      expect(managed.contentReadCalls, contentReadsBeforeGlobalSearch + 1);
+      expect(baseCatalogCalls, 1);
+      expect(managed.dataAssetPackageIndexReadCalls, 1);
     },
   );
 
@@ -3548,6 +3703,78 @@ Revision3ContentIndex _contentIndex({
   'authoring_locales': <Object?>[],
   'entity_counts': <String, Object?>{},
   'entities': <Object?>[],
+  'assets': <Object?>[],
+});
+
+Revision3ContentIndex _globalSearchContentIndex({
+  required String projectId,
+  required int revision,
+  required String targetEntityId,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': revision,
+  'project_name': 'Global search project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 1,
+      'sha256': List<String>.filled(64, '5').join(),
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{'npc_draft': 2},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': '91919191919191919191919191919191',
+      'kind': 'npc_draft',
+      'display_name': 'First Sentinel',
+      'revision': 1,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'FIRST_SENTINEL',
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': 'FIRST_SENTINEL',
+          'module_namespace': 'Test_Global_Search',
+          'parent_character_definition':
+              'UCharacterDefinition_Human_OM_GRD_Gardist_261',
+          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Gardist_261',
+          'parent_spawn_definition':
+              'USpawnAIAgentDefinition_OM_GRD_Gardist_261',
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': targetEntityId,
+      'kind': 'npc_draft',
+      'display_name': 'Asghan Sentinel',
+      'revision': 1,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'ASGHAN_SENTINEL',
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': 'ASGHAN_SENTINEL',
+          'module_namespace': 'Test_Global_Search',
+          'parent_character_definition':
+              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+          'parent_spawn_definition':
+              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
   'assets': <Object?>[],
 });
 

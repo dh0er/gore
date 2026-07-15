@@ -1001,4 +1001,74 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'インストール済みの正確なスナップショットを読み取れませんでした。プロジェクト、ゲーム、セーブのファイルは変更されていません。';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'すべて検索';
+
+  @override
+  String get managedGlobalSearchTitle => 'すべてのコンテンツを検索';
+
+  @override
+  String get managedGlobalSearchLabel => 'NPC、クエスト、セリフ、アセット、ID、または /Game パス';
+
+  @override
+  String get managedGlobalSearchAction => '検索';
+
+  @override
+  String get managedGlobalSearchClear => 'クリア';
+
+  @override
+  String get managedGlobalSearchPrompt => '検索語を入力すると、3つのソースを個別に読み取ります。';
+
+  @override
+  String get managedGlobalSearchNoResults => 'このソースには一致する項目がありません。';
+
+  @override
+  String get managedGlobalSearchLoading => '正確なソースを読み取り中…';
+
+  @override
+  String get managedGlobalSearchFailed => 'このソースを読み取れませんでした。';
+
+  @override
+  String get managedGlobalSearchComplete => '完了';
+
+  @override
+  String get managedGlobalSearchPartial => '一部';
+
+  @override
+  String get managedGlobalSearchTruncated => '最初の100件を表示しています。検索を絞り込んでください。';
+
+  @override
+  String get managedGlobalSearchOpen => '開く';
+
+  @override
+  String get managedGlobalSearchCreateDraft => '下書きを作成';
+
+  @override
+  String get managedGlobalSearchInspect => '検査';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Modコンテンツ';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Modアセット';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'NPCの開始点';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'クエストの開始点';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'NPCの証拠';
+
+  @override
+  String get managedGlobalSearchReadinessExact => '正確な現在のプロジェクト';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => '正確（問題あり）';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'この結果は現在のプロジェクトに存在しません。もう一度検索してください。';
 }

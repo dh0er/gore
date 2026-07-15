@@ -1037,4 +1037,78 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Der exakte installierte Schnappschuss konnte nicht gelesen werden. Projekt-, Spiel- und Spielstanddateien wurden nicht verändert.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Alles durchsuchen';
+
+  @override
+  String get managedGlobalSearchTitle => 'Alle Inhalte durchsuchen';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'NPC, Quest, Dialogzeile, Asset, ID oder /Game-Pfad';
+
+  @override
+  String get managedGlobalSearchAction => 'Suchen';
+
+  @override
+  String get managedGlobalSearchClear => 'Leeren';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Gib einen Suchbegriff ein, um die drei Quellen unabhängig voneinander zu lesen.';
+
+  @override
+  String get managedGlobalSearchNoResults => 'Keine Treffer in dieser Quelle.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Exakte Quelle wird gelesen…';
+
+  @override
+  String get managedGlobalSearchFailed =>
+      'Diese Quelle konnte nicht gelesen werden.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Vollständig';
+
+  @override
+  String get managedGlobalSearchPartial => 'Teilweise';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Die ersten 100 Treffer werden angezeigt. Suche präzisieren.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Öffnen';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Entwurf erstellen';
+
+  @override
+  String get managedGlobalSearchInspect => 'Prüfen';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Mod-Inhalt';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Mod-Asset';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'NPC-Ausgangspunkt';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Quest-Ausgangspunkt';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'NPC-Nachweis';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Exaktes aktuelles Projekt';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Exakt, mit Problemen';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Dieser Treffer ist nicht mehr im aktuellen Projekt enthalten. Erneut suchen.';
 }

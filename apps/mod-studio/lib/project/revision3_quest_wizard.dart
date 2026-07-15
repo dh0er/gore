@@ -40,6 +40,9 @@ class _Revision3QuestWizardDialogState
   Revision3QuestCatalog? _catalog;
   String? _parentCatalogId;
   String? _giverCatalogId;
+  String? _explicitParentCatalogId;
+  String? _explicitGiverCatalogId;
+  String? _catalogSelectionWarning;
   String? _error;
   bool _catalogLoading = true;
   bool _publishing = false;
@@ -52,6 +55,8 @@ class _Revision3QuestWizardDialogState
   @override
   void initState() {
     super.initState();
+    _explicitParentCatalogId = widget.initialParentCatalogId;
+    _explicitGiverCatalogId = widget.initialGiverCatalogId;
     _loadCatalog();
   }
 
@@ -100,22 +105,52 @@ class _Revision3QuestWizardDialogState
     Revision3QuestCatalog catalog, {
     required bool chooseDefaults,
   }) {
-    final oldParent = _parentCatalogId;
-    final oldGiver = _giverCatalogId;
+    final preferredParent = _explicitParentCatalogId ?? _parentCatalogId;
+    final preferredGiver = _explicitGiverCatalogId ?? _giverCatalogId;
+    final explicitParentMissing =
+        _explicitParentCatalogId != null &&
+        !catalog.containsParent(_explicitParentCatalogId!);
+    final explicitGiverMissing =
+        _explicitGiverCatalogId != null &&
+        !catalog.containsGiver(_explicitGiverCatalogId!);
     _catalog = catalog;
     _catalogEpoch += 1;
-    final preferredParent = oldParent ?? widget.initialParentCatalogId;
-    final preferredGiver = oldGiver ?? widget.initialGiverCatalogId;
     _parentCatalogId = catalog.containsParent(preferredParent ?? '')
         ? preferredParent
-        : chooseDefaults
+        : chooseDefaults && _explicitParentCatalogId == null
         ? catalog.parents.first.catalogId
         : null;
     _giverCatalogId = catalog.containsGiver(preferredGiver ?? '')
         ? preferredGiver
-        : chooseDefaults
+        : chooseDefaults && _explicitGiverCatalogId == null
         ? catalog.givers.first.catalogId
         : null;
+    _catalogSelectionWarning = _missingCatalogChoiceMessage(
+      parentMissing: explicitParentMissing,
+      giverMissing: explicitGiverMissing,
+    );
+  }
+
+  void _selectParent(String? value) {
+    setState(() {
+      _parentCatalogId = value;
+      if (value != null) _explicitParentCatalogId = value;
+      _clearResolvedCatalogSelectionWarning();
+    });
+  }
+
+  void _selectGiver(String? value) {
+    setState(() {
+      _giverCatalogId = value;
+      if (value != null) _explicitGiverCatalogId = value;
+      _clearResolvedCatalogSelectionWarning();
+    });
+  }
+
+  void _clearResolvedCatalogSelectionWarning() {
+    if (_parentCatalogId != null && _giverCatalogId != null) {
+      _catalogSelectionWarning = null;
+    }
   }
 
   Future<void> _submit() async {
@@ -274,6 +309,16 @@ class _Revision3QuestWizardDialogState
                 children: [
                   const _DraftBoundaryBanner(),
                   const SizedBox(height: 16),
+                  if (_catalogSelectionWarning != null) ...[
+                    _WizardMessage(
+                      key: const Key(
+                        'revision3-quest-catalog-selection-warning',
+                      ),
+                      message: _catalogSelectionWarning!,
+                      error: false,
+                    ),
+                    const SizedBox(height: 16),
+                  ],
                   if (_error != null) ...[
                     _WizardMessage(
                       key: const Key('revision3-quest-wizard-error'),
@@ -492,9 +537,7 @@ class _Revision3QuestWizardDialogState
                   ),
                 ),
             ],
-            onChanged: enabled
-                ? (value) => setState(() => _parentCatalogId = value)
-                : null,
+            onChanged: enabled ? _selectParent : null,
             validator: (value) =>
                 value == null ? 'Choose a Quest family' : null,
           ),
@@ -518,9 +561,7 @@ class _Revision3QuestWizardDialogState
                   ),
                 ),
             ],
-            onChanged: enabled
-                ? (value) => setState(() => _giverCatalogId = value)
-                : null,
+            onChanged: enabled ? _selectGiver : null,
             validator: (value) => value == null ? 'Choose a Quest giver' : null,
           ),
           const SizedBox(height: 14),
@@ -531,6 +572,26 @@ class _Revision3QuestWizardDialogState
       ),
     );
   }
+}
+
+String? _missingCatalogChoiceMessage({
+  required bool parentMissing,
+  required bool giverMissing,
+}) {
+  if (parentMissing && giverMissing) {
+    return 'The requested Quest family and Quest giver are no longer '
+        'available in the current game choices. Choose both again before '
+        'saving.';
+  }
+  if (parentMissing) {
+    return 'The requested Quest family is no longer available in the current '
+        'game choices. Choose a Quest family before saving.';
+  }
+  if (giverMissing) {
+    return 'The requested Quest giver is no longer available in the current '
+        'game choices. Choose a Quest giver before saving.';
+  }
+  return null;
 }
 
 class _DraftBoundaryBanner extends StatelessWidget {

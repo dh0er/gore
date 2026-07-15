@@ -83,6 +83,112 @@ void main() {
     expect(find.text('1 match'), findsOneWidget);
   });
 
+  testWidgets(
+    'exact initial target bypasses substring siblings and opens its inspector',
+    (tester) async {
+      const targetPath = '/Game/Characters/DA_Viper';
+      final snapshot = _packageIndexResult(
+        targetPaths: const <String>[
+          targetPath,
+          '/Game/Characters/DA_ViperVariant',
+        ],
+      );
+      AuthoringRevision3DataAssetPackageCandidate? inspected;
+      var inspections = 0;
+      await tester.pumpWidget(
+        _BrowserHost(
+          initialQuery: targetPath,
+          initialTargetPath: targetPath,
+          load: ({required gameRoot}) async => snapshot,
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async {
+                inspections += 1;
+                inspected = candidate;
+                return _installedInspectionResult(
+                  expectedSnapshot: expectedSnapshot,
+                  candidate: candidate,
+                );
+              },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+
+      expect(inspections, 1);
+      expect(inspected?.targetPath, targetPath);
+      expect(inspected?.ordinal, 0);
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('installed-dataasset-inspection-close')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('installed-package-browser-refresh')),
+      );
+      await tester.pumpAndSettle();
+      expect(inspections, 1, reason: 'the exact target intent is one-shot');
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'missing exact initial target never selects a substring or case sibling',
+    (tester) async {
+      const targetPath = '/Game/Characters/DA_Viper';
+      var inspections = 0;
+      await tester.pumpWidget(
+        _BrowserHost(
+          initialQuery: targetPath,
+          initialTargetPath: targetPath,
+          load: ({required gameRoot}) async => _packageIndexResult(
+            targetPaths: const <String>[
+              '/Game/Characters/DA_ViperVariant',
+              '/Game/Characters/da_viper',
+            ],
+          ),
+          inspect:
+              ({
+                required gameRoot,
+                required expectedSnapshot,
+                required candidate,
+              }) async {
+                inspections += 1;
+                return _installedInspectionResult(
+                  expectedSnapshot: expectedSnapshot,
+                  candidate: candidate,
+                );
+              },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('open-browser')));
+      await tester.pumpAndSettle();
+
+      expect(inspections, 0);
+      expect(
+        find.byKey(const Key('installed-package-initial-target-error')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('fresh installed snapshot'), findsOneWidget);
+      expect(
+        find.byKey(const Key('installed-dataasset-inspection-dialog')),
+        findsNothing,
+      );
+    },
+  );
+
   testWidgets('shows partial evidence and validates the manual path fallback', (
     tester,
   ) async {
@@ -937,6 +1043,7 @@ class _BrowserHost extends StatelessWidget {
     this.publish,
     this.publishReviewed,
     this.initialQuery = '',
+    this.initialTargetPath,
     this.textScale,
   });
 
@@ -945,6 +1052,7 @@ class _BrowserHost extends StatelessWidget {
   final InstalledDataAssetSemanticStagePublisher? publish;
   final ReviewedInstalledDataAssetStagePublisher? publishReviewed;
   final String initialQuery;
+  final String? initialTargetPath;
   final double? textScale;
 
   @override
@@ -970,6 +1078,7 @@ class _BrowserHost extends StatelessWidget {
               publish: publish,
               publishReviewed: publishReviewed,
               initialQuery: initialQuery,
+              initialTargetPath: initialTargetPath,
             ),
           ),
           child: const Text('Open'),
@@ -982,6 +1091,7 @@ class _BrowserHost extends StatelessWidget {
 AuthoringRevision3DataAssetPackageIndexResult _packageIndexResult({
   bool partial = false,
   bool reviewedWolf = false,
+  List<String>? targetPaths,
 }) {
   final head = AuthoringWorkingHead.fromCanonicalJson(
     jsonEncode(<String, Object?>{
@@ -996,7 +1106,13 @@ AuthoringRevision3DataAssetPackageIndexResult _packageIndexResult({
             '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps',
         'package_id_hex': '01e173a19ea374c9',
       },
-    if (!reviewedWolf) ...[
+    if (targetPaths != null)
+      for (final (index, targetPath) in targetPaths.indexed)
+        <String, Object?>{
+          'target_path': targetPath,
+          'package_id_hex': (index + 1).toRadixString(16).padLeft(16, '0'),
+        }
+    else if (!reviewedWolf) ...[
       <String, Object?>{
         'target_path': '/Game/Characters/DA_Asghan',
         'package_id_hex': '0123456789abcdef',

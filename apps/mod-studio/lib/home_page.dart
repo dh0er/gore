@@ -37,6 +37,8 @@ import 'project/revision3_content_library.dart';
 import 'project/revision3_content_workspace.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
+import 'project/revision3_global_content_search.dart';
+import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
 import 'project/revision3_npc_profile_dialog.dart';
 import 'project/revision3_npc_wizard.dart';
@@ -1679,134 +1681,249 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     location: location,
     libraryLabel: l10n.managedContentWorkspaceBrowseLabel,
     dataAssetsLabel: l10n.managedContentWorkspaceVerifiedEditsLabel,
-    library: Revision3ScopedContentBrowser(
-      projectIdentity: (project.root.path, project.projectId),
-      thisModLabel: l10n.managedContentWorkspaceLibraryLabel,
-      baseGameLabel: l10n.managedContentScopeBaseGameLabel,
-      installedLabel: l10n.managedContentScopeInstalledLabel,
-      thisMod: Revision3ContentLibrary(
-        projectRoot: project.root.path,
-        projectId: project.projectId,
-        projectRevision: project.projectRevision,
-        projectHeadCanonicalJson: project.head.canonicalJson,
-        load: loadContentIndex,
-        editQuestOutline: (index, quest) =>
-            _openQuestOutlineEditor(context, index, quest),
-        editQuestContext: gameRoot == null
-            ? null
-            : (index, quest) => _openQuestContextEditor(context, index, quest),
-        editQuestTransitions: (index, quest) =>
-            _openQuestTransitionsEditor(context, index, quest),
-        inspectQuestSource: gameRoot == null
-            ? null
-            : (index, quest) =>
-                  _openQuestSourceInspection(context, index, quest),
-        inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
+    library: _ManagedRevision3GlobalContentHost(
+      sourceIdentity: Revision3GlobalContentSearchSourceIdentity(
+        project: '${project.root.path}\u0000${project.projectId}',
+        thisMod:
+            '${project.projectRevision}\u0000${project.head.canonicalJson}',
+        baseGame: gameRoot ?? '<game-unconfigured>',
+        installed:
+            '${project.projectRevision}\u0000${project.head.canonicalJson}\u0000${gameRoot ?? '<game-unconfigured>'}',
       ),
-      baseGame: Revision3BaseGameContentBrowser(
-        gameRoot: gameRoot,
-        sourceIdentity: (project.root.path, project.projectId, gameRoot),
-        loader: loadBaseGameCatalog,
-        copy: Revision3BaseGameContentBrowserCopy(
-          title: l10n.managedBaseGameBrowserTitle,
-          description: l10n.managedBaseGameBrowserDescription,
-          missingGameTitle: l10n.managedDashboardMissingGameTitle,
-          missingGameDescription: l10n.managedDashboardMissingGameDescription,
-          configureGame: l10n.managedActionSettingsTitle,
-          loading: l10n.managedBaseGameBrowserLoading,
-          refresh: l10n.managedBaseGameBrowserRefresh,
-          searchLabel: l10n.managedBaseGameBrowserSearchLabel,
-          filterAll: l10n.changesAll,
-          filterNpcs: l10n.managedBaseGameBrowserFilterNpcs,
-          filterQuests: l10n.managedBaseGameBrowserFilterQuests,
-          npcSectionTitle: l10n.managedBaseGameBrowserNpcSectionTitle,
-          questSectionTitle: l10n.managedBaseGameBrowserQuestSectionTitle,
-          experimentalNpcSectionTitle:
-              l10n.managedBaseGameBrowserExperimentalNpcSectionTitle,
-          searchForExperimental:
-              l10n.managedBaseGameBrowserSearchForExperimental,
-          empty: l10n.managedBaseGameBrowserEmpty,
-          loadErrorTitle: l10n.managedBaseGameBrowserLoadErrorTitle,
-          loadErrorDescription: l10n.managedBaseGameBrowserLoadErrorDescription,
-          retry: l10n.managedDashboardRetry,
-          baseGameSourceBadge: l10n.managedContentScopeBaseGameLabel,
-          offlineDraftBadge: l10n.managedBaseGameBrowserOfflineDraftBadge,
-          runtimeUnqualifiedBadge: l10n.managedDashboardRuntimeUnqualifiedTitle,
-          inspectOnlyBadge: l10n.managedBaseGameBrowserInspectOnlyBadge,
-          createNpcDraft: l10n.managedBaseGameBrowserCreateNpcDraft,
-          createQuestDraft: l10n.managedBaseGameBrowserCreateQuestDraft,
-          spawnClass: l10n.managedBaseGameBrowserSpawnClass,
-          actorBlueprint: l10n.managedBaseGameBrowserActorBlueprint,
-          experimentalResultsCapped:
-              l10n.managedBaseGameBrowserExperimentalResultsCapped,
-        ),
-        openSettings: () => Revision3ProjectWorkspace.navigate(
-          context,
-          const Revision3ProjectWorkspaceLocation(
-            Revision3ProjectWorkspaceSection.settingsExpert,
-          ),
-        ),
-        createNpcDraft: (catalogId) =>
-            unawaited(_openNpcWizard(context, initialCatalogId: catalogId)),
-        createQuestDraft: (parentCatalogId) => unawaited(
-          _openQuestWizard(context, initialParentCatalogId: parentCatalogId),
-        ),
-      ),
-      installed: Revision3InstalledContentBrowser(
-        gameRoot: gameRoot,
-        sourceIdentity: gameRoot == null
-            ? null
-            : (
-                project.root.path,
-                project.projectId,
-                project.projectRevision,
-                project.head.canonicalJson,
-                gameRoot,
+      loadThisMod: loadContentIndex,
+      loadBaseGame: () {
+        final configuredGameRoot = gameRoot;
+        if (configuredGameRoot == null) {
+          throw const FormatException(
+            'A configured game installation is required.',
+          );
+        }
+        return loadBaseGameCatalog(configuredGameRoot);
+      },
+      loadInstalled: () {
+        final configuredGameRoot = gameRoot;
+        if (configuredGameRoot == null) {
+          throw const FormatException(
+            'A configured game installation is required.',
+          );
+        }
+        return loadInstalledPackageIndex(gameRoot: configuredGameRoot);
+      },
+      builder: (context, contentLibraryController, globalSearchController) =>
+          Revision3ScopedContentBrowser(
+            projectIdentity: (project.root.path, project.projectId),
+            thisModLabel: l10n.managedContentWorkspaceLibraryLabel,
+            baseGameLabel: l10n.managedContentScopeBaseGameLabel,
+            installedLabel: l10n.managedContentScopeInstalledLabel,
+            allSourcesLabel: l10n.managedGlobalSearchScopeLabel,
+            thisMod: Revision3ContentLibrary(
+              projectRoot: project.root.path,
+              projectId: project.projectId,
+              projectRevision: project.projectRevision,
+              projectHeadCanonicalJson: project.head.canonicalJson,
+              load: loadContentIndex,
+              editQuestOutline: (index, quest) =>
+                  _openQuestOutlineEditor(context, index, quest),
+              editQuestContext: gameRoot == null
+                  ? null
+                  : (index, quest) =>
+                        _openQuestContextEditor(context, index, quest),
+              editQuestTransitions: (index, quest) =>
+                  _openQuestTransitionsEditor(context, index, quest),
+              inspectQuestSource: gameRoot == null
+                  ? null
+                  : (index, quest) =>
+                        _openQuestSourceInspection(context, index, quest),
+              inspectNpcSource: (index, npc) =>
+                  _openNpcProfile(context, index, npc),
+              controller: contentLibraryController,
+            ),
+            baseGame: Revision3BaseGameContentBrowser(
+              gameRoot: gameRoot,
+              sourceIdentity: (project.root.path, project.projectId, gameRoot),
+              loader: loadBaseGameCatalog,
+              copy: Revision3BaseGameContentBrowserCopy(
+                title: l10n.managedBaseGameBrowserTitle,
+                description: l10n.managedBaseGameBrowserDescription,
+                missingGameTitle: l10n.managedDashboardMissingGameTitle,
+                missingGameDescription:
+                    l10n.managedDashboardMissingGameDescription,
+                configureGame: l10n.managedActionSettingsTitle,
+                loading: l10n.managedBaseGameBrowserLoading,
+                refresh: l10n.managedBaseGameBrowserRefresh,
+                searchLabel: l10n.managedBaseGameBrowserSearchLabel,
+                filterAll: l10n.changesAll,
+                filterNpcs: l10n.managedBaseGameBrowserFilterNpcs,
+                filterQuests: l10n.managedBaseGameBrowserFilterQuests,
+                npcSectionTitle: l10n.managedBaseGameBrowserNpcSectionTitle,
+                questSectionTitle: l10n.managedBaseGameBrowserQuestSectionTitle,
+                experimentalNpcSectionTitle:
+                    l10n.managedBaseGameBrowserExperimentalNpcSectionTitle,
+                searchForExperimental:
+                    l10n.managedBaseGameBrowserSearchForExperimental,
+                empty: l10n.managedBaseGameBrowserEmpty,
+                loadErrorTitle: l10n.managedBaseGameBrowserLoadErrorTitle,
+                loadErrorDescription:
+                    l10n.managedBaseGameBrowserLoadErrorDescription,
+                retry: l10n.managedDashboardRetry,
+                baseGameSourceBadge: l10n.managedContentScopeBaseGameLabel,
+                offlineDraftBadge: l10n.managedBaseGameBrowserOfflineDraftBadge,
+                runtimeUnqualifiedBadge:
+                    l10n.managedDashboardRuntimeUnqualifiedTitle,
+                inspectOnlyBadge: l10n.managedBaseGameBrowserInspectOnlyBadge,
+                createNpcDraft: l10n.managedBaseGameBrowserCreateNpcDraft,
+                createQuestDraft: l10n.managedBaseGameBrowserCreateQuestDraft,
+                spawnClass: l10n.managedBaseGameBrowserSpawnClass,
+                actorBlueprint: l10n.managedBaseGameBrowserActorBlueprint,
+                experimentalResultsCapped:
+                    l10n.managedBaseGameBrowserExperimentalResultsCapped,
               ),
-        loader: loadInstalledPackageIndex,
-        copy: Revision3InstalledContentBrowserCopy(
-          setupTitle: l10n.managedDashboardMissingGameTitle,
-          setupDescription: l10n.managedDashboardMissingGameDescription,
-          setupActionLabel: l10n.managedActionSettingsTitle,
-          loadingLabel: l10n.managedInstalledBrowserLoading,
-          completeSummary: l10n.managedInstalledBrowserCompleteSummary,
-          partialSummary: l10n.managedInstalledBrowserPartialSummary,
-          completeDescription: l10n.managedInstalledBrowserCompleteDescription,
-          partialDescription: l10n.managedInstalledBrowserPartialDescription,
-          authorityNotice: l10n.managedInstalledBrowserAuthorityNotice,
-          refreshTooltip: l10n.managedInstalledBrowserRefresh,
-          searchLabel: l10n.managedInstalledBrowserSearchLabel,
-          searchHint: l10n.managedInstalledBrowserSearchHint,
-          searchPrompt: l10n.managedInstalledBrowserSearchPrompt,
-          noMatchesTitle: l10n.managedInstalledBrowserNoMatchesTitle,
-          noMatchesDescription:
-              l10n.managedInstalledBrowserNoMatchesDescription,
-          resultLimitDescription:
-              l10n.managedInstalledBrowserResultLimitDescription,
-          kindBadgeLabel: l10n.managedInstalledBrowserKindBadge,
-          sourceBadgeLabel: l10n.managedContentScopeInstalledLabel,
-          readinessBadgeLabel: l10n.managedInstalledBrowserMetadataOnlyBadge,
-          openInspectorLabel: l10n.managedInstalledBrowserOpenInspector,
-          errorTitle: l10n.managedInstalledBrowserErrorTitle,
-          errorDescription: l10n.managedInstalledBrowserErrorDescription,
-          retryLabel: l10n.managedDashboardRetry,
-        ),
-        openSettings: () => Revision3ProjectWorkspace.navigate(
-          context,
-          const Revision3ProjectWorkspaceLocation(
-            Revision3ProjectWorkspaceSection.settingsExpert,
-          ),
-        ),
-        openInspector: gameRoot == null
-            ? null
-            : (targetPath) => unawaited(
-                _openInstalledPackageBrowser(
-                  context,
-                  gameRoot!,
-                  initialQuery: targetPath,
+              openSettings: () => Revision3ProjectWorkspace.navigate(
+                context,
+                const Revision3ProjectWorkspaceLocation(
+                  Revision3ProjectWorkspaceSection.settingsExpert,
                 ),
               ),
-      ),
+              createNpcDraft: (catalogId) => unawaited(
+                _openNpcWizard(context, initialCatalogId: catalogId),
+              ),
+              createQuestDraft: (parentCatalogId) => unawaited(
+                _openQuestWizard(
+                  context,
+                  initialParentCatalogId: parentCatalogId,
+                ),
+              ),
+            ),
+            installed: Revision3InstalledContentBrowser(
+              gameRoot: gameRoot,
+              sourceIdentity: gameRoot == null
+                  ? null
+                  : (
+                      project.root.path,
+                      project.projectId,
+                      project.projectRevision,
+                      project.head.canonicalJson,
+                      gameRoot,
+                    ),
+              loader: loadInstalledPackageIndex,
+              copy: Revision3InstalledContentBrowserCopy(
+                setupTitle: l10n.managedDashboardMissingGameTitle,
+                setupDescription: l10n.managedDashboardMissingGameDescription,
+                setupActionLabel: l10n.managedActionSettingsTitle,
+                loadingLabel: l10n.managedInstalledBrowserLoading,
+                completeSummary: l10n.managedInstalledBrowserCompleteSummary,
+                partialSummary: l10n.managedInstalledBrowserPartialSummary,
+                completeDescription:
+                    l10n.managedInstalledBrowserCompleteDescription,
+                partialDescription:
+                    l10n.managedInstalledBrowserPartialDescription,
+                authorityNotice: l10n.managedInstalledBrowserAuthorityNotice,
+                refreshTooltip: l10n.managedInstalledBrowserRefresh,
+                searchLabel: l10n.managedInstalledBrowserSearchLabel,
+                searchHint: l10n.managedInstalledBrowserSearchHint,
+                searchPrompt: l10n.managedInstalledBrowserSearchPrompt,
+                noMatchesTitle: l10n.managedInstalledBrowserNoMatchesTitle,
+                noMatchesDescription:
+                    l10n.managedInstalledBrowserNoMatchesDescription,
+                resultLimitDescription:
+                    l10n.managedInstalledBrowserResultLimitDescription,
+                kindBadgeLabel: l10n.managedInstalledBrowserKindBadge,
+                sourceBadgeLabel: l10n.managedContentScopeInstalledLabel,
+                readinessBadgeLabel:
+                    l10n.managedInstalledBrowserMetadataOnlyBadge,
+                openInspectorLabel: l10n.managedInstalledBrowserOpenInspector,
+                errorTitle: l10n.managedInstalledBrowserErrorTitle,
+                errorDescription: l10n.managedInstalledBrowserErrorDescription,
+                retryLabel: l10n.managedDashboardRetry,
+              ),
+              openSettings: () => Revision3ProjectWorkspace.navigate(
+                context,
+                const Revision3ProjectWorkspaceLocation(
+                  Revision3ProjectWorkspaceSection.settingsExpert,
+                ),
+              ),
+              openInspector: gameRoot == null
+                  ? null
+                  : (targetPath) => unawaited(
+                      _openInstalledPackageBrowser(
+                        context,
+                        gameRoot!,
+                        initialQuery: targetPath,
+                      ),
+                    ),
+            ),
+            allSources: Builder(
+              builder: (globalContext) => Revision3GlobalContentSearchView(
+                controller: globalSearchController,
+                copy: _globalContentSearchCopy(l10n),
+                callbacks: Revision3GlobalContentSearchCallbacks(
+                  openThisModEntity: (entityId) {
+                    Revision3ScopedContentBrowser.navigate(
+                      globalContext,
+                      Revision3ScopedContentScope.thisMod,
+                    );
+                    unawaited(
+                      contentLibraryController.openEntityById(entityId).then((
+                        open,
+                      ) {
+                        if (!open && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                l10n.managedGlobalSearchResultStale,
+                              ),
+                            ),
+                          );
+                        }
+                      }),
+                    );
+                  },
+                  openThisModAsset: (sha256) {
+                    Revision3ScopedContentBrowser.navigate(
+                      globalContext,
+                      Revision3ScopedContentScope.thisMod,
+                    );
+                    unawaited(
+                      contentLibraryController.openAssetBySha256(sha256).then((
+                        open,
+                      ) {
+                        if (!open && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                l10n.managedGlobalSearchResultStale,
+                              ),
+                            ),
+                          );
+                        }
+                      }),
+                    );
+                  },
+                  createBaseNpcDraft: (catalogId) => unawaited(
+                    _openNpcWizard(context, initialCatalogId: catalogId),
+                  ),
+                  createBaseQuestDraft: (catalogId) => unawaited(
+                    _openQuestWizard(
+                      context,
+                      initialParentCatalogId: catalogId,
+                    ),
+                  ),
+                  inspectInstalledDataAsset: (targetPath) {
+                    final configuredGameRoot = gameRoot;
+                    if (configuredGameRoot == null) return;
+                    unawaited(
+                      _openInstalledPackageBrowser(
+                        context,
+                        configuredGameRoot,
+                        initialQuery: targetPath,
+                        initialTargetPath: targetPath,
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
     ),
     dataAssets: Revision3DataAssetStagePanel(
       projectRoot: project.root.path,
@@ -2418,6 +2535,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
     BuildContext context,
     String configuredGameRoot, {
     String initialQuery = '',
+    String? initialTargetPath,
   }) => showDialog<void>(
     context: context,
     builder: (context) => InstalledPackageBrowserDialog(
@@ -2427,6 +2545,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
       publish: publishInstalledDataAssetSemanticEdit,
       publishReviewed: publishReviewedInstalledDataAssetEdit,
       initialQuery: initialQuery,
+      initialTargetPath: initialTargetPath,
     ),
   );
 
@@ -2459,6 +2578,124 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
   Future<void> _openSettings(BuildContext context) =>
       _showModStudioSettingsDialog(context);
 }
+
+class _ManagedRevision3GlobalContentHost extends StatefulWidget {
+  const _ManagedRevision3GlobalContentHost({
+    required this.sourceIdentity,
+    required this.loadThisMod,
+    required this.loadBaseGame,
+    required this.loadInstalled,
+    required this.builder,
+  });
+
+  final Revision3GlobalContentSearchSourceIdentity sourceIdentity;
+  final Revision3GlobalThisModContentLoader loadThisMod;
+  final Revision3GlobalBaseGameContentLoader loadBaseGame;
+  final Revision3GlobalInstalledContentLoader loadInstalled;
+  final Widget Function(
+    BuildContext context,
+    Revision3ContentLibraryController contentLibraryController,
+    Revision3GlobalContentSearchController globalSearchController,
+  )
+  builder;
+
+  @override
+  State<_ManagedRevision3GlobalContentHost> createState() =>
+      _ManagedRevision3GlobalContentHostState();
+}
+
+class _ManagedRevision3GlobalContentHostState
+    extends State<_ManagedRevision3GlobalContentHost> {
+  final _contentLibraryController = Revision3ContentLibraryController();
+  late final Revision3GlobalContentSearchController _globalSearchController;
+
+  @override
+  void initState() {
+    super.initState();
+    _globalSearchController = Revision3GlobalContentSearchController(
+      loadThisMod: widget.loadThisMod,
+      loadBaseGame: widget.loadBaseGame,
+      loadInstalled: widget.loadInstalled,
+      sourceIdentity: widget.sourceIdentity,
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant _ManagedRevision3GlobalContentHost oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _globalSearchController.updateSources(
+      loadThisMod: widget.loadThisMod,
+      loadBaseGame: widget.loadBaseGame,
+      loadInstalled: widget.loadInstalled,
+      sourceIdentity: widget.sourceIdentity,
+    );
+  }
+
+  @override
+  void dispose() {
+    _globalSearchController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.builder(
+    context,
+    _contentLibraryController,
+    _globalSearchController,
+  );
+}
+
+Revision3GlobalContentSearchCopy _globalContentSearchCopy(
+  AppLocalizations l10n,
+) => Revision3GlobalContentSearchCopy(
+  title: l10n.managedGlobalSearchTitle,
+  searchLabel: l10n.managedGlobalSearchLabel,
+  searchAction: l10n.managedGlobalSearchAction,
+  clearAction: l10n.managedGlobalSearchClear,
+  emptyPrompt: l10n.managedGlobalSearchPrompt,
+  noResults: l10n.managedGlobalSearchNoResults,
+  loading: l10n.managedGlobalSearchLoading,
+  loadFailed: l10n.managedGlobalSearchFailed,
+  retry: l10n.managedDashboardRetry,
+  partial: l10n.managedGlobalSearchPartial,
+  complete: l10n.managedGlobalSearchComplete,
+  truncated: l10n.managedGlobalSearchTruncated,
+  openAction: l10n.managedGlobalSearchOpen,
+  createDraftAction: l10n.managedGlobalSearchCreateDraft,
+  inspectAction: l10n.managedGlobalSearchInspect,
+  sourceLabels: <Revision3GlobalContentSource, String>{
+    Revision3GlobalContentSource.thisMod:
+        l10n.managedContentWorkspaceLibraryLabel,
+    Revision3GlobalContentSource.baseGame:
+        l10n.managedContentScopeBaseGameLabel,
+    Revision3GlobalContentSource.installed:
+        l10n.managedContentScopeInstalledLabel,
+  },
+  kindLabels: <Revision3GlobalContentKind, String>{
+    Revision3GlobalContentKind.thisModEntity:
+        l10n.managedGlobalSearchKindModEntity,
+    Revision3GlobalContentKind.thisModAsset:
+        l10n.managedGlobalSearchKindModAsset,
+    Revision3GlobalContentKind.baseNpc: l10n.managedGlobalSearchKindBaseNpc,
+    Revision3GlobalContentKind.baseQuest: l10n.managedGlobalSearchKindBaseQuest,
+    Revision3GlobalContentKind.experimentalBaseNpc:
+        l10n.managedGlobalSearchKindExperimentalNpc,
+    Revision3GlobalContentKind.installedDataAsset:
+        l10n.managedInstalledBrowserKindBadge,
+  },
+  readinessLabels: <Revision3GlobalContentReadiness, String>{
+    Revision3GlobalContentReadiness.exactCurrent:
+        l10n.managedGlobalSearchReadinessExact,
+    Revision3GlobalContentReadiness.exactCurrentWithProblems:
+        l10n.managedGlobalSearchReadinessProblems,
+    Revision3GlobalContentReadiness.offlineDraftRuntimeUnqualified:
+        l10n.managedBaseGameBrowserOfflineDraftBadge,
+    Revision3GlobalContentReadiness.inspectOnlyRuntimeUnqualified:
+        l10n.managedBaseGameBrowserInspectOnlyBadge,
+    Revision3GlobalContentReadiness.metadataOnlyRuntimeUnqualified:
+        l10n.managedInstalledBrowserMetadataOnlyBadge,
+  },
+);
 
 Future<void> _showModStudioSettingsDialog(BuildContext context) =>
     showDialog<void>(

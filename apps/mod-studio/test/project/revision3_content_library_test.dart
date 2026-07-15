@@ -574,6 +574,206 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('controller opens exact IDs and resets local discovery state', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    await _pumpLoadedLibrary(tester, controller: controller);
+
+    await tester.tap(
+      find.byKey(const Key('revision3-content-filter-quest_draft')),
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-content-search')),
+      'Find Homer',
+    );
+    await tester.pump();
+    expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsNothing);
+
+    expect(await controller.openEntityById(_npcId), isTrue);
+    await tester.pump();
+    expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('revision3-content-entity-details-$_npcId')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('revision3-content-search')))
+          .controller
+          ?.text,
+      isEmpty,
+    );
+
+    expect(await controller.openAssetBySha256(_artifactSha), isTrue);
+    await tester.pump();
+    expect(
+      find.byKey(ValueKey('revision3-content-asset-details-$_artifactSha')),
+      findsOneWidget,
+    );
+    expect(
+      await controller.openAssetBySha256(_artifactSha.toUpperCase()),
+      isFalse,
+      reason: 'SHA navigation is exact rather than normalized or fuzzy',
+    );
+    expect(await controller.openEntityById('missing'), isFalse);
+  });
+
+  testWidgets('controller resolves pending navigation against reloaded index', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final reopen = Completer<Revision3ContentIndex>();
+    var calls = 0;
+    await _pumpLibrary(
+      tester,
+      controller: controller,
+      load: () {
+        calls++;
+        return calls == 1 ? Future.value(_fixture()) : reopen.future;
+      },
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('revision3-content-refresh')));
+    await tester.pump();
+    bool? result;
+    unawaited(
+      controller.openEntityById(_moduleId).then((value) => result = value),
+    );
+    await tester.pump();
+    expect(result, isNull, reason: 'the old visible index is not reused');
+
+    reopen.complete(_fixture());
+    await tester.pumpAndSettle();
+    expect(result, isTrue);
+    expect(
+      find.byKey(ValueKey('revision3-content-entity-details-$_moduleId')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('controller reports a target removed by exact reopen', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final reopen = Completer<Revision3ContentIndex>();
+    var calls = 0;
+    await _pumpLibrary(
+      tester,
+      controller: controller,
+      load: () {
+        calls++;
+        return calls == 1 ? Future.value(_fixture()) : reopen.future;
+      },
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('revision3-content-refresh')));
+    await tester.pump();
+    final result = controller.openEntityById(_npcId);
+    reopen.complete(_fixture(includeNpc: false));
+    await tester.pumpAndSettle();
+
+    expect(await result, isFalse);
+    expect(find.byKey(Key('revision3-content-entity-$_npcId')), findsNothing);
+  });
+
+  testWidgets('project switch cancels a pending controller target', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final controller = Revision3ContentLibraryController();
+    final oldReopen = Completer<Revision3ContentIndex>();
+    final newProjectOpen = Completer<Revision3ContentIndex>();
+    var calls = 0;
+    var root = 'managed-root-a';
+    var head = 'head-a';
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: Revision3ContentLibrary(
+                projectRoot: root,
+                projectId: _projectId,
+                projectRevision: 7,
+                projectHeadCanonicalJson: head,
+                controller: controller,
+                load: () {
+                  calls++;
+                  return switch (calls) {
+                    1 => Future.value(_fixture()),
+                    2 => oldReopen.future,
+                    _ => newProjectOpen.future,
+                  };
+                },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    rebuild(() => head = 'head-b');
+    await tester.pump();
+    final pending = controller.openEntityById(_questId);
+    rebuild(() => root = 'managed-root-b');
+    await tester.pump();
+
+    expect(await pending, isFalse);
+    oldReopen.complete(_fixture());
+    newProjectOpen.complete(_fixture());
+    await tester.pumpAndSettle();
+    expect(calls, 3);
+  });
+
+  testWidgets('controller replacement and dispose leave no stale binding', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    final first = Revision3ContentLibraryController();
+    final second = Revision3ContentLibraryController();
+    var controller = first;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: Revision3ContentLibrary(
+                projectRoot: 'managed-root',
+                projectId: _projectId,
+                projectRevision: 7,
+                projectHeadCanonicalJson: 'head',
+                controller: controller,
+                load: () async => _fixture(),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    rebuild(() => controller = second);
+    await tester.pump();
+    expect(await first.openEntityById(_questId), isFalse);
+    expect(await second.openEntityById(_questId), isTrue);
+    await tester.pump();
+
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    expect(await second.openEntityById(_npcId), isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('shows a friendly error and retries the exact reopen', (
     tester,
   ) async {
@@ -692,6 +892,7 @@ Future<void> _pumpLoadedLibrary(
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  Revision3ContentLibraryController? controller,
 }) async {
   await _pumpLibrary(
     tester,
@@ -701,6 +902,7 @@ Future<void> _pumpLoadedLibrary(
     editQuestTransitions: editQuestTransitions,
     inspectQuestSource: inspectQuestSource,
     inspectNpcSource: inspectNpcSource,
+    controller: controller,
   );
   await tester.pumpAndSettle();
 }
@@ -714,6 +916,7 @@ Future<void> _pumpLibrary(
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  Revision3ContentLibraryController? controller,
 }) => tester.pumpWidget(
   MaterialApp(
     home: Scaffold(
@@ -728,6 +931,7 @@ Future<void> _pumpLibrary(
         editQuestTransitions: editQuestTransitions,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
+        controller: controller,
       ),
     ),
   ),
@@ -737,6 +941,7 @@ Revision3ContentIndex _fixture({
   int revision = 7,
   bool duplicateBacklinks = false,
   int questGeneratorVersion = 2,
+  bool includeNpc = true,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': _projectId,
@@ -749,33 +954,34 @@ Revision3ContentIndex _fixture({
   },
   'authoring_locales': <Object?>['de', 'en'],
   'entity_counts': <String, Object?>{
-    'npc_draft': 1,
+    if (includeNpc) 'npc_draft': 1,
     'quest_draft': 1,
     'script_module': 1,
   },
   'entities': <Object?>[
-    <String, Object?>{
-      'id': _npcId,
-      'kind': 'npc_draft',
-      'display_name': 'Gate Guard',
-      'revision': 0,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': 'GORE_GATE_GUARD',
-      },
-      'summary': <String, Object?>{
+    if (includeNpc)
+      <String, Object?>{
+        'id': _npcId,
         'kind': 'npc_draft',
-        'data': <String, Object?>{
-          'unique_name': 'GORE_GATE_GUARD',
-          'module_namespace': 'PROJECT.NPCS.GATEGUARD',
-          'parent_character_definition': 'UCharacterDefinition_Asghan',
-          'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
-          'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+        'display_name': 'Gate Guard',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_GATE_GUARD',
         },
+        'summary': <String, Object?>{
+          'kind': 'npc_draft',
+          'data': <String, Object?>{
+            'unique_name': 'GORE_GATE_GUARD',
+            'module_namespace': 'PROJECT.NPCS.GATEGUARD',
+            'parent_character_definition': 'UCharacterDefinition_Asghan',
+            'parent_ai_agent_config': 'UAIAgentConfig_Asghan',
+            'parent_spawn_definition': 'USpawnAIAgentDefinition_Asghan',
+          },
+        },
+        'references': <Object?>[],
+        'asset_references': <Object?>[],
       },
-      'references': <Object?>[],
-      'asset_references': <Object?>[],
-    },
     <String, Object?>{
       'id': _questId,
       'kind': 'quest_draft',

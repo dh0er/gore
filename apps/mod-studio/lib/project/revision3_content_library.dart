@@ -31,7 +31,64 @@ typedef Revision3NpcSourceInspector =
       Revision3ContentEntity npc,
     );
 
+/// Programmatic navigation into an attached [Revision3ContentLibrary].
+///
+/// Targets are deliberately accepted only as exact stable identifiers. The
+/// library resolves every request against its currently loaded exact project
+/// index; requests made while that index is reopening wait for the new index.
+/// A missing target, a project switch, or a detached controller resolves to
+/// `false` without retaining a stale content object.
+class Revision3ContentLibraryController {
+  Object? _attachment;
+  Future<bool> Function(String entityId)? _openEntityById;
+  Future<bool> Function(String sha256)? _openAssetBySha256;
+
+  /// Opens the entity with exactly [entityId].
+  Future<bool> openEntityById(String entityId) {
+    final open = _openEntityById;
+    return open == null ? Future<bool>.value(false) : open(entityId);
+  }
+
+  /// Opens the asset with exactly [sha256].
+  Future<bool> openAssetBySha256(String sha256) {
+    final open = _openAssetBySha256;
+    return open == null ? Future<bool>.value(false) : open(sha256);
+  }
+
+  void _attach(
+    Object attachment, {
+    required Future<bool> Function(String entityId) openEntityById,
+    required Future<bool> Function(String sha256) openAssetBySha256,
+  }) {
+    assert(
+      _attachment == null || identical(_attachment, attachment),
+      'A Revision3ContentLibraryController can only be attached to one '
+      'content library at a time.',
+    );
+    _attachment = attachment;
+    _openEntityById = openEntityById;
+    _openAssetBySha256 = openAssetBySha256;
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _openEntityById = null;
+    _openAssetBySha256 = null;
+  }
+}
+
 enum _ContentMode { entities, assets }
+
+enum _PendingContentTargetKind { entity, asset }
+
+class _PendingContentNavigation {
+  _PendingContentNavigation(this.kind, this.exactId);
+
+  final _PendingContentTargetKind kind;
+  final String exactId;
+  final Completer<bool> result = Completer<bool>();
+}
 
 enum _EntityToolAction {
   questOutline,
@@ -60,6 +117,7 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editQuestTransitions,
     this.inspectQuestSource,
     this.inspectNpcSource,
+    this.controller,
     super.key,
   });
 
@@ -73,6 +131,7 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3QuestTransitionsEditor? editQuestTransitions;
   final Revision3QuestSourceInspector? inspectQuestSource;
   final Revision3NpcSourceInspector? inspectNpcSource;
+  final Revision3ContentLibraryController? controller;
 
   @override
   State<Revision3ContentLibrary> createState() =>
@@ -89,17 +148,24 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   Revision3ContentEntityKind? _kind;
   String? _selectedEntityId;
   String? _selectedAssetSha256;
+  final List<_PendingContentNavigation> _pendingNavigations = [];
 
   @override
   void initState() {
     super.initState();
     _search.addListener(_searchChanged);
+    _attachController(widget.controller);
     _reload();
   }
 
   @override
   void didUpdateWidget(covariant Revision3ContentLibrary oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      _cancelPendingNavigations();
+      oldWidget.controller?._detach(this);
+      _attachController(widget.controller);
+    }
     if (oldWidget.projectRoot != widget.projectRoot ||
         oldWidget.projectId != widget.projectId ||
         oldWidget.projectRevision != widget.projectRevision ||
@@ -107,7 +173,11 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
       final changedProject =
           oldWidget.projectRoot != widget.projectRoot ||
           oldWidget.projectId != widget.projectId;
+      if (oldWidget.projectRevision != widget.projectRevision) {
+        _cancelPendingNavigations();
+      }
       if (changedProject) {
+        _cancelPendingNavigations();
         _search.clear();
         _mode = _ContentMode.entities;
         _kind = null;
@@ -120,6 +190,8 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
 
   @override
   void dispose() {
+    _cancelPendingNavigations();
+    widget.controller?._detach(this);
     _search
       ..removeListener(_searchChanged)
       ..dispose();
@@ -127,6 +199,72 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   }
 
   void _searchChanged() => setState(() {});
+
+  void _attachController(Revision3ContentLibraryController? controller) {
+    controller?._attach(
+      this,
+      openEntityById: _openEntityById,
+      openAssetBySha256: _openAssetBySha256,
+    );
+  }
+
+  Future<bool> _openEntityById(String entityId) =>
+      _openExactTarget(_PendingContentTargetKind.entity, entityId);
+
+  Future<bool> _openAssetBySha256(String sha256) =>
+      _openExactTarget(_PendingContentTargetKind.asset, sha256);
+
+  Future<bool> _openExactTarget(
+    _PendingContentTargetKind kind,
+    String exactId,
+  ) {
+    if (!mounted || exactId.isEmpty) return Future<bool>.value(false);
+    if (_loading) {
+      final pending = _PendingContentNavigation(kind, exactId);
+      _pendingNavigations.add(pending);
+      return pending.result.future;
+    }
+    if (_error != null) return Future<bool>.value(false);
+    final index = _index;
+    if (index == null) return Future<bool>.value(false);
+    return Future<bool>.value(_resolveExactTarget(index, kind, exactId));
+  }
+
+  bool _resolveExactTarget(
+    Revision3ContentIndex index,
+    _PendingContentTargetKind kind,
+    String exactId,
+  ) {
+    switch (kind) {
+      case _PendingContentTargetKind.entity:
+        if (index.entityById(exactId) == null) return false;
+        _selectEntity(index, exactId);
+        return true;
+      case _PendingContentTargetKind.asset:
+        if (index.assetBySha256(exactId) == null) return false;
+        _selectAsset(index, exactId);
+        return true;
+    }
+  }
+
+  void _resolvePendingNavigations(Revision3ContentIndex index) {
+    final pending = List<_PendingContentNavigation>.of(_pendingNavigations);
+    _pendingNavigations.clear();
+    for (final navigation in pending) {
+      final resolved =
+          mounted &&
+          _resolveExactTarget(index, navigation.kind, navigation.exactId);
+      navigation.result.complete(resolved);
+    }
+  }
+
+  void _cancelPendingNavigations() {
+    final pending = List<_PendingContentNavigation>.of(_pendingNavigations);
+    _pendingNavigations.clear();
+    for (final navigation in pending) {
+      navigation.result.complete(false);
+    }
+  }
 
   Future<void> _reload({bool clearCurrent = false}) async {
     final generation = ++_loadGeneration;
@@ -150,12 +288,14 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         _selectedEntityId = _retainEntitySelection(index);
         _selectedAssetSha256 = _retainAssetSelection(index);
       });
+      _resolvePendingNavigations(index);
     } catch (error) {
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _loading = false;
         _error = error;
       });
+      _cancelPendingNavigations();
     }
   }
 

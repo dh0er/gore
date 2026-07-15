@@ -1043,4 +1043,78 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get managedInstalledBrowserErrorDescription =>
       'Impossibile leggere l’istantanea installata esatta. Nessun file di progetto, gioco o salvataggio è stato modificato.';
+
+  @override
+  String get managedGlobalSearchScopeLabel => 'Cerca ovunque';
+
+  @override
+  String get managedGlobalSearchTitle => 'Cerca in tutti i contenuti';
+
+  @override
+  String get managedGlobalSearchLabel =>
+      'PNG, missione, battuta, risorsa, ID o percorso /Game';
+
+  @override
+  String get managedGlobalSearchAction => 'Cerca';
+
+  @override
+  String get managedGlobalSearchClear => 'Cancella';
+
+  @override
+  String get managedGlobalSearchPrompt =>
+      'Inserisci una ricerca per consultare le tre fonti separatamente.';
+
+  @override
+  String get managedGlobalSearchNoResults =>
+      'Nessuna corrispondenza in questa fonte.';
+
+  @override
+  String get managedGlobalSearchLoading => 'Lettura della fonte esatta…';
+
+  @override
+  String get managedGlobalSearchFailed => 'Impossibile leggere questa fonte.';
+
+  @override
+  String get managedGlobalSearchComplete => 'Completo';
+
+  @override
+  String get managedGlobalSearchPartial => 'Parziale';
+
+  @override
+  String get managedGlobalSearchTruncated =>
+      'Sono mostrate le prime 100 corrispondenze. Affina la ricerca.';
+
+  @override
+  String get managedGlobalSearchOpen => 'Apri';
+
+  @override
+  String get managedGlobalSearchCreateDraft => 'Crea bozza';
+
+  @override
+  String get managedGlobalSearchInspect => 'Ispeziona';
+
+  @override
+  String get managedGlobalSearchKindModEntity => 'Contenuto del mod';
+
+  @override
+  String get managedGlobalSearchKindModAsset => 'Risorsa del mod';
+
+  @override
+  String get managedGlobalSearchKindBaseNpc => 'Punto di partenza PNG';
+
+  @override
+  String get managedGlobalSearchKindBaseQuest => 'Punto di partenza missione';
+
+  @override
+  String get managedGlobalSearchKindExperimentalNpc => 'Evidenza PNG';
+
+  @override
+  String get managedGlobalSearchReadinessExact => 'Progetto corrente esatto';
+
+  @override
+  String get managedGlobalSearchReadinessProblems => 'Esatto, con problemi';
+
+  @override
+  String get managedGlobalSearchResultStale =>
+      'Questo risultato non è più nel progetto corrente. Ripeti la ricerca.';
 }
