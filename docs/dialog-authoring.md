@@ -75,26 +75,55 @@ sandbox tree with full-tree SHA-256
 the record, backup, loader, holder, recovery, and temporary residue were absent.
 This is an offline/sandbox qualification, not a live result.
 
-The Steam hotfix installed on 2026-07-14 is a new, unretained generation
-(`BuildID 24169431`; executable SHA-256 starts with `B52CD045`, Shipping cache
-SHA-256 with `757D8624`). It matches none of the retained 1.0.0--1.0.3
-executables, so the candidate's pinned 1.0.3 Snapshot must fail closed. A
-read-only audit found no GORE deployment record, cache backup, fixture loader or
-fixture enable marker in the normal install, but that is not a substitute for a
-new generation seal. The shared current `gore.exe` builder also differs from
-the builder frozen by the candidate verifier; the candidate artifacts are
-intact, while their old receipts remain evidence only for their original
-generation.
+The Steam hotfix installed on 2026-07-14 is now retained separately as
+`work/probe/viper-dialog-fixture/candidate-hotfix-24169431/`. Its exact
+generation is `BuildID 24169431`, executable SHA-256
+`B52CD0453AD03987B833F7F26D09A2075109F18D653B8D4FF95271C857139E5D`, and
+Shipping-cache SHA-256
+`757D8624F0C7480F63CC14A1BA2D7E43F461A529064B0C0CFBF523A54639E385`.
+The game was stopped and source/copy length plus SHA-256 matched immediately
+after both read-only copies. No save or installed file was written.
 
-Before another live Snapshot, retain the hotfix executable/cache/build identity,
-rebuild twice, and run a new copied-cache deploy/parse/disassemble/undeploy
-closure. The closure must restore the hotfix cache and complete sandbox tree
-exactly and leave no record, backup, loader, holder, recovery or temporary
-residue. Only then may the live qualification script be resealed for the new
-generation; no 1.0.3 receipt may be relabelled.
+A full byte-faithfulness comparison aligns all 163,551 functions between the
+retained 1.0.3 and hotfix caches with zero semantic differences and zero
+module/function alignment loss, but 155,219 functions require reference-key
+normalization. Therefore merely splicing an unchanged 1.0.3 mini into the
+hotfix is not qualification: its generation-specific keys can be stale even
+when the resulting cache parses.
 
-The candidate-local `live-qualification.ps1` is read-only toward the game,
-saves, and UE4SS markers. It admits only the pinned UE4SS 3.0.1 Beta #0 build
+A builder produced from repository commit `01147483` was retained by exact
+hash. Using the old fully composed caches as identity sources, the qualifier
+remaps Viper's 35 and Asghan's 195 references onto the hotfix base twice; both
+pairs are byte-identical. Viper's hotfix mini is 3,150 bytes with SHA-256
+`2F68D429CCE06CA3DFFAB4F03B1B5B1FCC845E81CE32EB8E897311B7FCDA6F32`;
+its runtime-v3 Lua remains the exact 30,519-byte safety-verified artifact.
+Asghan's hotfix mini is 12,537 bytes with SHA-256
+`CEBD9F93C9532E17FEC9969CF8CC724BAC0CDC5D48711493FDF97A6F2434B56D`;
+it now builds with the production runtime-v3 adapter rather than the old
+runtime-v2 artifact.
+
+Two fresh builds per candidate reproduce their exact five-file bundles. Viper
+deploys to a 7,306-module, 123,397,348-byte cache with SHA-256
+`E252EDD5226B0D941E7FC78DC2F7DC53FDE479A7CCEAC5D46384858B44CAE4CA`;
+Asghan deploys to a 7,306-module, 123,406,735-byte cache with SHA-256
+`172F57C2CE73468458F25AC6210AB4E53738D53738D44D88087DA25E71A9909E`.
+Header/module parsing, disassembly, and decompilation find both authored
+modules and their required dialog/quest functions. Each undeploy restores the
+exact seven-entry copied tree with SHA-256
+`F46A1073F7B632EFF69268AA0E3863685D514BB01CC9D2F972844447E7717824` and
+leaves no record, backup, loader, holder, recovery, temporary, or transient
+build residue. The candidate-local `run-hotfix-offline-qualification.ps1`
+reproduces both closures; the focused runtime suite remains 31/31 green. This
+clears the current-hotfix offline composition prerequisite, not either live
+runtime boundary or the exact-current arbitrary-source compiler gate.
+
+The retained hotfix candidate now has its own copied `live-qualification.ps1`,
+resealed to the BuildID-24169431 executable, pristine cache,
+hotfix-identity-remapped Viper mini/runtime, deployed-cache hash, and complete
+offline closure. The pure log/parser suite accepts one exact ordered session
+and rejects twelve duplicate, reordered, stale, inconsistent, or malformed
+cases. AST checks keep deployment, process, marker, network, and shell commands
+out of the harness. It admits only the pinned UE4SS 3.0.1 Beta #0 build
 (`272ce2f8`) with the sealed loader/proxy payloads, the exact game process and
 executable generation, the exact save root and sealed pre-run save tree, the
 sole fixture marker, and a sealed log prefix followed by the one ordered
@@ -104,9 +133,13 @@ after separately performed undeploy. The sole admitted save difference is a
 same-length numeric change to the root `GothicScreenshotsSave_<id>` token in
 `PersistentDataList.sav`; any other difference fails. The harness never
 deploys, isolates mods, launches the game, clicks, saves, or restores files.
-Those setup and cleanup operations stay separate and visible; one natural
+Those setup and cleanup operations stay separate and visible. One natural
 Viper-menu open with no selection and no save is the only remaining in-game
 interaction needed to requalify render-only runtime v3.
+Asghan remains a separate behavioral qualification because selecting its
+fixture can change quest/save state. The offline evidence qualifies its
+hotfix-remapped build/composition only, not selection, effects, persistence, or
+save/reload.
 
 ## Minimal compiled topic
 
