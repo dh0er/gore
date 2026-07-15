@@ -1909,9 +1909,11 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 module_name: module,
                 rel_path,
                 as_path: source,
+                source_override: None,
                 work_dir,
                 allow_new_symbols,
                 base_override: Some(base_override),
+                binds_override: None,
             };
             let diagnostics = gore_as::diagnostics::DiagnosticsOptions {
                 disabled: no_diagnostics,

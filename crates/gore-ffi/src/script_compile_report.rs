@@ -86,14 +86,14 @@ struct InstallStateWirePayload {
 /// only this directory's `tree` child; it never receives the caller-controlled workspace itself.
 /// The retained ancestor/child handles reject pre-existing links and, on Windows, exclude delete
 /// sharing so the path cannot be renamed or replaced until gore-as has finished using it.
-struct OwnedCompileStaging {
+pub(super) struct OwnedCompileStaging {
     path: PathBuf,
     workspace_real: PathBuf,
     _anchors: Vec<std::fs::File>,
 }
 
 impl OwnedCompileStaging {
-    fn create(workspace: &Path, game_dir: &Path) -> Result<Self, String> {
+    pub(super) fn create(workspace: &Path, game_dir: &Path) -> Result<Self, String> {
         let broad_anchors = open_directory_anchor_chain(workspace, false)?;
         let workspace_real = workspace.canonicalize().map_err(|error| {
             format!(
@@ -146,11 +146,11 @@ impl OwnedCompileStaging {
         Ok(staging)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 
-    fn verify_owned(&self) -> Result<(), String> {
+    pub(super) fn verify_owned(&self) -> Result<(), String> {
         let directory = self.path();
         let metadata = std::fs::symlink_metadata(directory)
             .map_err(|error| format!("inspecting the compile staging directory: {error}"))?;
@@ -229,8 +229,11 @@ fn allocate_owned_compile_child(workspace: &Path) -> Result<(PathBuf, std::fs::F
 fn run_owned_child_create_hook(_path: &Path) {}
 
 #[cfg(test)]
+type OwnedChildCreateHook = Box<dyn FnOnce(&Path)>;
+
+#[cfg(test)]
 thread_local! {
-    static OWNED_CHILD_CREATE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce(&Path)>>> =
+    static OWNED_CHILD_CREATE_HOOK: std::cell::RefCell<Option<OwnedChildCreateHook>> =
         std::cell::RefCell::new(None);
 }
 
@@ -384,7 +387,7 @@ fn open_file_anchor(path: &Path, label: &str) -> Result<std::fs::File, String> {
 fn anchor_owned_compiled_mini(
     staging: &OwnedCompileStaging,
     output: &gore_as::compile::CompileOutput,
-) -> Result<std::fs::File, String> {
+) -> Result<(), String> {
     let expected = staging.path().join("module.cache");
     if output.mini_path != expected {
         return Err(
@@ -397,7 +400,175 @@ fn anchor_owned_compiled_mini(
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err("compiled module.cache is not a regular non-link file".to_owned());
     }
-    open_file_anchor(&expected, "compiled module.cache")
+    // Reuse the exact create-new handle retained by gore-as. Reopening with a second handle is
+    // both weaker against replacement and a Windows sharing violation because the creation handle
+    // intentionally denies WRITE/DELETE sharing.
+    output.validate_retained_artifact()
+}
+
+/// Remove the exact compiler artifact while the owned staging directory remains identity-pinned.
+/// Managed compiler checks return evidence only, never a reusable mini-cache capability.
+pub(super) fn discard_owned_compiled_mini(
+    staging: &OwnedCompileStaging,
+    output: &mut gore_as::compile::CompileOutput,
+) -> Result<(), String> {
+    let expected = staging.path().join("module.cache");
+    if output.mini_path != expected {
+        return Err(
+            "compiler output path is not the exact owned-staging module.cache child".to_owned(),
+        );
+    }
+    // The exact retained output handle is the last reliable capability once staging verification
+    // fails. Always destroy its bytes before consulting the marker, and still run both operations
+    // so a caller does not lose either failure when disposal and ownership verification fail.
+    let neutralization_error = output.neutralize_retained_artifact().err();
+    let ownership_error = staging.verify_owned().err();
+    match (neutralization_error, ownership_error) {
+        (Some(neutralization), Some(ownership)) => {
+            return Err(format!(
+                "neutralizing the exact retained compiler output failed: {neutralization}; \
+                 compile-staging ownership verification also failed: {ownership}"
+            ));
+        }
+        (Some(error), None) | (None, Some(error)) => return Err(error),
+        (None, None) => {}
+    }
+
+    // The exact original file was neutralized before its retained handle was released. The
+    // identity-pinned staging path is now verified, so pathname cleanup is safe to attempt.
+    let _ = std::fs::remove_file(&expected);
+    confirm_compiled_output_absent_or_empty(&expected)
+}
+
+/// Destroy a partial `module.cache` that may have been left behind by a failed compiler write.
+/// Absence is success; any present bytes must be neutralized through the exact opened handle.
+pub(super) fn discard_owned_compiled_mini_if_present(
+    staging: &OwnedCompileStaging,
+) -> Result<(), String> {
+    discard_owned_compiled_mini_path(staging, true)
+}
+
+/// Destroy a partial final write through gore-as's retained creation handle when available. Other
+/// failure modes never created a genuine mini-cache; a same-name residue is still removed closed.
+pub(super) fn discard_owned_failed_compiled_mini(
+    staging: &OwnedCompileStaging,
+    error: &mut CompileError,
+) -> Result<(), String> {
+    if let Some(neutralized) = error.neutralize_failed_artifact() {
+        staging.verify_owned()?;
+        neutralized?;
+        let expected = staging.path().join("module.cache");
+        let _ = std::fs::remove_file(&expected);
+        return confirm_compiled_output_absent_or_empty(&expected);
+    }
+    discard_owned_compiled_mini_if_present(staging)
+}
+
+fn discard_owned_compiled_mini_path(
+    staging: &OwnedCompileStaging,
+    allow_missing: bool,
+) -> Result<(), String> {
+    staging.verify_owned()?;
+    let path = staging.path().join("module.cache");
+    let metadata = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(())
+        }
+        Err(error) => {
+            return Err(format!(
+                "inspecting evidence-only compiler output without following links: {error}"
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("evidence-only compiler output is not a regular non-link file".to_owned());
+    }
+
+    // Neutralize the exact opened file before releasing the identity-protecting handle. In
+    // particular, do not drop an anchor and then truncate by pathname: that creates a Windows
+    // rename/replacement gap in which the real mini-cache can escape.
+    let file = open_compiled_mini_discard_anchor(&path)?;
+    file.set_len(0)
+        .map_err(|error| format!("truncating the exact compiler output handle: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("syncing the exact truncated compiler output: {error}"))?;
+    if file
+        .metadata()
+        .map_err(|error| format!("rechecking the exact compiler output handle: {error}"))?
+        .len()
+        != 0
+    {
+        return Err("the exact compiler output handle still contains usable bytes".to_owned());
+    }
+    drop(file);
+
+    // Unlink is best-effort after the only compiler-produced bytes are already empty. A retained
+    // empty file is safe and lets the app-owned outer-workspace cleanup report its own warning.
+    let _ = std::fs::remove_file(&path);
+    confirm_compiled_output_absent_or_empty(&path)
+}
+
+fn confirm_compiled_output_absent_or_empty(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(metadata)
+            if metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == 0 =>
+        {
+            Ok(())
+        }
+        Ok(_) => Err("evidence-only compiler output still contains usable bytes".to_owned()),
+        Err(error) => Err(format!(
+            "confirming evidence-only compiler output discard: {error}"
+        )),
+    }
+}
+
+#[cfg(windows)]
+fn open_compiled_mini_discard_anchor(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+    };
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening compiler output without following links: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspecting opened compiler output: {error}"))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("compiler output is not a regular non-reparse file".to_owned());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_compiled_mini_discard_anchor(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening compiler output without following links: {error}"))?;
+    if !file
+        .metadata()
+        .map_err(|error| format!("inspecting opened compiler output: {error}"))?
+        .is_file()
+    {
+        return Err("compiler output is not a regular file".to_owned());
+    }
+    Ok(file)
 }
 
 pub(super) fn compile_report_v1_raw(input: &str) -> Value {
@@ -454,9 +625,11 @@ pub(super) fn compile_report_v1_raw(input: &str) -> Value {
         module_name: payload.module_name,
         rel_path: payload.rel_path,
         as_path: PathBuf::from(payload.as_path),
+        source_override: None,
         work_dir: staging.path().to_path_buf(),
         allow_new_symbols: payload.allow_new_symbols,
         base_override: Some(base_override),
+        binds_override: None,
     };
     if let Err(message) = staging.verify_owned() {
         return release_guard_after_preflight_failure(
@@ -475,14 +648,11 @@ pub(super) fn compile_report_v1_raw(input: &str) -> Value {
         guard,
     );
     let diagnostics_rejection = compiled_diagnostics_rejection(report.diagnostics());
-    let (mini_anchor, output_rejection) = match &report.outcome {
+    let output_rejection = match &report.outcome {
         CompileModuleReportOutcome::Compiled(output) => {
-            match anchor_owned_compiled_mini(&staging, output) {
-                Ok(anchor) => (Some(anchor), None),
-                Err(message) => (None, Some(message)),
-            }
+            anchor_owned_compiled_mini(&staging, output).err()
         }
-        CompileModuleReportOutcome::Failed(_) => (None, None),
+        CompileModuleReportOutcome::Failed(_) => None,
     };
     let retain_staging = matches!(&report.outcome, CompileModuleReportOutcome::Compiled(_))
         && compiled_output_is_usable(
@@ -494,14 +664,9 @@ pub(super) fn compile_report_v1_raw(input: &str) -> Value {
         // The response's mini_path remains usable after this call. Failed/recovery-required
         // attempts never cause native recursive deletion through caller-controlled paths.
         let _retained = staging.retain();
-        debug_assert!(mini_anchor
-            .as_ref()
-            .and_then(|anchor| anchor.metadata().ok())
-            .is_some_and(|metadata| metadata.is_file()));
+        debug_assert!(output_rejection.is_none());
     }
-    let response = report_response(report, output_rejection);
-    drop(mini_anchor);
-    response
+    report_response(report, output_rejection)
 }
 
 pub(super) fn install_state_v1_raw(input: &str) -> Value {
@@ -676,7 +841,7 @@ fn preflight_failure_with_state(
     })
 }
 
-fn install_guard_failure(game_dir: &Path, message: String) -> Value {
+pub(super) fn install_guard_failure(game_dir: &Path, message: String) -> Value {
     let state = probe_install_compile_state(game_dir);
     let (code, recovery_required) = match state.disposition {
         InstallCompileStateDisposition::GameProcessRunning => {
@@ -719,7 +884,10 @@ fn guard_release_failure(context: &'static str, error: String) -> Value {
     )
 }
 
-fn report_response(report: CompileModuleReport, output_rejection: Option<String>) -> Value {
+pub(super) fn report_response(
+    report: CompileModuleReport,
+    output_rejection: Option<String>,
+) -> Value {
     let restore = report.install_restore_disposition();
     let diagnostics_rejection = compiled_diagnostics_rejection(report.diagnostics());
     let diagnostics = report
@@ -888,7 +1056,7 @@ fn preflight_failure_with_diagnostics(
 
 fn compile_error(error: CompileError) -> (&'static str, String) {
     let code = match &error {
-        CompileError::Io(_) => "COMPILE_IO",
+        CompileError::Io(_) | CompileError::ArtifactIo { .. } => "COMPILE_IO",
         CompileError::Regen(_) => "COMPILER_REGEN_FAILED",
         CompileError::NoRegen(_) => "COMPILER_OUTPUT_MISSING",
         CompileError::Other(_) => "COMPILE_FAILED",
@@ -1091,6 +1259,112 @@ mod tests {
     }
 
     #[test]
+    fn evidence_only_discard_removes_the_exact_owned_mini() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let game = root.path().join("game");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&game).unwrap();
+        let staging = OwnedCompileStaging::create(&workspace, &game).unwrap();
+        let mini_path = staging.path().join("module.cache");
+        fs::write(&mini_path, b"not-a-reusable-managed-artifact").unwrap();
+        let mut output = gore_as::compile::CompileOutput::bind_existing(
+            mini_path.clone(),
+            "GoreMods.ManagedCheck".to_owned(),
+        )
+        .unwrap();
+
+        discard_owned_compiled_mini(&staging, &mut output).unwrap();
+        assert!(!mini_path.exists());
+        assert!(staging.path().join(OWNED_COMPILE_MARKER).is_file());
+    }
+
+    #[test]
+    fn evidence_only_discard_neutralizes_before_rejecting_a_corrupt_marker() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let game = root.path().join("game");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&game).unwrap();
+        let mut staging = OwnedCompileStaging::create(&workspace, &game).unwrap();
+        let mini_path = staging.path().join("module.cache");
+        fs::write(&mini_path, b"must-be-destroyed-before-marker-rejection").unwrap();
+        let mut output = gore_as::compile::CompileOutput::bind_existing(
+            mini_path.clone(),
+            "GoreMods.ManagedCheck".to_owned(),
+        )
+        .unwrap();
+        let exact_output_probe = fs::File::open(&mini_path).unwrap();
+
+        // Production retains a read-only marker anchor. Release only that last test-visible
+        // anchor so this regression can model a marker damaged by an external actor.
+        let marker_anchor = staging
+            ._anchors
+            .pop()
+            .expect("owned staging must retain its marker as the final anchor");
+        assert!(marker_anchor.metadata().unwrap().is_file());
+        drop(marker_anchor);
+        fs::write(staging.path().join(OWNED_COMPILE_MARKER), b"corrupt-marker").unwrap();
+
+        let error = discard_owned_compiled_mini(&staging, &mut output)
+            .expect_err("a corrupt ownership marker must reject pathname cleanup");
+        assert!(
+            error.contains("compile-staging ownership marker content changed"),
+            "got: {error}"
+        );
+        assert!(mini_path.is_file());
+        assert_eq!(exact_output_probe.metadata().unwrap().len(), 0);
+        assert!(fs::read(&mini_path).unwrap().is_empty());
+
+        let mut detached = gore_as::compile::CompileOutput::detached(
+            mini_path,
+            "GoreMods.ManagedCheck".to_owned(),
+        );
+        let combined = discard_owned_compiled_mini(&staging, &mut detached)
+            .expect_err("handle and marker failures must both be reported");
+        assert!(
+            combined.contains("compiler output did not retain its creation handle"),
+            "got: {combined}"
+        );
+        assert!(
+            combined.contains("compile-staging ownership verification also failed")
+                && combined.contains("compile-staging ownership marker content changed"),
+            "got: {combined}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn evidence_only_discard_securely_empties_a_delete_blocked_mini() {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_SHARE_READ, FILE_SHARE_WRITE};
+
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let game = root.path().join("game");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&game).unwrap();
+        let staging = OwnedCompileStaging::create(&workspace, &game).unwrap();
+        let mini_path = staging.path().join("module.cache");
+        fs::write(&mini_path, b"must-be-destroyed").unwrap();
+        let blocker = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(&mini_path)
+            .unwrap();
+        let mut output = gore_as::compile::CompileOutput::bind_existing(
+            mini_path.clone(),
+            "GoreMods.ManagedCheck".to_owned(),
+        )
+        .unwrap();
+
+        discard_owned_compiled_mini(&staging, &mut output).unwrap();
+        assert_eq!(fs::metadata(&mini_path).unwrap().len(), 0);
+        assert!(fs::read(&mini_path).unwrap().is_empty());
+        drop(blocker);
+    }
+
+    #[test]
     fn direct_g1r_game_dir_rejects_work_inside_semantic_install_root() {
         let root = tempfile::tempdir().unwrap();
         let install = root.path().join("install");
@@ -1123,25 +1397,27 @@ mod tests {
         let staging_path = staging.path().to_path_buf();
         let exact = staging.path().join("module.cache");
         fs::write(&exact, b"mini").unwrap();
-        let output = gore_as::compile::CompileOutput {
-            mini_path: exact.clone(),
-            module_name: "GoreMods.Probe".to_owned(),
-        };
-        let anchor = anchor_owned_compiled_mini(&staging, &output).unwrap();
-        assert!(anchor.metadata().unwrap().is_file());
-        drop(anchor);
+        let output = gore_as::compile::CompileOutput::bind_existing(
+            exact.clone(),
+            "GoreMods.Probe".to_owned(),
+        )
+        .unwrap();
+        anchor_owned_compiled_mini(&staging, &output).unwrap();
 
-        let wrong = gore_as::compile::CompileOutput {
-            mini_path: staging.path().join("elsewhere.cache"),
-            module_name: "GoreMods.Probe".to_owned(),
-        };
+        let wrong = gore_as::compile::CompileOutput::detached(
+            staging.path().join("elsewhere.cache"),
+            "GoreMods.Probe".to_owned(),
+        );
         assert!(anchor_owned_compiled_mini(&staging, &wrong).is_err());
+        drop(output);
         fs::remove_file(&exact).unwrap();
         fs::create_dir(&exact).unwrap();
-        assert!(anchor_owned_compiled_mini(&staging, &output).is_err());
+        let directory_output =
+            gore_as::compile::CompileOutput::detached(exact.clone(), "GoreMods.Probe".to_owned());
+        assert!(anchor_owned_compiled_mini(&staging, &directory_output).is_err());
 
         let response = compiled_response(
-            output,
+            directory_output,
             InstallRestoreDisposition::RestoredExact,
             None,
             Some("compiled module.cache failed its owned-file check".to_owned()),
@@ -1531,10 +1807,10 @@ mod tests {
                 true,
             ));
             let response = compiled_response(
-                gore_as::compile::CompileOutput {
-                    mini_path: PathBuf::from("must-not-escape.cache"),
-                    module_name: "GoreMods.Probe".to_owned(),
-                },
+                gore_as::compile::CompileOutput::detached(
+                    PathBuf::from("must-not-escape.cache"),
+                    "GoreMods.Probe".to_owned(),
+                ),
                 InstallRestoreDisposition::RestoredExact,
                 rejection,
                 None,

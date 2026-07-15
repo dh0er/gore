@@ -19,9 +19,11 @@ fn real_compile_add() {
         module_name: "GoreHello".into(),
         rel_path: "GoreHello.as".into(),
         as_path,
+        source_override: None,
         work_dir: work.clone(),
         allow_new_symbols: false,
         base_override: None,
+        binds_override: None,
     };
     let out = gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen).unwrap();
     assert!(out.mini_path.exists());

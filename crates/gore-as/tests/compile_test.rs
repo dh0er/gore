@@ -17,9 +17,11 @@ fn compile_errors_when_source_missing() {
         module_name: "M".into(),
         rel_path: "M.as".into(),
         as_path: tmp.join("does-not-exist.as"),
+        source_override: None,
         work_dir: tmp.clone(),
         allow_new_symbols: false,
         base_override: None,
+        binds_override: None,
     };
     let err = compile_module(&opts, fake_regen_ok(tmp.join("regen.cache"))).unwrap_err();
     assert!(matches!(err, CompileError::Io(_)));

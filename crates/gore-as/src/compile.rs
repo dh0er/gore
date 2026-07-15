@@ -17,6 +17,11 @@ pub enum CompileError {
     NoRegen(String),
     #[error("{0}")]
     Other(String),
+    #[error("io: {message}")]
+    ArtifactIo {
+        message: String,
+        artifact: Option<FailedCompiledArtifact>,
+    },
 }
 
 pub struct CompileOpts {
@@ -25,6 +30,10 @@ pub struct CompileOpts {
     pub module_name: String,
     pub rel_path: String,
     pub as_path: PathBuf,
+    /// Exact authored source bytes. When `Some`, compilation consumes only this buffer and never
+    /// opens `as_path`; managed callers use it to keep their sealed source snapshot independent
+    /// from caller-controlled workspace path races. Standalone callers keep `None`.
+    pub source_override: Option<Vec<u8>>,
     pub work_dir: PathBuf,
     /// Explicitly allow the edited/generated module to introduce symbols absent from the base.
     /// Default callers must pass `false`; the strict historical remap remains the safe default.
@@ -35,12 +44,160 @@ pub struct CompileOpts {
     /// `*.gore-bak`-or-live read (standalone/CLI/offline). NOTE: `game_run_regen` still uses the
     /// LIVE cache for its own backup/restore — only this emit/remap base is overridden.
     pub base_override: Option<Vec<u8>>,
+    /// Exact `Binds.Cache` bytes used to prepare native method/function arities. When `Some`,
+    /// parsing uses only this buffer and ignores both the live install and `GORE_AS_BINDS`.
+    /// Managed callers pass their already sealed/revalidated game-input snapshot; standalone
+    /// callers keep `None` for the historical environment-or-neighbor lookup.
+    pub binds_override: Option<Vec<u8>>,
+}
+
+#[derive(Debug)]
+pub struct CompiledArtifact {
+    path: PathBuf,
+    file: std::fs::File,
+}
+
+#[derive(Debug)]
+pub struct FailedCompiledArtifact {
+    artifact: CompiledArtifact,
+}
+
+impl Drop for FailedCompiledArtifact {
+    fn drop(&mut self) {
+        // Every caller gets a final best-effort retry, including legacy CLI/report paths that do
+        // not explicitly consume the managed cleanup capability.
+        let _ = self.artifact.neutralize();
+    }
+}
+
+impl CompiledArtifact {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Durably destroy the bytes of the exact output handle retained from creation. This stays
+    /// identity-safe even if an untrusted observer renamed the pathname after compilation.
+    pub fn neutralize(&self) -> Result<(), String> {
+        self.file
+            .set_len(0)
+            .map_err(|error| format!("truncating retained compiler artifact: {error}"))?;
+        self.file
+            .sync_all()
+            .map_err(|error| format!("syncing retained compiler artifact: {error}"))?;
+        if self
+            .file
+            .metadata()
+            .map_err(|error| format!("rechecking retained compiler artifact: {error}"))?
+            .len()
+            != 0
+        {
+            return Err("retained compiler artifact still contains usable bytes".to_owned());
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
 pub struct CompileOutput {
     pub mini_path: PathBuf,
     pub module_name: String,
+    artifact: Option<CompiledArtifact>,
+}
+
+impl CompileOutput {
+    fn retained(mini_path: PathBuf, module_name: String, artifact: CompiledArtifact) -> Self {
+        Self {
+            mini_path,
+            module_name,
+            artifact: Some(artifact),
+        }
+    }
+
+    /// Bind an existing regular file for tests/adapters that need an identity-retaining output.
+    /// Production compilation retains its original create-new handle instead.
+    pub fn bind_existing(mini_path: PathBuf, module_name: String) -> Result<Self, String> {
+        let file = open_compiled_artifact_existing(&mini_path)?;
+        Ok(Self::retained(
+            mini_path.clone(),
+            module_name,
+            CompiledArtifact {
+                path: mini_path,
+                file,
+            },
+        ))
+    }
+
+    /// Metadata-only value for response-policy tests. It cannot satisfy evidence-only disposal.
+    pub fn detached(mini_path: PathBuf, module_name: String) -> Self {
+        Self {
+            mini_path,
+            module_name,
+            artifact: None,
+        }
+    }
+
+    pub fn neutralize_retained_artifact(&mut self) -> Result<(), String> {
+        let artifact = self
+            .artifact
+            .take()
+            .ok_or_else(|| "compiler output did not retain its creation handle".to_owned())?;
+        if artifact.path() != self.mini_path {
+            self.artifact = Some(artifact);
+            return Err("retained compiler output identity does not match mini_path".to_owned());
+        }
+        match artifact.neutralize() {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.artifact = Some(artifact);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn validate_retained_artifact(&self) -> Result<(), String> {
+        let artifact = self
+            .artifact
+            .as_ref()
+            .ok_or_else(|| "compiler output did not retain its creation handle".to_owned())?;
+        if artifact.path() != self.mini_path {
+            return Err("retained compiler output identity does not match mini_path".to_owned());
+        }
+        let metadata = artifact
+            .file
+            .metadata()
+            .map_err(|error| format!("inspecting retained compiler output: {error}"))?;
+        if !metadata.is_file() {
+            return Err("retained compiler output is not a regular file".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl CompileError {
+    /// Neutralize a partial final mini-cache write through the exact creation handle, when the
+    /// final writer was the source of this failure. Other failures never created that artifact.
+    pub fn neutralize_failed_artifact(&mut self) -> Option<Result<(), String>> {
+        match self {
+            Self::ArtifactIo { artifact, .. } => {
+                let retained = match artifact.take() {
+                    Some(retained) => retained,
+                    None => {
+                        return Some(Err(
+                            "failed compiler artifact handle was already consumed".to_owned()
+                        ))
+                    }
+                };
+                match retained.artifact.neutralize() {
+                    Ok(()) => Some(Ok(())),
+                    Err(error) => {
+                        *artifact = Some(retained);
+                        Some(Err(error))
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
 }
 
 /// What happened to the live game installation around a compiler attempt.
@@ -1440,6 +1597,137 @@ fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> 
     }
 }
 
+fn remove_stale_compiled_artifact(path: &Path) -> Result<(), CompileError> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CompileError::Io(format!(
+            "inspecting stale mini-cache output: {error}"
+        ))),
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => Err(
+            CompileError::Io("stale mini-cache output is a directory".to_owned()),
+        ),
+        Ok(_) => std::fs::remove_file(path).map_err(|error| {
+            CompileError::Io(format!("removing stale mini-cache output: {error}"))
+        }),
+    }
+}
+
+fn write_compiled_artifact(path: PathBuf, bytes: &[u8]) -> Result<CompiledArtifact, CompileError> {
+    remove_stale_compiled_artifact(&path)?;
+    let file = open_compiled_artifact_create_new(&path).map_err(|message| {
+        CompileError::Io(format!("creating retained mini-cache output: {message}"))
+    })?;
+    let mut artifact = CompiledArtifact { path, file };
+    if let Err(error) = artifact
+        .file
+        .write_all(bytes)
+        .and_then(|_| artifact.file.sync_all())
+    {
+        let cleanup = artifact
+            .neutralize()
+            .err()
+            .map(|failure| format!("; exact-handle cleanup also failed: {failure}"))
+            .unwrap_or_default();
+        return Err(CompileError::ArtifactIo {
+            message: format!("writing retained mini-cache output: {error}{cleanup}"),
+            artifact: Some(FailedCompiledArtifact { artifact }),
+        });
+    }
+    Ok(artifact)
+}
+
+#[cfg(windows)]
+fn open_compiled_artifact_create_new(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening create-new/no-follow output: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(windows)]
+fn open_compiled_artifact_existing(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ};
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening existing no-follow output: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(windows)]
+fn validate_opened_compiled_artifact(file: std::fs::File) -> Result<std::fs::File, String> {
+    use std::os::windows::fs::MetadataExt as _;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspecting retained output handle: {error}"))?;
+    if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err("retained output is not a regular non-reparse file".to_owned());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_compiled_artifact_create_new(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening create-new/no-follow output: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(unix)]
+fn open_compiled_artifact_existing(path: &Path) -> Result<std::fs::File, String> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    let file = options
+        .open(path)
+        .map_err(|error| format!("opening existing no-follow output: {error}"))?;
+    validate_opened_compiled_artifact(file)
+}
+
+#[cfg(unix)]
+fn validate_opened_compiled_artifact(file: std::fs::File) -> Result<std::fs::File, String> {
+    if !file
+        .metadata()
+        .map_err(|error| format!("inspecting retained output handle: {error}"))?
+        .is_file()
+    {
+        return Err("retained output is not a regular file".to_owned());
+    }
+    Ok(file)
+}
+
 /// `run_regen(game_dir, src_dir) -> regen cache path`. Injected so the orchestration is testable
 /// offline; the FFI passes [`game_run_regen`].
 pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutput, CompileError>
@@ -1452,15 +1740,22 @@ where
             opts.op, opts.module_name
         )));
     }
-    if !opts.as_path.exists() {
-        return Err(CompileError::Io(format!(
-            "source .as not found: {}",
-            opts.as_path.display()
-        )));
-    }
     // Read the overlay before clearing work_dir/tree. This also makes an input that intentionally
     // lives below that old tree safe: its bytes survive the clean rebuild, never its stale siblings.
-    let overlay = std::fs::read(&opts.as_path).map_err(io("reading source .as"))?;
+    // Managed callers instead supply an already sealed byte snapshot and never reopen a
+    // caller-controlled source pathname.
+    let overlay = match &opts.source_override {
+        Some(bytes) => bytes.clone(),
+        None => {
+            if !opts.as_path.exists() {
+                return Err(CompileError::Io(format!(
+                    "source .as not found: {}",
+                    opts.as_path.display()
+                )));
+            }
+            std::fs::read(&opts.as_path).map_err(io("reading source .as"))?
+        }
+    };
     // The PRISTINE base cache to emit/remap against. Prefer the caller-supplied `base_override`
     // (the FFI passes gore-mod's drift-aware `pristine_script_cache`, so the base matches exactly
     // what deploy will splice against, even after a game update made the `*.gore-bak` stale).
@@ -1484,7 +1779,15 @@ where
     // and id-based free-function collision renames are all compile-significant; the old partial
     // setup produced 287 divergent vanilla files on the 1.0.3 cache before the authored overlay
     // was even considered.
-    let prepared = emit_all::PreparedEmit::new(&mods, &mut refs, native_api(&base_path))
+    let native_api = match &opts.binds_override {
+        Some(bytes) => Some(
+            crate::cache::binds::NativeApi::from_bytes(bytes).ok_or_else(|| {
+                CompileError::Other("sealed Binds.Cache override is invalid".to_owned())
+            })?,
+        ),
+        None => native_api(&base_path),
+    };
+    let prepared = emit_all::PreparedEmit::new(&mods, &mut refs, native_api)
         .map_err(|error| CompileError::Other(format!("preparing base modules: {error}")))?;
     let overlay = std::str::from_utf8(&overlay)
         .map_err(|error| CompileError::Other(format!("source .as is not valid UTF-8: {error}")))?;
@@ -1577,11 +1880,8 @@ where
     canonicalize_mini_guid(&mut mini, &base).map_err(CompileError::Other)?;
 
     let mini_path = opts.work_dir.join("module.cache");
-    std::fs::write(&mini_path, &mini).map_err(io("writing mini"))?;
-    Ok(CompileOutput {
-        mini_path,
-        module_name: target,
-    })
+    let artifact = write_compiled_artifact(mini_path.clone(), &mini)?;
+    Ok(CompileOutput::retained(mini_path, target, artifact))
 }
 
 /// Load native arities from the `GORE_AS_BINDS` env path if set, else a `Binds.Cache` sitting next
@@ -5006,9 +5306,11 @@ mod tests {
                 module_name: module_name.into(),
                 rel_path: rel_path.into(),
                 as_path: source,
+                source_override: None,
                 work_dir: root.clone(),
                 allow_new_symbols: false,
                 base_override: Some(base_cache),
+                binds_override: None,
             };
             let called = std::cell::Cell::new(false);
             let error = compile_module(&opts, |_, _| {
@@ -6289,20 +6591,22 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let source = root.join("overlay.as");
-        std::fs::write(&source, b"// generated module\n").unwrap();
+        let source = root.join("must-not-be-opened.as");
         let opts = CompileOpts {
             game_dir: root.join("game"),
             op: "add".to_owned(),
             module_name: "NewModule".to_owned(),
             rel_path: "NewModule.as".to_owned(),
             as_path: source,
+            source_override: Some(b"// native-sealed generated module\n".to_vec()),
             work_dir: root.join("work"),
             allow_new_symbols: true,
             base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: None,
         };
         let generated =
             cache_with_empty_modules(&[("Base", "Base.as"), ("NewModule", "NewModule.as")]);
+        assert!(!opts.as_path.exists());
         let success = compile_module_report_with(&opts, |_, _| {
             let path = root.join("generated.cache");
             std::fs::write(&path, &generated).unwrap();
@@ -6338,6 +6642,8 @@ mod tests {
             success.install_restore_disposition(),
             InstallRestoreDisposition::RestoredExact
         );
+        // A successful output intentionally pins its exact artifact until the caller consumes it.
+        drop(success);
 
         let failed = compile_module_report_with(&opts, |_, _| {
             Ok(GameRunRegenExtendedReport {
@@ -6421,6 +6727,108 @@ mod tests {
     }
 
     #[test]
+    fn sealed_binds_override_fails_closed_before_regen() {
+        let root = unique_test_root("invalid-sealed-binds");
+        std::fs::create_dir_all(&root).unwrap();
+        let opts = CompileOpts {
+            game_dir: root.join("game"),
+            op: "add".to_owned(),
+            module_name: "Managed".to_owned(),
+            rel_path: "Managed.as".to_owned(),
+            as_path: root.join("must-not-be-opened.as"),
+            source_override: Some(b"// sealed source\n".to_vec()),
+            work_dir: root.join("work"),
+            allow_new_symbols: true,
+            base_override: Some(cache_with_empty_modules(&[("Base", "Base.as")])),
+            binds_override: Some(Vec::new()),
+        };
+        let called = std::cell::Cell::new(false);
+        let error = compile_module(&opts, |_, _| {
+            called.set(true);
+            Err("regen must not run".to_owned())
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("sealed Binds.Cache override is invalid"));
+        assert!(!called.get());
+        assert!(!opts.as_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compiled_artifact_neutralizes_the_creation_identity() {
+        let root = unique_test_root("retained-compiled-artifact");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("module.cache");
+        let escaped = root.join("escaped.cache");
+        let artifact = write_compiled_artifact(path.clone(), b"compiler bytes").unwrap();
+
+        #[cfg(windows)]
+        {
+            assert!(
+                std::fs::rename(&path, &escaped).is_err(),
+                "the retained creation handle must deny Windows rename/replacement"
+            );
+            artifact.neutralize().unwrap();
+            assert!(std::fs::read(&path).unwrap().is_empty());
+        }
+
+        #[cfg(unix)]
+        {
+            std::fs::rename(&path, &escaped).unwrap();
+            std::fs::write(&path, b"replacement").unwrap();
+            artifact.neutralize().unwrap();
+            assert!(std::fs::read(&escaped).unwrap().is_empty());
+            assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        }
+
+        drop(artifact);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compiled_artifact_never_follows_a_precreated_link() {
+        let root = unique_test_root("compiled-artifact-link");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("module.cache");
+        let victim = root.join("victim.cache");
+        std::fs::write(&victim, b"victim").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&victim, &path).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&victim, &path).is_err() {
+            std::fs::remove_dir_all(root).unwrap();
+            return;
+        }
+
+        let artifact = write_compiled_artifact(path.clone(), b"safe output").unwrap();
+        assert_eq!(std::fs::read(&victim).unwrap(), b"victim");
+        assert_eq!(std::fs::read(&path).unwrap(), b"safe output");
+        artifact.neutralize().unwrap();
+        drop(artifact);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_artifact_error_keeps_exact_cleanup_capability() {
+        let root = unique_test_root("failed-artifact-handle");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("module.cache");
+        let artifact = write_compiled_artifact(path.clone(), b"partial bytes").unwrap();
+        let mut error = CompileError::ArtifactIo {
+            message: "injected final-write failure".to_owned(),
+            artifact: Some(FailedCompiledArtifact { artifact }),
+        };
+        error
+            .neutralize_failed_artifact()
+            .expect("artifact error exposes cleanup")
+            .unwrap();
+        assert!(std::fs::read(&path).unwrap().is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn preheld_compile_guard_is_explicitly_released_when_module_preflight_fails() {
         let root = unique_test_root("preheld-guard-preflight-release");
         let (game, _) = fake_install(&root);
@@ -6434,9 +6842,11 @@ mod tests {
             module_name: "NeverRuns".to_owned(),
             rel_path: "NeverRuns.as".to_owned(),
             as_path: source,
+            source_override: None,
             work_dir: root.join("work"),
             allow_new_symbols: false,
             base_override: Some(Vec::new()),
+            binds_override: None,
         };
 
         let report =
@@ -6474,9 +6884,11 @@ mod tests {
             module_name: "NeverRuns".to_owned(),
             rel_path: "NeverRuns.as".to_owned(),
             as_path: source,
+            source_override: None,
             work_dir: root.join("work"),
             allow_new_symbols: false,
             base_override: Some(Vec::new()),
+            binds_override: None,
         };
 
         let report =

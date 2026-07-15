@@ -66,9 +66,9 @@ struct InspectQuestWirePayload {
 }
 
 #[derive(Debug)]
-struct Failure {
-    code: &'static str,
-    message: String,
+pub(super) struct Failure {
+    pub(super) code: &'static str,
+    pub(super) message: String,
 }
 
 impl Failure {
@@ -239,7 +239,7 @@ fn parse_quest_id(input: &str) -> Result<EntityId, Failure> {
     input.parse().map_err(|_| invalid_request())
 }
 
-fn build_fresh_game_inputs(
+pub(super) fn build_fresh_game_inputs(
     game_root: &Path,
 ) -> Result<(StoryCatalogFile, Vec<u8>, Vec<u8>), Failure> {
     let g1r = resolve_g1r_root(game_root);
@@ -284,7 +284,7 @@ fn is_g1r_component(value: &std::ffi::OsStr) -> bool {
     value.as_encoded_bytes().eq_ignore_ascii_case(b"G1R")
 }
 
-fn revalidate_game_inputs(
+pub(super) fn revalidate_game_inputs(
     catalog: &StoryCatalogFile,
     game_root: &Path,
     expected_shipping: &[u8],

@@ -167,6 +167,7 @@ mod authoring_store;
 mod authoring_story;
 mod authoring_story_build;
 mod authoring_story_catalog;
+mod authoring_story_compiler_revision3;
 mod authoring_story_inventory;
 mod authoring_story_npc_inspection_revision3;
 mod authoring_story_npc_revision3;
@@ -217,6 +218,8 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_project_story_quest_draft_insert_v1",
     "authoring_read_dataasset_extract_receipt_v2",
     "authoring_store_build_revision3_voice_v1",
+    "authoring_store_check_revision3_npc_compiler_v1",
+    "authoring_store_check_revision3_quest_compiler_v1",
     "authoring_store_import_ogg",
     "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
@@ -505,6 +508,12 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_build_revision3_voice_v1" => {
             Some(authoring_voice_build_revision3::build_revision3_voice_v1_raw)
         }
+        "authoring_store_check_revision3_npc_compiler_v1" => Some(
+            authoring_story_compiler_revision3::check_revision3_npc_compiler_v1_raw,
+        ),
+        "authoring_store_check_revision3_quest_compiler_v1" => Some(
+            authoring_story_compiler_revision3::check_revision3_quest_compiler_v1_raw,
+        ),
         "authoring_store_inspect_revision3_installed_dataasset_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::inspect_revision3_installed_dataasset_v1_raw,
         ),
@@ -1616,6 +1625,8 @@ mod tests {
                     "authoring_project_story_quest_draft_insert_v1",
                     "authoring_read_dataasset_extract_receipt_v2",
                     "authoring_store_build_revision3_voice_v1",
+                    "authoring_store_check_revision3_npc_compiler_v1",
+                    "authoring_store_check_revision3_quest_compiler_v1",
                     "authoring_store_import_ogg",
                     "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
