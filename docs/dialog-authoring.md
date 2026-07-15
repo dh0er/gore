@@ -75,6 +75,24 @@ sandbox tree with full-tree SHA-256
 the record, backup, loader, holder, recovery, and temporary residue were absent.
 This is an offline/sandbox qualification, not a live result.
 
+The Steam hotfix installed on 2026-07-14 is a new, unretained generation
+(`BuildID 24169431`; executable SHA-256 starts with `B52CD045`, Shipping cache
+SHA-256 with `757D8624`). It matches none of the retained 1.0.0--1.0.3
+executables, so the candidate's pinned 1.0.3 Snapshot must fail closed. A
+read-only audit found no GORE deployment record, cache backup, fixture loader or
+fixture enable marker in the normal install, but that is not a substitute for a
+new generation seal. The shared current `gore.exe` builder also differs from
+the builder frozen by the candidate verifier; the candidate artifacts are
+intact, while their old receipts remain evidence only for their original
+generation.
+
+Before another live Snapshot, retain the hotfix executable/cache/build identity,
+rebuild twice, and run a new copied-cache deploy/parse/disassemble/undeploy
+closure. The closure must restore the hotfix cache and complete sandbox tree
+exactly and leave no record, backup, loader, holder, recovery or temporary
+residue. Only then may the live qualification script be resealed for the new
+generation; no 1.0.3 receipt may be relabelled.
+
 The candidate-local `live-qualification.ps1` is read-only toward the game,
 saves, and UE4SS markers. It admits only the pinned UE4SS 3.0.1 Beta #0 build
 (`272ce2f8`) with the sealed loader/proxy payloads, the exact game process and
