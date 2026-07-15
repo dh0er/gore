@@ -77,6 +77,10 @@
 //!   managed Quest's display outline and deterministically regenerates its owned ScriptModule.
 //!   It fully reopens an unpublished candidate, never accepts collision authority from the
 //!   client, and never builds, deploys, touches a game/save, or publishes the fixed head.
+//! - `authoring_store_prepare_revision3_quest_outline_edit_v2` edits the display outline of one
+//!   exact-current semantic Quest while retaining stable objective slots and transition behavior.
+//!   It binds the owned module and retained plan explicitly, fully reopens only an unpublished
+//!   candidate, and accepts no game, compiler, build, deployment, save, or publication authority.
 //! - `authoring_store_prepare_revision3_quest_transitions_edit_v1` edits only one exact-current
 //!   managed Quest's bounded semantic transition plan and deterministically regenerates its owned
 //!   ScriptModule. It can explicitly upgrade a frozen generator-v2/v3 Quest to generator v4,
@@ -136,6 +140,13 @@
 //! - `dataasset_fixed_inspect_v1` accepts exactly `{uasset_path, usmap_path, export_index?}` and
 //!   performs a bounded, offline-only G1R UE5.4 fixed-leaf inspection. It returns exact content
 //!   seals and offset-free selectors without paths, patching, deployment, or runtime claims.
+//! - `script_compile_report_v1` is the bounded structured companion to the legacy
+//!   `script_compile` command. It fails closed unless the deployment-aware pristine cache can be
+//!   resolved, runs the optional compiler hook with automatic normal-generator fallback, and
+//!   reports diagnostics plus exact live-install restoration separately from compile success.
+//! - `script_compile_install_state_v1` is a bounded, strictly read-only native preflight for the
+//!   shipping-game process and every known compile/recovery artifact. It returns display-only
+//!   paths and never creates, removes, renames, repairs, launches, or writes anything.
 //! - `authoring_store_inspect_revision3_installed_dataasset_v1` accepts only one exact managed
 //!   revision-3 head, installed package-snapshot seals, game/Store roots, and a candidate ordinal.
 //!   It rebuilds every native authority and returns bounded whole-package fixed-leaf inspection
@@ -163,6 +174,7 @@ mod authoring_story_quest;
 mod authoring_story_quest_context_revision3;
 mod authoring_story_quest_inspection_revision3;
 mod authoring_story_quest_outline_revision3;
+mod authoring_story_quest_outline_v2_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_build_revision3;
@@ -170,6 +182,7 @@ mod authoring_voice_revision3;
 mod authoring_voice_selection_revision3;
 mod authoring_voice_target_revision3;
 mod dataasset;
+mod script_compile_report;
 mod transport;
 mod voice;
 
@@ -226,6 +239,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_prepare_revision3_quest_outline_edit_v1",
+    "authoring_store_prepare_revision3_quest_outline_edit_v2",
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_voice_take_selection_v1",
@@ -258,6 +272,8 @@ const CORE_COMMANDS: &[&str] = &[
     "mod_deploy",
     "mod_undeploy",
     "script_compile",
+    "script_compile_install_state_v1",
+    "script_compile_report_v1",
     "script_emit_module",
     "script_list_modules",
     "texture_extract",
@@ -529,6 +545,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_quest_outline_edit_v1" => Some(
             authoring_story_quest_outline_revision3::prepare_revision3_quest_outline_edit_v1_raw,
         ),
+        "authoring_store_prepare_revision3_quest_outline_edit_v2" => Some(
+            authoring_story_quest_outline_v2_revision3::prepare_revision3_quest_outline_edit_v2_raw,
+        ),
         "authoring_store_prepare_revision3_quest_transitions_edit_v1" => Some(
             authoring_story_quest_transitions_revision3::prepare_revision3_quest_transitions_edit_v1_raw,
         ),
@@ -550,6 +569,10 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_read_revision3_dataasset_package_index_v1" => Some(
             authoring_dataasset_package_index_revision3::read_revision3_dataasset_package_index_v1_raw,
         ),
+        "script_compile_install_state_v1" => {
+            Some(script_compile_report::install_state_v1_raw)
+        }
+        "script_compile_report_v1" => Some(script_compile_report::compile_report_v1_raw),
         _ => None,
     }
 }
@@ -1123,29 +1146,56 @@ fn script_compile(payload: Value) -> Value {
             "missing one of game_dir/op/module_name/rel_path/as_path/work_dir",
         );
     };
-    // Use gore-mod's drift-aware pristine resolver for the emit/remap base, so the compile base is
-    // exactly the bytes deploy will splice against (honoring a `*.gore-bak` gone stale after a game
-    // update). `None` on failure → compile falls back to its own on-disk read.
-    let base_override = gore_mod::pristine_script_cache(std::path::Path::new(&game_dir)).ok();
     let allow_new_symbols = payload
         .get("allow_new_symbols")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let opts = gore_as::compile::CompileOpts {
-        game_dir: PathBuf::from(game_dir),
-        op,
-        module_name,
-        rel_path,
-        as_path: PathBuf::from(as_path),
-        work_dir: PathBuf::from(work_dir),
-        allow_new_symbols,
-        base_override,
-    };
-    match gore_as::compile::compile_module(&opts, gore_as::compile::game_run_regen) {
-        Ok(out) => {
-            json!({"ok": true, "mini_path": out.mini_path.display().to_string(), "module": out.module_name})
+    // Keep the legacy response shape, but execute through the same bounded native route as the
+    // structured command. In particular, the same install guard spans pristine selection through
+    // compile, and gore-as receives only a uniquely-owned child below `work_dir`; no caller-owned
+    // `work_dir/tree` is ever recursively reset by this raw compatibility command.
+    let request = json!({
+        "command": script_compile_report::COMMAND,
+        "payload": {
+            "allow_new_symbols": allow_new_symbols,
+            "as_path": as_path,
+            "game_dir": game_dir,
+            "module_name": module_name,
+            "op": op,
+            "rel_path": rel_path,
+            "work_dir": work_dir,
         }
-        Err(e) => err("COMPILE_FAILED", e.to_string()),
+    });
+    let structured = script_compile_report::compile_report_v1_raw(&request.to_string());
+    match structured.get("outcome").and_then(Value::as_str) {
+        Some("compiled") => json!({
+            "ok": true,
+            "mini_path": structured.get("mini_path").cloned().unwrap_or(Value::Null),
+            "module": structured.get("module").cloned().unwrap_or(Value::Null),
+        }),
+        Some("failed") => {
+            let recovery_required = structured
+                .get("recovery_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let compile_error = structured.get("compile_error");
+            let structured_code = compile_error
+                .and_then(|value| value.get("code"))
+                .and_then(Value::as_str)
+                .unwrap_or("COMPILE_FAILED");
+            let message = compile_error
+                .and_then(|value| value.get("message"))
+                .and_then(Value::as_str)
+                .unwrap_or("AngelScript compilation failed");
+            let code = if recovery_required {
+                "COMPILE_RECOVERY_REQUIRED"
+            } else {
+                structured_code
+            };
+            err(code, message)
+        }
+        // Bad-request envelopes already use the legacy `{ok:false,error:{...}}` shape.
+        _ => structured,
     }
 }
 
@@ -1588,6 +1638,7 @@ mod tests {
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_prepare_revision3_quest_outline_edit_v1",
+                    "authoring_store_prepare_revision3_quest_outline_edit_v2",
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
                     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
@@ -1620,6 +1671,8 @@ mod tests {
                     "mod_deploy",
                     "mod_undeploy",
                     "script_compile",
+                    "script_compile_install_state_v1",
+                    "script_compile_report_v1",
                     "script_emit_module",
                     "script_list_modules",
                     "texture_extract",
@@ -1703,6 +1756,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_outline_edit_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_quest_outline_edit_v2"));
         assert!(commands.iter().any(
             |command| command == "authoring_store_prepare_revision3_quest_transitions_edit_v1"
         ));
@@ -1765,6 +1821,54 @@ mod tests {
         .unwrap();
         assert_eq!(v["ok"], false);
         assert_eq!(v["error"]["code"], "BAD_REQUEST");
+    }
+
+    #[test]
+    fn legacy_script_compile_never_resets_the_caller_work_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        let work = root.path().join("caller-work");
+        let victim_tree = work.join("tree");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::create_dir_all(&victim_tree).unwrap();
+        std::fs::write(
+            script.join("PrecompiledScript_Shipping.Cache"),
+            b"invalid-but-readable-pristine",
+        )
+        .unwrap();
+        std::fs::write(victim_tree.join("keep.txt"), b"caller-owned").unwrap();
+
+        let response = script_compile(json!({
+            "game_dir": game.display().to_string(),
+            "op": "add",
+            "module_name": "NeverRuns",
+            "rel_path": "NeverRuns.as",
+            "as_path": root.path().join("missing.as").display().to_string(),
+            "work_dir": work.display().to_string(),
+            "allow_new_symbols": false,
+        }));
+
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            std::fs::read(victim_tree.join("keep.txt")).unwrap(),
+            b"caller-owned"
+        );
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+        let owned_children = std::fs::read_dir(&work)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("gore-owned-compile-")
+            })
+            .count();
+        assert_eq!(
+            owned_children, 1,
+            "legacy compile must use its own staging child"
+        );
     }
 
     // ── mgr_* commands ─────────────────────────────────────────────────────────

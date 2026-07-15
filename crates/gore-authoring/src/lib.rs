@@ -24,6 +24,7 @@ mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_quest_outline;
+mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transitions;
 mod story_transaction_revision3_voice;
 mod story_transaction_revision3_voice_selection;
@@ -199,6 +200,16 @@ pub use story_transaction_revision3_quest_outline::{
     Revision3QuestOutlineEditRequestV1, Revision3QuestOutlineEditRuntimeStatusV1,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V1,
     MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_quest_outline_v2::{
+    apply_revision3_quest_outline_edit_transaction_v2, Revision3QuestOutlineEditBuildStatusV2,
+    Revision3QuestOutlineEditConflictV2, Revision3QuestOutlineEditErrorV2,
+    Revision3QuestOutlineEditEvaluationV2, Revision3QuestOutlineEditOutcomeV2,
+    Revision3QuestOutlineEditPublicationStatusV2, Revision3QuestOutlineEditRejectionV2,
+    Revision3QuestOutlineEditRequestJsonErrorV2, Revision3QuestOutlineEditRequestV2,
+    Revision3QuestOutlineEditRuntimeStatusV2, Revision3QuestOutlineObjectiveEditV2,
+    MAX_REVISION3_QUEST_OUTLINE_EDIT_DISPLAY_NAME_BYTES_V2,
+    MAX_REVISION3_QUEST_OUTLINE_EDIT_REQUEST_JSON_BYTES_V2,
 };
 pub use story_transaction_revision3_quest_transitions::{
     apply_revision3_quest_transition_plan_transaction_v1, revision3_quest_transition_plan_basis_v1,

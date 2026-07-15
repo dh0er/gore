@@ -1,7 +1,7 @@
 //! Compile a staged `.as` into a 1-module mini-cache by driving the game's precompiled-data
 //! generation, then extracting (add) / extract-remapping (edit) the target module.
 
-use std::io::Write;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -56,7 +56,8 @@ pub enum InstallRestoreDisposition {
     RestoredExact,
     /// Generator exit could not be confirmed, so isolation and disk recovery artifacts were kept.
     RecoveryRequiredProcessExitUnconfirmed,
-    /// Restore/finalization failed while disk recovery artifacts were still retained.
+    /// Restore, finalization, or shared-ownership release failed while a persistent recovery
+    /// blocker was still retained.
     RecoveryRequiredRestoreFailed,
 }
 
@@ -116,9 +117,71 @@ pub fn compile_module_with_diagnostics_report(
     })
 }
 
+/// Compile with a caller-held guard acquired by [`acquire_compile_install_mutation`].
+///
+/// This is the authoritative-read variant for FFI/orchestration callers: resolve the pristine
+/// cache while holding `guard`, put those exact bytes in `opts.base_override`, then transfer the
+/// same guard here. The runner consumes it without reacquiring, so deploy/undeploy cannot interleave
+/// between pristine selection and live compiler use.
+pub fn compile_module_with_diagnostics_report_with_guard(
+    opts: &CompileOpts,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    guard: InstallMutationGuard,
+) -> CompileModuleReport {
+    let guard = std::cell::RefCell::new(Some(guard));
+    let generated = std::cell::RefCell::new(None);
+    let mut result = compile_module(opts, |game_dir, source_tree| {
+        let guard = guard
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| "pre-held compiler guard was consumed more than once".to_owned())?;
+        let report = game_run_regen_with_extended_diagnostics_report_with_guard(
+            game_dir,
+            source_tree,
+            diagnostics,
+            guard,
+        )?;
+        *generated.borrow_mut() = Some((report.diagnostics, report.install_restore));
+        report.result
+    });
+    let generated = generated.into_inner();
+    let mut install_restore = generated
+        .as_ref()
+        .map(|(_, install_restore)| *install_restore)
+        .unwrap_or(InstallRestoreDisposition::NotStarted);
+
+    // Source/base/overlay preflight can fail before the runner consumes the guard. Release it
+    // explicitly so Drop cannot hide a coordination failure behind an ordinary NotStarted report.
+    if let Some(mut unused_guard) = guard.into_inner() {
+        if let Err(release) = unused_guard.release() {
+            unused_guard.preserve_for_manual_recovery();
+            let primary = result
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_else(|| "compiler runner was not entered".to_owned());
+            result = Err(CompileError::Other(format!(
+                "{primary}; additionally failed to release the pre-held install-mutation guard: \
+                 {release}"
+            )));
+            // The release operation itself failed; a second pathname inspection cannot safely
+            // downgrade that uncertainty (NotFound/permission/race are not proof of cleanup).
+            install_restore = InstallRestoreDisposition::RecoveryRequiredRestoreFailed;
+        }
+    }
+
+    CompileModuleReport {
+        outcome: match result {
+            Ok(output) => CompileModuleReportOutcome::Compiled(output),
+            Err(error) => CompileModuleReportOutcome::Failed(error),
+        },
+        diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        install_restore,
+    }
+}
+
 fn compile_module_report_with<R>(opts: &CompileOpts, run_regen: R) -> CompileModuleReport
 where
-    R: Fn(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
+    R: FnOnce(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
 {
     let report = std::cell::RefCell::new(None);
     let result = compile_module(opts, |game_dir, source_tree| {
@@ -383,8 +446,14 @@ fn io(ctx: &str) -> impl FnOnce(std::io::Error) -> CompileError {
 }
 
 /// The `G1R` game directory: `game_dir` itself if it already ends in `G1R`, else `game_dir/G1R`.
+fn is_direct_g1r_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("G1R"))
+}
+
 fn g1r_dir(game_dir: &Path) -> PathBuf {
-    if game_dir.file_name().is_some_and(|n| n == "G1R") {
+    if is_direct_g1r_dir(game_dir) {
         game_dir.to_path_buf()
     } else {
         game_dir.join("G1R")
@@ -394,7 +463,7 @@ fn g1r_dir(game_dir: &Path) -> PathBuf {
 /// The install root containing `G1R/`. AngelScript writes `AS_JITTED_CODE` beside `G1R`, not
 /// inside it, even when the process working directory is `G1R`.
 fn game_root_dir(game_dir: &Path) -> PathBuf {
-    if game_dir.file_name().is_some_and(|n| n == "G1R") {
+    if is_direct_g1r_dir(game_dir) {
         game_dir.parent().unwrap_or(game_dir).to_path_buf()
     } else {
         game_dir.to_path_buf()
@@ -428,6 +497,650 @@ fn compile_bak_path(live: &Path) -> PathBuf {
 
 fn compile_lock_path(game_dir: &Path) -> PathBuf {
     game_root_dir(game_dir).join(".gore-as-compile.lock")
+}
+
+fn install_mutation_lock_path(game_dir: &Path) -> PathBuf {
+    game_root_dir(game_dir).join(".gore-install-mutation.lock")
+}
+
+const G1R_SHIPPING_EXE_NAME: &str = "G1R-Win64-Shipping.exe";
+const INSTALL_COMPILE_PROBE_PATH_LIMIT: usize = 4096;
+const INSTALL_COMPILE_PROBE_MESSAGE_LIMIT: usize = 2048;
+const INSTALL_MUTATION_OWNER_LIMIT: usize = 128;
+const INSTALL_MUTATION_RECORD_LIMIT: usize = 512;
+
+/// Cross-tool exclusive ownership of a live game installation mutation.
+///
+/// The lock is created atomically at `<game-root>/.gore-install-mutation.lock` and records a
+/// strictly bounded owner plus the current process id. Dropping the guard removes the lock. A
+/// caller that deliberately retains the guard (for example because a child process may still be
+/// writing the installation) retains the on-disk lock as well.
+#[derive(Debug)]
+pub struct InstallMutationGuard {
+    path: PathBuf,
+    owner: String,
+    pid: u32,
+    payload: String,
+    file: Option<std::fs::File>,
+    active: bool,
+}
+
+fn install_mutation_open_options() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_SHARE_READ};
+
+        // Retain DELETE authority on this exact handle while denying write/delete sharing. That
+        // makes the ownership record immutable for the guard lifetime and lets release delete the
+        // same file object by handle instead of checking one pathname object and unlinking another.
+        options
+            .access_mode(GENERIC_READ | GENERIC_WRITE | DELETE)
+            .share_mode(FILE_SHARE_READ);
+    }
+    options
+}
+
+fn read_install_mutation_payload(file: &mut std::fs::File, path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "reading install-mutation lock metadata {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.len() > INSTALL_MUTATION_RECORD_LIMIT as u64 {
+        return Err(format!(
+            "refusing oversized install-mutation ownership record at {} ({} bytes; limit {})",
+            path.display(),
+            metadata.len(),
+            INSTALL_MUTATION_RECORD_LIMIT
+        ));
+    }
+    file.seek(SeekFrom::Start(0)).map_err(|error| {
+        format!(
+            "seeking install-mutation ownership record {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(INSTALL_MUTATION_RECORD_LIMIT as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!(
+                "reading install-mutation ownership record {}: {error}",
+                path.display()
+            )
+        })?;
+    if bytes.len() > INSTALL_MUTATION_RECORD_LIMIT {
+        return Err(format!(
+            "refusing oversized install-mutation ownership record at {}",
+            path.display()
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(windows)]
+fn remove_install_mutation_file_by_handle(file: &std::fs::File, path: &Path) -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
+    };
+
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+    let removed = unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileDispositionInfo,
+            std::ptr::from_ref(&disposition).cast(),
+            std::mem::size_of::<FILE_DISPOSITION_INFO>() as u32,
+        )
+    };
+    if removed == 0 {
+        return Err(format!(
+            "deleting owned install-mutation lock by handle {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn remove_install_mutation_file_by_handle(file: &std::fs::File, path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let owned = file.metadata().map_err(|error| {
+        format!(
+            "reading owned install-mutation lock identity {}: {error}",
+            path.display()
+        )
+    })?;
+    let current = std::fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "reading current install-mutation lock identity {}: {error}",
+            path.display()
+        )
+    })?;
+    if current.file_type().is_symlink()
+        || owned.dev() != current.dev()
+        || owned.ino() != current.ino()
+    {
+        return Err(
+            "refusing to remove install-mutation lock because its filesystem identity changed"
+                .to_owned(),
+        );
+    }
+    // Unix has no portable unlink-by-handle primitive. The inode check above is the strongest
+    // portable guard; the supported live game platform uses the handle-bound Windows path.
+    std::fs::remove_file(path).map_err(|error| {
+        format!(
+            "removing owned install-mutation lock {}: {error}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(any(windows, unix)))]
+fn remove_install_mutation_file_by_handle(
+    _file: &std::fs::File,
+    _path: &Path,
+) -> Result<(), String> {
+    Err("identity-bound install-mutation lock release is unsupported on this platform".to_owned())
+}
+
+impl InstallMutationGuard {
+    pub fn acquire(game_dir: &Path, owner: &str) -> Result<Self, String> {
+        if owner.is_empty()
+            || owner.len() > INSTALL_MUTATION_OWNER_LIMIT
+            || !owner
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._-:".contains(&byte))
+        {
+            return Err(format!(
+                "install-mutation owner must be 1..={INSTALL_MUTATION_OWNER_LIMIT} ASCII bytes \
+                 using only letters, digits, '.', '_', '-', or ':'"
+            ));
+        }
+        let path = install_mutation_lock_path(game_dir);
+        let mut file = install_mutation_open_options()
+            .open(&path)
+            .map_err(|error| {
+                let message = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    format!(
+                        "another install mutation is active (lock exists: {})",
+                        path.display()
+                    )
+                } else {
+                    format!("creating install-mutation lock {}: {error}", path.display())
+                };
+                bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0
+            })?;
+        let pid = std::process::id();
+        static GUARD_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let sequence = GUARD_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let created_nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let payload = format!(
+            "version=1\nowner={owner}\npid={pid}\nguard_id={pid}-{created_nanos}-{sequence}\n"
+        );
+        if let Err(error) = file
+            .write_all(payload.as_bytes())
+            .and_then(|_| file.sync_all())
+        {
+            // Cleanup through the still-open identity handle. Closing first and then unlinking the
+            // pathname would let a raced replacement become the deletion target.
+            let cleanup = remove_install_mutation_file_by_handle(&file, &path).err();
+            drop(file);
+            let message = match cleanup {
+                Some(cleanup) => format!(
+                    "initializing install-mutation lock {}: {error}; additionally failed to \
+                     remove it: {cleanup}",
+                    path.display()
+                ),
+                None => format!(
+                    "initializing install-mutation lock {}: {error}",
+                    path.display()
+                ),
+            };
+            return Err(bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0);
+        }
+        Ok(Self {
+            path,
+            owner: owner.to_owned(),
+            pid,
+            payload,
+            file: Some(file),
+            active: true,
+        })
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Close this process's handle without deleting or retrying deletion of the on-disk blocker.
+    /// Call only after an explicit release failure that must remain stable for manual recovery.
+    pub fn preserve_for_manual_recovery(mut self) {
+        self.close_handle_preserving_record();
+    }
+
+    fn close_handle_preserving_record(&mut self) {
+        self.active = false;
+        drop(self.file.take());
+    }
+
+    pub fn release(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        let file = self.file.as_mut().ok_or_else(|| {
+            "install-mutation guard lost its owned file handle before release".to_owned()
+        })?;
+        let current = read_install_mutation_payload(file, &self.path).map_err(|message| {
+            bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0
+        })?;
+        if current != self.payload.as_bytes() {
+            return Err(
+                "refusing to remove install-mutation lock because its bounded ownership record \
+                 changed while the guard was active"
+                    .to_owned(),
+            );
+        }
+        remove_install_mutation_file_by_handle(file, &self.path).map_err(|message| {
+            bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT).0
+        })?;
+        drop(self.file.take());
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for InstallMutationGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.release();
+        }
+    }
+}
+
+/// Why the live install may or may not be entered by an AngelScript compiler transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallCompileStateDisposition {
+    SafeToCompile,
+    GameProcessRunning,
+    RecoveryArtifactsPresent,
+    InspectionFailed,
+}
+
+/// Result of the native shipping-process inspection used by the install preflight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallCompileGameProcessDisposition {
+    NotRunning,
+    Running,
+    InspectionFailed,
+}
+
+/// A known disk artifact owned by an interrupted or currently active compile transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallCompileArtifactKind {
+    InstallMutationLock,
+    CompileLock,
+    RecoveryJournal,
+    ShippingCacheBackup,
+    JittedCodeBackup,
+    Ue4ssProxyBackup,
+}
+
+/// One present install-compile artifact. `path` is a bounded lossy display value; callers must not
+/// use it as filesystem authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallCompileArtifact {
+    pub kind: InstallCompileArtifactKind,
+    pub path: String,
+    pub path_truncated: bool,
+}
+
+/// Which read-only portion of the install-state inspection could not be completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallCompileInspectionIssueKind {
+    GameProcessEnumeration,
+    ArtifactMetadata,
+}
+
+/// A bounded, display-only inspection failure. Any issue makes the probe fail closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallCompileInspectionIssue {
+    pub kind: InstallCompileInspectionIssueKind,
+    pub path: Option<String>,
+    pub path_truncated: bool,
+    pub message: String,
+    pub message_truncated: bool,
+}
+
+/// Read-only snapshot of the native game process and every known gore-as recovery artifact.
+///
+/// The probe never creates, removes, renames, or writes a path. Its returned path/message strings
+/// are bounded display data, not paths that recovery code should execute blindly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallCompileStateProbe {
+    pub disposition: InstallCompileStateDisposition,
+    pub safe_to_compile: bool,
+    pub game_process: InstallCompileGameProcessDisposition,
+    pub artifacts: Vec<InstallCompileArtifact>,
+    pub issues: Vec<InstallCompileInspectionIssue>,
+}
+
+fn bounded_probe_text(value: &str, limit: usize) -> (String, bool) {
+    if value.len() <= limit {
+        return (value.to_owned(), false);
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_owned(), true)
+}
+
+fn bounded_probe_path(path: &Path) -> (String, bool) {
+    bounded_probe_text(
+        &path.as_os_str().to_string_lossy(),
+        INSTALL_COMPILE_PROBE_PATH_LIMIT,
+    )
+}
+
+fn install_compile_artifact_paths(game_dir: &Path) -> Vec<(InstallCompileArtifactKind, PathBuf)> {
+    let root = game_root_dir(game_dir);
+    let g1r = g1r_dir(game_dir);
+    let shipping = vanilla_cache(game_dir);
+    let jitted = root.join("AS_JITTED_CODE");
+    let proxy = g1r.join("Binaries").join("Win64").join("dwmapi.dll");
+    vec![
+        (
+            InstallCompileArtifactKind::InstallMutationLock,
+            install_mutation_lock_path(game_dir),
+        ),
+        (
+            InstallCompileArtifactKind::CompileLock,
+            compile_lock_path(game_dir),
+        ),
+        (
+            InstallCompileArtifactKind::RecoveryJournal,
+            recovery_journal_path(game_dir),
+        ),
+        (
+            InstallCompileArtifactKind::ShippingCacheBackup,
+            compile_bak_path(&shipping),
+        ),
+        (
+            InstallCompileArtifactKind::JittedCodeBackup,
+            append_suffix(&jitted, ".gore-compile-bak"),
+        ),
+        (
+            InstallCompileArtifactKind::Ue4ssProxyBackup,
+            append_suffix(&proxy, ".gore-compile-bak"),
+        ),
+    ]
+}
+
+#[cfg(windows)]
+fn native_shipping_game_process_running() -> Result<bool, String> {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    struct ProcessSnapshot(windows_sys::Win32::Foundation::HANDLE);
+    impl Drop for ProcessSnapshot {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(format!(
+            "CreateToolhelp32Snapshot(processes) failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let snapshot = ProcessSnapshot(snapshot);
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    if unsafe { Process32FirstW(snapshot.0, &mut entry) } == 0 {
+        return Err(format!(
+            "Process32FirstW failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    loop {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|ch| *ch == 0)
+            .unwrap_or(entry.szExeFile.len());
+        if String::from_utf16_lossy(&entry.szExeFile[..len])
+            .eq_ignore_ascii_case(G1R_SHIPPING_EXE_NAME)
+        {
+            return Ok(true);
+        }
+        if unsafe { Process32NextW(snapshot.0, &mut entry) } == 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
+                return Ok(false);
+            }
+            return Err(format!("Process32NextW failed: {error}"));
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn native_shipping_game_process_running() -> Result<bool, String> {
+    // The supported game executable is Windows-only. Keeping the non-Windows implementation
+    // read-only and deterministic preserves offline cache tooling/tests on other hosts.
+    Ok(false)
+}
+
+fn require_shipping_game_process_closed_with<C>(check_game_process: C) -> Result<(), String>
+where
+    C: FnOnce() -> Result<bool, String>,
+{
+    match check_game_process() {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(format!(
+            "refusing install mutation while {G1R_SHIPPING_EXE_NAME} is running; close the game \
+             and retry"
+        )),
+        Err(error) => Err(format!(
+            "refusing install mutation because native game-process inspection failed: {error}"
+        )),
+    }
+}
+
+/// Recheck the native shipping process immediately before the caller's first live-game mutation.
+///
+/// This deliberately does not claim an OS launch barrier: the game does not participate in the
+/// gore install lock, so a process can still start after enumeration. Callers keep this check as
+/// close as possible to the first write and must not present it as proof that a later launch is
+/// impossible.
+pub fn require_shipping_game_process_closed() -> Result<(), String> {
+    require_shipping_game_process_closed_with(native_shipping_game_process_running)
+}
+
+fn probe_install_compile_state_with<C>(
+    game_dir: &Path,
+    check_game_process: C,
+) -> InstallCompileStateProbe
+where
+    C: FnOnce() -> Result<bool, String>,
+{
+    let mut issues = Vec::new();
+    let game_process = match check_game_process() {
+        Ok(true) => InstallCompileGameProcessDisposition::Running,
+        Ok(false) => InstallCompileGameProcessDisposition::NotRunning,
+        Err(error) => {
+            let (message, message_truncated) =
+                bounded_probe_text(&error, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+            issues.push(InstallCompileInspectionIssue {
+                kind: InstallCompileInspectionIssueKind::GameProcessEnumeration,
+                path: None,
+                path_truncated: false,
+                message,
+                message_truncated,
+            });
+            InstallCompileGameProcessDisposition::InspectionFailed
+        }
+    };
+
+    let mut artifacts = Vec::new();
+    for (kind, path) in install_compile_artifact_paths(game_dir) {
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => {
+                let (path, path_truncated) = bounded_probe_path(&path);
+                artifacts.push(InstallCompileArtifact {
+                    kind,
+                    path,
+                    path_truncated,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                let (display, path_truncated) = bounded_probe_path(&path);
+                let (message, message_truncated) =
+                    bounded_probe_text(&error.to_string(), INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+                issues.push(InstallCompileInspectionIssue {
+                    kind: InstallCompileInspectionIssueKind::ArtifactMetadata,
+                    path: Some(display),
+                    path_truncated,
+                    message,
+                    message_truncated,
+                });
+            }
+        }
+    }
+
+    let disposition = if !issues.is_empty() {
+        InstallCompileStateDisposition::InspectionFailed
+    } else if game_process == InstallCompileGameProcessDisposition::Running {
+        InstallCompileStateDisposition::GameProcessRunning
+    } else if !artifacts.is_empty() {
+        InstallCompileStateDisposition::RecoveryArtifactsPresent
+    } else {
+        InstallCompileStateDisposition::SafeToCompile
+    };
+    InstallCompileStateProbe {
+        safe_to_compile: disposition == InstallCompileStateDisposition::SafeToCompile,
+        disposition,
+        game_process,
+        artifacts,
+        issues,
+    }
+}
+
+/// Inspect whether gore-as may safely begin a live-install compiler transaction.
+///
+/// On Windows this fail-closed probe enumerates processes with Toolhelp and compares executable
+/// names case-insensitively against `G1R-Win64-Shipping.exe`. It also reports the cross-tool
+/// install-mutation lock, gore-as compile lock, recovery journal, Shipping-cache backup, JIT
+/// quarantine backup, and UE4SS-proxy backup. Any enumeration/metadata error, running game
+/// process, or present artifact sets `safe_to_compile` to false. The function is strictly
+/// read-only.
+pub fn probe_install_compile_state(game_dir: &Path) -> InstallCompileStateProbe {
+    probe_install_compile_state_with(game_dir, native_shipping_game_process_running)
+}
+
+/// Acquire the shared live-install guard before resolving any pristine compiler input.
+///
+/// The returned guard must be passed to
+/// [`compile_module_with_diagnostics_report_with_guard`]. Holding it across pristine resolution and
+/// compiler use closes cross-tool deploy/undeploy races without recursively reacquiring the lock.
+pub fn acquire_compile_install_mutation(game_dir: &Path) -> Result<InstallMutationGuard, String> {
+    install_compile_preflight_with(game_dir, native_shipping_game_process_running)?;
+    InstallMutationGuard::acquire(game_dir, "gore-as:compile")
+}
+
+fn install_compile_preflight_with<C>(game_dir: &Path, check_game_process: C) -> Result<(), String>
+where
+    C: FnOnce() -> Result<bool, String>,
+{
+    let probe = probe_install_compile_state_with(game_dir, check_game_process);
+    match probe.disposition {
+        InstallCompileStateDisposition::SafeToCompile => Ok(()),
+        InstallCompileStateDisposition::GameProcessRunning => Err(format!(
+            "refusing AngelScript compile while {G1R_SHIPPING_EXE_NAME} is running; close the game \
+             and retry"
+        )),
+        InstallCompileStateDisposition::RecoveryArtifactsPresent => {
+            let artifact = probe
+                .artifacts
+                .first()
+                .expect("recovery-artifact disposition requires an artifact");
+            let message = match artifact.kind {
+                InstallCompileArtifactKind::InstallMutationLock => format!(
+                    "another install mutation is active (lock already exists: {}); inspect its \
+                     bounded owner/pid record before retrying",
+                    artifact.path
+                ),
+                InstallCompileArtifactKind::CompileLock => format!(
+                    "another AngelScript compile is active (compile lock already exists: {}); if \
+                     no compile is running, inspect the stale lock and recovery state manually",
+                    artifact.path
+                ),
+                InstallCompileArtifactKind::RecoveryJournal => format!(
+                    "compile recovery journal already exists: {} (recover the previous compile \
+                     before retrying)",
+                    artifact.path
+                ),
+                InstallCompileArtifactKind::ShippingCacheBackup
+                | InstallCompileArtifactKind::JittedCodeBackup
+                | InstallCompileArtifactKind::Ue4ssProxyBackup => format!(
+                    "compile backup already exists: {} (recover or remove it manually before \
+                     retrying)",
+                    artifact.path
+                ),
+            };
+            let (message, _) = bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+            Err(message)
+        }
+        InstallCompileStateDisposition::InspectionFailed => {
+            let issue = probe
+                .issues
+                .first()
+                .expect("inspection-failed disposition requires an issue");
+            let message = match &issue.path {
+                Some(path) => format!(
+                    "refusing AngelScript compile because install-state inspection failed for \
+                     {path}: {}",
+                    issue.message
+                ),
+                None => format!(
+                    "refusing AngelScript compile because native game-process inspection failed: \
+                     {}",
+                    issue.message
+                ),
+            };
+            let (message, _) = bounded_probe_text(&message, INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+            Err(message)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -481,6 +1194,10 @@ impl CompileLock {
             .map_err(|e| format!("removing compile lock {}: {e}", self.path.display()))?;
         self.active = false;
         Ok(())
+    }
+
+    fn preserve_for_manual_recovery(&mut self) {
+        self.active = false;
     }
 }
 
@@ -539,6 +1256,10 @@ impl ShippingRecovery {
             .map_err(|e| format!("removing compile backup {}: {e}", self.path.display()))?;
         self.active = false;
         Ok(())
+    }
+
+    fn preserve_for_manual_recovery(&mut self) {
+        self.active = false;
     }
 }
 
@@ -723,7 +1444,7 @@ fn restore_optional(path: &Path, saved: &Option<Vec<u8>>) -> Result<(), String> 
 /// offline; the FFI passes [`game_run_regen`].
 pub fn compile_module<R>(opts: &CompileOpts, run_regen: R) -> Result<CompileOutput, CompileError>
 where
-    R: Fn(&Path, &Path) -> Result<PathBuf, String>,
+    R: FnOnce(&Path, &Path) -> Result<PathBuf, String>,
 {
     if opts.op != "add" && opts.op != "edit" {
         return Err(CompileError::Other(format!(
@@ -1112,6 +1833,48 @@ impl RestoreReport {
     }
 }
 
+#[derive(Debug)]
+struct CompileTransactionBeginFailure {
+    message: String,
+    recovery_required: bool,
+}
+
+/// Finish a failure that happened after shared ownership was transferred but before a complete
+/// `CompileTransaction` existed. Release is explicit so a guard Drop can never hide its failure.
+fn finalize_compile_transaction_begin_failure(
+    game_dir: &Path,
+    mut mutation_guard: InstallMutationGuard,
+    mut errors: Vec<String>,
+) -> CompileTransactionBeginFailure {
+    let mut recovery_required = false;
+    if let Err(error) = mutation_guard.release() {
+        errors.push(format!(
+            "failed to release the pre-transaction install-mutation guard: {error}"
+        ));
+        // The failed release itself is uncertain and therefore recovery-dominant. Do not retry in
+        // Drop: keeping the ownership record is the durable blocker when the path still exists.
+        mutation_guard.preserve_for_manual_recovery();
+        recovery_required = true;
+    }
+    for (_, path) in install_compile_artifact_paths(game_dir) {
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => recovery_required = true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                errors.push(format!(
+                    "failed to inspect recovery artifact {} after setup failure: {error}",
+                    path.display()
+                ));
+                recovery_required = true;
+            }
+        }
+    }
+    CompileTransactionBeginFailure {
+        message: errors.join("; additionally "),
+        recovery_required,
+    }
+}
+
 fn recovery_journal_path(game_dir: &Path) -> PathBuf {
     game_root_dir(game_dir).join(".gore-as-compile-recovery")
 }
@@ -1147,7 +1910,10 @@ Copy files from overwritten/ over the same relative paths under G1R/Script/.\n\
 Delete the same relative paths listed as zero-byte files under created/.\n\
 development-cache/PrecompiledScript.Cache is the pre-call dev cache;\n\
 development-cache.absent means that cache did not exist.\n\
-Restore *.gore-compile-bak paths beside their originals, then remove the compile lock.\n";
+Restore *.gore-compile-bak paths beside their originals.\n\
+Only after the process is dead and every path is restored, remove .gore-as-compile.lock and\n\
+.gore-install-mutation.lock from the install root, then remove this\n\
+.gore-as-compile-recovery directory. Never remove a lock owned by a live task.\n";
             std::fs::write(root.join("README.txt"), instructions)
                 .map_err(|e| format!("writing recovery instructions: {e}"))?;
             match saved_dev {
@@ -1241,35 +2007,173 @@ struct CompileTransaction {
     recovery: ShippingRecovery,
     journal: RecoveryJournal,
     lock: CompileLock,
+    mutation_guard: InstallMutationGuard,
     rollback_needed: bool,
     /// A user-facing `.gore-bak` created immediately before install, removed unless install commits.
     ephemeral_deploy_backup: Option<PathBuf>,
 }
 
 impl CompileTransaction {
-    /// Acquire the cross-entry-point lock first; the recovery backup is the next and only mutation
-    /// before the fully-owned transaction exists.
-    fn begin(game_dir: &Path, g1r: &Path, script_dir: &Path) -> Result<Self, String> {
-        let mut lock = CompileLock::acquire(game_dir)?;
+    /// Complete the read-only, fail-closed preflight before creating either lock. The shared
+    /// install-mutation guard is acquired before the gore-as-specific lock; the recovery backup is
+    /// the next and only mutation before the fully-owned transaction exists.
+    fn begin_with_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        check_game_process: C,
+    ) -> Result<Self, String>
+    where
+        C: Fn() -> Result<bool, String>,
+    {
+        Self::begin_with_process_checker_report(game_dir, g1r, script_dir, check_game_process)
+            .map_err(|failure| failure.message)
+    }
+
+    fn begin_with_process_checker_report<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: Fn() -> Result<bool, String>,
+    {
+        install_compile_preflight_with(game_dir, &check_game_process).map_err(|message| {
+            CompileTransactionBeginFailure {
+                message,
+                recovery_required: false,
+            }
+        })?;
+        let mutation_guard =
+            InstallMutationGuard::acquire(game_dir, "gore-as:compile").map_err(|message| {
+                CompileTransactionBeginFailure {
+                    message,
+                    recovery_required: false,
+                }
+            })?;
+        Self::begin_with_mutation_guard_and_process_checker(
+            game_dir,
+            g1r,
+            script_dir,
+            mutation_guard,
+            check_game_process,
+        )
+    }
+
+    fn begin_with_mutation_guard_and_process_checker<C>(
+        game_dir: &Path,
+        g1r: &Path,
+        script_dir: &Path,
+        mutation_guard: InstallMutationGuard,
+        check_game_process: C,
+    ) -> Result<Self, CompileTransactionBeginFailure>
+    where
+        C: FnOnce() -> Result<bool, String>,
+    {
+        let expected_lock = install_mutation_lock_path(game_dir);
+        if !mutation_guard.active
+            || mutation_guard.owner != "gore-as:compile"
+            || mutation_guard.path != expected_lock
+        {
+            return Err(finalize_compile_transaction_begin_failure(
+                game_dir,
+                mutation_guard,
+                vec![
+                    "pre-held install-mutation guard is not the active gore-as compiler guard for \
+                     this game installation"
+                        .to_owned(),
+                ],
+            ));
+        }
+        // This second process enumeration happens after ownership is held and immediately before
+        // the compile lock/recovery files become the first live-install mutations. It narrows the
+        // launch race but is not an OS barrier; see `require_shipping_game_process_closed`.
+        if let Err(error) = require_shipping_game_process_closed_with(check_game_process) {
+            return Err(finalize_compile_transaction_begin_failure(
+                game_dir,
+                mutation_guard,
+                vec![error],
+            ));
+        }
+        let mut lock = match CompileLock::acquire(game_dir) {
+            Ok(lock) => lock,
+            Err(error) => {
+                return Err(finalize_compile_transaction_begin_failure(
+                    game_dir,
+                    mutation_guard,
+                    vec![error],
+                ));
+            }
+        };
         let shipping_cache = script_dir.join("PrecompiledScript_Shipping.Cache");
         let dev_cache = script_dir.join("PrecompiledScript.Cache");
-        let saved_shipping = std::fs::read(&shipping_cache).map_err(|e| {
-            format!(
-                "reading live shipping cache {}: {e}",
-                shipping_cache.display()
-            )
-        })?;
-        let saved_dev = snapshot_optional(&dev_cache)?;
-        let mut recovery = ShippingRecovery::create(&shipping_cache, &saved_shipping)?;
+        let saved_shipping = match std::fs::read(&shipping_cache) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let mut errors = vec![format!(
+                    "reading live shipping cache {}: {e}",
+                    shipping_cache.display(),
+                    e = error
+                )];
+                if let Err(error) = lock.release() {
+                    errors.push(error);
+                    lock.preserve_for_manual_recovery();
+                }
+                return Err(finalize_compile_transaction_begin_failure(
+                    game_dir,
+                    mutation_guard,
+                    errors,
+                ));
+            }
+        };
+        let saved_dev = match snapshot_optional(&dev_cache) {
+            Ok(saved) => saved,
+            Err(error) => {
+                let mut errors = vec![error];
+                if let Err(error) = lock.release() {
+                    errors.push(error);
+                    lock.preserve_for_manual_recovery();
+                }
+                return Err(finalize_compile_transaction_begin_failure(
+                    game_dir,
+                    mutation_guard,
+                    errors,
+                ));
+            }
+        };
+        let mut recovery = match ShippingRecovery::create(&shipping_cache, &saved_shipping) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                let mut errors = vec![error];
+                if let Err(error) = lock.release() {
+                    errors.push(error);
+                    lock.preserve_for_manual_recovery();
+                }
+                return Err(finalize_compile_transaction_begin_failure(
+                    game_dir,
+                    mutation_guard,
+                    errors,
+                ));
+            }
+        };
         let journal = match RecoveryJournal::create(game_dir, &saved_dev) {
             Ok(journal) => journal,
             Err(error) => {
-                let recovery_error = recovery.retire().err();
-                let lock_error = lock.release().err();
                 let mut errors = vec![error];
-                errors.extend(recovery_error);
-                errors.extend(lock_error);
-                return Err(errors.join("; additionally "));
+                if let Err(error) = recovery.retire() {
+                    errors.push(error);
+                    recovery.preserve_for_manual_recovery();
+                }
+                if let Err(error) = lock.release() {
+                    errors.push(error);
+                    lock.preserve_for_manual_recovery();
+                }
+                return Err(finalize_compile_transaction_begin_failure(
+                    game_dir,
+                    mutation_guard,
+                    errors,
+                ));
             }
         };
         Ok(Self {
@@ -1285,6 +2189,7 @@ impl CompileTransaction {
             recovery,
             journal,
             lock,
+            mutation_guard,
             rollback_needed: true,
             ephemeral_deploy_backup: None,
         })
@@ -1396,29 +2301,38 @@ impl CompileTransaction {
         self.ephemeral_deploy_backup = None;
     }
 
-    /// Retire recovery only after Shipping was restored/committed, then release the common lock.
+    /// Retire the Shipping backup after exact restore, but retain the recovery journal as a durable
+    /// retry blocker until both locks have been released. A shared-lock release failure therefore
+    /// remains observable after restart instead of existing only in this guard's in-memory state.
     fn finish(&mut self) -> Vec<String> {
         let mut errors = Vec::new();
         if self.rollback_needed {
             errors.push("internal error: compile transaction finalized before restore".into());
             return errors;
         }
-        if let Err(e) = self.journal.retire() {
-            errors.push(e);
-            return errors; // keep Shipping recovery + lock while the journal remains
-        }
         if let Err(e) = self.recovery.retire() {
             errors.push(e);
-            return errors; // keep the lock until Drop retries retirement
+            return errors; // keep journal + both locks until Drop/recovery
         }
         if let Err(e) = self.lock.release() {
+            errors.push(e);
+            return errors;
+        }
+        if let Err(e) = self.mutation_guard.release() {
+            errors.push(e);
+            return errors; // keep the journal as the persistent retry blocker
+        }
+        if let Err(e) = self.journal.retire() {
             errors.push(e);
         }
         errors
     }
 
     fn recovery_retained(&self) -> bool {
-        self.journal.active || self.recovery.active
+        self.journal.active
+            || self.recovery.active
+            || self.lock.active
+            || self.mutation_guard.active
     }
 
     /// A confirmed-dead generator may release the compile lock after restore/finalization failed,
@@ -1427,25 +2341,37 @@ impl CompileTransaction {
     fn preserve_for_restore_failure(mut self) {
         let _ = self.remove_ephemeral_deploy_backup();
         let _ = self.lock.release();
+        // Unit tests emulate retained recovery in-process and must be able to remove their unique
+        // fixture afterward. Production deliberately keeps this exact handle open as extra
+        // protection for the persistent shared lock until process exit/manual recovery.
+        #[cfg(test)]
+        self.mutation_guard.close_handle_preserving_record();
         std::mem::forget(self);
     }
 
     /// A generator process that might still be alive must retain exclusive ownership of every
     /// path it can touch. Deliberately leak the transaction guards so Drop cannot race that process
-    /// by restoring Script/JIT/proxy state or releasing the compile lock. The disk recovery backup
-    /// and quarantine paths make the pre-call state recoverable after the process is killed.
+    /// by restoring Script/JIT/proxy state or releasing either lock. The disk recovery backup and
+    /// quarantine paths make the pre-call state recoverable after the process is killed.
     fn preserve_for_unconfirmed_generator(self, cause: String) -> String {
-        let recovery = self.recovery.path.display().to_string();
-        let journal = self.journal.root.display().to_string();
-        let lock = self.lock.path.display().to_string();
-        let game_root = game_root_dir(&self.game_dir).display().to_string();
-        std::mem::forget(self);
+        #[cfg(test)]
+        let mut transaction = self;
+        #[cfg(not(test))]
+        let transaction = self;
+        let recovery = transaction.recovery.path.display().to_string();
+        let journal = transaction.journal.root.display().to_string();
+        let lock = transaction.lock.path.display().to_string();
+        let mutation_lock = transaction.mutation_guard.path.display().to_string();
+        let game_root = game_root_dir(&transaction.game_dir).display().to_string();
+        #[cfg(test)]
+        transaction.mutation_guard.close_handle_preserving_record();
+        std::mem::forget(transaction);
         format!(
             "{cause}; cleanup was intentionally NOT run because the generator's exit could not be \
              confirmed. Kill the reported process tree before recovery; the Shipping recovery \
              cache is {recovery}, the source/dev recovery journal is {journal}, quarantined side \
              effects are beside their originals under {game_root}, and the compile lock remains \
-             at {lock}"
+             at {lock}; the cross-tool install-mutation lock remains at {mutation_lock}"
         )
     }
 }
@@ -1466,8 +2392,11 @@ impl Drop for CompileTransaction {
             let _ = self.lock.release();
             return;
         }
-        if self.journal.retire().is_ok() && self.recovery.retire().is_ok() {
-            let _ = self.lock.release();
+        if self.recovery.retire().is_ok()
+            && self.lock.release().is_ok()
+            && self.mutation_guard.release().is_ok()
+        {
+            let _ = self.journal.retire();
         }
     }
 }
@@ -1593,6 +2522,39 @@ fn game_run_regen_with_extended_diagnostics_report(
     })
 }
 
+fn game_run_regen_with_extended_diagnostics_report_with_guard(
+    game_dir: &Path,
+    src_dir: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+    mutation_guard: InstallMutationGuard,
+) -> Result<GameRunRegenExtendedReport, String> {
+    let diagnostic_report = std::cell::RefCell::new(None);
+    let generated = game_run_regen_with_install_report_with_guard(
+        game_dir,
+        src_dir,
+        mutation_guard,
+        |exe, g1r, cache| {
+            let generated = real_generate_with_timeout_and_diagnostics_report(
+                exe,
+                g1r,
+                cache,
+                Duration::from_secs(30 * 60),
+                diagnostics,
+            );
+            *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
+            GeneratorRunResult {
+                result: generated.result,
+                process_exit: generated.process_exit,
+            }
+        },
+    )?;
+    Ok(GameRunRegenExtendedReport {
+        result: generated.result,
+        diagnostics: diagnostic_report.into_inner(),
+        install_restore: generated.install_restore,
+    })
+}
+
 /// Testable core of [`game_run_regen`]. `generate` receives the executable, G1R directory, and
 /// the *development* cache path. It must return the bytes generated there.
 #[cfg(test)]
@@ -1600,22 +2562,28 @@ fn game_run_regen_with<G>(game_dir: &Path, src_dir: &Path, generate: G) -> Resul
 where
     G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
 {
-    game_run_regen_with_install_report(game_dir, src_dir, |exe, g1r, cache| {
-        let result = generate(exe, g1r, cache);
-        let process_exit = if result
-            .as_ref()
-            .err()
-            .is_some_and(|error| generator_exit_unconfirmed(error))
-        {
-            GeneratorProcessExitDisposition::Unconfirmed
-        } else {
-            GeneratorProcessExitDisposition::Confirmed
-        };
-        GeneratorRunResult {
-            result,
-            process_exit,
-        }
-    })
+    game_run_regen_with_install_report_and(
+        game_dir,
+        src_dir,
+        || Ok(false),
+        CompileTransaction::begin_isolation,
+        |exe, g1r, cache| {
+            let result = generate(exe, g1r, cache);
+            let process_exit = if result
+                .as_ref()
+                .err()
+                .is_some_and(|error| generator_exit_unconfirmed(error))
+            {
+                GeneratorProcessExitDisposition::Unconfirmed
+            } else {
+                GeneratorProcessExitDisposition::Confirmed
+            };
+            GeneratorRunResult {
+                result,
+                process_exit,
+            }
+        },
+    )
     .and_then(|report| report.result)
 }
 
@@ -1636,18 +2604,124 @@ where
     game_run_regen_with_install_report_and(
         game_dir,
         src_dir,
+        native_shipping_game_process_running,
         CompileTransaction::begin_isolation,
         generate,
     )
 }
 
-fn game_run_regen_with_install_report_and<I, G>(
+fn game_run_regen_with_install_report_and<C, I, G>(
     game_dir: &Path,
     src_dir: &Path,
+    check_game_process: C,
     begin_isolation: I,
     generate: G,
 ) -> Result<GameRunInstallReport, String>
 where
+    C: Fn() -> Result<bool, String>,
+    I: FnOnce(&mut CompileTransaction) -> Result<(), String>,
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+{
+    let begin_recovery_required = std::cell::Cell::new(false);
+    let run = game_run_regen_with_install_report_using_transaction(
+        game_dir,
+        src_dir,
+        |game_dir, g1r, script_dir| match CompileTransaction::begin_with_process_checker_report(
+            game_dir,
+            g1r,
+            script_dir,
+            check_game_process,
+        ) {
+            Ok(transaction) => Ok(transaction),
+            Err(failure) => {
+                begin_recovery_required.set(failure.recovery_required);
+                Err(failure.message)
+            }
+        },
+        begin_isolation,
+        generate,
+    );
+    match run {
+        Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
+            result: Err(message),
+            install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+        }),
+        other => other,
+    }
+}
+
+fn game_run_regen_with_install_report_with_guard<G>(
+    game_dir: &Path,
+    src_dir: &Path,
+    mutation_guard: InstallMutationGuard,
+    generate: G,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+{
+    let mutation_guard = std::cell::RefCell::new(Some(mutation_guard));
+    let begin_recovery_required = std::cell::Cell::new(false);
+    let run = game_run_regen_with_install_report_using_transaction(
+        game_dir,
+        src_dir,
+        |game_dir, g1r, script_dir| {
+            let guard = mutation_guard.borrow_mut().take().ok_or_else(|| {
+                "pre-held install-mutation guard was consumed more than once".to_owned()
+            })?;
+            match CompileTransaction::begin_with_mutation_guard_and_process_checker(
+                game_dir,
+                g1r,
+                script_dir,
+                guard,
+                native_shipping_game_process_running,
+            ) {
+                Ok(transaction) => Ok(transaction),
+                Err(failure) => {
+                    begin_recovery_required.set(failure.recovery_required);
+                    Err(failure.message)
+                }
+            }
+        },
+        CompileTransaction::begin_isolation,
+        generate,
+    );
+
+    // Exe/source-tree checks in the common runner happen before its begin closure. If one fails,
+    // ownership is still here and must be explicitly finalized rather than silently dropped.
+    if let Some(unused_guard) = mutation_guard.into_inner() {
+        let primary = match run {
+            Err(error) => error,
+            Ok(_) => "compiler transaction returned without consuming its pre-held guard".into(),
+        };
+        let failure =
+            finalize_compile_transaction_begin_failure(game_dir, unused_guard, vec![primary]);
+        if failure.recovery_required {
+            return Ok(GameRunInstallReport {
+                result: Err(failure.message),
+                install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            });
+        }
+        return Err(failure.message);
+    }
+
+    match run {
+        Err(message) if begin_recovery_required.get() => Ok(GameRunInstallReport {
+            result: Err(message),
+            install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+        }),
+        other => other,
+    }
+}
+
+fn game_run_regen_with_install_report_using_transaction<B, I, G>(
+    game_dir: &Path,
+    src_dir: &Path,
+    begin_transaction: B,
+    begin_isolation: I,
+    generate: G,
+) -> Result<GameRunInstallReport, String>
+where
+    B: FnOnce(&Path, &Path, &Path) -> Result<CompileTransaction, String>,
     I: FnOnce(&mut CompileTransaction) -> Result<(), String>,
     G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
 {
@@ -1655,7 +2729,7 @@ where
     let exe = g1r
         .join("Binaries")
         .join("Win64")
-        .join("G1R-Win64-Shipping.exe");
+        .join(G1R_SHIPPING_EXE_NAME);
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
     }
@@ -1675,7 +2749,7 @@ where
         ));
     }
 
-    let mut txn = CompileTransaction::begin(game_dir, &g1r, &script_dir)?;
+    let mut txn = begin_transaction(game_dir, &g1r, &script_dir)?;
     let regen_out = src_dir.join("regen.cache");
     let _ = std::fs::remove_file(&regen_out);
     let mut process_exit = GeneratorProcessExitDisposition::NotStarted;
@@ -1888,9 +2962,11 @@ fn precompile_with<G>(opts: &PrecompileOpts, generate: G) -> Result<PathBuf, Str
 where
     G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
 {
-    precompile_with_generator_report(opts, |exe, g1r, cache| {
-        GeneratorRunResult::confirmed(generate(exe, g1r, cache))
-    })
+    precompile_with_generator_report_and_process_checker(
+        opts,
+        || Ok(false),
+        |exe, g1r, cache| GeneratorRunResult::confirmed(generate(exe, g1r, cache)),
+    )
 }
 
 fn precompile_with_generator_report<G>(
@@ -1900,11 +2976,27 @@ fn precompile_with_generator_report<G>(
 where
     G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
 {
+    precompile_with_generator_report_and_process_checker(
+        opts,
+        native_shipping_game_process_running,
+        generate,
+    )
+}
+
+fn precompile_with_generator_report_and_process_checker<C, G>(
+    opts: &PrecompileOpts,
+    check_game_process: C,
+    generate: G,
+) -> Result<PathBuf, String>
+where
+    C: Fn() -> Result<bool, String>,
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+{
     let g1r = g1r_dir(&opts.game_dir);
     let exe = g1r
         .join("Binaries")
         .join("Win64")
-        .join("G1R-Win64-Shipping.exe");
+        .join(G1R_SHIPPING_EXE_NAME);
     if !exe.exists() {
         return Err(format!("game exe not found: {}", exe.display()));
     }
@@ -1967,9 +3059,15 @@ where
         }
     }
 
-    // Both compile entry points share the same lock and disk-backed Shipping recovery guard.
-    // Generation isolation begins before staging or deleting the development cache.
-    let mut txn = CompileTransaction::begin(&opts.game_dir, &g1r, &script_dir)?;
+    // Both compile entry points share the cross-tool mutation guard, the gore-as compile lock, and
+    // the disk-backed Shipping recovery guard. Generation isolation begins before staging or
+    // deleting the development cache.
+    let mut txn = CompileTransaction::begin_with_process_checker(
+        &opts.game_dir,
+        &g1r,
+        &script_dir,
+        check_game_process,
+    )?;
     let mut process_exit = GeneratorProcessExitDisposition::NotStarted;
     let result = (|| -> Result<Vec<u8>, String> {
         txn.begin_isolation()?;
@@ -3242,10 +4340,33 @@ mod tests {
             g1r_dir(Path::new("games/Gothic")),
             PathBuf::from("games/Gothic/G1R")
         );
+        for spelling in ["G1R", "g1r", "G1r", "g1R"] {
+            let direct = PathBuf::from("games/Gothic").join(spelling);
+            assert_eq!(g1r_dir(&direct), direct);
+            assert_eq!(game_root_dir(&direct), PathBuf::from("games/Gothic"));
+        }
+    }
+
+    #[test]
+    fn mixed_case_direct_g1r_and_install_root_share_one_mutation_lock() {
+        let root = unique_test_root("mixed-case-g1r-lock");
+        std::fs::create_dir_all(&root).unwrap();
+        let direct = root.join("g1R");
         assert_eq!(
-            g1r_dir(Path::new("games/Gothic/G1R")),
-            PathBuf::from("games/Gothic/G1R")
+            install_mutation_lock_path(&direct),
+            install_mutation_lock_path(&root)
         );
+
+        let mut guard = InstallMutationGuard::acquire(&direct, "gore-as:compile").unwrap();
+        let blocked = InstallMutationGuard::acquire(&root, "gore-mod:deploy")
+            .expect_err("the semantic install root must contend on the direct-G1R lock");
+        assert!(
+            blocked.contains("install mutation is active"),
+            "got: {blocked}"
+        );
+        assert_eq!(guard.path(), root.join(".gore-install-mutation.lock"));
+        guard.release().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -3273,6 +4394,449 @@ mod tests {
         let cache = script.join("PrecompiledScript_Shipping.Cache");
         std::fs::write(&cache, b"OLD").unwrap();
         (base.to_path_buf(), cache)
+    }
+
+    fn unique_test_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "gore-as-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn install_compile_probe_injected_process_states_are_fail_closed_and_bounded() {
+        let root = unique_test_root("install-state-process-probe");
+
+        let closed = probe_install_compile_state_with(&root, || Ok(false));
+        assert_eq!(
+            closed.disposition,
+            InstallCompileStateDisposition::SafeToCompile
+        );
+        assert!(closed.safe_to_compile);
+        assert_eq!(
+            closed.game_process,
+            InstallCompileGameProcessDisposition::NotRunning
+        );
+        assert!(closed.artifacts.is_empty());
+        assert!(closed.issues.is_empty());
+
+        let running = probe_install_compile_state_with(&root, || Ok(true));
+        assert_eq!(
+            running.disposition,
+            InstallCompileStateDisposition::GameProcessRunning
+        );
+        assert!(!running.safe_to_compile);
+        assert_eq!(
+            running.game_process,
+            InstallCompileGameProcessDisposition::Running
+        );
+
+        let oversized = "enumeration failed ".repeat(INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+        let failed = probe_install_compile_state_with(&root, || Err(oversized));
+        assert_eq!(
+            failed.disposition,
+            InstallCompileStateDisposition::InspectionFailed
+        );
+        assert!(!failed.safe_to_compile);
+        assert_eq!(
+            failed.game_process,
+            InstallCompileGameProcessDisposition::InspectionFailed
+        );
+        assert_eq!(failed.issues.len(), 1);
+        assert_eq!(
+            failed.issues[0].kind,
+            InstallCompileInspectionIssueKind::GameProcessEnumeration
+        );
+        assert!(failed.issues[0].message_truncated);
+        assert!(failed.issues[0].message.len() <= INSTALL_COMPILE_PROBE_MESSAGE_LIMIT);
+
+        let oversized_path = PathBuf::from("x".repeat(INSTALL_COMPILE_PROBE_PATH_LIMIT + 128));
+        let (display, truncated) = bounded_probe_path(&oversized_path);
+        assert!(truncated);
+        assert!(display.len() <= INSTALL_COMPILE_PROBE_PATH_LIMIT);
+    }
+
+    #[test]
+    fn install_compile_probe_reports_every_known_artifact_without_mutation() {
+        let root = unique_test_root("install-state-artifacts");
+        let (game, shipping) = fake_install(&root);
+        let mutation_lock = install_mutation_lock_path(&game);
+        let compile_lock = compile_lock_path(&game);
+        let journal = recovery_journal_path(&game);
+        let shipping_backup = compile_bak_path(&shipping);
+        let jitted_backup = append_suffix(&root.join("AS_JITTED_CODE"), ".gore-compile-bak");
+        let proxy = root
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("dwmapi.dll");
+        let proxy_backup = append_suffix(&proxy, ".gore-compile-bak");
+
+        std::fs::write(&mutation_lock, b"mutation-lock").unwrap();
+        std::fs::write(&compile_lock, b"compile-lock").unwrap();
+        std::fs::create_dir(&journal).unwrap();
+        std::fs::write(journal.join("marker"), b"journal").unwrap();
+        std::fs::write(&shipping_backup, b"shipping").unwrap();
+        std::fs::create_dir(&jitted_backup).unwrap();
+        std::fs::write(jitted_backup.join("marker"), b"jitted").unwrap();
+        std::fs::write(&proxy_backup, b"proxy").unwrap();
+
+        let probe = probe_install_compile_state_with(&game, || Ok(false));
+        assert_eq!(
+            probe.disposition,
+            InstallCompileStateDisposition::RecoveryArtifactsPresent
+        );
+        assert!(!probe.safe_to_compile);
+        assert_eq!(probe.artifacts.len(), 6);
+        assert_eq!(
+            probe
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.kind)
+                .collect::<Vec<_>>(),
+            [
+                InstallCompileArtifactKind::InstallMutationLock,
+                InstallCompileArtifactKind::CompileLock,
+                InstallCompileArtifactKind::RecoveryJournal,
+                InstallCompileArtifactKind::ShippingCacheBackup,
+                InstallCompileArtifactKind::JittedCodeBackup,
+                InstallCompileArtifactKind::Ue4ssProxyBackup,
+            ]
+        );
+        assert!(probe
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.path.len() <= INSTALL_COMPILE_PROBE_PATH_LIMIT));
+        assert_eq!(std::fs::read(&mutation_lock).unwrap(), b"mutation-lock");
+        assert_eq!(std::fs::read(&compile_lock).unwrap(), b"compile-lock");
+        assert_eq!(std::fs::read(journal.join("marker")).unwrap(), b"journal");
+        assert_eq!(std::fs::read(&shipping_backup).unwrap(), b"shipping");
+        assert_eq!(
+            std::fs::read(jitted_backup.join("marker")).unwrap(),
+            b"jitted"
+        );
+        assert_eq!(std::fs::read(&proxy_backup).unwrap(), b"proxy");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_guard_binds_release_to_the_owned_record() {
+        let root = unique_test_root("install-mutation-replaced-owner");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+        let mut guard = InstallMutationGuard::acquire(&game, "gore-as:test").unwrap();
+        #[cfg(windows)]
+        {
+            assert!(
+                std::fs::remove_file(&path).is_err(),
+                "the retained Windows handle must deny disappearance of the owned record"
+            );
+            assert!(
+                std::fs::write(&path, b"version=1\nowner=other\npid=1\n").is_err(),
+                "the retained Windows handle must deny ownership-record replacement"
+            );
+            guard.release().unwrap();
+            assert!(!path.exists());
+        }
+        #[cfg(not(windows))]
+        {
+            std::fs::remove_file(&path).unwrap();
+            let disappeared = guard.release().unwrap_err();
+            assert!(
+                disappeared.contains("current install-mutation lock identity"),
+                "got: {disappeared}"
+            );
+            std::fs::write(&path, b"version=1\nowner=other\npid=1\n").unwrap();
+            let error = guard.release().unwrap_err();
+            assert!(
+                error.contains("filesystem identity changed"),
+                "got: {error}"
+            );
+            guard.preserve_for_manual_recovery();
+            assert_eq!(
+                std::fs::read(&path).unwrap(),
+                b"version=1\nowner=other\npid=1\n"
+            );
+            std::fs::remove_file(&path).unwrap();
+        }
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_payload_reader_rejects_oversized_content_without_unbounded_read() {
+        let root = unique_test_root("install-mutation-bounded-read");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("oversized.lock");
+        std::fs::write(&path, vec![b'x'; INSTALL_MUTATION_RECORD_LIMIT + 1]).unwrap();
+        let mut file = std::fs::File::open(&path).unwrap();
+        let error = read_install_mutation_payload(&mut file, &path).unwrap_err();
+        assert!(error.contains("oversized"), "got: {error}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn install_mutation_guard_is_bounded_exclusive_and_raii() {
+        let root = unique_test_root("install-mutation-guard");
+        let (game, _) = fake_install(&root);
+        let path = install_mutation_lock_path(&game);
+
+        for invalid in [
+            "",
+            "contains newline\n",
+            &"x".repeat(INSTALL_MUTATION_OWNER_LIMIT + 1),
+        ] {
+            let error = InstallMutationGuard::acquire(&game, invalid)
+                .expect_err("invalid owner must be rejected");
+            assert!(error.contains("owner must be"), "got: {error}");
+            assert!(!path.exists());
+        }
+
+        {
+            let guard = InstallMutationGuard::acquire(&game, "gore-as:test").unwrap();
+            assert_eq!(guard.owner(), "gore-as:test");
+            assert_eq!(guard.pid(), std::process::id());
+            assert_eq!(guard.path(), path);
+            let payload = std::fs::read_to_string(&path).unwrap();
+            assert!(payload.starts_with(&format!(
+                "version=1\nowner=gore-as:test\npid={}\nguard_id={}-",
+                std::process::id(),
+                std::process::id()
+            )));
+            assert!(payload.ends_with('\n'));
+            assert!(payload.len() < INSTALL_MUTATION_OWNER_LIMIT + 128);
+
+            let error = InstallMutationGuard::acquire(&game, "gore-mod:deploy")
+                .expect_err("a second owner must be rejected");
+            assert!(error.contains("install mutation is active"), "got: {error}");
+            assert!(path.exists());
+        }
+        assert!(!path.exists(), "dropping the guard must release the lock");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn one_preheld_guard_spans_authoritative_read_and_compiler_transaction() {
+        let root = unique_test_root("preheld-guard-read-through-transaction");
+        let (game, shipping) = fake_install(&root);
+        let src = root.join("src");
+        std::fs::create_dir(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"// staged\n").unwrap();
+
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let authoritative = std::fs::read(&shipping).unwrap();
+        let report =
+            game_run_regen_with_install_report_with_guard(&game, &src, guard, |_, _, _| {
+                let contender = InstallMutationGuard::acquire(&game, "gore-mod:deploy")
+                    .expect_err("deploy must remain blocked after the authoritative read");
+                assert!(
+                    contender.contains("install mutation is active"),
+                    "got: {contender}"
+                );
+                GeneratorRunResult::confirmed(Ok(cache_with_empty_modules(&[(
+                    "Generated",
+                    "Generated.as",
+                )])))
+            })
+            .unwrap();
+
+        assert!(report.result.is_ok(), "got: {:?}", report.result);
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert_eq!(authoritative, b"OLD");
+        assert_eq!(std::fs::read(&shipping).unwrap(), authoritative);
+        assert!(!install_mutation_lock_path(&game).exists());
+        assert!(!recovery_journal_path(&game).exists());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_transaction_process_preflight_mutates_nothing_for_running_or_error() {
+        for (label, checker, expected) in [
+            (
+                "running",
+                Ok(true),
+                format!("{G1R_SHIPPING_EXE_NAME} is running"),
+            ),
+            (
+                "inspection-error",
+                Err("injected Toolhelp failure".to_owned()),
+                "native game-process inspection failed".to_owned(),
+            ),
+        ] {
+            let root = unique_test_root(&format!("process-preflight-{label}"));
+            let (game, shipping) = fake_install(&root);
+            let g1r = g1r_dir(&game);
+            let script = g1r.join("Script");
+            let error =
+                CompileTransaction::begin_with_process_checker(&game, &g1r, &script, || {
+                    checker.clone()
+                })
+                .err()
+                .expect("unsafe process state must be rejected");
+            assert!(error.contains(&expected), "got: {error}");
+            assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+            assert!(install_compile_artifact_paths(&game)
+                .into_iter()
+                .all(|(_, path)| !path.exists()));
+            std::fs::remove_dir_all(root).unwrap();
+        }
+
+        let root = unique_test_root("process-preflight-closed");
+        let (game, shipping) = fake_install(&root);
+        let g1r = g1r_dir(&game);
+        let script = g1r.join("Script");
+        let txn =
+            CompileTransaction::begin_with_process_checker(&game, &g1r, &script, || Ok(false))
+                .expect("closed-game preflight should permit transaction ownership");
+        assert!(install_mutation_lock_path(&game).exists());
+        assert!(compile_lock_path(&game).exists());
+        drop(txn);
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(install_compile_artifact_paths(&game)
+            .into_iter()
+            .all(|(_, path)| !path.exists()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compile_transaction_rechecks_process_after_guard_before_first_live_mutation() {
+        let root = unique_test_root("process-started-after-guard");
+        let (game, shipping) = fake_install(&root);
+        let g1r = g1r_dir(&game);
+        let script = g1r.join("Script");
+        let calls = std::cell::Cell::new(0usize);
+        let error = CompileTransaction::begin_with_process_checker(&game, &g1r, &script, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            Ok(call != 0)
+        })
+        .err()
+        .expect("the post-guard process check must reject a newly running game");
+
+        assert_eq!(calls.get(), 2, "preflight and post-guard checks must run");
+        assert!(error.contains(G1R_SHIPPING_EXE_NAME), "got: {error}");
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(
+            install_compile_artifact_paths(&game)
+                .into_iter()
+                .all(|(_, path)| !path.exists()),
+            "the rejected post-guard check must release ownership without creating recovery state"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn post_guard_process_recheck_release_failure_is_recovery_dominant() {
+        let root = unique_test_root("process-recheck-release-failure");
+        let (game, shipping) = fake_install(&root);
+        let g1r = g1r_dir(&game);
+        let script = g1r.join("Script");
+        let mut guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let lock = guard.path().to_path_buf();
+        guard.payload.push_str("mismatched-in-memory-owner");
+
+        let failure = CompileTransaction::begin_with_mutation_guard_and_process_checker(
+            &game,
+            &g1r,
+            &script,
+            guard,
+            || Ok(true),
+        )
+        .err()
+        .expect("the final process check must reject the transaction");
+        assert!(failure.recovery_required);
+        assert!(failure.message.contains(G1R_SHIPPING_EXE_NAME));
+        assert!(
+            failure
+                .message
+                .contains("failed to release the pre-transaction"),
+            "got: {}",
+            failure.message
+        );
+        assert!(
+            lock.exists(),
+            "release failure must retain a durable blocker"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!recovery_journal_path(&game).exists());
+
+        std::fs::remove_file(lock).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn common_runner_preflight_release_failure_reaches_restore_disposition() {
+        let root = unique_test_root("runner-preflight-release-failure");
+        std::fs::create_dir_all(&root).unwrap();
+        let src = root.join("src");
+        std::fs::create_dir(&src).unwrap();
+        let mut guard = InstallMutationGuard::acquire(&root, "gore-as:compile").unwrap();
+        let lock = guard.path().to_path_buf();
+        guard.payload.push_str("mismatched-in-memory-owner");
+
+        let report =
+            game_run_regen_with_install_report_with_guard(&root, &src, guard, |_, _, _| {
+                panic!("missing executable must not generate")
+            })
+            .expect("release uncertainty is returned as a structured install report");
+        assert!(report.result.unwrap_err().contains("game exe not found"));
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+        );
+        assert!(lock.exists());
+
+        std::fs::remove_file(lock).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn both_compile_entry_points_reject_existing_recovery_before_mutation() {
+        for entry_point in ["module-generator", "standalone-precompile"] {
+            let root = unique_test_root(&format!("existing-recovery-{entry_point}"));
+            let (game, shipping) = fake_install(&root);
+            let journal = recovery_journal_path(&game);
+            std::fs::create_dir(&journal).unwrap();
+            std::fs::write(journal.join("KEEP"), b"RECOVERY").unwrap();
+            let src = root.join("src");
+            std::fs::create_dir(&src).unwrap();
+            std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+            let error = if entry_point == "module-generator" {
+                game_run_regen_with(&game, &src, |_, _, _| panic!("must not generate")).unwrap_err()
+            } else {
+                let opts = PrecompileOpts {
+                    game_dir: game.clone(),
+                    src: Some(src),
+                    out: Some(root.join("out.Cache")),
+                    backup: false,
+                };
+                precompile_with(&opts, |_, _, _| panic!("must not generate")).unwrap_err()
+            };
+
+            assert!(
+                error.contains("recovery journal already exists"),
+                "entry={entry_point}: {error}"
+            );
+            assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+            assert_eq!(std::fs::read(journal.join("KEEP")).unwrap(), b"RECOVERY");
+            assert!(!install_mutation_lock_path(&game).exists());
+            assert!(!compile_lock_path(&game).exists());
+            assert!(!compile_bak_path(&shipping).exists());
+
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     fn dev_cache(shipping_cache: &Path) -> PathBuf {
@@ -3664,7 +5228,7 @@ mod tests {
     }
 
     #[test]
-    fn regen_diagnostics_report_keeps_legacy_outer_error_before_runner_invocation() {
+    fn regen_diagnostics_report_rejects_existing_recovery_before_runner_invocation() {
         let base = std::env::temp_dir().join(format!(
             "gore-as-regen-report-before-runner-{}-{}",
             std::process::id(),
@@ -3679,8 +5243,8 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("Mod.as"), b"script").unwrap();
 
-        // The reserved path makes isolation planning fail after the transaction has created its
-        // recovery artifacts, but before any generator/diagnostics runner can be invoked.
+        // The reserved path is an existing recovery artifact. Both report surfaces must now reject
+        // it during the read-only preflight, before transaction ownership or a diagnostics runner.
         let jitted = base.join("AS_JITTED_CODE");
         let collision = append_suffix(&jitted, ".gore-compile-bak");
         std::fs::create_dir(&collision).unwrap();
@@ -3688,26 +5252,22 @@ mod tests {
         let error = game_run_regen_with_diagnostics_report(&game, &src, &Default::default())
             .expect_err("the public report requires a diagnostics-runner disposition");
         assert!(
-            error.contains("compile quarantine backup already exists"),
+            error.contains("compile backup already exists"),
             "got: {error}"
         );
 
-        let report =
+        let extended_error =
             game_run_regen_with_extended_diagnostics_report(&game, &src, &Default::default())
-                .expect("the internal module-compile report retains transactional status");
-        assert!(report.diagnostics.is_none());
-        assert_eq!(
-            report.install_restore,
-            InstallRestoreDisposition::RestoredExact
+                .expect_err("preflight rejection must remain outside the runner report");
+        assert!(
+            extended_error.contains("compile backup already exists"),
+            "got: {extended_error}"
         );
-        assert!(report
-            .result
-            .unwrap_err()
-            .contains("compile quarantine backup already exists"));
         assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
         assert!(!compile_bak_path(&shipping).exists());
         assert!(!recovery_journal_path(&game).exists());
         assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
 
         std::fs::remove_dir_all(base).unwrap();
     }
@@ -3743,6 +5303,7 @@ mod tests {
         let report = game_run_regen_with_install_report_and(
             &game,
             &src,
+            || Ok(false),
             |txn| {
                 txn.begin_isolation_after_jitted(|| {
                     // JIT has been moved. Make proxy activation fail, then block JIT restoration
@@ -4072,6 +5633,7 @@ mod tests {
         });
         entered_rx.recv().unwrap();
         assert!(compile_lock_path(&game).exists());
+        assert!(install_mutation_lock_path(&game).exists());
 
         let second_opts = PrecompileOpts {
             game_dir: game.clone(),
@@ -4081,11 +5643,15 @@ mod tests {
         };
         let second =
             precompile_with(&second_opts, |_, _, _| panic!("must not generate")).unwrap_err();
-        assert!(second.contains("compile is active"), "got: {second}");
+        assert!(
+            second.contains("install mutation is active"),
+            "got: {second}"
+        );
 
         release_tx.send(()).unwrap();
         first.join().unwrap().unwrap();
         assert!(!compile_lock_path(&game).exists());
+        assert!(!install_mutation_lock_path(&game).exists());
         assert!(!compile_bak_path(&shipping).exists());
         assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
 
@@ -4855,6 +6421,136 @@ mod tests {
     }
 
     #[test]
+    fn preheld_compile_guard_is_explicitly_released_when_module_preflight_fails() {
+        let root = unique_test_root("preheld-guard-preflight-release");
+        let (game, _) = fake_install(&root);
+        let source = root.join("overlay.as");
+        std::fs::write(&source, b"// never staged\n").unwrap();
+        let guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let lock = guard.path().to_path_buf();
+        let opts = CompileOpts {
+            game_dir: game.clone(),
+            op: "invalid".to_owned(),
+            module_name: "NeverRuns".to_owned(),
+            rel_path: "NeverRuns.as".to_owned(),
+            as_path: source,
+            work_dir: root.join("work"),
+            allow_new_symbols: false,
+            base_override: Some(Vec::new()),
+        };
+
+        let report =
+            compile_module_with_diagnostics_report_with_guard(&opts, &Default::default(), guard);
+        assert!(matches!(
+            &report.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Other(_))
+        ));
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
+        assert!(
+            !lock.exists(),
+            "ordinary preflight failure must release the guard"
+        );
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preheld_compile_guard_release_failure_is_dominant_and_persistent() {
+        let root = unique_test_root("preheld-guard-release-failure");
+        let (game, _) = fake_install(&root);
+        let source = root.join("overlay.as");
+        std::fs::write(&source, b"// never staged\n").unwrap();
+        let mut guard = InstallMutationGuard::acquire(&game, "gore-as:compile").unwrap();
+        let lock = guard.path().to_path_buf();
+        // Simulate an ownership mismatch without mutating the live record. The production path
+        // must surface this release failure instead of allowing Drop to hide it.
+        guard.payload.push_str("mismatched-in-memory-owner");
+        let opts = CompileOpts {
+            game_dir: game.clone(),
+            op: "invalid".to_owned(),
+            module_name: "NeverRuns".to_owned(),
+            rel_path: "NeverRuns.as".to_owned(),
+            as_path: source,
+            work_dir: root.join("work"),
+            allow_new_symbols: false,
+            base_override: Some(Vec::new()),
+        };
+
+        let report =
+            compile_module_with_diagnostics_report_with_guard(&opts, &Default::default(), guard);
+        match &report.outcome {
+            CompileModuleReportOutcome::Failed(error) => assert!(
+                error.to_string().contains("failed to release the pre-held"),
+                "got: {error}"
+            ),
+            CompileModuleReportOutcome::Compiled(_) => panic!("invalid preflight compiled"),
+        }
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+        );
+        assert!(
+            lock.exists(),
+            "the unreleased lock is the persistent blocker"
+        );
+
+        // The test intentionally injected a private in-memory mismatch; no live transaction ran,
+        // so remove that exact test-owned record after the API has closed its handle.
+        std::fs::remove_file(lock).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn shared_guard_release_failure_keeps_the_recovery_journal_until_retry_succeeds() {
+        let root = unique_test_root("guard-release-keeps-journal");
+        let (game, shipping) = fake_install(&root);
+        let g1r = g1r_dir(&game);
+        let script = g1r.join("Script");
+        let mut txn =
+            CompileTransaction::begin_with_process_checker(&game, &g1r, &script, || Ok(false))
+                .unwrap();
+        let readme = std::fs::read_to_string(txn.journal.root.join("README.txt")).unwrap();
+        assert!(readme.contains(".gore-as-compile-recovery"));
+        assert!(readme.contains(".gore-as-compile.lock"));
+        assert!(readme.contains(".gore-install-mutation.lock"));
+
+        assert!(txn.restore_install().clean());
+        let expected_payload = txn.mutation_guard.payload.clone();
+        txn.mutation_guard
+            .payload
+            .push_str("mismatched-in-memory-owner");
+        let errors = txn.finish();
+        assert_eq!(errors.len(), 1, "got: {errors:?}");
+        assert!(errors[0].contains("ownership record changed"));
+        assert!(
+            txn.journal.root.exists(),
+            "journal must outlive lock-release failure"
+        );
+        assert!(txn.mutation_guard.path.exists());
+        assert!(
+            !txn.lock.path.exists(),
+            "the narrower compile lock was released"
+        );
+        assert!(
+            !txn.recovery.path.exists(),
+            "the exact Shipping backup was retired"
+        );
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+
+        // Exercise a successful explicit retry, after restoring the injected expected identity.
+        txn.mutation_guard.payload = expected_payload;
+        txn.mutation_guard.release().unwrap();
+        txn.journal.retire().unwrap();
+        assert!(!install_mutation_lock_path(&game).exists());
+        assert!(!recovery_journal_path(&game).exists());
+        drop(txn);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn no_match_fallback_returns_the_normal_generator_result() {
         let called = std::cell::Cell::new(0);
         let report = resolve_diagnostic_attempt_report(
@@ -5420,6 +7116,10 @@ mod tests {
             "compile lock must remain"
         );
         assert!(
+            install_mutation_lock_path(&game).exists(),
+            "cross-tool install-mutation lock must remain"
+        );
+        assert!(
             compile_bak_path(&shipping).exists(),
             "Shipping recovery backup must remain"
         );
@@ -5478,14 +7178,17 @@ mod tests {
         let message = "simulated process tree still alive without a legacy marker";
         assert!(!message.contains(GENERATOR_EXIT_UNCONFIRMED));
 
-        let error = precompile_with_generator_report(&opts, |_, _, _| {
-            GeneratorRunResult::unconfirmed(message.to_owned())
-        })
+        let error = precompile_with_generator_report_and_process_checker(
+            &opts,
+            || Ok(false),
+            |_, _, _| GeneratorRunResult::unconfirmed(message.to_owned()),
+        )
         .unwrap_err();
 
         assert!(error.contains(message), "got: {error}");
         assert!(error.contains("intentionally NOT run"), "got: {error}");
         assert!(compile_lock_path(&game).exists());
+        assert!(install_mutation_lock_path(&game).exists());
         assert_eq!(std::fs::read(compile_bak_path(&shipping)).unwrap(), b"OLD");
         assert!(recovery_journal_path(&game).exists());
         assert!(shipping.parent().unwrap().join("Mod.as").exists());

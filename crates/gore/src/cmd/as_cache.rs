@@ -1328,6 +1328,33 @@ fn sync_default_output_parent(_parent: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Acquire cross-tool ownership before selecting the deployment-aware pristine cache. The same
+/// guard is then transferred into gore-as, so deploy/undeploy cannot change the authoritative base
+/// between this read and compiler use.
+fn guarded_pristine_script_cache(
+    game: &Path,
+) -> Result<(Vec<u8>, gore_as::compile::InstallMutationGuard)> {
+    let mut guard = gore_as::compile::acquire_compile_install_mutation(game)
+        .map_err(anyhow::Error::msg)
+        .context("acquiring the AngelScript install-mutation guard")?;
+    match gore_mod::pristine_script_cache(game) {
+        Ok(base) => Ok((base, guard)),
+        Err(error) => {
+            let primary = format!("reading the drift-aware pristine script cache: {error}");
+            match guard.release() {
+                Ok(()) => Err(anyhow::Error::msg(primary)),
+                Err(release) => {
+                    guard.preserve_for_manual_recovery();
+                    bail!(
+                        "COMPILE_RECOVERY_REQUIRED: {primary}; additionally failed to release the \
+                         pre-held install-mutation guard: {release}"
+                    )
+                }
+            }
+        }
+    }
+}
+
 pub fn run(cmd: AsCmd) -> Result<()> {
     match cmd {
         AsCmd::DecodeHeader { file } => {
@@ -1875,8 +1902,7 @@ pub fn run(cmd: AsCmd) -> Result<()> {
             diagnostics_inject_delay_ms,
         } => {
             let game = gore_loc::config::game_root(game).context("resolving game path")?;
-            let base_override = gore_mod::pristine_script_cache(&game)
-                .context("reading the drift-aware pristine script cache")?;
+            let (base_override, guard) = guarded_pristine_script_cache(&game)?;
             let opts = gore_as::compile::CompileOpts {
                 game_dir: game,
                 op,
@@ -1892,10 +1918,35 @@ pub fn run(cmd: AsCmd) -> Result<()> {
                 hook_dll: diagnostics_hook,
                 inject_delay: std::time::Duration::from_millis(diagnostics_inject_delay_ms),
             };
-            let compiled = gore_as::compile::compile_module(&opts, |game, tree| {
-                gore_as::compile::game_run_regen_with_diagnostics(game, tree, &diagnostics)
-            })
-            .context("compiling module")?;
+            let report = gore_as::compile::compile_module_with_diagnostics_report_with_guard(
+                &opts,
+                &diagnostics,
+                guard,
+            );
+            let restore = report.install_restore_disposition();
+            let compiled = match report.outcome {
+                gore_as::compile::CompileModuleReportOutcome::Compiled(output)
+                    if restore == gore_as::compile::InstallRestoreDisposition::RestoredExact =>
+                {
+                    output
+                }
+                gore_as::compile::CompileModuleReportOutcome::Compiled(_) => bail!(
+                    "COMPILE_RECOVERY_REQUIRED: compiler output was produced without proving an \
+                     exact game-install restore"
+                ),
+                gore_as::compile::CompileModuleReportOutcome::Failed(error)
+                    if matches!(
+                        restore,
+                        gore_as::compile::InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+                            | gore_as::compile::InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+                    ) =>
+                {
+                    bail!("COMPILE_RECOVERY_REQUIRED: {error}")
+                }
+                gore_as::compile::CompileModuleReportOutcome::Failed(error) => {
+                    return Err(anyhow::Error::new(error)).context("compiling module");
+                }
+            };
             let mini = std::fs::read(&compiled.mini_path).with_context(|| {
                 format!(
                     "reading compiled mini-cache {}",
@@ -2204,6 +2255,44 @@ fn hex16(b: &[u8; 16]) -> String {
 #[cfg(test)]
 mod default_cli_tests {
     use super::*;
+
+    #[test]
+    fn compile_module_cli_keeps_one_guard_across_pristine_selection() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        let script = game.join("G1R/Script");
+        std::fs::create_dir_all(&script).unwrap();
+        std::fs::write(
+            script.join("PrecompiledScript_Shipping.Cache"),
+            b"authoritative-pristine",
+        )
+        .unwrap();
+
+        let (base, mut guard) = guarded_pristine_script_cache(&game).unwrap();
+        assert_eq!(base, b"authoritative-pristine");
+        let contender = gore_as::compile::InstallMutationGuard::acquire(&game, "gore-mod:deploy")
+            .expect_err("deploy must remain blocked after the authoritative read");
+        assert!(
+            contender.contains("install mutation is active"),
+            "got: {contender}"
+        );
+        assert!(guard.path().exists());
+        guard.release().unwrap();
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn compile_module_cli_releases_guard_when_pristine_selection_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let game = root.path().join("game");
+        std::fs::create_dir_all(&game).unwrap();
+
+        let error = guarded_pristine_script_cache(&game)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("pristine script cache"), "got: {error}");
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
 
     const VALID: &str = r#"{
         "format":"gore-as-default-site-v4",

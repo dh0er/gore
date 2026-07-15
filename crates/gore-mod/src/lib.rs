@@ -3434,6 +3434,99 @@ fn record_path(root: &Path) -> PathBuf {
     record_root(root).join(RECORD_NAME)
 }
 
+fn install_compile_state_detail(state: &gore_as::compile::InstallCompileStateProbe) -> String {
+    use gore_as::compile::InstallCompileStateDisposition;
+
+    match state.disposition {
+        InstallCompileStateDisposition::SafeToCompile => "safe".into(),
+        InstallCompileStateDisposition::GameProcessRunning => {
+            "G1R-Win64-Shipping.exe is running; close the game before changing its installation"
+                .into()
+        }
+        InstallCompileStateDisposition::RecoveryArtifactsPresent => state
+            .artifacts
+            .first()
+            .map(|artifact| format!("{:?} at {}", artifact.kind, artifact.path))
+            .unwrap_or_else(|| "an AngelScript compile/recovery artifact is present".into()),
+        InstallCompileStateDisposition::InspectionFailed => state
+            .issues
+            .first()
+            .map(|issue| match &issue.path {
+                Some(path) => format!("{:?} for {path}: {}", issue.kind, issue.message),
+                None => format!("{:?}: {}", issue.kind, issue.message),
+            })
+            .unwrap_or_else(|| "the install state could not be inspected safely".into()),
+    }
+}
+
+/// Acquire cross-tool ownership only after the read-only gore-as process/recovery probe says the
+/// install is safe. Both functions normalize `G1R/` callers to the same semantic parent so gore-as
+/// compile, single-mod deploy, manager apply, and undeploy contend on exactly one lock path.
+fn acquire_live_install_mutation(
+    game_root: &Path,
+    owner: &str,
+) -> Result<gore_as::compile::InstallMutationGuard> {
+    let install_root = record_root(game_root);
+    let state = gore_as::compile::probe_install_compile_state(&install_root);
+    if !state.safe_to_compile {
+        return Err(ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: {}",
+            install_compile_state_detail(&state)
+        )));
+    }
+    gore_as::compile::InstallMutationGuard::acquire(&install_root, owner).map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: acquiring cross-tool install ownership: {error}"
+        ))
+    })
+}
+
+fn finish_live_install_mutation<T>(
+    result: Result<T>,
+    mut guard: gore_as::compile::InstallMutationGuard,
+) -> Result<T> {
+    let release = guard.release();
+    match (result, release) {
+        (result, Ok(())) => result,
+        (primary, Err(release)) => {
+            let blocker = guard.path().to_path_buf();
+            let blocker_state = match std::fs::symlink_metadata(&blocker) {
+                Ok(_) => Ok(true),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(error),
+            };
+            // Do not let Drop silently retry and erase the only durable evidence behind a
+            // recovery-required response. A missing/replaced pathname is classified separately
+            // below and the exact owned handle is still closed without deleting another object.
+            guard.preserve_for_manual_recovery();
+            let release = match blocker_state {
+                Ok(true) => format!(
+                    "INSTALL_MUTATION_RECOVERY_REQUIRED: releasing cross-tool ownership failed; \
+                     the persistent blocker remains at {}: {release}",
+                    blocker.display()
+                ),
+                Ok(false) => format!(
+                    "releasing cross-tool ownership failed, but its pathname is absent; no \
+                     recovery blocker was retained: {release}"
+                ),
+                Err(inspect) => format!(
+                    "INSTALL_MUTATION_RECOVERY_REQUIRED: releasing cross-tool ownership failed \
+                     and the blocker state at {} could not be inspected: {release}; {inspect}",
+                    blocker.display()
+                ),
+            };
+            match primary {
+                Ok(_) => Err(ModError::Other(format!(
+                    "installation mutation completed, but {release}"
+                ))),
+                Err(primary) => Err(ModError::Other(format!(
+                    "{primary}; additionally, {release}"
+                ))),
+            }
+        }
+    }
+}
+
 /// A fully-prepared deployment: everything to write, computed in memory so the failure-prone
 /// work happens BEFORE the game is touched. The single-bundle [`deploy`] fills 0/1 `ue4ss_dirs`
 /// entries and no `managed_paks`; the multi-mod manager composes several of each.
@@ -4045,6 +4138,51 @@ pub fn deploy(bundle_dir: &Path, game_root: &Path) -> Result<DeployRecord> {
 pub(crate) fn commit_plan(
     gp: &GamePaths,
     abs_root: &Path,
+    plan: DeployPlan,
+    record: DeployRecord,
+    prev: Option<StoredDeployRecord>,
+) -> Result<DeployRecord> {
+    let mutation = acquire_live_install_mutation(abs_root, "gore-mod:deploy")?;
+    let result = (|| {
+        verify_deploy_record_basis(abs_root, prev.as_ref())?;
+        if prev
+            .as_ref()
+            .is_some_and(|stored| stored.record.phase == DeployPhase::RecoveryRequired)
+        {
+            return Err(recovery_required_error());
+        }
+        commit_plan_guarded(gp, abs_root, plan, record, prev)
+    })();
+    finish_live_install_mutation(result, mutation)
+}
+
+/// Re-read the active record only after cross-tool ownership is held. Plans are intentionally built
+/// outside the mutation lock; exact raw-byte comparison prevents a second deploy that completed
+/// during that prepare window from being replaced using a stale `prev` basis.
+fn verify_deploy_record_basis(
+    game_root: &Path,
+    expected: Option<&StoredDeployRecord>,
+) -> Result<()> {
+    let current = read_record(game_root)?;
+    let unchanged = match (expected, current.as_ref()) {
+        (None, None) => true,
+        (Some(expected), Some(current)) => expected.raw == current.raw,
+        _ => false,
+    };
+    if unchanged {
+        Ok(())
+    } else {
+        Err(ModError::Other(
+            "DEPLOY_BASIS_CHANGED: the active deploy record changed while the new deployment was \
+             being prepared; rebuild the plan and retry"
+                .into(),
+        ))
+    }
+}
+
+fn commit_plan_guarded(
+    gp: &GamePaths,
+    abs_root: &Path,
     mut plan: DeployPlan,
     mut record: DeployRecord,
     prev: Option<StoredDeployRecord>,
@@ -4111,6 +4249,14 @@ pub(crate) fn commit_plan(
     if let Some(generation) = &plan.voice_executable_generation {
         require_live_voice_executable_generation(gp, generation)?;
     }
+    // Re-enumerate after shared ownership and immediately before `stage` creates the first backup.
+    // This narrows but cannot eliminate a later game-launch race because the game does not honor
+    // gore's lock file; gore-as documents the same limitation on this shared native check.
+    gore_as::compile::require_shipping_game_process_closed().map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: final pre-write process check: {error}"
+        ))
+    })?;
     if let Err(e) = stage(&plan, &mut record, &mut undo) {
         return Err(with_rollback_failures(e, undo.rollback()));
     }
@@ -6749,6 +6895,16 @@ fn recovery_required_error() -> ModError {
     )
 }
 
+/// Read-only persistent recovery gate for compiler/install-state UIs.
+///
+/// This reuses the same bounded, no-follow, schema/path-validated deploy-record reader as deploy
+/// and pristine resolution. It never repairs, removes, rewrites, or publishes anything.
+pub fn deploy_recovery_required(game_root: &Path) -> Result<bool> {
+    Ok(read_record(game_root)?
+        .as_ref()
+        .is_some_and(|stored| stored.record.phase == DeployPhase::RecoveryRequired))
+}
+
 /// Pristine bytes to rebuild a modded file from, plus whether the live file has DRIFTED from what
 /// we previously deployed there (e.g. Steam verified/updated it). Normally the preserved
 /// `*.gore-bak` is the pristine source; but if `prev` recorded a hash for this file and the
@@ -7648,13 +7804,32 @@ fn restore_record(game_root: &Path, record: &mut DeployRecord) -> Result<Vec<Str
 /// UE4SS mod. No-op if nothing is deployed.
 pub fn undeploy(game_root: &Path) -> Result<Option<DeployRecord>> {
     // Match deploy's absolutization so the record file is found regardless of the caller's cwd.
-    let game_root = &abs_root(game_root);
+    let game_root = abs_root(game_root);
+    // Preserve the established no-op behavior without creating a lock file. A present record is
+    // always re-read after ownership is acquired, so two concurrent undeploy/deploy processes can
+    // never act on this unlocked observation.
+    if read_record(&game_root)?.is_none() {
+        return Ok(None);
+    }
+    let mutation = acquire_live_install_mutation(&game_root, "gore-mod:undeploy")?;
+    let result = undeploy_guarded(&game_root);
+    finish_live_install_mutation(result, mutation)
+}
+
+fn undeploy_guarded(game_root: &Path) -> Result<Option<DeployRecord>> {
     let rp = record_path(game_root);
     let Some(stored) = read_record(game_root)? else {
         return Ok(None);
     };
     let bytes = stored.raw;
     let mut record = stored.record;
+    // This is the final process check after shared ownership and immediately before the recovery
+    // record becomes undeploy's first live-install write. It is not an OS launch barrier.
+    gore_as::compile::require_shipping_game_process_closed().map_err(|error| {
+        ModError::Other(format!(
+            "INSTALL_MUTATION_BLOCKED: final pre-write process check: {error}"
+        ))
+    })?;
     // Mark recovery durably before the first filesystem mutation. A crash at any later point
     // cannot make status/apply report a completed deployment while undeploy is only half done.
     record.phase = DeployPhase::RecoveryRequired;
@@ -8474,6 +8649,191 @@ mod tests {
             byte_len: bytes.len() as u64,
             sha256: format!("{:x}", Sha256::digest(bytes)),
         }
+    }
+
+    fn install_mutation_fixture(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+        let game = root.join("game");
+        let win64 = game.join("G1R/Binaries/Win64");
+        std::fs::create_dir_all(&win64).unwrap();
+        std::fs::create_dir_all(win64.join("ue4ss/Mods")).unwrap();
+        std::fs::write(win64.join("G1R-Win64-Shipping.exe"), b"offline-stub").unwrap();
+        let script = game.join("G1R/Script");
+        std::fs::create_dir_all(&script).unwrap();
+        let shipping = script.join("PrecompiledScript_Shipping.Cache");
+        std::fs::write(&shipping, b"OFFLINE-SHIPPING").unwrap();
+
+        let bundle = root.join("bundle");
+        let source = bundle.join("ue4ss/LockProbe");
+        std::fs::create_dir_all(source.join("Scripts")).unwrap();
+        std::fs::write(source.join("enabled.txt"), b"").unwrap();
+        std::fs::write(source.join("Scripts/main.lua"), b"return {}").unwrap();
+        let manifest = ModManifest {
+            format: 1,
+            mod_meta: ModMeta {
+                name: "LockProbe".into(),
+                version: "1".into(),
+                author: "offline-test".into(),
+            },
+            components: vec![Component::Ue4ssLua {
+                name: "LockProbe".into(),
+                path: "ue4ss/LockProbe".into(),
+                targets: Vec::new(),
+                opaque: false,
+            }],
+        };
+        std::fs::write(
+            bundle.join("gore-mod.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        let deployed = game.join("G1R/Binaries/Win64/ue4ss/Mods/LockProbe");
+        (game, bundle, deployed, shipping)
+    }
+
+    #[test]
+    fn active_compile_guard_blocks_deploy_and_undeploy_before_live_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, bundle, deployed, _) = install_mutation_fixture(temp.path());
+
+        let compile =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-as:test").unwrap();
+        let lock_bytes = std::fs::read(compile.path()).unwrap();
+        let error = deploy(&bundle, &game).unwrap_err().to_string();
+        assert!(error.contains("INSTALL_MUTATION_BLOCKED"), "got: {error}");
+        assert!(!deployed.exists());
+        assert!(!record_path(&game).exists());
+        assert_eq!(std::fs::read(compile.path()).unwrap(), lock_bytes);
+        drop(compile);
+
+        deploy(&bundle, &game).unwrap();
+        assert!(deployed.exists());
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+        let compile =
+            gore_as::compile::InstallMutationGuard::acquire(&game, "gore-as:test").unwrap();
+        let error = undeploy(&game).unwrap_err().to_string();
+        assert!(error.contains("INSTALL_MUTATION_BLOCKED"), "got: {error}");
+        assert!(deployed.exists());
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+        drop(compile);
+
+        assert!(undeploy(&game).unwrap().is_some());
+        assert!(!deployed.exists());
+        assert!(!record_path(&game).exists());
+    }
+
+    #[test]
+    fn gore_mod_mutation_guard_blocks_compile_for_deploy_and_undeploy_owners() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, _, _, shipping) = install_mutation_fixture(temp.path());
+
+        for owner in ["gore-mod:deploy", "gore-mod:undeploy"] {
+            let guard = acquire_live_install_mutation(&game, owner).unwrap();
+            let output = temp.path().join(format!("{owner}.Cache").replace(':', "-"));
+            let error = gore_as::compile::precompile(&gore_as::compile::PrecompileOpts {
+                game_dir: game.clone(),
+                src: None,
+                out: Some(output.clone()),
+                backup: false,
+            })
+            .unwrap_err();
+            assert!(
+                error.contains("install mutation is active"),
+                "owner={owner}: {error}"
+            );
+            assert_eq!(std::fs::read(&shipping).unwrap(), b"OFFLINE-SHIPPING");
+            assert!(!output.exists());
+            assert!(!game.join(".gore-as-compile.lock").exists());
+            assert!(!game.join(".gore-as-compile-recovery").exists());
+            assert!(guard.path().exists());
+            drop(guard);
+        }
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn gore_as_recovery_artifacts_block_deploy_and_undeploy_until_recovered() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, bundle, deployed, _) = install_mutation_fixture(temp.path());
+        let recovery = game.join(".gore-as-compile-recovery");
+        std::fs::create_dir(&recovery).unwrap();
+        std::fs::write(recovery.join("README.txt"), b"KEEP").unwrap();
+
+        let error = deploy(&bundle, &game).unwrap_err().to_string();
+        assert!(error.contains("RecoveryJournal"), "got: {error}");
+        assert!(!deployed.exists());
+        assert_eq!(std::fs::read(recovery.join("README.txt")).unwrap(), b"KEEP");
+        std::fs::remove_dir_all(&recovery).unwrap();
+
+        deploy(&bundle, &game).unwrap();
+        let record_before = std::fs::read(record_path(&game)).unwrap();
+        std::fs::create_dir(&recovery).unwrap();
+        std::fs::write(recovery.join("README.txt"), b"KEEP").unwrap();
+        let error = undeploy(&game).unwrap_err().to_string();
+        assert!(error.contains("RecoveryJournal"), "got: {error}");
+        assert!(deployed.exists());
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), record_before);
+        assert_eq!(std::fs::read(recovery.join("README.txt")).unwrap(), b"KEEP");
+        std::fs::remove_dir_all(&recovery).unwrap();
+
+        undeploy(&game).unwrap();
+        assert!(!deployed.exists());
+    }
+
+    #[test]
+    fn commit_plan_rejects_a_record_changed_after_prepare_under_the_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, _, _, _) = install_mutation_fixture(temp.path());
+        let active = DeployRecord {
+            mod_name: "ConcurrentWinner".into(),
+            ..Default::default()
+        };
+        write_record_file(&game, &active).unwrap();
+        let active_bytes = std::fs::read(record_path(&game)).unwrap();
+
+        let error = commit_plan(
+            &resolve_game_paths(&game),
+            &game,
+            DeployPlan::default(),
+            DeployRecord {
+                mod_name: "StalePlan".into(),
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("DEPLOY_BASIS_CHANGED"), "got: {error}");
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), active_bytes);
+        assert!(!game.join(".gore-install-mutation.lock").exists());
+    }
+
+    #[test]
+    fn deploy_recovery_probe_is_read_only_and_persists_across_calls() {
+        let temp = tempfile::tempdir().unwrap();
+        let (game, _, _, _) = install_mutation_fixture(temp.path());
+        assert!(!deploy_recovery_required(&game).unwrap());
+        assert!(!record_path(&game).exists());
+
+        let mut record = DeployRecord {
+            mod_name: "InterruptedDeploy".into(),
+            ..Default::default()
+        };
+        record.phase = DeployPhase::RecoveryRequired;
+        write_record_file(&game, &record).unwrap();
+        let bytes = std::fs::read(record_path(&game)).unwrap();
+
+        assert!(deploy_recovery_required(&game).unwrap());
+        assert!(
+            deploy_recovery_required(&game).unwrap(),
+            "a fresh read must recover the persistent state without process-local memory"
+        );
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), bytes);
+
+        record.phase = DeployPhase::Applied;
+        write_record_file(&game, &record).unwrap();
+        let applied = std::fs::read(record_path(&game)).unwrap();
+        assert!(!deploy_recovery_required(&game).unwrap());
+        assert_eq!(std::fs::read(record_path(&game)).unwrap(), applied);
     }
 
     fn test_voice_replace_spec(
