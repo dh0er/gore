@@ -43,6 +43,23 @@ pub struct CompileOutput {
     pub module_name: String,
 }
 
+/// What happened to the live game installation around a compiler attempt.
+///
+/// This is deliberately separate from compiler success: a syntax error after the generator exited
+/// can still have restored every live path exactly, while an otherwise useful compiler report may
+/// require manual recovery when process termination or cleanup could not be proven.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstallRestoreDisposition {
+    /// The transactional generator runner was never entered (for example, module preflight failed).
+    NotStarted,
+    /// The generator is confirmed absent and every live path was restored to its pre-call state.
+    RestoredExact,
+    /// Generator exit could not be confirmed, so isolation and disk recovery artifacts were kept.
+    RecoveryRequiredProcessExitUnconfirmed,
+    /// Restore/finalization failed while disk recovery artifacts were still retained.
+    RecoveryRequiredRestoreFailed,
+}
+
 /// Result of one compile-module attempt. A failure remains an ordinary [`CompileError`]; the
 /// surrounding report separately preserves whether enhanced diagnostics were captured, fell back,
 /// or were unavailable after the original process had already completed.
@@ -62,11 +79,16 @@ pub enum CompileModuleReportOutcome {
 pub struct CompileModuleReport {
     pub outcome: CompileModuleReportOutcome,
     diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    install_restore: InstallRestoreDisposition,
 }
 
 impl CompileModuleReport {
     pub fn diagnostics(&self) -> Option<&crate::diagnostics::CompilerDiagnosticsReport> {
         self.diagnostics.as_ref()
+    }
+
+    pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
+        self.install_restore
     }
 
     pub fn into_parts(
@@ -90,13 +112,13 @@ pub fn compile_module_with_diagnostics_report(
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> CompileModuleReport {
     compile_module_report_with(opts, |game_dir, source_tree| {
-        game_run_regen_with_diagnostics_report(game_dir, source_tree, diagnostics)
+        game_run_regen_with_extended_diagnostics_report(game_dir, source_tree, diagnostics)
     })
 }
 
 fn compile_module_report_with<R>(opts: &CompileOpts, run_regen: R) -> CompileModuleReport
 where
-    R: Fn(&Path, &Path) -> Result<GameRunRegenReport, String>,
+    R: Fn(&Path, &Path) -> Result<GameRunRegenExtendedReport, String>,
 {
     let report = std::cell::RefCell::new(None);
     let result = compile_module(opts, |game_dir, source_tree| {
@@ -105,15 +127,22 @@ where
         if slot.is_some() {
             return Err("compile-module diagnostics runner was invoked more than once".to_owned());
         }
-        *slot = Some(generated.diagnostics);
-        generated.result
+        let result = generated.result;
+        *slot = Some((generated.diagnostics, generated.install_restore));
+        result
     });
+    let generated = report.into_inner();
+    let install_restore = generated
+        .as_ref()
+        .map(|(_, install_restore)| *install_restore)
+        .unwrap_or(InstallRestoreDisposition::NotStarted);
     CompileModuleReport {
         outcome: match result {
             Ok(output) => CompileModuleReportOutcome::Compiled(output),
             Err(error) => CompileModuleReportOutcome::Failed(error),
         },
-        diagnostics: report.into_inner(),
+        diagnostics: generated.and_then(|(diagnostics, _)| diagnostics),
+        install_restore,
     }
 }
 
@@ -978,8 +1007,8 @@ impl QuarantinedPath {
 
 impl Drop for QuarantinedPath {
     fn drop(&mut self) {
-        // Covers a partial GenerationIsolation::begin (for example, proxy rename fails after the
-        // JIT directory was already moved). Explicit restoration remains the normal/reporting path.
+        // Explicit restoration remains the normal/reporting path. This is only the unwind safety
+        // net after the owning transaction has already had a chance to retain recovery artifacts.
         let _ = self.restore();
     }
 }
@@ -993,9 +1022,11 @@ struct GenerationIsolation {
 }
 
 impl GenerationIsolation {
-    fn begin(game_dir: &Path, g1r: &Path) -> Result<Self, String> {
+    /// Plan both quarantines without mutating either path. The transaction stores this owner before
+    /// activation, so even a partial activation remains visible to its reporting restore path.
+    fn plan(game_dir: &Path, g1r: &Path) -> Result<Self, String> {
         let jitted = game_root_dir(game_dir).join("AS_JITTED_CODE");
-        let mut jitted = QuarantinedPath::plan(
+        let jitted = QuarantinedPath::plan(
             jitted.clone(),
             append_suffix(&jitted, ".gore-compile-bak"),
             QuarantineKind::Directory,
@@ -1012,7 +1043,7 @@ impl GenerationIsolation {
         let clearly_ue4ss = ue4ss_payload.is_file();
         // A present dwmapi.dll without the UE4SS payload is not clearly the local proxy; leave it
         // entirely alone. An absent path is still tracked so it remains absent after generation.
-        let mut proxy = if !proxy_exists || clearly_ue4ss {
+        let proxy = if !proxy_exists || clearly_ue4ss {
             Some(QuarantinedPath::plan(
                 proxy_path.clone(),
                 append_suffix(&proxy_path, ".gore-compile-bak"),
@@ -1022,18 +1053,26 @@ impl GenerationIsolation {
             None
         };
 
-        // Both plans (including collision checks) completed before the first rename.
-        jitted.activate()?;
-        if let Some(proxy) = &mut proxy {
-            if let Err(e) = proxy.activate() {
-                let rollback = jitted.restore().err();
-                return Err(match rollback {
-                    Some(re) => format!("{e}; additionally failed to restore isolation: {re}"),
-                    None => e,
-                });
-            }
-        }
         Ok(Self { jitted, proxy })
+    }
+
+    fn activate(&mut self) -> Result<(), String> {
+        self.activate_after_jitted(|| {})
+    }
+
+    fn activate_after_jitted<F>(&mut self, after_jitted: F) -> Result<(), String>
+    where
+        F: FnOnce(),
+    {
+        // Both plans (including collision checks) completed before this first rename. Do not
+        // locally roll back a partial activation: the transaction owns `self` and must report any
+        // failed restoration before deciding whether its journal/backups can be retired.
+        self.jitted.activate()?;
+        after_jitted();
+        if let Some(proxy) = &mut self.proxy {
+            proxy.activate()?;
+        }
+        Ok(())
     }
 
     fn restore(&mut self) -> Result<(), String> {
@@ -1253,9 +1292,26 @@ impl CompileTransaction {
 
     fn begin_isolation(&mut self) -> Result<(), String> {
         if self.isolation.is_none() {
-            self.isolation = Some(GenerationIsolation::begin(&self.game_dir, &self.g1r)?);
+            self.isolation = Some(GenerationIsolation::plan(&self.game_dir, &self.g1r)?);
         }
-        Ok(())
+        self.isolation
+            .as_mut()
+            .expect("generation isolation was planned above")
+            .activate()
+    }
+
+    #[cfg(test)]
+    fn begin_isolation_after_jitted<F>(&mut self, after_jitted: F) -> Result<(), String>
+    where
+        F: FnOnce(),
+    {
+        if self.isolation.is_none() {
+            self.isolation = Some(GenerationIsolation::plan(&self.game_dir, &self.g1r)?);
+        }
+        self.isolation
+            .as_mut()
+            .expect("generation isolation was planned above")
+            .activate_after_jitted(after_jitted)
     }
 
     fn stage(&mut self, src: &Path) -> Result<(), String> {
@@ -1361,6 +1417,19 @@ impl CompileTransaction {
         errors
     }
 
+    fn recovery_retained(&self) -> bool {
+        self.journal.active || self.recovery.active
+    }
+
+    /// A confirmed-dead generator may release the compile lock after restore/finalization failed,
+    /// but the recovery artifacts must remain exactly as reported to the caller. Do not let Drop
+    /// turn a structured `RecoveryRequiredRestoreFailed` into a transient, unobservable retry.
+    fn preserve_for_restore_failure(mut self) {
+        let _ = self.remove_ephemeral_deploy_backup();
+        let _ = self.lock.release();
+        std::mem::forget(self);
+    }
+
     /// A generator process that might still be alive must retain exclusive ownership of every
     /// path it can touch. Deliberately leak the transaction guards so Drop cannot race that process
     /// by restoring Script/JIT/proxy state or releasing the compile lock. The disk recovery backup
@@ -1422,6 +1491,7 @@ pub fn game_run_regen(game_dir: &Path, src_dir: &Path) -> Result<PathBuf, String
 pub struct GameRunRegenReport {
     result: Result<PathBuf, String>,
     diagnostics: crate::diagnostics::CompilerDiagnosticsReport,
+    install_restore: InstallRestoreDisposition,
 }
 
 impl GameRunRegenReport {
@@ -1433,6 +1503,10 @@ impl GameRunRegenReport {
         &self.diagnostics
     }
 
+    pub fn install_restore_disposition(&self) -> InstallRestoreDisposition {
+        self.install_restore
+    }
+
     pub fn into_parts(
         self,
     ) -> (
@@ -1441,6 +1515,15 @@ impl GameRunRegenReport {
     ) {
         (self.result, self.diagnostics)
     }
+}
+
+/// Internal superset used by module compilation. Unlike the public compatibility report, this can
+/// represent a transactional setup/restore failure before the diagnostics runner was reached.
+#[derive(Debug)]
+struct GameRunRegenExtendedReport {
+    result: Result<PathBuf, String>,
+    diagnostics: Option<crate::diagnostics::CompilerDiagnosticsReport>,
+    install_restore: InstallRestoreDisposition,
 }
 
 /// Same transactional compiler path as [`game_run_regen`], with explicit diagnostics discovery /
@@ -1465,8 +1548,31 @@ pub fn game_run_regen_with_diagnostics_report(
     src_dir: &Path,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> Result<GameRunRegenReport, String> {
+    let extended = game_run_regen_with_extended_diagnostics_report(game_dir, src_dir, diagnostics)?;
+    let GameRunRegenExtendedReport {
+        result,
+        diagnostics,
+        install_restore,
+    } = extended;
+    let Some(diagnostics) = diagnostics else {
+        return Err(result.err().unwrap_or_else(|| {
+            "game compiler completed without producing its diagnostics disposition".to_owned()
+        }));
+    };
+    Ok(GameRunRegenReport {
+        result,
+        diagnostics,
+        install_restore,
+    })
+}
+
+fn game_run_regen_with_extended_diagnostics_report(
+    game_dir: &Path,
+    src_dir: &Path,
+    diagnostics: &crate::diagnostics::DiagnosticsOptions,
+) -> Result<GameRunRegenExtendedReport, String> {
     let diagnostic_report = std::cell::RefCell::new(None);
-    let result = game_run_regen_with(game_dir, src_dir, |exe, g1r, cache| {
+    let generated = game_run_regen_with_install_report(game_dir, src_dir, |exe, g1r, cache| {
         let generated = real_generate_with_timeout_and_diagnostics_report(
             exe,
             g1r,
@@ -1475,24 +1581,75 @@ pub fn game_run_regen_with_diagnostics_report(
             diagnostics,
         );
         *diagnostic_report.borrow_mut() = Some(generated.diagnostics);
-        generated.result
-    });
-    match diagnostic_report.into_inner() {
-        Some(diagnostics) => Ok(GameRunRegenReport {
-            result,
-            diagnostics,
-        }),
-        None => Err(result.err().unwrap_or_else(|| {
-            "game compiler completed without producing its diagnostics disposition".to_owned()
-        })),
-    }
+        GeneratorRunResult {
+            result: generated.result,
+            process_exit: generated.process_exit,
+        }
+    })?;
+    Ok(GameRunRegenExtendedReport {
+        result: generated.result,
+        diagnostics: diagnostic_report.into_inner(),
+        install_restore: generated.install_restore,
+    })
 }
 
 /// Testable core of [`game_run_regen`]. `generate` receives the executable, G1R directory, and
 /// the *development* cache path. It must return the bytes generated there.
+#[cfg(test)]
 fn game_run_regen_with<G>(game_dir: &Path, src_dir: &Path, generate: G) -> Result<PathBuf, String>
 where
     G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
+{
+    game_run_regen_with_install_report(game_dir, src_dir, |exe, g1r, cache| {
+        let result = generate(exe, g1r, cache);
+        let process_exit = if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| generator_exit_unconfirmed(error))
+        {
+            GeneratorProcessExitDisposition::Unconfirmed
+        } else {
+            GeneratorProcessExitDisposition::Confirmed
+        };
+        GeneratorRunResult {
+            result,
+            process_exit,
+        }
+    })
+    .and_then(|report| report.result)
+}
+
+#[derive(Debug)]
+struct GameRunInstallReport {
+    result: Result<PathBuf, String>,
+    install_restore: InstallRestoreDisposition,
+}
+
+fn game_run_regen_with_install_report<G>(
+    game_dir: &Path,
+    src_dir: &Path,
+    generate: G,
+) -> Result<GameRunInstallReport, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
+{
+    game_run_regen_with_install_report_and(
+        game_dir,
+        src_dir,
+        CompileTransaction::begin_isolation,
+        generate,
+    )
+}
+
+fn game_run_regen_with_install_report_and<I, G>(
+    game_dir: &Path,
+    src_dir: &Path,
+    begin_isolation: I,
+    generate: G,
+) -> Result<GameRunInstallReport, String>
+where
+    I: FnOnce(&mut CompileTransaction) -> Result<(), String>,
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
 {
     let g1r = g1r_dir(game_dir);
     let exe = g1r
@@ -1521,15 +1678,18 @@ where
     let mut txn = CompileTransaction::begin(game_dir, &g1r, &script_dir)?;
     let regen_out = src_dir.join("regen.cache");
     let _ = std::fs::remove_file(&regen_out);
+    let mut process_exit = GeneratorProcessExitDisposition::NotStarted;
     let result = (|| -> Result<PathBuf, String> {
         // Quarantine process-wide side effects before staging or deleting either cache. From this
         // point onward CompileTransaction::drop can roll back an unwind at any instruction.
-        txn.begin_isolation()?;
+        begin_isolation(&mut txn)?;
         txn.stage(src_dir)?;
         // A source tree may accidentally contain this filename, so remove the stale/staged dev
         // cache immediately before launch. The saved pre-call state is restored below.
         remove_if_exists(&txn.dev_cache)?;
-        let regen = generate(&exe, &g1r, &dev_cache)?;
+        let generated = generate(&exe, &g1r, &dev_cache);
+        process_exit = generated.process_exit;
+        let regen = generated.result?;
         if regen.is_empty() {
             return Err("the game produced an empty PrecompiledScript.Cache".into());
         }
@@ -1538,10 +1698,14 @@ where
         Ok(regen_out.clone())
     })();
 
-    if let Err(error) = &result {
-        if generator_exit_unconfirmed(error) {
-            return Err(txn.preserve_for_unconfirmed_generator(error.clone()));
-        }
+    if process_exit == GeneratorProcessExitDisposition::Unconfirmed {
+        let error = result
+            .err()
+            .unwrap_or_else(|| "generator exit was unconfirmed after reporting success".to_owned());
+        return Ok(GameRunInstallReport {
+            result: Err(txn.preserve_for_unconfirmed_generator(error)),
+            install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+        });
     }
 
     // Undo staged files first: they may include either cache filename. Explicit cache restoration
@@ -1553,7 +1717,7 @@ where
         cleanup_errors.extend(txn.finish());
     }
 
-    match result {
+    let result = match result {
         Ok(p) if cleanup_errors.is_empty() => Ok(p),
         Ok(p) => Err(format!(
             "compiled to {}, but {}",
@@ -1562,7 +1726,18 @@ where
         )),
         Err(e) if cleanup_errors.is_empty() => Err(e),
         Err(e) => Err(format!("{e}; additionally {}", cleanup_errors.join("; "))),
+    };
+    if txn.recovery_retained() {
+        txn.preserve_for_restore_failure();
+        return Ok(GameRunInstallReport {
+            result,
+            install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+        });
     }
+    Ok(GameRunInstallReport {
+        result,
+        install_restore: InstallRestoreDisposition::RestoredExact,
+    })
 }
 
 /// Options for [`precompile`] — driving the game's own `-as-generate-precompiled-data` step as a
@@ -1586,7 +1761,9 @@ pub struct PrecompileOpts {
 /// output placement and restore internally. Returns the path of the resulting cache (`out` if set,
 /// else the in-place `Script/PrecompiledScript_Shipping.Cache`).
 pub fn precompile(opts: &PrecompileOpts) -> Result<PathBuf, String> {
-    precompile_with(opts, real_generate)
+    precompile_with_generator_report(opts, |exe, g1r, cache| {
+        real_generate_report(exe, g1r, cache, &Default::default())
+    })
 }
 
 /// [`precompile`] with explicit optional compiler-diagnostic capture settings.
@@ -1594,8 +1771,8 @@ pub fn precompile_with_diagnostics(
     opts: &PrecompileOpts,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
 ) -> Result<PathBuf, String> {
-    precompile_with(opts, |exe, g1r, cache| {
-        real_generate_with_diagnostics(exe, g1r, cache, diagnostics)
+    precompile_with_generator_report(opts, |exe, g1r, cache| {
+        real_generate_report(exe, g1r, cache, diagnostics)
     })
 }
 
@@ -1704,11 +1881,24 @@ fn resolve_out_real(out: &Path, cwd: &Path) -> PathBuf {
 }
 
 /// Testable core of [`precompile`]. `generate(exe, g1r, dev_cache)` must make the game write
-/// `PrecompiledScript.Cache` and return its bytes; the real impl [`real_generate`] launches the
-/// game and polls, while tests inject a stub so orchestration stays offline.
+/// `PrecompiledScript.Cache` and return its bytes; the real public paths use
+/// [`real_generate_report`], while tests inject a stub so orchestration stays offline.
+#[cfg(test)]
 fn precompile_with<G>(opts: &PrecompileOpts, generate: G) -> Result<PathBuf, String>
 where
     G: FnOnce(&Path, &Path, &Path) -> Result<Vec<u8>, String>,
+{
+    precompile_with_generator_report(opts, |exe, g1r, cache| {
+        GeneratorRunResult::confirmed(generate(exe, g1r, cache))
+    })
+}
+
+fn precompile_with_generator_report<G>(
+    opts: &PrecompileOpts,
+    generate: G,
+) -> Result<PathBuf, String>
+where
+    G: FnOnce(&Path, &Path, &Path) -> GeneratorRunResult<Vec<u8>>,
 {
     let g1r = g1r_dir(&opts.game_dir);
     let exe = g1r
@@ -1780,6 +1970,7 @@ where
     // Both compile entry points share the same lock and disk-backed Shipping recovery guard.
     // Generation isolation begins before staging or deleting the development cache.
     let mut txn = CompileTransaction::begin(&opts.game_dir, &g1r, &script_dir)?;
+    let mut process_exit = GeneratorProcessExitDisposition::NotStarted;
     let result = (|| -> Result<Vec<u8>, String> {
         txn.begin_isolation()?;
         if let Some(src) = &opts.src {
@@ -1788,7 +1979,9 @@ where
         // Delete the old (or accidentally staged) development cache immediately before launch so
         // existence/size can only describe this run. The optional original is restored below.
         remove_if_exists(&txn.dev_cache)?;
-        let regen = generate(&exe, &g1r, &dev_cache)?;
+        let generated = generate(&exe, &g1r, &dev_cache);
+        process_exit = generated.process_exit;
+        let regen = generated.result?;
         if regen.is_empty() {
             return Err("the game produced an empty PrecompiledScript.Cache".into());
         }
@@ -1796,10 +1989,11 @@ where
         Ok(regen)
     })();
 
-    if let Err(error) = &result {
-        if generator_exit_unconfirmed(error) {
-            return Err(txn.preserve_for_unconfirmed_generator(error.clone()));
-        }
+    if process_exit == GeneratorProcessExitDisposition::Unconfirmed {
+        let error = result
+            .err()
+            .unwrap_or_else(|| "generator exit was unconfirmed after reporting success".to_owned());
+        return Err(txn.preserve_for_unconfirmed_generator(error));
     }
 
     // Always restore the complete install before either publishing an output artifact or starting
@@ -1889,29 +2083,66 @@ where
 /// Launch the game with the proven AngelScript generation flags, then read the newly-created
 /// `PrecompiledScript.Cache`. The caller removes that file before launch, so mere existence is a
 /// fresh-run signal; the shipping cache is never the generator output.
-fn real_generate(exe: &Path, g1r: &Path, cache: &Path) -> Result<Vec<u8>, String> {
-    real_generate_with_diagnostics(exe, g1r, cache, &Default::default())
-}
-
-fn real_generate_with_diagnostics(
+fn real_generate_report(
     exe: &Path,
     g1r: &Path,
     cache: &Path,
     diagnostics: &crate::diagnostics::DiagnosticsOptions,
-) -> Result<Vec<u8>, String> {
-    real_generate_with_timeout_and_diagnostics(
+) -> GeneratorRunResult<Vec<u8>> {
+    let generated = real_generate_with_timeout_and_diagnostics_report(
         exe,
         g1r,
         cache,
         Duration::from_secs(30 * 60),
         diagnostics,
-    )
+    );
+    GeneratorRunResult {
+        result: generated.result,
+        process_exit: generated.process_exit,
+    }
 }
 
 const GENERATOR_EXIT_UNCONFIRMED: &str = "[gore:generator-exit-unconfirmed]";
 
+#[cfg(test)]
 fn generator_exit_unconfirmed(error: &str) -> bool {
     error.contains(GENERATOR_EXIT_UNCONFIRMED)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GeneratorProcessExitDisposition {
+    NotStarted,
+    Confirmed,
+    Unconfirmed,
+}
+
+#[derive(Debug)]
+struct GeneratorRunResult<T> {
+    result: Result<T, String>,
+    process_exit: GeneratorProcessExitDisposition,
+}
+
+impl<T> GeneratorRunResult<T> {
+    fn not_started(result: Result<T, String>) -> Self {
+        Self {
+            result,
+            process_exit: GeneratorProcessExitDisposition::NotStarted,
+        }
+    }
+
+    fn confirmed(result: Result<T, String>) -> Self {
+        Self {
+            result,
+            process_exit: GeneratorProcessExitDisposition::Confirmed,
+        }
+    }
+
+    fn unconfirmed(error: String) -> Self {
+        Self {
+            result: Err(error),
+            process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+        }
+    }
 }
 
 /// Spawn/try_wait implementation with a real wall-clock deadline. Keeping the timeout injectable
@@ -1923,51 +2154,77 @@ const GENERATOR_ARGS: &[&str] = &[
     "-as-exit-on-error",
 ];
 
-fn run_normal_generator(
+fn run_normal_generator_report(
     exe: &Path,
     g1r: &Path,
     cache: &Path,
     timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    let mut child = std::process::Command::new(exe)
+) -> GeneratorRunResult<Vec<u8>> {
+    let mut child = match std::process::Command::new(exe)
         .args(GENERATOR_ARGS)
         .current_dir(g1r)
         .spawn()
-        .map_err(|e| format!("launching game: {e}"))?;
+    {
+        Ok(child) => child,
+        Err(error) => {
+            return GeneratorRunResult::not_started(Err(format!("launching game: {error}")));
+        }
+    };
 
-    finish_generator_child(&mut child, cache, timeout)
+    finish_generator_child_report(&mut child, cache, timeout)
 }
 
 /// A failed hook attempt may have started the generator and written a partial development cache
 /// before its process was confirmed gone. Remove that first-attempt artifact before the fallback
 /// launch so the normal result cannot accidentally accept stale bytes.
-fn run_clean_fallback_generator(
+fn run_clean_fallback_generator_report(
     exe: &Path,
     g1r: &Path,
     cache: &Path,
     timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    clear_partial_cache_before_fallback(cache)?;
-    run_normal_generator(exe, g1r, cache, timeout)
+) -> GeneratorRunResult<Vec<u8>> {
+    if let Err(error) = clear_partial_cache_before_fallback(cache) {
+        return GeneratorRunResult::not_started(Err(error));
+    }
+    run_normal_generator_report(exe, g1r, cache, timeout)
 }
 
 fn clear_partial_cache_before_fallback(cache: &Path) -> Result<(), String> {
     remove_if_exists(cache)
 }
 
-fn finish_generator_child(
+fn finish_generator_child_report(
     child: &mut std::process::Child,
     cache: &Path,
     timeout: Duration,
-) -> Result<Vec<u8>, String> {
-    let status = wait_for_child_with_timeout(
+) -> GeneratorRunResult<Vec<u8>> {
+    let status = match wait_for_child_with_timeout_report(
         child,
         timeout,
         Duration::from_millis(250),
         Duration::from_secs(2),
         "AngelScript generation",
-    )?;
-    read_completed_generated_cache(cache, status.success(), &status.to_string())
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            return match error.process_exit {
+                GeneratorProcessExitDisposition::Unconfirmed => {
+                    GeneratorRunResult::unconfirmed(error.message)
+                }
+                GeneratorProcessExitDisposition::Confirmed => {
+                    GeneratorRunResult::confirmed(Err(error.message))
+                }
+                GeneratorProcessExitDisposition::NotStarted => {
+                    GeneratorRunResult::not_started(Err(error.message))
+                }
+            };
+        }
+    };
+    GeneratorRunResult::confirmed(read_completed_generated_cache(
+        cache,
+        status.success(),
+        &status.to_string(),
+    ))
 }
 
 #[derive(Debug)]
@@ -1982,6 +2239,7 @@ enum DiagnosticAttempt<T> {
 struct GeneratorDiagnosticsResult<T> {
     result: Result<T, String>,
     diagnostics: crate::diagnostics::CompilerDiagnosticsReport,
+    process_exit: GeneratorProcessExitDisposition,
 }
 
 /// Infrastructure failure is deliberately not a compiler failure: once the first process is
@@ -1991,25 +2249,31 @@ fn resolve_diagnostic_attempt_report<T, N>(
     normal: N,
 ) -> GeneratorDiagnosticsResult<T>
 where
-    N: FnOnce() -> Result<T, String>,
+    N: FnOnce() -> GeneratorRunResult<T>,
 {
     match attempt {
         DiagnosticAttempt::Completed(report) | DiagnosticAttempt::Fatal(report) => report,
-        DiagnosticAttempt::Disabled => GeneratorDiagnosticsResult {
-            result: normal(),
-            diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
-                crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
-            ),
-        },
+        DiagnosticAttempt::Disabled => {
+            let normal = normal();
+            GeneratorDiagnosticsResult {
+                result: normal.result,
+                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
+                ),
+                process_exit: normal.process_exit,
+            }
+        }
         DiagnosticAttempt::Unavailable(reason) => {
             eprintln!(
                 "gore: AngelScript diagnostics unavailable ({reason}); falling back to the normal generator"
             );
+            let normal = normal();
             GeneratorDiagnosticsResult {
-                result: normal(),
+                result: normal.result,
                 diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
                     crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableFallback,
                 ),
+                process_exit: normal.process_exit,
             }
         }
     }
@@ -2020,7 +2284,22 @@ fn resolve_diagnostic_attempt<T, N>(attempt: DiagnosticAttempt<T>, normal: N) ->
 where
     N: FnOnce() -> Result<T, String>,
 {
-    resolve_diagnostic_attempt_report(attempt, normal).result
+    resolve_diagnostic_attempt_report(attempt, || {
+        let result = normal();
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| generator_exit_unconfirmed(error))
+        {
+            GeneratorRunResult {
+                result,
+                process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+            }
+        } else {
+            GeneratorRunResult::confirmed(result)
+        }
+    })
+    .result
 }
 
 struct DiagnosticArtifacts {
@@ -2081,10 +2360,14 @@ impl Drop for DiagnosticArtifacts {
 }
 
 fn append_captured_diagnostics(
-    result: Result<Vec<u8>, String>,
+    generated: GeneratorRunResult<Vec<u8>>,
     artifacts: &DiagnosticArtifacts,
     disposition: crate::diagnostics::DiagnosticsCaptureDisposition,
 ) -> GeneratorDiagnosticsResult<Vec<u8>> {
+    let GeneratorRunResult {
+        result,
+        process_exit,
+    } = generated;
     let (capture, diagnostics, capture_failure) = match crate::diagnostics::read_bounded(
         &artifacts.capture,
         crate::diagnostics::MAX_CAPTURE_BYTES,
@@ -2153,27 +2436,29 @@ fn append_captured_diagnostics(
         }
     } else {
         match result {
-        Ok(_) if has_compiler_error => Err(format!(
-            "AngelScript compiler reported an error despite producing a structurally complete cache\n--- AngelScript compiler diagnostics ---\n{}",
-            capture.trim_end()
-        )),
-        Ok(_) if capture_failure.is_some() => Err(format!(
-            "AngelScript diagnostics capture {}; refusing to accept an unverified cache\n--- AngelScript compiler diagnostics ---\n{}",
-            capture_failure.as_deref().unwrap_or("was invalid"), capture.trim_end()
-        )),
-        Ok(bytes) => {
-            eprint!("{capture}");
-            Ok(bytes)
-        }
-        Err(error) => Err(format!(
-            "{error}\n--- AngelScript compiler diagnostics ---\n{}",
-            capture.trim_end()
-        )),
+            Ok(_) if has_compiler_error => Err(format!(
+                "AngelScript compiler reported an error despite producing a structurally complete cache\n--- AngelScript compiler diagnostics ---\n{}",
+                capture.trim_end()
+            )),
+            Ok(_) if capture_failure.is_some() => Err(format!(
+                "AngelScript diagnostics capture {}; refusing to accept an unverified cache\n--- AngelScript compiler diagnostics ---\n{}",
+                capture_failure.as_deref().unwrap_or("was invalid"),
+                capture.trim_end()
+            )),
+            Ok(bytes) => {
+                eprint!("{capture}");
+                Ok(bytes)
+            }
+            Err(error) => Err(format!(
+                "{error}\n--- AngelScript compiler diagnostics ---\n{}",
+                capture.trim_end()
+            )),
         }
     };
     GeneratorDiagnosticsResult {
         result,
         diagnostics,
+        process_exit,
     }
 }
 
@@ -2197,24 +2482,29 @@ fn preserve_unconfirmed_diagnostic_attempt(
         diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
             crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed,
         ),
+        process_exit: GeneratorProcessExitDisposition::Unconfirmed,
     })
 }
 
 fn classify_hooked_result(
-    result: Result<Vec<u8>, String>,
+    generated: GeneratorRunResult<Vec<u8>>,
     artifacts: DiagnosticArtifacts,
     prep: crate::diagnostics::HookPreparation,
 ) -> DiagnosticAttempt<Vec<u8>> {
-    let result = match result {
-        Err(error) if generator_exit_unconfirmed(&error) => {
+    let generated = match generated.process_exit {
+        GeneratorProcessExitDisposition::Unconfirmed => {
             // The child may still own and append to the capture. Preserve the whole directory for
             // recovery, but never read or expose a snapshot as if it were a completed report.
-            return preserve_unconfirmed_diagnostic_attempt(error, artifacts, prep);
+            return preserve_unconfirmed_diagnostic_attempt(
+                generated.result.unwrap_err(),
+                artifacts,
+                prep,
+            );
         }
-        result => result,
+        _ => generated,
     };
     let report = append_captured_diagnostics(
-        result,
+        generated,
         &artifacts,
         crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
     );
@@ -2222,25 +2512,15 @@ fn classify_hooked_result(
 }
 
 fn classify_started_hook_termination(
-    termination: String,
+    termination: ChildWaitFailure,
     artifacts: DiagnosticArtifacts,
     prep: crate::diagnostics::HookPreparation,
 ) -> DiagnosticAttempt<Vec<u8>> {
-    if generator_exit_unconfirmed(&termination) {
-        preserve_unconfirmed_diagnostic_attempt(termination, artifacts, prep)
+    if termination.process_exit == GeneratorProcessExitDisposition::Unconfirmed {
+        preserve_unconfirmed_diagnostic_attempt(termination.message, artifacts, prep)
     } else {
-        DiagnosticAttempt::Unavailable(termination)
+        DiagnosticAttempt::Unavailable(termination.message)
     }
-}
-
-fn real_generate_with_timeout_and_diagnostics(
-    exe: &Path,
-    g1r: &Path,
-    cache: &Path,
-    timeout: Duration,
-    diagnostics: &crate::diagnostics::DiagnosticsOptions,
-) -> Result<Vec<u8>, String> {
-    real_generate_with_timeout_and_diagnostics_report(exe, g1r, cache, timeout, diagnostics).result
 }
 
 fn real_generate_with_timeout_and_diagnostics_report(
@@ -2252,7 +2532,7 @@ fn real_generate_with_timeout_and_diagnostics_report(
 ) -> GeneratorDiagnosticsResult<Vec<u8>> {
     if diagnostics.disabled {
         return resolve_diagnostic_attempt_report(DiagnosticAttempt::Disabled, || {
-            run_clean_fallback_generator(exe, g1r, cache, timeout)
+            run_clean_fallback_generator_report(exe, g1r, cache, timeout)
         });
     }
     let prep = match crate::diagnostics::prepare_hook(exe, diagnostics) {
@@ -2260,7 +2540,7 @@ fn real_generate_with_timeout_and_diagnostics_report(
         Err(reason) => {
             return resolve_diagnostic_attempt_report(
                 DiagnosticAttempt::Unavailable(reason),
-                || run_clean_fallback_generator(exe, g1r, cache, timeout),
+                || run_clean_fallback_generator_report(exe, g1r, cache, timeout),
             );
         }
     };
@@ -2269,7 +2549,7 @@ fn real_generate_with_timeout_and_diagnostics_report(
         Err(reason) => {
             return resolve_diagnostic_attempt_report(
                 DiagnosticAttempt::Unavailable(reason),
-                || run_clean_fallback_generator(exe, g1r, cache, timeout),
+                || run_clean_fallback_generator_report(exe, g1r, cache, timeout),
             );
         }
     };
@@ -2283,16 +2563,24 @@ fn real_generate_with_timeout_and_diagnostics_report(
         diagnostics.inject_delay,
     ) {
         Ok(crate::diagnostics::HookSpawnOutcome::Hooked(mut child)) => {
-            let result = finish_generator_child(&mut child, cache, timeout);
+            let result = finish_generator_child_report(&mut child, cache, timeout);
             classify_hooked_result(result, artifacts, prep)
         }
         Ok(crate::diagnostics::HookSpawnOutcome::ExitedBeforeInjection(mut child)) => {
-            let result = finish_generator_child(&mut child, cache, timeout);
-            DiagnosticAttempt::Completed(append_captured_diagnostics(
-                result,
-                &artifacts,
-                crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback,
-            ))
+            let generated = finish_generator_child_report(&mut child, cache, timeout);
+            if generated.process_exit == GeneratorProcessExitDisposition::Unconfirmed {
+                preserve_unconfirmed_diagnostic_attempt(
+                    generated.result.unwrap_err(),
+                    artifacts,
+                    prep,
+                )
+            } else {
+                DiagnosticAttempt::Completed(append_captured_diagnostics(
+                    generated,
+                    &artifacts,
+                    crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback,
+                ))
+            }
         }
         Ok(crate::diagnostics::HookSpawnOutcome::ExitedAfterInjectionBeforeReady {
             child,
@@ -2315,7 +2603,7 @@ fn real_generate_with_timeout_and_diagnostics_report(
                     "{reason}; first generator already exited ({status})"
                 )),
                 _ => {
-                    let termination = terminate_child_bounded(
+                    let termination = terminate_child_bounded_report(
                         &mut child,
                         &reason,
                         Duration::from_millis(20),
@@ -2327,7 +2615,7 @@ fn real_generate_with_timeout_and_diagnostics_report(
         }
     };
     resolve_diagnostic_attempt_report(attempt, || {
-        run_clean_fallback_generator(exe, g1r, cache, timeout)
+        run_clean_fallback_generator_report(exe, g1r, cache, timeout)
     })
 }
 
@@ -2363,6 +2651,7 @@ fn read_completed_generated_cache(
 /// Wait for a direct child up to a hard execution deadline. On timeout or polling failure, request
 /// termination and observe it only for the separately bounded `termination_grace`; this function
 /// never calls blocking `Child::wait` after a failed kill (or at all).
+#[cfg(test)]
 fn wait_for_child_with_timeout(
     child: &mut std::process::Child,
     timeout: Duration,
@@ -2370,9 +2659,29 @@ fn wait_for_child_with_timeout(
     termination_grace: Duration,
     context: &str,
 ) -> Result<std::process::ExitStatus, String> {
+    wait_for_child_with_timeout_report(child, timeout, poll_interval, termination_grace, context)
+        .map_err(|failure| failure.message)
+}
+
+#[derive(Debug)]
+struct ChildWaitFailure {
+    message: String,
+    process_exit: GeneratorProcessExitDisposition,
+}
+
+fn wait_for_child_with_timeout_report(
+    child: &mut std::process::Child,
+    timeout: Duration,
+    poll_interval: Duration,
+    termination_grace: Duration,
+    context: &str,
+) -> Result<std::process::ExitStatus, ChildWaitFailure> {
     let deadline = Instant::now()
         .checked_add(timeout)
-        .ok_or_else(|| format!("{context} timeout is too large"))?;
+        .ok_or_else(|| ChildWaitFailure {
+            message: format!("{context} timeout is too large"),
+            process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+        })?;
     let poll_interval = poll_interval.max(Duration::from_millis(1));
     loop {
         match child.try_wait() {
@@ -2381,7 +2690,7 @@ fn wait_for_child_with_timeout(
                 let now = Instant::now();
                 if now >= deadline {
                     let cause = format!("{context} exceeded the {timeout:?} timeout");
-                    return Err(terminate_child_bounded(
+                    return Err(terminate_child_bounded_report(
                         child,
                         &cause,
                         poll_interval,
@@ -2392,7 +2701,7 @@ fn wait_for_child_with_timeout(
             }
             Err(e) => {
                 let cause = format!("waiting for {context}: {e}");
-                return Err(terminate_child_bounded(
+                return Err(terminate_child_bounded_report(
                     child,
                     &cause,
                     poll_interval,
@@ -2406,12 +2715,12 @@ fn wait_for_child_with_timeout(
 /// Process-tree termination with a bounded observation window. On Windows, `taskkill /T /F` first
 /// handles descendants; `Child::kill` remains the direct-child fallback on every platform. An
 /// unconfirmed exit is marked so transaction owners preserve isolation instead of racing cleanup.
-fn terminate_child_bounded(
+fn terminate_child_bounded_report(
     child: &mut std::process::Child,
     cause: &str,
     poll_interval: Duration,
     termination_grace: Duration,
-) -> String {
+) -> ChildWaitFailure {
     let pid = child.id();
     let deadline = Instant::now()
         .checked_add(termination_grace)
@@ -2423,14 +2732,17 @@ fn terminate_child_bounded(
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !tree.confirmed {
-                    return format!(
-                        "{GENERATOR_EXIT_UNCONFIRMED} {cause}; direct child {pid} exited during \
+                    return ChildWaitFailure {
+                        message: format!(
+                            "{GENERATOR_EXIT_UNCONFIRMED} {cause}; direct child {pid} exited during \
                          termination ({status}), but descendant termination was not confirmed \
                          ({}). Isolation must remain in place",
-                        tree.note
-                    );
+                            tree.note
+                        ),
+                        process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+                    };
                 }
-                return match kill_error {
+                let message = match kill_error {
                     Some(kill_error) => format!(
                         "{cause}; child {pid} exited during termination ({status}; direct kill \
                          reported: {kill_error}; {})",
@@ -2442,6 +2754,10 @@ fn terminate_child_bounded(
                         tree.note
                     ),
                 };
+                return ChildWaitFailure {
+                    message,
+                    process_exit: GeneratorProcessExitDisposition::Confirmed,
+                };
             }
             Ok(None) => {
                 let now = Instant::now();
@@ -2450,21 +2766,27 @@ fn terminate_child_bounded(
                         .as_ref()
                         .map(|e| format!("direct kill reported: {e}"))
                         .unwrap_or_else(|| "direct kill was requested".into());
-                    return format!(
-                        "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for \
+                    return ChildWaitFailure {
+                        message: format!(
+                            "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for \
                          process tree {pid}, but exit was not observed within \
                          {termination_grace:?} ({kill_note}; {})",
-                        tree.note
-                    );
+                            tree.note
+                        ),
+                        process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+                    };
                 }
                 std::thread::sleep(poll_interval.min(deadline.saturating_duration_since(now)));
             }
             Err(e) => {
-                return format!(
-                    "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for process \
+                return ChildWaitFailure {
+                    message: format!(
+                        "{GENERATOR_EXIT_UNCONFIRMED} {cause}; termination was requested for process \
                      tree {pid}, but querying its exit failed: {e} ({})",
-                    tree.note
-                );
+                        tree.note
+                    ),
+                    process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+                };
             }
         }
     }
@@ -3342,6 +3664,245 @@ mod tests {
     }
 
     #[test]
+    fn regen_diagnostics_report_keeps_legacy_outer_error_before_runner_invocation() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-regen-report-before-runner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        // The reserved path makes isolation planning fail after the transaction has created its
+        // recovery artifacts, but before any generator/diagnostics runner can be invoked.
+        let jitted = base.join("AS_JITTED_CODE");
+        let collision = append_suffix(&jitted, ".gore-compile-bak");
+        std::fs::create_dir(&collision).unwrap();
+
+        let error = game_run_regen_with_diagnostics_report(&game, &src, &Default::default())
+            .expect_err("the public report requires a diagnostics-runner disposition");
+        assert!(
+            error.contains("compile quarantine backup already exists"),
+            "got: {error}"
+        );
+
+        let report =
+            game_run_regen_with_extended_diagnostics_report(&game, &src, &Default::default())
+                .expect("the internal module-compile report retains transactional status");
+        assert!(report.diagnostics.is_none());
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(report
+            .result
+            .unwrap_err()
+            .contains("compile quarantine backup already exists"));
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!recovery_journal_path(&game).exists());
+        assert!(!compile_lock_path(&game).exists());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn partial_isolation_begin_failure_retains_recovery_and_never_reports_exact_restore() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-partial-isolation-failure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let jitted = base.join("AS_JITTED_CODE");
+        std::fs::create_dir(&jitted).unwrap();
+        std::fs::write(jitted.join("old.bin"), b"OLD-JIT").unwrap();
+        let jitted_backup = append_suffix(&jitted, ".gore-compile-bak");
+        let win64 = base.join("G1R").join("Binaries").join("Win64");
+        let payload = win64.join("ue4ss").join("UE4SS.dll");
+        std::fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        std::fs::write(&payload, b"UE4SS").unwrap();
+        let proxy = win64.join("dwmapi.dll");
+        std::fs::write(&proxy, b"OLD-PROXY").unwrap();
+
+        let generator_calls = std::cell::Cell::new(0);
+        let report = game_run_regen_with_install_report_and(
+            &game,
+            &src,
+            |txn| {
+                txn.begin_isolation_after_jitted(|| {
+                    // JIT has been moved. Make proxy activation fail, then block JIT restoration
+                    // with the wrong path type so the partial begin cannot clean itself up.
+                    std::fs::remove_file(&proxy).unwrap();
+                    std::fs::write(&jitted, b"RESTORE-BLOCKER").unwrap();
+                })
+            },
+            |_, _, _| {
+                generator_calls.set(generator_calls.get() + 1);
+                GeneratorRunResult::confirmed(Ok(valid_cache()))
+            },
+        )
+        .unwrap();
+
+        assert_eq!(generator_calls.get(), 0, "runner must not be invoked");
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+        );
+        let error = report.result.unwrap_err();
+        assert!(error.contains("quarantining"), "got: {error}");
+        assert!(
+            error.contains("failed to restore generation isolation"),
+            "got: {error}"
+        );
+        assert!(jitted_backup.exists(), "JIT recovery must remain");
+        assert_eq!(
+            std::fs::read(&jitted_backup.join("old.bin")).unwrap(),
+            b"OLD-JIT"
+        );
+        assert_eq!(std::fs::read(compile_bak_path(&shipping)).unwrap(), b"OLD");
+        assert!(
+            recovery_journal_path(&game).exists(),
+            "journal must not be retired after a failed isolation restore"
+        );
+        assert!(
+            !compile_lock_path(&game).exists(),
+            "no process started, so manual recovery must not retain the compile lock"
+        );
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn regen_report_marks_confirmed_syntax_failure_as_restored_exact() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-regen-report-syntax-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Broken.as"), b"void Broken( {").unwrap();
+
+        let report = game_run_regen_with_install_report(&game, &src, |_, _, _| {
+            GeneratorRunResult::confirmed(Err("AngelScript syntax/regen failure".to_owned()))
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RestoredExact
+        );
+        assert!(report.result.unwrap_err().contains("syntax/regen failure"));
+        assert_eq!(std::fs::read(&shipping).unwrap(), b"OLD");
+        assert!(!compile_bak_path(&shipping).exists());
+        assert!(!recovery_journal_path(&game).exists());
+        assert!(!compile_lock_path(&game).exists());
+        assert!(!shipping.parent().unwrap().join("Broken.as").exists());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn regen_report_marks_structured_unconfirmed_exit_as_recovery_required() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-regen-report-unconfirmed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+
+        let report = game_run_regen_with_install_report(&game, &src, |_, _, _| {
+            // Deliberately omit the legacy text marker: the disposition must drive recovery.
+            GeneratorRunResult::unconfirmed("simulated generator still alive".to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+        );
+        assert!(report.result.unwrap_err().contains("intentionally NOT run"));
+        assert!(compile_bak_path(&shipping).exists());
+        assert!(recovery_journal_path(&game).exists());
+        assert!(compile_lock_path(&game).exists());
+        assert!(shipping.parent().unwrap().join("Mod.as").exists());
+
+        // The fake runner has no real process. Removing the isolated fixture is its test-only
+        // equivalent of following the retained recovery instructions.
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn regen_report_marks_failed_restore_with_retained_backup_as_recovery_required() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-regen-report-restore-failure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Broken.as"), b"void Broken( {").unwrap();
+
+        let report = game_run_regen_with_install_report(&game, &src, |_, _, _| {
+            std::fs::remove_file(&shipping).unwrap();
+            std::fs::create_dir(&shipping).unwrap();
+            GeneratorRunResult::confirmed(Err("AngelScript syntax/regen failure".to_owned()))
+        })
+        .unwrap();
+
+        assert_eq!(
+            report.install_restore,
+            InstallRestoreDisposition::RecoveryRequiredRestoreFailed
+        );
+        let error = report.result.unwrap_err();
+        assert!(error.contains("syntax/regen failure"), "got: {error}");
+        assert!(error.contains("FAILED to restore"), "got: {error}");
+        let recovery = compile_bak_path(&shipping);
+        assert_eq!(std::fs::read(&recovery).unwrap(), b"OLD");
+        assert!(recovery_journal_path(&game).exists());
+        assert!(
+            !compile_lock_path(&game).exists(),
+            "a confirmed-dead generator must release the lock for manual recovery"
+        );
+
+        std::fs::remove_dir(&shipping).unwrap();
+        std::fs::rename(&recovery, &shipping).unwrap();
+        std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn game_run_regen_leaves_unidentified_dwmapi_untouched() {
         let base = std::env::temp_dir().join("gore-as-game-non-ue4ss-proxy");
         let _ = std::fs::remove_dir_all(&base);
@@ -4122,6 +4683,35 @@ mod tests {
     }
 
     #[test]
+    fn game_run_regen_report_keeps_legacy_diagnostics_and_into_parts_signatures() {
+        let report = GameRunRegenReport {
+            result: Err("simulated compiler rejection".to_owned()),
+            diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
+                crate::diagnostics::DiagnosticsCaptureDisposition::Disabled,
+            ),
+            install_restore: InstallRestoreDisposition::RestoredExact,
+        };
+
+        let diagnostics: &crate::diagnostics::CompilerDiagnosticsReport = report.diagnostics();
+        assert_eq!(
+            diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::Disabled
+        );
+        assert_eq!(
+            report.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact
+        );
+        let (_result, diagnostics): (
+            Result<PathBuf, String>,
+            crate::diagnostics::CompilerDiagnosticsReport,
+        ) = report.into_parts();
+        assert_eq!(
+            diagnostics.disposition(),
+            crate::diagnostics::DiagnosticsCaptureDisposition::Disabled
+        );
+    }
+
+    #[test]
     fn compile_module_report_retains_structured_diagnostics_on_success_and_failure() {
         let root = std::env::temp_dir().join(format!(
             "gore-as-compile-report-{}-{}",
@@ -4150,14 +4740,22 @@ mod tests {
         let success = compile_module_report_with(&opts, |_, _| {
             let path = root.join("generated.cache");
             std::fs::write(&path, &generated).unwrap();
-            Ok(GameRunRegenReport {
+            let report = GameRunRegenExtendedReport {
                 result: Ok(path),
-                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
-                    crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
-                    "=== NewModule.as ===\n(1:1) [W] retained warning\n",
-                )
-                .unwrap(),
-            })
+                diagnostics: Some(
+                    crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
+                        crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+                        "=== NewModule.as ===\n(1:1) [W] retained warning\n",
+                    )
+                    .unwrap(),
+                ),
+                install_restore: InstallRestoreDisposition::RestoredExact,
+            };
+            assert_eq!(
+                report.install_restore,
+                InstallRestoreDisposition::RestoredExact
+            );
+            Ok(report)
         });
         assert!(matches!(
             &success.outcome,
@@ -4170,15 +4768,22 @@ mod tests {
         );
         assert_eq!(diagnostics.diagnostics().len(), 1);
         assert_eq!(diagnostics.diagnostics()[0].message, "retained warning");
+        assert_eq!(
+            success.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact
+        );
 
         let failed = compile_module_report_with(&opts, |_, _| {
-            Ok(GameRunRegenReport {
+            Ok(GameRunRegenExtendedReport {
                 result: Err("compiler rejected the source".to_owned()),
-                diagnostics: crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
-                    crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
-                    "=== NewModule.as ===\n(3:4) [E] broken expression\n",
-                )
-                .unwrap(),
+                diagnostics: Some(
+                    crate::diagnostics::CompilerDiagnosticsReport::from_bounded_capture(
+                        crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
+                        "=== NewModule.as ===\n(3:4) [E] broken expression\n",
+                    )
+                    .unwrap(),
+                ),
+                install_restore: InstallRestoreDisposition::RestoredExact,
             })
         });
         assert!(matches!(
@@ -4188,6 +4793,47 @@ mod tests {
         assert_eq!(
             failed.diagnostics().unwrap().diagnostics()[0].message,
             "broken expression"
+        );
+        assert_eq!(
+            failed.install_restore_disposition(),
+            InstallRestoreDisposition::RestoredExact,
+            "an ordinary compiler rejection still restores the install exactly"
+        );
+
+        let recovery_required = compile_module_report_with(&opts, |_, _| {
+            Ok(GameRunRegenExtendedReport {
+                result: Err("generator exit could not be confirmed".to_owned()),
+                diagnostics: Some(crate::diagnostics::CompilerDiagnosticsReport::empty(
+                    crate::diagnostics::DiagnosticsCaptureDisposition::ProcessExitUnconfirmed,
+                )),
+                install_restore: InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed,
+            })
+        });
+        assert!(matches!(
+            &recovery_required.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Regen(_))
+        ));
+        assert_eq!(
+            recovery_required.install_restore_disposition(),
+            InstallRestoreDisposition::RecoveryRequiredProcessExitUnconfirmed
+        );
+
+        let recovery_before_runner = compile_module_report_with(&opts, |_, _| {
+            Ok(GameRunRegenExtendedReport {
+                result: Err("isolation setup failed and its rollback also failed".to_owned()),
+                diagnostics: None,
+                install_restore: InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            })
+        });
+        assert!(matches!(
+            &recovery_before_runner.outcome,
+            CompileModuleReportOutcome::Failed(CompileError::Regen(_))
+        ));
+        assert!(recovery_before_runner.diagnostics().is_none());
+        assert_eq!(
+            recovery_before_runner.install_restore_disposition(),
+            InstallRestoreDisposition::RecoveryRequiredRestoreFailed,
+            "the report must be stored before its inner compiler error is returned"
         );
 
         let mut invalid_opts = opts;
@@ -4200,6 +4846,10 @@ mod tests {
             CompileModuleReportOutcome::Failed(CompileError::Other(_))
         ));
         assert!(not_run.diagnostics().is_none());
+        assert_eq!(
+            not_run.install_restore_disposition(),
+            InstallRestoreDisposition::NotStarted
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -4211,7 +4861,7 @@ mod tests {
             DiagnosticAttempt::Unavailable("signature matched 0 times".into()),
             || {
                 called.set(called.get() + 1);
-                Ok::<_, String>(b"real-cache".to_vec())
+                GeneratorRunResult::confirmed(Ok::<_, String>(b"real-cache".to_vec()))
             },
         );
         assert_eq!(report.result.unwrap(), b"real-cache");
@@ -4248,7 +4898,7 @@ mod tests {
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
         let captured = append_captured_diagnostics(
-            Ok(complete),
+            GeneratorRunResult::confirmed(Ok(complete)),
             &artifacts,
             crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
         );
@@ -4290,7 +4940,7 @@ mod tests {
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
         let captured = append_captured_diagnostics(
-            Ok(complete),
+            GeneratorRunResult::confirmed(Ok(complete)),
             &artifacts,
             crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
         );
@@ -4328,7 +4978,7 @@ mod tests {
         let complete = valid_cache();
         validate_generated_cache(&complete).expect("fixture must be structurally complete");
         let captured = append_captured_diagnostics(
-            Ok(complete),
+            GeneratorRunResult::confirmed(Ok(complete)),
             &artifacts,
             crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
         );
@@ -4370,7 +5020,7 @@ mod tests {
         .unwrap();
 
         let captured = append_captured_diagnostics(
-            Ok(valid_cache()),
+            GeneratorRunResult::confirmed(Ok(valid_cache())),
             &artifacts,
             crate::diagnostics::DiagnosticsCaptureDisposition::Captured,
         );
@@ -4414,7 +5064,7 @@ mod tests {
             crate::diagnostics::HookPreparation::owned_for_test(helper.clone(), helper_dir.clone());
 
         let attempt = classify_hooked_result(
-            Err(format!(
+            GeneratorRunResult::unconfirmed(format!(
                 "{GENERATOR_EXIT_UNCONFIRMED} simulated live generator"
             )),
             artifacts,
@@ -4423,7 +5073,7 @@ mod tests {
         let fallback_calls = std::cell::Cell::new(0);
         let report = resolve_diagnostic_attempt_report(attempt, || {
             fallback_calls.set(fallback_calls.get() + 1);
-            Ok::<_, String>(b"unsafe fallback".to_vec())
+            GeneratorRunResult::confirmed(Ok::<_, String>(b"unsafe fallback".to_vec()))
         });
         assert_eq!(
             report.diagnostics.disposition(),
@@ -4481,14 +5131,17 @@ mod tests {
             crate::diagnostics::HookPreparation::owned_for_test(helper.clone(), helper_dir.clone());
 
         let attempt = classify_started_hook_termination(
-            format!("{GENERATOR_EXIT_UNCONFIRMED} simulated failed termination"),
+            ChildWaitFailure {
+                message: format!("{GENERATOR_EXIT_UNCONFIRMED} simulated failed termination"),
+                process_exit: GeneratorProcessExitDisposition::Unconfirmed,
+            },
             artifacts,
             prep,
         );
         let fallback_calls = std::cell::Cell::new(0);
         let report = resolve_diagnostic_attempt_report(attempt, || {
             fallback_calls.set(fallback_calls.get() + 1);
-            Ok::<_, String>(b"unsafe fallback".to_vec())
+            GeneratorRunResult::confirmed(Ok::<_, String>(b"unsafe fallback".to_vec()))
         });
         assert_eq!(
             report.diagnostics.disposition(),
@@ -4519,7 +5172,7 @@ mod tests {
         let called = std::cell::Cell::new(0);
         let report = resolve_diagnostic_attempt_report(DiagnosticAttempt::Disabled, || {
             called.set(called.get() + 1);
-            Ok::<_, String>("normal")
+            GeneratorRunResult::confirmed(Ok::<_, String>("normal"))
         });
         assert_eq!(report.result.unwrap(), "normal");
         assert_eq!(
@@ -4533,7 +5186,11 @@ mod tests {
     fn injection_failure_fallback_preserves_the_normal_error() {
         let report = resolve_diagnostic_attempt_report::<Vec<u8>, _>(
             DiagnosticAttempt::Unavailable("CreateRemoteThread failed".into()),
-            || Err("normal generator failed exactly this way".into()),
+            || {
+                GeneratorRunResult::confirmed(
+                    Err("normal generator failed exactly this way".into()),
+                )
+            },
         );
         assert_eq!(
             report.result.unwrap_err(),
@@ -4554,10 +5211,11 @@ mod tests {
                 diagnostics: crate::diagnostics::CompilerDiagnosticsReport::empty(
                     crate::diagnostics::DiagnosticsCaptureDisposition::UnavailableWithoutFallback,
                 ),
+                process_exit: GeneratorProcessExitDisposition::Confirmed,
             }),
             || {
                 fallback_calls.set(fallback_calls.get() + 1);
-                Ok(b"unexpected-relaunch".to_vec())
+                GeneratorRunResult::confirmed(Ok(b"unexpected-relaunch".to_vec()))
             },
         );
         assert_eq!(report.result.unwrap(), b"first-normal-result");
@@ -4794,6 +5452,48 @@ mod tests {
 
         // The transaction is intentionally leaked; remove the isolated temp fixture as a whole.
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn precompile_uses_structured_unconfirmed_exit_without_string_marker() {
+        let base = std::env::temp_dir().join(format!(
+            "gore-as-precompile-structured-unconfirmed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let (game, shipping) = fake_install(&base);
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("Mod.as"), b"script").unwrap();
+        let opts = PrecompileOpts {
+            game_dir: game.clone(),
+            src: Some(src),
+            out: Some(base.join("compiled.cache")),
+            backup: true,
+        };
+        let message = "simulated process tree still alive without a legacy marker";
+        assert!(!message.contains(GENERATOR_EXIT_UNCONFIRMED));
+
+        let error = precompile_with_generator_report(&opts, |_, _, _| {
+            GeneratorRunResult::unconfirmed(message.to_owned())
+        })
+        .unwrap_err();
+
+        assert!(error.contains(message), "got: {error}");
+        assert!(error.contains("intentionally NOT run"), "got: {error}");
+        assert!(compile_lock_path(&game).exists());
+        assert_eq!(std::fs::read(compile_bak_path(&shipping)).unwrap(), b"OLD");
+        assert!(recovery_journal_path(&game).exists());
+        assert!(shipping.parent().unwrap().join("Mod.as").exists());
+        assert!(!opts.out.as_ref().unwrap().exists());
+
+        // No real process exists in this injected test; removing the isolated fixture is the
+        // test-only equivalent of completing the documented recovery sequence.
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     /// `copy_tree` records every file it writes (with its prior bytes); `restore_or_remove` then
