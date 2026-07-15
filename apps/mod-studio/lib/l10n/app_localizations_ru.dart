@@ -1105,4 +1105,173 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedGlobalSearchResultStale =>
       'Этого результата больше нет в текущем проекте. Выполните поиск снова.';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => 'Только черновик';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => 'Сборка заблокирована';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge =>
+      'Работа в игре не проверена';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => 'Обзор';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => 'Профиль';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => 'Сюжет';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => 'Логика';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => 'Распорядок';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => 'Инвентарь';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => 'Диалоги и озвучка';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => 'Ссылки';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => 'Проблемы и проверки';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => 'Изменить имя и цели';
+
+  @override
+  String get managedStoryWorkbenchEditStory => 'Изменить описание и связи';
+
+  @override
+  String get managedStoryWorkbenchEditLogic => 'Изменить состояния и переходы';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest =>
+      'Открыть исходный код и проверки компилятора';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc =>
+      'Открыть профиль и проверки компилятора';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable =>
+      'Ещё не смоделировано';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable =>
+      'Связи с заданиями и сюжетом ещё не смоделированы для черновиков NPC.';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable =>
+      'Распорядок и размещение в мире ещё не смоделированы.';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable =>
+      'Инвентарь, экипировка и торговля ещё не смоделированы.';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'Связи с диалогами, локализацией и озвучкой ещё не смоделированы для черновиков NPC.';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      'Связи с диалогами, локализацией и озвучкой ещё не смоделированы для черновиков заданий.';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems =>
+      'Нет неразрешённых ссылок в проекте';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count неразрешённой ссылки в проекте',
+      many: '$count неразрешённых ссылок в проекте',
+      few: '$count неразрешённые ссылки в проекте',
+      one: '1 неразрешённая ссылка в проекте',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      'Это только статус ссылок; он не означает готовности к сборке или запуску.';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => 'Технические сведения';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => 'Черновик задания';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'Черновик NPC';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => 'Название задания';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => 'Технический ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => 'Цели';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => 'Уникальное имя';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel =>
+      'Пространство имён модуля';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => 'Выдающий задание';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel =>
+      'Родительский класс времени выполнения';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      'Состояния жизненного цикла задания, триггеры, условия и эффекты редактируются как единая атомарная операция над точным текущим состоянием.';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => 'Исходящие';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences =>
+      'Нет предполагаемых ссылок';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => 'Входящие';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences =>
+      'Нет входящих ссылок проекта';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel =>
+      'Семантическая идентичность';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => 'Источник';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => 'Ревизия сущности';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => 'Стабильный ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel => 'Ссылка разрешена';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel =>
+      'Ссылка не разрешена';
 }

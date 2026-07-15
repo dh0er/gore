@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_content_library.dart';
+import 'package:gore_mod/project/revision3_story_entity_workbench.dart';
 
 const _projectId = '11111111111111111111111111111111';
 const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
+const _missingId = '55555555555555555555555555555555';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _assetSha =
@@ -51,34 +53,30 @@ void main() {
     expect(find.text('GORE_GATE_GUARD'), findsWidgets);
   });
 
-  testWidgets('disables Edit Quest without an edit lease', (tester) async {
-    await _setSurfaceSize(tester, const Size(1200, 800));
-    await _pumpLoadedLibrary(tester);
+  testWidgets(
+    'keeps Quest overview action visible but disabled without lease',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      await _pumpLoadedLibrary(tester);
 
-    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
-    await tester.pump();
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pump();
 
-    final editQuest = find.byKey(Key('revision3-content-edit-quest-$_questId'));
-    expect(editQuest, findsOneWidget);
-    await tester.tap(editQuest);
-    await tester.pumpAndSettle();
-
-    expect(find.text('Name & objectives'), findsNothing);
-    expect(find.text('Description & connections'), findsNothing);
-    expect(find.text('States & transitions'), findsNothing);
-    expect(
-      find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
-      findsNothing,
-    );
-    expect(
-      find.byKey(Key('revision3-content-edit-quest-transitions-$_questId')),
-      findsNothing,
-    );
-  });
+      final action = find.byKey(
+        Key('revision3-story-workbench-action-edit-overview-$_questId'),
+      );
+      expect(action, findsOneWidget);
+      expect(
+        tester
+            .widget<ListTile>(
+              find.descendant(of: action, matching: find.byType(ListTile)),
+            )
+            .enabled,
+        isFalse,
+      );
+      expect(find.text('Not modeled yet'), findsOneWidget);
+    },
+  );
 
   testWidgets('Edit Quest keeps outline usable when context has no game root', (
     tester,
@@ -88,28 +86,52 @@ void main() {
     await _pumpLoadedLibrary(
       tester,
       editQuestOutline: (index, quest) async => outlineCalls++,
+      editQuestContextDisabledReason:
+          'Select a game installation before editing game-backed story data.',
     );
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
 
-    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Name & objectives'), findsOneWidget);
-    expect(find.text('Description & connections'), findsOneWidget);
-    expect(find.text('States & transitions'), findsOneWidget);
-    expect(find.text('Configure the game installation first'), findsOneWidget);
+    final overviewAction = find.byKey(
+      Key('revision3-story-workbench-action-edit-overview-$_questId'),
+    );
     expect(
       tester
-          .widget<PopupMenuItem<Object?>>(
-            find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
+          .widget<ListTile>(
+            find.descendant(
+              of: overviewAction,
+              matching: find.byType(ListTile),
+            ),
+          )
+          .enabled,
+      isTrue,
+    );
+    await tester.tap(overviewAction);
+    await tester.pumpAndSettle();
+    expect(outlineCalls, 1);
+
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.story,
+      _questId,
+    );
+    final storyAction = find.byKey(
+      Key('revision3-story-workbench-action-edit-story-$_questId'),
+    );
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: storyAction, matching: find.byType(ListTile)),
           )
           .enabled,
       isFalse,
     );
-    await tester.tap(find.text('Name & objectives'));
-    await tester.pumpAndSettle();
-    expect(outlineCalls, 1);
+    expect(
+      find.text(
+        'Select a game installation before editing game-backed story data.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('Edit Quest routes states and transitions separately', (
@@ -123,10 +145,14 @@ void main() {
     );
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
-    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('States & transitions'));
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.logic,
+      _questId,
+    );
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-action-edit-logic-$_questId')),
+    );
     await tester.pumpAndSettle();
     expect(transitionCalls, 1);
   });
@@ -147,19 +173,62 @@ void main() {
     );
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
-    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
-    await tester.pumpAndSettle();
-
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.problemsChecks,
+      _questId,
+    );
     final action = find.byKey(
-      Key('revision3-content-inspect-quest-source-$_questId'),
+      Key('revision3-story-workbench-action-inspect-quest_draft-$_questId'),
     );
     expect(action, findsOneWidget);
-    expect(tester.widget<PopupMenuItem<Object?>>(action).enabled, isTrue);
-    await tester.tap(find.text('Source & checks'));
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: action, matching: find.byType(ListTile)),
+          )
+          .enabled,
+      isTrue,
+    );
+    await tester.tap(action);
     await tester.pumpAndSettle();
 
     expect(inspectionCalls, 1);
     expect(inspectedQuest, _questId);
+  });
+
+  testWidgets('disabled Quest inspection shows its supplied setup reason', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLoadedLibrary(
+      tester,
+      inspectQuestSourceDisabledReason:
+          'Select a game installation before running compiler checks.',
+    );
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.problemsChecks,
+      _questId,
+    );
+
+    final action = find.byKey(
+      Key('revision3-story-workbench-action-inspect-quest_draft-$_questId'),
+    );
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: action, matching: find.byType(ListTile)),
+          )
+          .enabled,
+      isFalse,
+    );
+    expect(
+      find.text('Select a game installation before running compiler checks.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('NPC Profile & checks routes the exact NPC without a game root', (
@@ -177,17 +246,19 @@ void main() {
       },
     );
 
-    final tools = find.byKey(Key('revision3-content-npc-tools-$_npcId'));
-    expect(tools, findsOneWidget);
-    await tester.tap(tools);
-    await tester.pumpAndSettle();
-
     final action = find.byKey(
-      Key('revision3-content-inspect-npc-source-$_npcId'),
+      Key('revision3-story-workbench-action-inspect-npc-$_npcId'),
     );
     expect(action, findsOneWidget);
-    expect(tester.widget<PopupMenuItem<Object?>>(action).enabled, isTrue);
-    await tester.tap(find.text('Profile & checks'));
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: action, matching: find.byType(ListTile)),
+          )
+          .enabled,
+      isTrue,
+    );
+    await tester.tap(action);
     await tester.pumpAndSettle();
 
     expect(inspectionCalls, 1);
@@ -210,52 +281,60 @@ void main() {
       );
       await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
       await tester.pump();
-      await tester.tap(
-        find.byKey(Key('revision3-content-edit-quest-$_questId')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        tester
-            .widget<PopupMenuItem<Object?>>(
-              find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
-            )
-            .enabled,
-        isTrue,
-      );
-      expect(
-        find.text('Keeps objective IDs and behavior connections intact'),
-        findsOneWidget,
+      final overviewAction = find.byKey(
+        Key('revision3-story-workbench-action-edit-overview-$_questId'),
       );
       expect(
         tester
-            .widget<PopupMenuItem<Object?>>(
-              find.byKey(Key('revision3-content-edit-quest-context-$_questId')),
-            )
-            .enabled,
-        isTrue,
-      );
-      expect(
-        tester
-            .widget<PopupMenuItem<Object?>>(
-              find.byKey(
-                Key('revision3-content-edit-quest-transitions-$_questId'),
+            .widget<ListTile>(
+              find.descendant(
+                of: overviewAction,
+                matching: find.byType(ListTile),
               ),
             )
             .enabled,
         isTrue,
       );
-
-      await tester.tap(find.text('Name & objectives'));
+      await tester.tap(overviewAction);
       await tester.pumpAndSettle();
       expect(outlineCalls, 1);
-      await tester.tap(
-        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+
+      await _openWorkbenchSection(
+        tester,
+        Revision3StoryWorkbenchSection.story,
+        _questId,
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Description & connections'));
+      final storyAction = find.byKey(
+        Key('revision3-story-workbench-action-edit-story-$_questId'),
+      );
+      expect(
+        tester
+            .widget<ListTile>(
+              find.descendant(of: storyAction, matching: find.byType(ListTile)),
+            )
+            .enabled,
+        isTrue,
+      );
+      await tester.tap(storyAction);
       await tester.pumpAndSettle();
       expect(contextCalls, 1);
+
+      await _openWorkbenchSection(
+        tester,
+        Revision3StoryWorkbenchSection.logic,
+        _questId,
+      );
+      final logicAction = find.byKey(
+        Key('revision3-story-workbench-action-edit-logic-$_questId'),
+      );
+      expect(
+        tester
+            .widget<ListTile>(
+              find.descendant(of: logicAction, matching: find.byType(ListTile)),
+            )
+            .enabled,
+        isTrue,
+      );
     },
   );
 
@@ -271,15 +350,9 @@ void main() {
       );
       await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
       await tester.pump();
-      await tester.tap(
-        find.byKey(Key('revision3-content-edit-quest-$_questId')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.text('Keeps objective count and Quest relationships intact'),
-        findsOneWidget,
-      );
+      expect(find.text('Draft only'), findsOneWidget);
+      expect(find.text('Build blocked'), findsOneWidget);
+      expect(find.text('Runtime not verified'), findsOneWidget);
       expect(
         find.text('Keeps objective IDs and behavior connections intact'),
         findsNothing,
@@ -299,10 +372,14 @@ void main() {
     );
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
-    await tester.tap(find.byKey(Key('revision3-content-edit-quest-$_questId')));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.text('Description & connections'));
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.story,
+      _questId,
+    );
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-action-edit-story-$_questId')),
+    );
     await tester.pumpAndSettle();
     expect(contextCalls, 1);
   });
@@ -394,12 +471,11 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
-
-    await tester.drag(
-      find.byKey(const Key('revision3-content-entity-details')),
-      const Offset(0, -250),
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.references,
+      _questId,
     );
-    await tester.pump();
     await tester.tap(find.text('draft script module'));
     await tester.pump();
     expect(
@@ -429,11 +505,11 @@ void main() {
       findsOneWidget,
     );
 
-    await tester.drag(
-      find.byKey(const Key('revision3-content-entity-details')),
-      const Offset(0, -250),
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.references,
+      _questId,
     );
-    await tester.pump();
     await tester.tap(find.text('quest collision artifact'));
     await tester.pump();
     expect(
@@ -482,9 +558,64 @@ void main() {
       find.byKey(const Key('revision3-content-entity-details')),
       findsOneWidget,
     );
+    final technical = find.byKey(
+      Key('revision3-story-workbench-technical-$_npcId'),
+    );
+    await tester.scrollUntilVisible(
+      technical,
+      100,
+      scrollable: find.descendant(
+        of: find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.profile.name}-$_npcId',
+          ),
+        ),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.tap(technical);
+    await tester.pumpAndSettle();
     expect(find.text('Stable ID'), findsOneWidget);
     expect(find.text(_npcId), findsOneWidget);
   });
+
+  for (final viewport in <({String label, Size size})>[
+    (label: '1280x720', size: Size(1280, 720)),
+    (label: '1600x900', size: Size(1600, 900)),
+  ]) {
+    testWidgets(
+      'Home ${viewport.label} uses the details sheet for a fully interactive action',
+      (tester) async {
+        await _setSurfaceSize(tester, viewport.size);
+        await _pumpHomeContentViewportLibrary(tester);
+
+        expect(find.byType(BottomSheet), findsNothing);
+        await _selectQuestFromViewportList(tester);
+
+        expect(find.byType(BottomSheet), findsOneWidget);
+        await _expectOverviewActionFullyInteractive(tester);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'Home 1920x1080 keeps a fully visible action in the wide details pane',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1920, 1080));
+      await _pumpHomeContentViewportLibrary(tester);
+
+      await _selectQuestFromViewportList(tester);
+
+      expect(find.byType(BottomSheet), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-content-entity-details')),
+        findsOneWidget,
+      );
+      await _expectOverviewActionFullyInteractive(tester);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('compact Quest sheet closes before each editor callback', (
     tester,
@@ -510,11 +641,16 @@ void main() {
         find.byKey(const Key('revision3-content-entity-details')),
         findsOneWidget,
       );
-      await tester.tap(
-        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+      await _openWorkbenchSection(
+        tester,
+        Revision3StoryWorkbenchSection.logic,
+        _questId,
       );
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('States & transitions'));
+      await tester.tap(
+        find.byKey(
+          Key('revision3-story-workbench-action-edit-logic-$_questId'),
+        ),
+      );
       await tester.pumpAndSettle();
     }
 
@@ -556,11 +692,11 @@ void main() {
       find.byKey(const Key('revision3-content-entity-details')),
       findsOneWidget,
     );
-    final tools = find.byKey(Key('revision3-content-npc-tools-$_npcId'));
-    await tester.ensureVisible(tools);
-    await tester.tap(tools);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Profile & checks'));
+    final action = find.byKey(
+      Key('revision3-story-workbench-action-inspect-npc-$_npcId'),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
     await tester.pumpAndSettle();
 
     expect(inspectionCalls, 1);
@@ -584,29 +720,311 @@ void main() {
 
     await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
-    await tester.drag(
-      find.byKey(const Key('revision3-content-entity-details')),
-      const Offset(0, -650),
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.references,
+      _questId,
     );
+    final firstBacklink = find.byKey(
+      const Key(
+        'revision3-content-backlink-$_questId-$_moduleId-origin_owner-0',
+      ),
+    );
+    await tester.scrollUntilVisible(
+      firstBacklink,
+      120,
+      scrollable: find.descendant(
+        of: find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.references.name}-$_questId',
+          ),
+        ),
+        matching: find.byType(Scrollable),
+      ),
+    );
+
+    expect(firstBacklink, findsOneWidget);
+    final secondBacklink = find.byKey(
+      const Key(
+        'revision3-content-backlink-$_questId-$_moduleId-origin_owner-2',
+      ),
+    );
+    await tester.scrollUntilVisible(
+      secondBacklink,
+      80,
+      scrollable: find.descendant(
+        of: find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.references.name}-$_questId',
+          ),
+        ),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(secondBacklink, findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shows honest draft boundaries and disabled unmodeled sections', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLoadedLibrary(tester);
+
+    expect(find.text('Draft only'), findsOneWidget);
+    expect(find.text('Build blocked'), findsOneWidget);
+    expect(find.text('Runtime not verified'), findsOneWidget);
+
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.routine,
+      _npcId,
+    );
+    expect(
+      find.text('Routine and world placement are not modeled yet.'),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(
+        const ValueKey('revision3-story-workbench-unavailable-Routine'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
     await tester.pump();
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.dialogVoice,
+      _questId,
+    );
+    expect(
+      find.text(
+        'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.',
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'exposes one chip semantic and explicit reference status labels',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      await _pumpLibrary(
+        tester,
+        load: () async => _fixture(brokenQuestReference: true),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pump();
+      expect(find.bySemanticsLabel('Draft only'), findsOneWidget);
+      expect(find.bySemanticsLabel('Build blocked'), findsOneWidget);
+      expect(find.bySemanticsLabel('Runtime not verified'), findsOneWidget);
+      expect(find.bySemanticsLabel('Story'), findsOneWidget);
+
+      await _openWorkbenchSection(
+        tester,
+        Revision3StoryWorkbenchSection.references,
+        _questId,
+      );
+      expect(
+        find.bySemanticsLabel(RegExp(r'Reference resolved')),
+        findsWidgets,
+      );
+      expect(
+        find.bySemanticsLabel(RegExp(r'Reference unresolved')),
+        findsOneWidget,
+      );
+      semantics.dispose();
+    },
+  );
+
+  testWidgets('details unresolved references without claiming readiness', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpLibrary(
+      tester,
+      load: () async => _fixture(brokenQuestReference: true),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.problemsChecks,
+      _questId,
+    );
 
     expect(
-      find.byKey(
-        const Key(
-          'revision3-content-backlink-$_questId-$_moduleId-origin_owner-0',
+      find.descendant(
+        of: find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+          ),
         ),
+        matching: find.text('1 unresolved project reference'),
       ),
       findsOneWidget,
     );
     expect(
+      find.textContaining('missing_entity / Generated script'),
+      findsOneWidget,
+    );
+    expect(
       find.byKey(
-        const Key(
-          'revision3-content-backlink-$_questId-$_moduleId-origin_owner-2',
-        ),
+        Key('revision3-story-workbench-action-inspect-quest_draft-$_questId'),
       ),
       findsOneWidget,
     );
-    expect(tester.takeException(), isNull);
+    final scopeNotice = find.text(
+      'Reference status only; this is not build or runtime readiness.',
+    );
+    await tester.scrollUntilVisible(
+      scopeNotice,
+      80,
+      scrollable: find.descendant(
+        of: find.byKey(
+          Key(
+            'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.problemsChecks.name}-$_questId',
+          ),
+        ),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    expect(scopeNotice, findsOneWidget);
+  });
+
+  testWidgets('preserves a section across revision reload and clears deletion', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var revision = 7;
+    var includeQuest = true;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: Revision3ContentLibrary(
+                projectRoot: 'managed-root',
+                projectId: _projectId,
+                projectRevision: revision,
+                projectHeadCanonicalJson: 'head-$revision',
+                load: () async =>
+                    _fixture(revision: revision, includeQuest: includeQuest),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.logic,
+      _questId,
+    );
+
+    rebuild(() => revision = 8);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              Key(
+                'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.logic.name}-$_questId',
+              ),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+
+    rebuild(() {
+      revision = 9;
+      includeQuest = false;
+    });
+    await tester.pumpAndSettle();
+    expect(find.byKey(Key('revision3-content-entity-$_questId')), findsNothing);
+
+    rebuild(() {
+      revision = 10;
+      includeQuest = true;
+    });
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              Key(
+                'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.overview.name}-$_questId',
+              ),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
+  });
+
+  testWidgets('project switch clears remembered story section', (tester) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var root = 'managed-root-a';
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: Revision3ContentLibrary(
+                projectRoot: root,
+                projectId: _projectId,
+                projectRevision: 7,
+                projectHeadCanonicalJson: 'head',
+                load: () async => _fixture(),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    await _openWorkbenchSection(
+      tester,
+      Revision3StoryWorkbenchSection.story,
+      _questId,
+    );
+
+    rebuild(() => root = 'managed-root-b');
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<ChoiceChip>(
+            find.byKey(
+              Key(
+                'revision3-story-workbench-tab-${Revision3StoryWorkbenchSection.overview.name}-$_questId',
+              ),
+            ),
+          )
+          .selected,
+      isTrue,
+    );
   });
 
   testWidgets('controller opens exact IDs and resets local discovery state', (
@@ -914,9 +1332,105 @@ void main() {
   });
 }
 
+Future<void> _openWorkbenchSection(
+  WidgetTester tester,
+  Revision3StoryWorkbenchSection section,
+  String entityId,
+) async {
+  final tab = find.byKey(
+    Key('revision3-story-workbench-tab-${section.name}-$entityId'),
+  );
+  await tester.ensureVisible(tab);
+  await tester.tap(tab);
+  await tester.pumpAndSettle();
+}
+
 Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
   await tester.binding.setSurfaceSize(size);
   addTearDown(() => tester.binding.setSurfaceSize(null));
+}
+
+Future<void> _pumpHomeContentViewportLibrary(WidgetTester tester) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      home: Scaffold(
+        body: Padding(
+          // The canonical Home workspace leaves this exact content rectangle
+          // after its primary navigation and project header at all three
+          // regression viewports.
+          padding: const EdgeInsets.only(left: 339, top: 358),
+          child: Revision3ContentLibrary(
+            projectRoot: 'managed-root',
+            projectId: _projectId,
+            projectRevision: 7,
+            projectHeadCanonicalJson: 'canonical-head-7',
+            load: () async => _fixture(),
+            editQuestOutline: (index, quest) async {},
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
+Future<void> _selectQuestFromViewportList(WidgetTester tester) async {
+  final entityList = find.byKey(const Key('revision3-content-entity-list'));
+  final scrollable = find.descendant(
+    of: entityList,
+    matching: find.byType(Scrollable),
+  );
+  final quest = find.byKey(
+    Key('revision3-content-entity-$_questId'),
+    skipOffstage: false,
+  );
+  expect(entityList, findsOneWidget);
+  expect(scrollable, findsOneWidget);
+  expect(quest, findsOneWidget);
+  await tester.scrollUntilVisible(quest, 80, scrollable: scrollable);
+  await tester.pumpAndSettle();
+  expect(quest.hitTestable(), findsOneWidget);
+  await tester.tap(quest.hitTestable());
+  await tester.pumpAndSettle();
+}
+
+Future<void> _expectOverviewActionFullyInteractive(WidgetTester tester) async {
+  final section = find.byKey(
+    Key(
+      'revision3-story-workbench-section-${Revision3StoryWorkbenchSection.overview.name}-$_questId',
+    ),
+    skipOffstage: false,
+  );
+  final scrollable = find.descendant(
+    of: section,
+    matching: find.byType(Scrollable),
+    skipOffstage: false,
+  );
+  final action = find.byKey(
+    Key('revision3-story-workbench-action-edit-overview-$_questId'),
+    skipOffstage: false,
+  );
+  expect(section, findsOneWidget);
+  expect(scrollable, findsOneWidget);
+  expect(action, findsOneWidget);
+  await tester.scrollUntilVisible(action, 80, scrollable: scrollable);
+  await tester.pumpAndSettle();
+
+  final actionRect = tester.getRect(action);
+  final viewportRect = tester.getRect(scrollable);
+  expect(
+    viewportRect.intersect(actionRect),
+    actionRect,
+    reason: 'the entire primary action must be visible inside its section',
+  );
+  expect(action.hitTestable(), findsOneWidget);
+
+  final listTile = find.descendant(of: action, matching: find.byType(ListTile));
+  final inkWell = find.descendant(of: action, matching: find.byType(InkWell));
+  expect(listTile, findsOneWidget);
+  expect(tester.widget<ListTile>(listTile).enabled, isTrue);
+  expect(inkWell, findsOneWidget);
+  expect(tester.widget<InkWell>(inkWell).canRequestFocus, isTrue);
 }
 
 Future<void> _pumpLoadedLibrary(
@@ -928,6 +1442,8 @@ Future<void> _pumpLoadedLibrary(
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  String? editQuestContextDisabledReason,
+  String? inspectQuestSourceDisabledReason,
   Revision3ContentLibraryController? controller,
 }) async {
   await _pumpLibrary(
@@ -941,6 +1457,8 @@ Future<void> _pumpLoadedLibrary(
     editQuestTransitions: editQuestTransitions,
     inspectQuestSource: inspectQuestSource,
     inspectNpcSource: inspectNpcSource,
+    editQuestContextDisabledReason: editQuestContextDisabledReason,
+    inspectQuestSourceDisabledReason: inspectQuestSourceDisabledReason,
     controller: controller,
   );
   await tester.pumpAndSettle();
@@ -955,6 +1473,8 @@ Future<void> _pumpLibrary(
   Revision3QuestTransitionsEditor? editQuestTransitions,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
+  String? editQuestContextDisabledReason,
+  String? inspectQuestSourceDisabledReason,
   Revision3ContentLibraryController? controller,
 }) => tester.pumpWidget(
   MaterialApp(
@@ -970,6 +1490,8 @@ Future<void> _pumpLibrary(
         editQuestTransitions: editQuestTransitions,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
+        editQuestContextDisabledReason: editQuestContextDisabledReason,
+        inspectQuestSourceDisabledReason: inspectQuestSourceDisabledReason,
         controller: controller,
       ),
     ),
@@ -979,6 +1501,8 @@ Future<void> _pumpLibrary(
 Revision3ContentIndex _fixture({
   int revision = 7,
   bool duplicateBacklinks = false,
+  bool brokenQuestReference = false,
+  bool includeQuest = true,
   int questGeneratorVersion = 2,
   String questGeneratorId = 'gore-authoring.quest-draft',
   bool includeNpc = true,
@@ -995,8 +1519,8 @@ Revision3ContentIndex _fixture({
   'authoring_locales': <Object?>['de', 'en'],
   'entity_counts': <String, Object?>{
     if (includeNpc) 'npc_draft': 1,
-    'quest_draft': 1,
-    'script_module': 1,
+    if (includeQuest) 'quest_draft': 1,
+    if (includeQuest) 'script_module': 1,
   },
   'entities': <Object?>[
     if (includeNpc)
@@ -1022,107 +1546,88 @@ Revision3ContentIndex _fixture({
         'references': <Object?>[],
         'asset_references': <Object?>[],
       },
-    <String, Object?>{
-      'id': _questId,
-      'kind': 'quest_draft',
-      'display_name': 'Find Homer',
-      'revision': 1,
-      'origin': <String, Object?>{
-        'type': 'new',
-        'authored_runtime_id': 'GORE_FIND_HOMER',
-      },
-      'summary': <String, Object?>{
+    if (includeQuest)
+      <String, Object?>{
+        'id': _questId,
         'kind': 'quest_draft',
-        'data': <String, Object?>{
-          'technical_id': 'GORE_FIND_HOMER',
-          'title': 'Find Homer',
-          'objective_title': 'Ask Asghan about Homer',
-          'additional_objective_titles': <String>[
-            'Inspect the old gate',
-            'Report the secured gate',
-          ],
-          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
-          'parent_runtime_class': 'B_Quest_FindHomer_C',
-          'giver_runtime_unique_name': 'ASGHAN',
+        'display_name': 'Find Homer',
+        'revision': 1,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_FIND_HOMER',
         },
-      },
-      'references': <Object?>[
-        <String, Object?>{
-          'role': 'draft_script_module',
-          'qualifier': null,
-          'target': <String, Object?>{
-            'project_id': _projectId,
-            'entity_id': _moduleId,
-            'expected_kind': 'script_module',
+        'summary': <String, Object?>{
+          'kind': 'quest_draft',
+          'data': <String, Object?>{
+            'technical_id': 'GORE_FIND_HOMER',
+            'title': 'Find Homer',
+            'objective_title': 'Ask Asghan about Homer',
+            'additional_objective_titles': <String>[
+              'Inspect the old gate',
+              'Report the secured gate',
+            ],
+            'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+            'parent_runtime_class': 'B_Quest_FindHomer_C',
+            'giver_runtime_unique_name': 'ASGHAN',
           },
-          'resolution': 'resolved',
         },
-      ],
-      'asset_references': <Object?>[
-        <String, Object?>{
-          'role': 'quest_collision_artifact',
-          'sha256': _artifactSha,
-          'byte_len': 8192,
-          'logical_name': null,
-          'expected_media_type':
-              'application/vnd.gore.quest-collision-capability+json;version=2',
-          'resolution': 'resolved',
-        },
-      ],
-    },
-    <String, Object?>{
-      'id': _moduleId,
-      'kind': 'script_module',
-      'display_name': 'Find Homer source',
-      'revision': 0,
-      'origin': <String, Object?>{
-        'type': 'generated',
-        'generator_id': questGeneratorId,
-        'generator_version': questGeneratorVersion,
-        'owner': <String, Object?>{
-          'project_id': _projectId,
-          'entity_id': _questId,
-          'expected_kind': 'quest_draft',
-        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'draft_script_module',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': brokenQuestReference ? _missingId : _moduleId,
+              'expected_kind': 'script_module',
+            },
+            'resolution': brokenQuestReference ? 'missing_entity' : 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[
+          <String, Object?>{
+            'role': 'quest_collision_artifact',
+            'sha256': _artifactSha,
+            'byte_len': 8192,
+            'logical_name': null,
+            'expected_media_type':
+                'application/vnd.gore.quest-collision-capability+json;version=2',
+            'resolution': 'resolved',
+          },
+        ],
       },
-      'summary': <String, Object?>{
+    if (includeQuest)
+      <String, Object?>{
+        'id': _moduleId,
         'kind': 'script_module',
-        'data': <String, Object?>{
+        'display_name': 'Find Homer source',
+        'revision': 0,
+        'origin': <String, Object?>{
+          'type': 'generated',
           'generator_id': questGeneratorId,
           'generator_version': questGeneratorVersion,
-          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
-          'module_relative_path': 'Project/Quests/FindHomer.as',
-          'status': <String, Object?>{
-            'authoring': 'offline_draft',
-            'runtime': 'runtime_unqualified',
-          },
-        },
-      },
-      'references': <Object?>[
-        <String, Object?>{
-          'role': 'origin_owner',
-          'qualifier': null,
-          'target': <String, Object?>{
+          'owner': <String, Object?>{
             'project_id': _projectId,
             'entity_id': _questId,
             'expected_kind': 'quest_draft',
           },
-          'resolution': 'resolved',
         },
-        <String, Object?>{
-          'role': 'script_owner',
-          'qualifier': null,
-          'target': <String, Object?>{
-            'project_id': _projectId,
-            'entity_id': _questId,
-            'expected_kind': 'quest_draft',
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': questGeneratorId,
+            'generator_version': questGeneratorVersion,
+            'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+            'module_relative_path': 'Project/Quests/FindHomer.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
           },
-          'resolution': 'resolved',
         },
-        if (duplicateBacklinks)
+        'references': <Object?>[
           <String, Object?>{
             'role': 'origin_owner',
-            'qualifier': 'alternate',
+            'qualifier': null,
             'target': <String, Object?>{
               'project_id': _projectId,
               'entity_id': _questId,
@@ -1130,9 +1635,30 @@ Revision3ContentIndex _fixture({
             },
             'resolution': 'resolved',
           },
-      ],
-      'asset_references': <Object?>[],
-    },
+          <String, Object?>{
+            'role': 'script_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': _projectId,
+              'entity_id': _questId,
+              'expected_kind': 'quest_draft',
+            },
+            'resolution': 'resolved',
+          },
+          if (duplicateBacklinks)
+            <String, Object?>{
+              'role': 'origin_owner',
+              'qualifier': 'alternate',
+              'target': <String, Object?>{
+                'project_id': _projectId,
+                'entity_id': _questId,
+                'expected_kind': 'quest_draft',
+              },
+              'resolution': 'resolved',
+            },
+        ],
+        'asset_references': <Object?>[],
+      },
   ],
   'assets': <Object?>[
     <String, Object?>{

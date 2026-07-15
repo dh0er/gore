@@ -1071,4 +1071,160 @@ class AppLocalizationsJa extends AppLocalizations {
   @override
   String get managedGlobalSearchResultStale =>
       'この結果は現在のプロジェクトに存在しません。もう一度検索してください。';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => '下書きのみ';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => 'ビルド不可';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge => 'ランタイム未検証';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => '概要';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => 'プロフィール';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => 'ストーリー';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => 'ロジック';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => 'ルーチン';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => 'インベントリ';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => '会話と音声';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => '参照関係';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => '問題とチェック';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => '名前と目標を編集';
+
+  @override
+  String get managedStoryWorkbenchEditStory => '説明とつながりを編集';
+
+  @override
+  String get managedStoryWorkbenchEditLogic => '状態と遷移を編集';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest => 'ソースとコンパイラーチェックを開く';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc => 'プロフィールとコンパイラーチェックを開く';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable => 'まだモデル化されていません';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable =>
+      'クエストやストーリーとの関係は、NPCの下書きではまだモデル化されていません。';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable =>
+      'ルーチンとワールド内の配置はまだモデル化されていません。';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable =>
+      'インベントリ、装備、取引はまだモデル化されていません。';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      '会話、ローカライズ、音声との関係は、NPCの下書きではまだモデル化されていません。';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      '会話、ローカライズ、音声との関係は、クエストの下書きではまだモデル化されていません。';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems => '未解決のプロジェクト参照はありません';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '未解決のプロジェクト参照が$count件あります',
+      one: '未解決のプロジェクト参照が1件あります',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      '参照状態のみを示します。ビルドや実行の準備完了を示すものではありません。';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => '技術情報';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => 'クエストの下書き';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'NPCの下書き';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => 'クエスト名';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => '技術ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => '目標';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => '一意の名前';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel => 'モジュール名前空間';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => 'クエスト提供者';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel => 'ランタイム親クラス';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      'クエストのライフサイクル状態、トリガー、条件、効果を、正確な現在の状態に対する単一のアトミック操作として編集します。';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => '参照先';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences => '予測される参照先はありません';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => '参照元';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences => 'プロジェクト内に参照元はありません';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel => '意味上の識別情報';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => 'オリジン';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => 'エンティティリビジョン';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => '安定ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel => '参照は解決済み';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel => '参照は未解決';
 }

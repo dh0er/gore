@@ -35,6 +35,7 @@ import 'project/revision3_base_game_content_browser.dart';
 import 'project/revision3_content_index.dart';
 import 'project/revision3_content_library.dart';
 import 'project/revision3_content_workspace.dart';
+import 'project/revision3_story_entity_workbench.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_global_content_search.dart';
@@ -1807,7 +1808,80 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
                         _openQuestSourceInspection(context, index, quest),
               inspectNpcSource: (index, npc) =>
                   _openNpcProfile(context, index, npc),
+              editQuestContextDisabledReason: gameRoot == null
+                  ? l10n.managedDashboardMissingGameDescription
+                  : null,
+              inspectQuestSourceDisabledReason: gameRoot == null
+                  ? l10n.managedDashboardMissingGameDescription
+                  : null,
               controller: contentLibraryController,
+              storyWorkbenchCopy: Revision3StoryEntityWorkbenchCopy(
+                draftBadge: l10n.managedStoryWorkbenchDraftBadge,
+                buildBlockedBadge: l10n.managedStoryWorkbenchBuildBlockedBadge,
+                runtimeUnqualifiedBadge:
+                    l10n.managedStoryWorkbenchRuntimeUnqualifiedBadge,
+                overviewTab: l10n.managedStoryWorkbenchOverviewTab,
+                profileTab: l10n.managedStoryWorkbenchProfileTab,
+                storyTab: l10n.managedStoryWorkbenchStoryTab,
+                logicTab: l10n.managedStoryWorkbenchLogicTab,
+                routineTab: l10n.managedStoryWorkbenchRoutineTab,
+                inventoryTab: l10n.managedStoryWorkbenchInventoryTab,
+                dialogVoiceTab: l10n.managedStoryWorkbenchDialogVoiceTab,
+                referencesTab: l10n.managedStoryWorkbenchReferencesTab,
+                problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
+                editOverview: l10n.managedStoryWorkbenchEditOverview,
+                editStory: l10n.managedStoryWorkbenchEditStory,
+                editLogic: l10n.managedStoryWorkbenchEditLogic,
+                inspectQuest: l10n.managedStoryWorkbenchInspectQuest,
+                inspectNpc: l10n.managedStoryWorkbenchInspectNpc,
+                capabilityUnavailable:
+                    l10n.managedStoryWorkbenchCapabilityUnavailable,
+                npcStoryUnavailable:
+                    l10n.managedStoryWorkbenchNpcStoryUnavailable,
+                npcRoutineUnavailable:
+                    l10n.managedStoryWorkbenchNpcRoutineUnavailable,
+                npcInventoryUnavailable:
+                    l10n.managedStoryWorkbenchNpcInventoryUnavailable,
+                npcDialogVoiceUnavailable:
+                    l10n.managedStoryWorkbenchNpcDialogVoiceUnavailable,
+                questDialogVoiceUnavailable:
+                    l10n.managedStoryWorkbenchQuestDialogVoiceUnavailable,
+                noReferenceProblems:
+                    l10n.managedStoryWorkbenchNoReferenceProblems,
+                referenceProblemCount:
+                    l10n.managedStoryWorkbenchReferenceProblemCount,
+                referenceScopeNotice:
+                    l10n.managedStoryWorkbenchReferenceScopeNotice,
+                technicalDetails: l10n.managedStoryWorkbenchTechnicalDetails,
+                questKindLabel: l10n.managedStoryWorkbenchQuestKindLabel,
+                npcKindLabel: l10n.managedStoryWorkbenchNpcKindLabel,
+                questTitleLabel: l10n.managedStoryWorkbenchQuestTitleLabel,
+                technicalIdLabel: l10n.managedStoryWorkbenchTechnicalIdLabel,
+                objectivesLabel: l10n.managedStoryWorkbenchObjectivesLabel,
+                uniqueNameLabel: l10n.managedStoryWorkbenchUniqueNameLabel,
+                moduleNamespaceLabel:
+                    l10n.managedStoryWorkbenchModuleNamespaceLabel,
+                questGiverLabel: l10n.managedStoryWorkbenchQuestGiverLabel,
+                runtimeParentLabel:
+                    l10n.managedStoryWorkbenchRuntimeParentLabel,
+                logicDescription: l10n.managedStoryWorkbenchLogicDescription,
+                outgoingHeading: l10n.managedStoryWorkbenchOutgoingHeading,
+                noOutgoingReferences:
+                    l10n.managedStoryWorkbenchNoOutgoingReferences,
+                incomingHeading: l10n.managedStoryWorkbenchIncomingHeading,
+                noIncomingReferences:
+                    l10n.managedStoryWorkbenchNoIncomingReferences,
+                semanticIdentityLabel:
+                    l10n.managedStoryWorkbenchSemanticIdentityLabel,
+                originLabel: l10n.managedStoryWorkbenchOriginLabel,
+                entityRevisionLabel:
+                    l10n.managedStoryWorkbenchEntityRevisionLabel,
+                stableIdLabel: l10n.managedStoryWorkbenchStableIdLabel,
+                referenceResolvedLabel:
+                    l10n.managedStoryWorkbenchReferenceResolvedLabel,
+                referenceUnresolvedLabel:
+                    l10n.managedStoryWorkbenchReferenceUnresolvedLabel,
+              ),
             ),
             baseGame: Revision3BaseGameContentBrowser(
               gameRoot: gameRoot,

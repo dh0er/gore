@@ -2005,6 +2005,288 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'This result is no longer in the current project. Search again.'**
   String get managedGlobalSearchResultStale;
+
+  /// No description provided for @managedStoryWorkbenchDraftBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft only'**
+  String get managedStoryWorkbenchDraftBadge;
+
+  /// No description provided for @managedStoryWorkbenchBuildBlockedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Build blocked'**
+  String get managedStoryWorkbenchBuildBlockedBadge;
+
+  /// No description provided for @managedStoryWorkbenchRuntimeUnqualifiedBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime not verified'**
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge;
+
+  /// No description provided for @managedStoryWorkbenchOverviewTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Overview'**
+  String get managedStoryWorkbenchOverviewTab;
+
+  /// No description provided for @managedStoryWorkbenchProfileTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Profile'**
+  String get managedStoryWorkbenchProfileTab;
+
+  /// No description provided for @managedStoryWorkbenchStoryTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Story'**
+  String get managedStoryWorkbenchStoryTab;
+
+  /// No description provided for @managedStoryWorkbenchLogicTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Logic'**
+  String get managedStoryWorkbenchLogicTab;
+
+  /// No description provided for @managedStoryWorkbenchRoutineTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Routine'**
+  String get managedStoryWorkbenchRoutineTab;
+
+  /// No description provided for @managedStoryWorkbenchInventoryTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Inventory'**
+  String get managedStoryWorkbenchInventoryTab;
+
+  /// No description provided for @managedStoryWorkbenchDialogVoiceTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog & Voice'**
+  String get managedStoryWorkbenchDialogVoiceTab;
+
+  /// No description provided for @managedStoryWorkbenchReferencesTab.
+  ///
+  /// In en, this message translates to:
+  /// **'References'**
+  String get managedStoryWorkbenchReferencesTab;
+
+  /// No description provided for @managedStoryWorkbenchProblemsChecksTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Problems & Checks'**
+  String get managedStoryWorkbenchProblemsChecksTab;
+
+  /// No description provided for @managedStoryWorkbenchEditOverview.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & objectives'**
+  String get managedStoryWorkbenchEditOverview;
+
+  /// No description provided for @managedStoryWorkbenchEditStory.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit description & connections'**
+  String get managedStoryWorkbenchEditStory;
+
+  /// No description provided for @managedStoryWorkbenchEditLogic.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit states & transitions'**
+  String get managedStoryWorkbenchEditLogic;
+
+  /// No description provided for @managedStoryWorkbenchInspectQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Open source & compiler checks'**
+  String get managedStoryWorkbenchInspectQuest;
+
+  /// No description provided for @managedStoryWorkbenchInspectNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'Open profile & compiler checks'**
+  String get managedStoryWorkbenchInspectNpc;
+
+  /// No description provided for @managedStoryWorkbenchCapabilityUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Not modeled yet'**
+  String get managedStoryWorkbenchCapabilityUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcStoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest and story relationships are not modeled for NPC drafts yet.'**
+  String get managedStoryWorkbenchNpcStoryUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcRoutineUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Routine and world placement are not modeled yet.'**
+  String get managedStoryWorkbenchNpcRoutineUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcInventoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Inventory, equipment, and trading are not modeled yet.'**
+  String get managedStoryWorkbenchNpcInventoryUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNpcDialogVoiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.'**
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchQuestDialogVoiceUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.'**
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable;
+
+  /// No description provided for @managedStoryWorkbenchNoReferenceProblems.
+  ///
+  /// In en, this message translates to:
+  /// **'No unresolved project references'**
+  String get managedStoryWorkbenchNoReferenceProblems;
+
+  /// No description provided for @managedStoryWorkbenchReferenceProblemCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 unresolved project reference} other{{count} unresolved project references}}'**
+  String managedStoryWorkbenchReferenceProblemCount(int count);
+
+  /// No description provided for @managedStoryWorkbenchReferenceScopeNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference status only; this is not build or runtime readiness.'**
+  String get managedStoryWorkbenchReferenceScopeNotice;
+
+  /// No description provided for @managedStoryWorkbenchTechnicalDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details'**
+  String get managedStoryWorkbenchTechnicalDetails;
+
+  /// No description provided for @managedStoryWorkbenchQuestKindLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest draft'**
+  String get managedStoryWorkbenchQuestKindLabel;
+
+  /// No description provided for @managedStoryWorkbenchNpcKindLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC draft'**
+  String get managedStoryWorkbenchNpcKindLabel;
+
+  /// No description provided for @managedStoryWorkbenchQuestTitleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest title'**
+  String get managedStoryWorkbenchQuestTitleLabel;
+
+  /// No description provided for @managedStoryWorkbenchTechnicalIdLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical ID'**
+  String get managedStoryWorkbenchTechnicalIdLabel;
+
+  /// No description provided for @managedStoryWorkbenchObjectivesLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Objectives'**
+  String get managedStoryWorkbenchObjectivesLabel;
+
+  /// No description provided for @managedStoryWorkbenchUniqueNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Unique name'**
+  String get managedStoryWorkbenchUniqueNameLabel;
+
+  /// No description provided for @managedStoryWorkbenchModuleNamespaceLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Module namespace'**
+  String get managedStoryWorkbenchModuleNamespaceLabel;
+
+  /// No description provided for @managedStoryWorkbenchQuestGiverLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest giver'**
+  String get managedStoryWorkbenchQuestGiverLabel;
+
+  /// No description provided for @managedStoryWorkbenchRuntimeParentLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Runtime parent'**
+  String get managedStoryWorkbenchRuntimeParentLabel;
+
+  /// No description provided for @managedStoryWorkbenchLogicDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.'**
+  String get managedStoryWorkbenchLogicDescription;
+
+  /// No description provided for @managedStoryWorkbenchOutgoingHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Outgoing'**
+  String get managedStoryWorkbenchOutgoingHeading;
+
+  /// No description provided for @managedStoryWorkbenchNoOutgoingReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'No projected references'**
+  String get managedStoryWorkbenchNoOutgoingReferences;
+
+  /// No description provided for @managedStoryWorkbenchIncomingHeading.
+  ///
+  /// In en, this message translates to:
+  /// **'Incoming'**
+  String get managedStoryWorkbenchIncomingHeading;
+
+  /// No description provided for @managedStoryWorkbenchNoIncomingReferences.
+  ///
+  /// In en, this message translates to:
+  /// **'No incoming project references'**
+  String get managedStoryWorkbenchNoIncomingReferences;
+
+  /// No description provided for @managedStoryWorkbenchSemanticIdentityLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Semantic identity'**
+  String get managedStoryWorkbenchSemanticIdentityLabel;
+
+  /// No description provided for @managedStoryWorkbenchOriginLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Origin'**
+  String get managedStoryWorkbenchOriginLabel;
+
+  /// No description provided for @managedStoryWorkbenchEntityRevisionLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Entity revision'**
+  String get managedStoryWorkbenchEntityRevisionLabel;
+
+  /// No description provided for @managedStoryWorkbenchStableIdLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Stable ID'**
+  String get managedStoryWorkbenchStableIdLabel;
+
+  /// No description provided for @managedStoryWorkbenchReferenceResolvedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference resolved'**
+  String get managedStoryWorkbenchReferenceResolvedLabel;
+
+  /// No description provided for @managedStoryWorkbenchReferenceUnresolvedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Reference unresolved'**
+  String get managedStoryWorkbenchReferenceUnresolvedLabel;
 }
 
 class _AppLocalizationsDelegate

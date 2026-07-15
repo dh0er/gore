@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'revision3_content_index.dart';
+import 'revision3_story_entity_workbench.dart';
 
 typedef Revision3ContentIndexLoader = Future<Revision3ContentIndex> Function();
 typedef Revision3QuestOutlineEditor =
@@ -118,6 +119,12 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editQuestTransitions,
     this.inspectQuestSource,
     this.inspectNpcSource,
+    this.editQuestOutlineDisabledReason,
+    this.editQuestContextDisabledReason,
+    this.editQuestTransitionsDisabledReason,
+    this.inspectQuestSourceDisabledReason,
+    this.inspectNpcSourceDisabledReason,
+    this.storyWorkbenchCopy = const Revision3StoryEntityWorkbenchCopy.english(),
     this.controller,
     super.key,
   });
@@ -132,6 +139,12 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3QuestTransitionsEditor? editQuestTransitions;
   final Revision3QuestSourceInspector? inspectQuestSource;
   final Revision3NpcSourceInspector? inspectNpcSource;
+  final String? editQuestOutlineDisabledReason;
+  final String? editQuestContextDisabledReason;
+  final String? editQuestTransitionsDisabledReason;
+  final String? inspectQuestSourceDisabledReason;
+  final String? inspectNpcSourceDisabledReason;
+  final Revision3StoryEntityWorkbenchCopy storyWorkbenchCopy;
   final Revision3ContentLibraryController? controller;
 
   @override
@@ -149,6 +162,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
   Revision3ContentEntityKind? _kind;
   String? _selectedEntityId;
   String? _selectedAssetSha256;
+  final Map<String, Revision3StoryWorkbenchSection> _storySections = {};
   final List<_PendingContentNavigation> _pendingNavigations = [];
 
   @override
@@ -184,6 +198,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         _kind = null;
         _selectedEntityId = null;
         _selectedAssetSha256 = null;
+        _storySections.clear();
       }
       _reload(clearCurrent: true);
     }
@@ -288,6 +303,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         _loading = false;
         _selectedEntityId = _retainEntitySelection(index);
         _selectedAssetSha256 = _retainAssetSelection(index);
+        _storySections.removeWhere((entityId, _) {
+          final entity = index.entityById(entityId);
+          return entity == null || !_isStoryDraft(entity);
+        });
       });
       _resolvePendingNavigations(index);
     } catch (error) {
@@ -395,16 +414,18 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         visible.firstOrNull;
     return LayoutBuilder(
       builder: (context, constraints) {
+        final useDetailsSheet =
+            constraints.maxWidth < 900 || constraints.maxHeight < 430;
         final list = _EntityList(
           entities: visible,
           selectedId: selected?.id,
           onSelected: (entity) async {
             setState(() => _selectedEntityId = entity.id);
-            if (constraints.maxWidth < 900) {
+            if (useDetailsSheet) {
               final editAction = await _showDetailsSheet<_EntityToolAction>(
                 context,
                 semanticsLabel: '${entity.kind.displayName} details',
-                child: _EntityDetails(
+                child: _buildEntityDetails(
                   index: index,
                   entity: entity,
                   onOpenEntity: (entityId) {
@@ -458,7 +479,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
             }
           },
         );
-        if (constraints.maxWidth < 900) {
+        if (useDetailsSheet) {
           return list;
         }
         return Row(
@@ -469,7 +490,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               flex: 2,
               child: selected == null
                   ? const _EmptyDetails(label: 'Select project content')
-                  : _EntityDetails(
+                  : _buildEntityDetails(
                       index: index,
                       entity: selected,
                       onOpenEntity: (entityId) =>
@@ -496,6 +517,73 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           ],
         );
       },
+    );
+  }
+
+  Widget _buildEntityDetails({
+    required Revision3ContentIndex index,
+    required Revision3ContentEntity entity,
+    required ValueChanged<String> onOpenEntity,
+    required ValueChanged<String> onOpenAsset,
+    required Future<void> Function()? onEditQuestOutline,
+    required Future<void> Function()? onEditQuestContext,
+    required Future<void> Function()? onEditQuestTransitions,
+    required Future<void> Function()? onInspectQuestSource,
+    required Future<void> Function()? onInspectNpcSource,
+  }) {
+    if (_isStoryDraft(entity)) {
+      final selectedSection =
+          _storySections[entity.id] ??
+          Revision3StoryEntityWorkbench.defaultSectionFor(entity);
+      return Revision3StoryEntityWorkbench(
+        key: ValueKey(
+          'revision3-story-workbench-${widget.projectId}-${entity.id}',
+        ),
+        projectId: widget.projectId,
+        index: index,
+        entity: entity,
+        selectedSection: selectedSection,
+        onSectionChanged: (section) {
+          if (!mounted) return;
+          setState(() => _storySections[entity.id] = section);
+        },
+        actions: Revision3StoryEntityWorkbenchActions(
+          openEntity: onOpenEntity,
+          openAsset: onOpenAsset,
+          editOverview: entity.kind == Revision3ContentEntityKind.questDraft
+              ? onEditQuestOutline
+              : null,
+          editStory: entity.kind == Revision3ContentEntityKind.questDraft
+              ? onEditQuestContext
+              : null,
+          editLogic: entity.kind == Revision3ContentEntityKind.questDraft
+              ? onEditQuestTransitions
+              : null,
+          inspectQuest: entity.kind == Revision3ContentEntityKind.questDraft
+              ? onInspectQuestSource
+              : null,
+          inspectNpc: entity.kind == Revision3ContentEntityKind.npcDraft
+              ? onInspectNpcSource
+              : null,
+          editOverviewDisabledReason: widget.editQuestOutlineDisabledReason,
+          editStoryDisabledReason: widget.editQuestContextDisabledReason,
+          editLogicDisabledReason: widget.editQuestTransitionsDisabledReason,
+          inspectQuestDisabledReason: widget.inspectQuestSourceDisabledReason,
+          inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
+        ),
+        copy: widget.storyWorkbenchCopy,
+      );
+    }
+    return _EntityDetails(
+      index: index,
+      entity: entity,
+      onOpenEntity: onOpenEntity,
+      onOpenAsset: onOpenAsset,
+      onEditQuestOutline: onEditQuestOutline,
+      onEditQuestContext: onEditQuestContext,
+      onEditQuestTransitions: onEditQuestTransitions,
+      onInspectQuestSource: onInspectQuestSource,
+      onInspectNpcSource: onInspectNpcSource,
     );
   }
 
@@ -1470,6 +1558,10 @@ IconData _kindIcon(Revision3ContentEntityKind kind) => switch (kind) {
 String _entityTitle(Revision3ContentEntity entity) => entity.displayName.isEmpty
     ? entity.summary.primaryIdentity
     : entity.displayName;
+
+bool _isStoryDraft(Revision3ContentEntity entity) =>
+    entity.kind == Revision3ContentEntityKind.questDraft ||
+    entity.kind == Revision3ContentEntityKind.npcDraft;
 
 String _formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';

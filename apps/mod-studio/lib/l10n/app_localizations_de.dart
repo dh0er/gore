@@ -1111,4 +1111,172 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedGlobalSearchResultStale =>
       'Dieser Treffer ist nicht mehr im aktuellen Projekt enthalten. Erneut suchen.';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => 'Nur Entwurf';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => 'Build blockiert';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge =>
+      'Laufzeit nicht verifiziert';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => 'Überblick';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => 'Profil';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => 'Story';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => 'Logik';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => 'Routine';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => 'Inventar';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => 'Dialog & Sprachausgabe';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => 'Referenzen';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => 'Probleme & Prüfungen';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => 'Name & Ziele bearbeiten';
+
+  @override
+  String get managedStoryWorkbenchEditStory =>
+      'Beschreibung & Verknüpfungen bearbeiten';
+
+  @override
+  String get managedStoryWorkbenchEditLogic =>
+      'Zustände & Übergänge bearbeiten';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest =>
+      'Quelltext & Compilerprüfungen öffnen';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc =>
+      'Profil & Compilerprüfungen öffnen';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable =>
+      'Noch nicht modelliert';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable =>
+      'Quest- und Story-Beziehungen sind für NPC-Entwürfe noch nicht modelliert.';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable =>
+      'Routine und Platzierung in der Welt sind noch nicht modelliert.';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable =>
+      'Inventar, Ausrüstung und Handel sind noch nicht modelliert.';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'Dialog-, Lokalisierungs- und Sprachausgabebeziehungen sind für NPC-Entwürfe noch nicht modelliert.';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      'Dialog-, Lokalisierungs- und Sprachausgabebeziehungen sind für Quest-Entwürfe noch nicht modelliert.';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems =>
+      'Keine ungelösten Projektreferenzen';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count ungelöste Projektreferenzen',
+      one: '1 ungelöste Projektreferenz',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      'Nur Referenzstatus; dies ist keine Build- oder Laufzeitbereitschaft.';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => 'Technische Details';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => 'Quest-Entwurf';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'NPC-Entwurf';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => 'Quest-Titel';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => 'Technische ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => 'Ziele';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => 'Eindeutiger Name';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel => 'Modul-Namensraum';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => 'Questgeber';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel => 'Laufzeit-Basisklasse';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      'Quest-Lebenszykluszustände, Auslöser, Bedingungen und Effekte werden in einer einzigen atomaren Operation am exakten aktuellen Stand bearbeitet.';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => 'Ausgehend';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences =>
+      'Keine projizierten Referenzen';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => 'Eingehend';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences =>
+      'Keine eingehenden Projektreferenzen';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel =>
+      'Semantische Identität';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => 'Ursprung';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => 'Entitätsrevision';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => 'Stabile ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel =>
+      'Referenz aufgelöst';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel =>
+      'Referenz nicht aufgelöst';
 }

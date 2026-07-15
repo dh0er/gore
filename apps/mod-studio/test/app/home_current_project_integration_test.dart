@@ -20,7 +20,6 @@ import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
-import 'package:gore_mod/project/revision3_content_library.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
@@ -1328,34 +1327,14 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      final menu = find.byKey(
-        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
-      );
-      if (menu.evaluate().isEmpty) {
-        await tester.tap(
-          find.byKey(
-            const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
-          ),
-        );
-        await tester.pumpAndSettle();
-        if (menu.evaluate().isEmpty) {
-          await tester.drag(
-            find.byKey(const Key('revision3-content-entity-details')),
-            const Offset(0, -300),
-          );
-          await tester.pump();
-        }
-      }
-      expect(menu, findsOneWidget);
-      await tester.tap(menu);
-      await tester.pumpAndSettle();
-      final edit = find.byKey(
+      await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
+      final edit = _storyWorkbenchAction(
         const Key(
-          'revision3-content-edit-quest-outline-$revision3QuestOutlineQuestId',
+          'revision3-story-workbench-action-edit-overview-$revision3QuestOutlineQuestId',
         ),
       );
-      expect(edit, findsOneWidget);
-      await tester.tap(edit);
+      await _revealWorkbenchAction(tester, edit);
+      await _tapWorkbenchAction(tester, edit);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-quest-outline-dialog')),
@@ -1464,35 +1443,24 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      final menu = find.byKey(
-        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
-      );
-      if (menu.evaluate().isEmpty) {
-        await tester.tap(
-          find.byKey(
-            const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
-          ),
-        );
-        await tester.pumpAndSettle();
-        if (menu.evaluate().isEmpty) {
-          await tester.drag(
-            find.byKey(const Key('revision3-content-entity-details')),
-            const Offset(0, -300),
-          );
-          await tester.pump();
-        }
-      }
-      expect(menu, findsOneWidget);
-      await tester.tap(menu);
-      await tester.pumpAndSettle();
-      final inspect = find.byKey(
+      await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
+      final problemsTab = find.byKey(
         const Key(
-          'revision3-content-inspect-quest-source-$revision3QuestOutlineQuestId',
+          'revision3-story-workbench-tab-problemsChecks-$revision3QuestOutlineQuestId',
         ),
       );
-      expect(inspect, findsOneWidget);
-      expect(tester.widget<PopupMenuItem<Object?>>(inspect).enabled, isTrue);
-      await tester.tap(find.text('Source & checks'));
+      expect(problemsTab, findsOneWidget);
+      await tester.ensureVisible(problemsTab);
+      await tester.tap(problemsTab);
+      await tester.pumpAndSettle();
+      final inspect = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-inspect-quest_draft-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, inspect);
+      expect(_workbenchActionTileWidget(tester, inspect).enabled, isTrue);
+      await _tapWorkbenchAction(tester, inspect);
       await tester.pumpAndSettle();
 
       expect(managed.questSourceInspectionCalls, 1);
@@ -1566,14 +1534,15 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      final library = tester.widget<Revision3ContentLibrary>(
-        find.byType(Revision3ContentLibrary),
+      await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+      final inspectNpc = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+        ),
       );
-      expect(library.inspectNpcSource, isNotNull);
-      final opening = library.inspectNpcSource!(
-        contentIndex,
-        contentIndex.entities.single,
-      );
+      await _revealWorkbenchAction(tester, inspectNpc);
+      expect(_workbenchActionTileWidget(tester, inspectNpc).enabled, isTrue);
+      await _tapWorkbenchAction(tester, inspectNpc);
       await tester.pumpAndSettle();
 
       expect(
@@ -1588,7 +1557,13 @@ void main() {
         find.byKey(const Key('revision3-npc-profile-result')),
         findsOneWidget,
       );
-      expect(find.text('Build blocked'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-npc-profile-dialog')),
+          matching: find.text('Build blocked'),
+        ),
+        findsOneWidget,
+      );
       expect(
         (coordinator.state as ManagedRevision3CurrentProjectState)
             .requiresReopen,
@@ -1596,7 +1571,134 @@ void main() {
       );
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
-      await opening;
+    },
+  );
+
+  testWidgets(
+    'unconfigured Story Workbench keeps NPC profile but gates game-backed Quest actions',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const revision = 7;
+      final contentIndex = _storyWorkbenchGameGateIndex(
+        projectId: revision3NpcInspectionProjectId,
+        revision: revision,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-workbench-game-gate'),
+        projectId: revision3NpcInspectionProjectId,
+        projectRevision: revision,
+        head: _head(revision),
+        contentIndexBuilder: (_) => contentIndex,
+        onNpcSourceInspection: (lease, npcId) async {
+          expect(npcId, revision3NpcInspectionNpcId);
+          return revision3NpcInspectionResult(
+            head: lease.head,
+            projectJson: revision3NpcInspectionProjectJson(
+              projectId: lease.projectId,
+              revision: lease.projectRevision,
+            ),
+            npcId: npcId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedContent(tester);
+      await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+
+      final inspectNpc = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, inspectNpc);
+      expect(_workbenchActionTileWidget(tester, inspectNpc).enabled, isTrue);
+      await _tapWorkbenchAction(tester, inspectNpc);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-npc-profile-dialog')),
+        findsOneWidget,
+      );
+      expect(managed.npcSourceInspectionCalls, 1);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(
+          const Key('revision3-content-entity-$revision3QuestOutlineQuestId'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final storyTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-story-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await tester.ensureVisible(storyTab);
+      await tester.tap(storyTab);
+      await tester.pumpAndSettle();
+      final editStory = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-story-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, editStory);
+      expect(_workbenchActionTileWidget(tester, editStory).enabled, isFalse);
+      const missingGameReason =
+          'Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.';
+      expect(
+        find.descendant(
+          of: editStory,
+          matching: find.text(missingGameReason, skipOffstage: false),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      final problemsTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-problemsChecks-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await tester.ensureVisible(problemsTab);
+      await tester.tap(problemsTab);
+      await tester.pumpAndSettle();
+      final inspectQuest = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-inspect-quest_draft-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, inspectQuest);
+      expect(_workbenchActionTileWidget(tester, inspectQuest).enabled, isFalse);
+      expect(
+        find.descendant(
+          of: inspectQuest,
+          matching: find.text(missingGameReason, skipOffstage: false),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      expect(managed.questContextSeedCalls, 0);
+      expect(managed.questSourceInspectionCalls, 0);
+      expect(
+        find.byKey(const Key('revision3-quest-context-dialog')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-quest-source-inspection-dialog')),
+        findsNothing,
+      );
     },
   );
 
@@ -1665,13 +1767,15 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      final library = tester.widget<Revision3ContentLibrary>(
-        find.byType(Revision3ContentLibrary),
+      await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+      final inspectNpc = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+        ),
       );
-      final npc = fixture.contentIndex.entities.singleWhere(
-        (entity) => entity.kind == Revision3ContentEntityKind.npcDraft,
-      );
-      final opening = library.inspectNpcSource!(fixture.contentIndex, npc);
+      await _revealWorkbenchAction(tester, inspectNpc);
+      expect(_workbenchActionTileWidget(tester, inspectNpc).enabled, isTrue);
+      await _tapWorkbenchAction(tester, inspectNpc);
       await tester.pumpAndSettle();
 
       final panelFinder = find.byType(Revision3ManagedCompilerCheckPanel);
@@ -1690,7 +1794,6 @@ void main() {
       );
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
-      await opening;
     },
   );
 
@@ -1777,13 +1880,24 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      final menu = find.byKey(
-        const Key('revision3-content-edit-quest-$revision3QuestOutlineQuestId'),
+      await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
+      final storyTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-story-$revision3QuestOutlineQuestId',
+        ),
       );
-      expect(menu, findsOneWidget);
-      await tester.tap(menu);
+      expect(storyTab, findsOneWidget);
+      await tester.ensureVisible(storyTab);
+      await tester.tap(storyTab);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Description & connections'));
+      final editStory = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-story-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, editStory);
+      expect(_workbenchActionTileWidget(tester, editStory).enabled, isTrue);
+      await _tapWorkbenchAction(tester, editStory);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-quest-context-dialog')),
@@ -1881,15 +1995,24 @@ void main() {
       await _pumpApp(tester, container);
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
-      await tester.tap(
-        find.byKey(
-          const Key(
-            'revision3-content-edit-quest-$revision3QuestOutlineQuestId',
-          ),
+      await _openStoryWorkbenchEntity(tester, revision3QuestOutlineQuestId);
+      final logicTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-logic-$revision3QuestOutlineQuestId',
         ),
       );
+      expect(logicTab, findsOneWidget);
+      await tester.ensureVisible(logicTab);
+      await tester.tap(logicTab);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('States & transitions'));
+      final editLogic = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-logic-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, editLogic);
+      expect(_workbenchActionTileWidget(tester, editLogic).enabled, isTrue);
+      await _tapWorkbenchAction(tester, editLogic);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-quest-transitions-dialog')),
@@ -3211,6 +3334,58 @@ Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _openStoryWorkbenchEntity(
+  WidgetTester tester,
+  String entityId,
+) async {
+  final entity = find.byKey(Key('revision3-content-entity-$entityId'));
+  expect(entity, findsOneWidget);
+  await tester.tap(entity);
+  await tester.pumpAndSettle();
+  expect(
+    find.byKey(ValueKey('revision3-content-entity-details-$entityId')),
+    findsOneWidget,
+  );
+}
+
+Finder _storyWorkbenchAction(Key key) => find.byKey(key, skipOffstage: false);
+
+Future<void> _revealWorkbenchAction(WidgetTester tester, Finder action) async {
+  expect(action, findsOneWidget);
+  final scrollable = find
+      .ancestor(of: action, matching: find.byType(Scrollable))
+      .last;
+  expect(scrollable, findsOneWidget);
+  await tester.scrollUntilVisible(action, 120, scrollable: scrollable);
+  await tester.pumpAndSettle();
+  expect(
+    tester.getRect(action).intersect(tester.getRect(scrollable)).isEmpty,
+    isFalse,
+  );
+}
+
+Finder _workbenchActionTile(Finder action) => find.descendant(
+  of: action,
+  matching: find.byType(ListTile),
+  skipOffstage: false,
+);
+
+ListTile _workbenchActionTileWidget(WidgetTester tester, Finder action) {
+  final tile = _workbenchActionTile(action);
+  expect(tile, findsOneWidget);
+  return tester.widget<ListTile>(tile);
+}
+
+Future<void> _tapWorkbenchAction(WidgetTester tester, Finder action) async {
+  final tile = _workbenchActionTile(action);
+  final scrollable = find
+      .ancestor(of: action, matching: find.byType(Scrollable))
+      .last;
+  final visible = tester.getRect(tile).intersect(tester.getRect(scrollable));
+  expect(visible.isEmpty, isFalse);
+  await tester.tapAt(visible.center);
+}
+
 Finder _managedSectionAction({
   required String sectionId,
   required String actionId,
@@ -4384,6 +4559,77 @@ Revision3ContentIndex _npcInspectionIndex({
           'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
           'parent_spawn_definition':
               'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+  ],
+  'assets': <Object?>[],
+});
+
+Revision3ContentIndex _storyWorkbenchGameGateIndex({
+  required String projectId,
+  required int revision,
+}) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  'schema_revision': 1,
+  'project_id': projectId,
+  'project_revision': revision,
+  'project_name': 'Home Story Workbench project',
+  'project_version': '1.0.0',
+  'project_author': 'tests',
+  'target': <String, Object?>{
+    'executable': <String, Object?>{
+      'byte_len': 171698176,
+      'sha256':
+          'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+    },
+  },
+  'authoring_locales': <Object?>[],
+  'entity_counts': <String, Object?>{'npc_draft': 1, 'quest_draft': 1},
+  'entities': <Object?>[
+    <String, Object?>{
+      'id': revision3NpcInspectionNpcId,
+      'kind': 'npc_draft',
+      'display_name': 'Inspection Guard',
+      'revision': 2,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': revision3NpcInspectionUniqueName,
+      },
+      'summary': <String, Object?>{
+        'kind': 'npc_draft',
+        'data': <String, Object?>{
+          'unique_name': revision3NpcInspectionUniqueName,
+          'module_namespace': revision3NpcInspectionModuleNamespace,
+          'parent_character_definition':
+              'UCharacterDefinition_Human_OM_GRD_Asghan_263',
+          'parent_ai_agent_config': 'UAIAgentConfig_Human_OM_GRD_Asghan_263',
+          'parent_spawn_definition':
+              'USpawnAIAgentDefinition_OM_GRD_Asghan_263',
+        },
+      },
+      'references': <Object?>[],
+      'asset_references': <Object?>[],
+    },
+    <String, Object?>{
+      'id': revision3QuestOutlineQuestId,
+      'kind': 'quest_draft',
+      'display_name': 'Find Homer',
+      'revision': 4,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': 'GORE_FIND_HOMER',
+      },
+      'summary': <String, Object?>{
+        'kind': 'quest_draft',
+        'data': <String, Object?>{
+          'technical_id': 'GORE_FIND_HOMER',
+          'title': 'Find Homer',
+          'objective_title': 'Ask Asghan about Homer',
+          'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
+          'parent_runtime_class': 'B_Quest_FindHomer_C',
+          'giver_runtime_unique_name': 'ASGHAN',
         },
       },
       'references': <Object?>[],

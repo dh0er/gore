@@ -1114,4 +1114,175 @@ class AppLocalizationsFr extends AppLocalizations {
   @override
   String get managedGlobalSearchResultStale =>
       'Ce résultat ne figure plus dans le projet actuel. Relancez la recherche.';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => 'Brouillon uniquement';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => 'Compilation bloquée';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge =>
+      'Exécution non vérifiée';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => 'Vue d’ensemble';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => 'Profil';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => 'Histoire';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => 'Logique';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => 'Routine';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => 'Inventaire';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => 'Dialogues et voix';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => 'Références';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab =>
+      'Problèmes et vérifications';
+
+  @override
+  String get managedStoryWorkbenchEditOverview =>
+      'Modifier le nom et les objectifs';
+
+  @override
+  String get managedStoryWorkbenchEditStory =>
+      'Modifier la description et les connexions';
+
+  @override
+  String get managedStoryWorkbenchEditLogic =>
+      'Modifier les états et les transitions';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest =>
+      'Ouvrir le code source et les vérifications du compilateur';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc =>
+      'Ouvrir le profil et les vérifications du compilateur';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable =>
+      'Pas encore modélisé';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable =>
+      'Les relations avec les quêtes et l’histoire ne sont pas encore modélisées pour les brouillons de PNJ.';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable =>
+      'La routine et le placement dans le monde ne sont pas encore modélisés.';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable =>
+      'L’inventaire, l’équipement et le commerce ne sont pas encore modélisés.';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'Les relations avec les dialogues, la localisation et les voix ne sont pas encore modélisées pour les brouillons de PNJ.';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      'Les relations avec les dialogues, la localisation et les voix ne sont pas encore modélisées pour les brouillons de quête.';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems =>
+      'Aucune référence de projet non résolue';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count références de projet non résolues',
+      one: '1 référence de projet non résolue',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      'État des références uniquement ; il ne garantit pas que le projet est prêt à être compilé ou exécuté.';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => 'Détails techniques';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => 'Brouillon de quête';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'Brouillon de PNJ';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => 'Titre de la quête';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => 'Identifiant technique';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => 'Objectifs';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => 'Nom unique';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel =>
+      'Espace de noms du module';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => 'Donneur de quête';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel =>
+      'Classe parente à l’exécution';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      'Les états du cycle de vie de la quête, les déclencheurs, les conditions et les effets sont modifiés en une seule opération atomique sur l’état actuel exact.';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => 'Sortantes';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences =>
+      'Aucune référence projetée';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => 'Entrantes';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences =>
+      'Aucune référence entrante du projet';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel =>
+      'Identité sémantique';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => 'Origine';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => 'Révision d’entité';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => 'ID stable';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel => 'Référence résolue';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel =>
+      'Référence non résolue';
 }

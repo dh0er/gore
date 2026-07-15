@@ -1058,6 +1058,158 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedGlobalSearchResultStale => '此结果已不在当前项目中。请重新搜索。';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => '仅草稿';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => '构建已阻止';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge => '运行时未验证';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => '概览';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => '档案';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => '故事';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => '逻辑';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => '日程';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => '物品栏';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => '对话与语音';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => '引用';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => '问题与检查';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => '编辑名称和目标';
+
+  @override
+  String get managedStoryWorkbenchEditStory => '编辑描述和关联';
+
+  @override
+  String get managedStoryWorkbenchEditLogic => '编辑状态和转换';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest => '打开源码和编译器检查';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc => '打开档案和编译器检查';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable => '尚未建模';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable => 'NPC 草稿中的任务和故事关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable => '日程和世界放置尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable => '物品栏、装备和交易尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'NPC 草稿中的对话、本地化和语音关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      '任务草稿中的对话、本地化和语音关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems => '没有未解决的项目引用';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 个未解决的项目引用',
+      one: '1 个未解决的项目引用',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice => '仅表示引用状态；不代表已可构建或运行。';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => '技术详情';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => '任务草稿';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'NPC 草稿';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => '任务标题';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => '技术 ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => '目标';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => '唯一名称';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel => '模块命名空间';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => '任务发布者';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel => '运行时父类';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      '任务生命周期状态、触发器、条件和效果将作为针对精确当前状态的单个原子操作进行编辑。';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => '传出';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences => '没有预计的引用';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => '传入';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences => '没有传入的项目引用';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel => '语义标识';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => '来源';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => '实体修订';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => '稳定 ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel => '引用已解析';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel => '引用未解析';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).
@@ -2024,4 +2176,156 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedGlobalSearchResultStale => '此结果已不在当前项目中。请重新搜索。';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => '仅草稿';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => '构建已阻止';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge => '运行时未验证';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => '概览';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => '档案';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => '故事';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => '逻辑';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => '日程';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => '物品栏';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => '对话与语音';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => '引用';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => '问题与检查';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => '编辑名称和目标';
+
+  @override
+  String get managedStoryWorkbenchEditStory => '编辑描述和关联';
+
+  @override
+  String get managedStoryWorkbenchEditLogic => '编辑状态和转换';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest => '打开源码和编译器检查';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc => '打开档案和编译器检查';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable => '尚未建模';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable => 'NPC 草稿中的任务和故事关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable => '日程和世界放置尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable => '物品栏、装备和交易尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'NPC 草稿中的对话、本地化和语音关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      '任务草稿中的对话、本地化和语音关系尚未建模。';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems => '没有未解决的项目引用';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 个未解决的项目引用',
+      one: '1 个未解决的项目引用',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice => '仅表示引用状态；不代表已可构建或运行。';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => '技术详情';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => '任务草稿';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'NPC 草稿';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => '任务标题';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => '技术 ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => '目标';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => '唯一名称';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel => '模块命名空间';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => '任务发布者';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel => '运行时父类';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      '任务生命周期状态、触发器、条件和效果将作为针对精确当前状态的单个原子操作进行编辑。';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => '传出';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences => '没有预计的引用';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => '传入';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences => '没有传入的项目引用';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel => '语义标识';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => '来源';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => '实体修订';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => '稳定 ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel => '引用已解析';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel => '引用未解析';
 }

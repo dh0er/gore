@@ -1096,4 +1096,168 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get managedGlobalSearchResultStale =>
       'This result is no longer in the current project. Search again.';
+
+  @override
+  String get managedStoryWorkbenchDraftBadge => 'Draft only';
+
+  @override
+  String get managedStoryWorkbenchBuildBlockedBadge => 'Build blocked';
+
+  @override
+  String get managedStoryWorkbenchRuntimeUnqualifiedBadge =>
+      'Runtime not verified';
+
+  @override
+  String get managedStoryWorkbenchOverviewTab => 'Overview';
+
+  @override
+  String get managedStoryWorkbenchProfileTab => 'Profile';
+
+  @override
+  String get managedStoryWorkbenchStoryTab => 'Story';
+
+  @override
+  String get managedStoryWorkbenchLogicTab => 'Logic';
+
+  @override
+  String get managedStoryWorkbenchRoutineTab => 'Routine';
+
+  @override
+  String get managedStoryWorkbenchInventoryTab => 'Inventory';
+
+  @override
+  String get managedStoryWorkbenchDialogVoiceTab => 'Dialog & Voice';
+
+  @override
+  String get managedStoryWorkbenchReferencesTab => 'References';
+
+  @override
+  String get managedStoryWorkbenchProblemsChecksTab => 'Problems & Checks';
+
+  @override
+  String get managedStoryWorkbenchEditOverview => 'Edit name & objectives';
+
+  @override
+  String get managedStoryWorkbenchEditStory => 'Edit description & connections';
+
+  @override
+  String get managedStoryWorkbenchEditLogic => 'Edit states & transitions';
+
+  @override
+  String get managedStoryWorkbenchInspectQuest =>
+      'Open source & compiler checks';
+
+  @override
+  String get managedStoryWorkbenchInspectNpc =>
+      'Open profile & compiler checks';
+
+  @override
+  String get managedStoryWorkbenchCapabilityUnavailable => 'Not modeled yet';
+
+  @override
+  String get managedStoryWorkbenchNpcStoryUnavailable =>
+      'Quest and story relationships are not modeled for NPC drafts yet.';
+
+  @override
+  String get managedStoryWorkbenchNpcRoutineUnavailable =>
+      'Routine and world placement are not modeled yet.';
+
+  @override
+  String get managedStoryWorkbenchNpcInventoryUnavailable =>
+      'Inventory, equipment, and trading are not modeled yet.';
+
+  @override
+  String get managedStoryWorkbenchNpcDialogVoiceUnavailable =>
+      'Dialog, localization, and voice relationships are not modeled for NPC drafts yet.';
+
+  @override
+  String get managedStoryWorkbenchQuestDialogVoiceUnavailable =>
+      'Dialog, localization, and voice relationships are not modeled for Quest drafts yet.';
+
+  @override
+  String get managedStoryWorkbenchNoReferenceProblems =>
+      'No unresolved project references';
+
+  @override
+  String managedStoryWorkbenchReferenceProblemCount(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count unresolved project references',
+      one: '1 unresolved project reference',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkbenchReferenceScopeNotice =>
+      'Reference status only; this is not build or runtime readiness.';
+
+  @override
+  String get managedStoryWorkbenchTechnicalDetails => 'Technical details';
+
+  @override
+  String get managedStoryWorkbenchQuestKindLabel => 'Quest draft';
+
+  @override
+  String get managedStoryWorkbenchNpcKindLabel => 'NPC draft';
+
+  @override
+  String get managedStoryWorkbenchQuestTitleLabel => 'Quest title';
+
+  @override
+  String get managedStoryWorkbenchTechnicalIdLabel => 'Technical ID';
+
+  @override
+  String get managedStoryWorkbenchObjectivesLabel => 'Objectives';
+
+  @override
+  String get managedStoryWorkbenchUniqueNameLabel => 'Unique name';
+
+  @override
+  String get managedStoryWorkbenchModuleNamespaceLabel => 'Module namespace';
+
+  @override
+  String get managedStoryWorkbenchQuestGiverLabel => 'Quest giver';
+
+  @override
+  String get managedStoryWorkbenchRuntimeParentLabel => 'Runtime parent';
+
+  @override
+  String get managedStoryWorkbenchLogicDescription =>
+      'Quest lifecycle states, triggers, conditions, and effects are edited as one exact-current atomic operation.';
+
+  @override
+  String get managedStoryWorkbenchOutgoingHeading => 'Outgoing';
+
+  @override
+  String get managedStoryWorkbenchNoOutgoingReferences =>
+      'No projected references';
+
+  @override
+  String get managedStoryWorkbenchIncomingHeading => 'Incoming';
+
+  @override
+  String get managedStoryWorkbenchNoIncomingReferences =>
+      'No incoming project references';
+
+  @override
+  String get managedStoryWorkbenchSemanticIdentityLabel => 'Semantic identity';
+
+  @override
+  String get managedStoryWorkbenchOriginLabel => 'Origin';
+
+  @override
+  String get managedStoryWorkbenchEntityRevisionLabel => 'Entity revision';
+
+  @override
+  String get managedStoryWorkbenchStableIdLabel => 'Stable ID';
+
+  @override
+  String get managedStoryWorkbenchReferenceResolvedLabel =>
+      'Reference resolved';
+
+  @override
+  String get managedStoryWorkbenchReferenceUnresolvedLabel =>
+      'Reference unresolved';
 }
