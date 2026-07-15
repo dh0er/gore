@@ -12,37 +12,85 @@ treated as deployed compatibility state.
 
 ## Visible Home workflow
 
-With a managed revision-3 project open, Home exposes four separate actions.
-Import, installed-target resolution, and bundle construction additionally need
-a Gothic 1 Remake installation configured in Settings; changing an existing
-take selection does not.
+With a managed revision-3 project open, Home exposes one guided V1 prerequisite
+flow plus four separate Voice actions. The prerequisite and take-selection
+flows are project-only. Import, installed-target resolution, and bundle
+construction additionally need a Gothic 1 Remake installation configured in
+Settings.
 
-1. **Add Voice take** imports one real local Ogg for an existing dialog line and
+1. The **guided dialog-line V1** flow lets a fresh project create the minimum
+   managed line/localization structure needed by the Voice tools. Its narrow
+   contract and limits are described below.
+2. **Add Voice take** imports one real local Ogg for an existing dialog line and
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-2. **Manage Voice takes** searches existing dialog lines and lets the author
+3. **Manage Voice takes** searches existing dialog lines and lets the author
    select one already retained Approved candidate for an existing locale slot,
    or explicitly clear its current selection. It imports, removes, and changes
    no take or media asset, and it needs no game path.
-3. **Resolve Voice target** inspects the exact installed locale archive for one
+4. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
    ambiguous match implicitly.
-4. **Build Voice bundle** evaluates every current Voice slot and either shows
+5. **Build Voice bundle** evaluates every current Voice slot and either shows
    all structured blockers without creating output, or writes one sealed
    voice-only bundle into a brand-new folder selected by the author. This is an
    offline build; the dialog has no deployment action.
 
-All four actions reload or bind the exact current project checkpoint. A stale
-dialog, changed project identity, changed canonical head, or session requiring
-reopen fails closed. After a successful authoring publication, Home refreshes
-to the new managed project revision and head.
+All authoring actions reload or bind the exact current project checkpoint. A
+stale dialog, changed project identity, changed canonical head, or session
+requiring reopen fails closed. After a successful authoring publication, Home
+refreshes to the new managed project revision and head.
 
 The normal UI never asks for entity IDs, archive paths, member names, hashes,
 CAS paths, or bundle internals. A full Voice slot remains eligible for target
 resolution even though its candidate-capacity limit correctly prevents adding
 another take.
+
+## Fresh-project dialog-line prerequisite V1
+
+The guided V1 flow can create one new project-owned `LocalizationEntry` and one
+new `DialogLine`, with an optional empty unresolved `VoiceSlot` for one locale.
+Alternatively, it can bind the new line to one exact existing, currently unused
+managed `LocalizationEntry`. Reuse is tied to the exact entity ID, entity
+revision, localization identity, project revision, target, and fixed head; the
+existing localization is preserved byte-for-byte. This is deliberately a
+small prerequisite flow, not a complete dialog or localization editor.
+
+Before exact reuse can be saved, Studio reads only that exact current managed
+localization through a separate read-only Store route. The route fully reopens
+the fixed head before and after the read, verifies the project and entity
+identity/revision, and returns at most 1,000 sorted locale previews with a
+UTF-8-safe 512-byte bound per preview. The normal dialog shows friendly text
+previews rather than entity IDs or localization identities, disambiguates equal
+display names without exposing those identities, and enables only locales that
+contain non-whitespace text. Publication repeats the exact read so a stale or
+newly empty selection fails closed instead of creating a dangling Voice slot.
+
+The optional speaker field is an author-facing label only. It does not resolve,
+create, or bind an NPC, topic, runtime speaker, or vanilla identity.
+
+The flow does not adopt records from the global extracted localization catalog.
+That catalog is not sealed to the managed project and game generation, and its
+speaker grouping is heuristic. It therefore cannot authorize a vanilla
+identity, speaker, topic, or runtime relationship. A future vanilla-adoption
+workflow needs a new sealed, generation-bound catalog and explicit provenance;
+matching text or a familiar localization ID is insufficient.
+
+Native code evaluates the change as one exact transaction, prepares an
+immutable candidate in the managed Store, reopens it with full asset
+verification, and checks that the fixed head has not changed after preparation
+and response construction. The native route never publishes the fixed head.
+Only the serialized managed session may publish the candidate through guarded
+fixed-head compare-and-swap, repair journaling, and a full published reopen.
+
+Neither create nor exact reuse accepts a game root or reads or writes the game
+installation or a save. Its result is explicitly build `blocked`, runtime
+`runtime_unqualified`, topic authority `not_granted`, and native publication
+`not_supported`. The new `DialogLine` can be selected by subsequent managed
+Voice authoring, but it creates no dialog topic, AngelScript, conditions,
+effects, game registration, or playable conversation.
 
 ## Exact take import and Ogg safety
 
@@ -204,8 +252,14 @@ The managed-R3 workflow still does not provide:
   normalization, transcoding, loudness comparison, actor notes, or lineage;
 - folder/batch import, translation/Voice coverage, CSV/XLIFF, or review queues;
 - qualified Opus output; or
-- new-member namespace/lookup proof, new dialog-line creation, or new
-  localization-entry creation.
+- new-member namespace/lookup proof or a sealed generation-bound path for
+  adopting vanilla dialog/localization identities;
+- topic registration, AngelScript generation, conditions/effects, or a
+  playable dialog path for a newly authored managed line; or
+- a complete dialog/localization editor with edit/delete/clone, bulk language
+  production, history, and provenance/rebase workflows.
 
-This completes the managed existing-member target and offline build foundation,
-not the Voice production milestone or runtime workflow.
+This closes the fresh-project project-local prerequisite and retains the
+managed existing-member target and offline build foundation. It does not
+complete the Voice production milestone, vanilla adoption, or any runtime
+dialog workflow.

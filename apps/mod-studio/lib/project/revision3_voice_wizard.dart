@@ -15,11 +15,19 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
   const Revision3VoiceTakeDialog({
     required this.service,
     this.pickOgg,
+    this.initialLineId,
+    this.initialLocale,
     super.key,
   });
 
   final Revision3VoiceAuthoringService service;
   final Revision3VoiceOggPicker? pickOgg;
+
+  /// Optional exact-current selection supplied by a preceding project action,
+  /// such as creating a new DialogLine. The freshly loaded catalog still has
+  /// to contain the line; stale or malformed values are discarded.
+  final String? initialLineId;
+  final String? initialLocale;
 
   @override
   State<Revision3VoiceTakeDialog> createState() =>
@@ -52,6 +60,8 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
   @override
   void initState() {
     super.initState();
+    _lineId = widget.initialLineId;
+    _locale.text = widget.initialLocale ?? '';
     _loadCatalog();
   }
 

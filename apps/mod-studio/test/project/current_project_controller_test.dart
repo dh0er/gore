@@ -11,6 +11,7 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
@@ -662,6 +663,237 @@ void main() {
         throwsA(isA<Revision3ContentRequiresReopenException>()),
       );
       expect(managed.contentReadCalls, 2);
+    },
+  );
+
+  test(
+    'dialog localization read binds the visible root project revision head and candidate',
+    () async {
+      const projectId = '15151515151515151515151515151515';
+      const localizationId = '25252525252525252525252525252525';
+      const locId = 'GORE_EXISTING_TEXT';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-localization'),
+        projectIdValue: projectId,
+        projectRevision: 15,
+        head: _head(15),
+        onDialogLocalizationRead:
+            (lease, receivedId, receivedRevision, receivedLocId) {
+              expect(receivedId, localizationId);
+              expect(receivedRevision, 4);
+              expect(receivedLocId, locId);
+              return _controllerDialogLocalizationReadResult(
+                head: lease.head,
+                projectId: lease.projectId,
+                projectRevision: lease.projectRevision,
+                localizationId: receivedId,
+                localizationRevision: receivedRevision,
+                locId: receivedLocId,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final staleReads =
+          <Future<AuthoringRevision3DialogLocalizationReadResult> Function()>[
+            () => coordinator.readCurrentRevision3DialogLocalization(
+              expectedRoot: 'another-root',
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              localizationId: localizationId,
+              expectedLocalizationRevision: 4,
+              expectedLocId: locId,
+            ),
+            () => coordinator.readCurrentRevision3DialogLocalization(
+              expectedRoot: visible.root.path,
+              expectedProjectId: '16161616161616161616161616161616',
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+              localizationId: localizationId,
+              expectedLocalizationRevision: 4,
+              expectedLocId: locId,
+            ),
+            () => coordinator.readCurrentRevision3DialogLocalization(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision + 1,
+              expectedHead: visible.head,
+              localizationId: localizationId,
+              expectedLocalizationRevision: 4,
+              expectedLocId: locId,
+            ),
+            () => coordinator.readCurrentRevision3DialogLocalization(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: _head(16),
+              localizationId: localizationId,
+              expectedLocalizationRevision: 4,
+              expectedLocId: locId,
+            ),
+          ];
+      for (final read in staleReads) {
+        await expectLater(
+          read(),
+          throwsA(
+            isA<Revision3DialogLocalizationReadStaleCheckpointException>(),
+          ),
+        );
+      }
+      expect(managed.dialogLocalizationReadCalls, 0);
+
+      final result = await coordinator.readCurrentRevision3DialogLocalization(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        localizationId: localizationId,
+        expectedLocalizationRevision: 4,
+        expectedLocId: locId,
+      );
+
+      expect(result.projectId, projectId);
+      expect(result.projectRevision, 15);
+      expect(result.localizationId, localizationId);
+      expect(result.localizationRevision, 4);
+      expect(result.locId, locId);
+      expect(result.locales.single.preview, 'Bleib stehen!');
+      expect(managed.dialogLocalizationReadCalls, 1);
+      expect(managed.dialogLocalizationReadIds, <String>[localizationId]);
+      expect(managed.dialogLocalizationReadRevisions, <int>[4]);
+      expect(managed.dialogLocalizationReadLocIds, <String>[locId]);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'dialog localization result and native candidate drift map to stale',
+    () async {
+      const projectId = '17171717171717171717171717171717';
+      const localizationId = '27272727272727272727272727272727';
+      const locId = 'GORE_STALE_TEXT';
+      var returnMismatchedResult = true;
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-localization-stale'),
+        projectIdValue: projectId,
+        projectRevision: 17,
+        head: _head(17),
+        onDialogLocalizationRead: (lease, id, revision, identity) {
+          if (returnMismatchedResult) {
+            returnMismatchedResult = false;
+            return _controllerDialogLocalizationReadResult(
+              head: lease.head,
+              projectId: lease.projectId,
+              projectRevision: lease.projectRevision + 1,
+              localizationId: id,
+              localizationRevision: revision,
+              locId: identity,
+            );
+          }
+          throw const ModFfiException(
+            command: 'authoring_store_read_revision3_dialog_localization_v1',
+            code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+            message: 'fake stale candidate revision',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      Future<AuthoringRevision3DialogLocalizationReadResult> read() =>
+          coordinator.readCurrentRevision3DialogLocalization(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            localizationId: localizationId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: locId,
+          );
+
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DialogLocalizationReadStaleCheckpointException>()),
+      );
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DialogLocalizationReadStaleCheckpointException>()),
+      );
+      expect(managed.dialogLocalizationReadCalls, 2);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'dialog localization poisoned lease maps to requires-reopen and locks retry',
+    () async {
+      const projectId = '18181818181818181818181818181818';
+      const localizationId = '28282828282828282828282828282828';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-localization-reopen'),
+        projectIdValue: projectId,
+        projectRevision: 18,
+        head: _head(18),
+        onDialogLocalizationRead: (lease, _, _, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected localization integrity failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      Future<AuthoringRevision3DialogLocalizationReadResult> read() =>
+          coordinator.readCurrentRevision3DialogLocalization(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            localizationId: localizationId,
+            expectedLocalizationRevision: 4,
+            expectedLocId: 'GORE_REOPEN_TEXT',
+          );
+
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DialogLocalizationReadRequiresReopenException>()),
+      );
+      expect(managed.dialogLocalizationReadCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        read(),
+        throwsA(isA<Revision3DialogLocalizationReadRequiresReopenException>()),
+      );
+      expect(managed.dialogLocalizationReadCalls, 1);
     },
   );
 
@@ -2452,6 +2684,112 @@ void main() {
   );
 
   test(
+    'DialogLine publication rejects stale checkpoints and refreshes managed state without a game root',
+    () async {
+      const projectId = '22222222222222222222222222222222';
+      const projectRevision = 22;
+      final plan = _dialogLinePlan(
+        projectId: projectId,
+        projectRevision: projectRevision,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('managed-dialog-line'),
+        projectIdValue: projectId,
+        projectRevision: projectRevision,
+        head: _head(projectRevision),
+        onDialogLinePublish: (lease, received) {
+          expect(received, same(plan));
+          lease.projectRevision = projectRevision + 1;
+          lease.head = _head(projectRevision + 1);
+          return Revision3DialogLineEntryPublication(
+            projectId: projectId,
+            projectRevision: projectRevision + 1,
+            lineId: received.lineId,
+            localizationId: received.localization.localizationId,
+            localizationAction:
+                AuthoringRevision3DialogLocalizationAction.created,
+            voiceSlotId: received.voiceSlot?.slotId,
+            locale: received.locale,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      for (final stale
+          in <
+            ({
+              String root,
+              String projectId,
+              int revision,
+              AuthoringWorkingHead head,
+            })
+          >[
+            (
+              root: Directory('another-dialog-root').path,
+              projectId: projectId,
+              revision: projectRevision,
+              head: _head(projectRevision),
+            ),
+            (
+              root: managed.root.path,
+              projectId: '23232323232323232323232323232323',
+              revision: projectRevision,
+              head: _head(projectRevision),
+            ),
+            (
+              root: managed.root.path,
+              projectId: projectId,
+              revision: projectRevision - 1,
+              head: _head(projectRevision),
+            ),
+            (
+              root: managed.root.path,
+              projectId: projectId,
+              revision: projectRevision,
+              head: _head(projectRevision - 1),
+            ),
+          ]) {
+        await expectLater(
+          coordinator.createCurrentRevision3DialogLine(
+            expectedRoot: stale.root,
+            expectedProjectId: stale.projectId,
+            expectedProjectRevision: stale.revision,
+            expectedHead: stale.head,
+            plan: plan,
+          ),
+          throwsA(isA<Revision3DialogLineEntryStaleCheckpointException>()),
+        );
+      }
+      expect(managed.dialogLinePublishCalls, 0);
+
+      final publication = await coordinator.createCurrentRevision3DialogLine(
+        expectedRoot: managed.root.path,
+        expectedProjectId: projectId,
+        expectedProjectRevision: projectRevision,
+        expectedHead: _head(projectRevision),
+        plan: plan,
+      );
+      expect(publication.lineId, plan.lineId);
+      expect(publication.localizationId, plan.localization.localizationId);
+      expect(publication.voiceSlotId, plan.voiceSlot?.slotId);
+      expect(managed.dialogLinePublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, projectRevision + 1);
+      expect(
+        state.head.canonicalJson,
+        _head(projectRevision + 1).canonicalJson,
+      );
+    },
+  );
+
+  test(
     'Voice publication is exact-checkpoint bound and refreshes R3 state',
     () async {
       final plan = _voicePlan();
@@ -3853,6 +4191,11 @@ typedef _NpcPublishHook =
       String gameRoot,
       Revision3NpcDraftAuthoringInput input,
     );
+typedef _DialogLinePublishHook =
+    FutureOr<Revision3DialogLineEntryPublication> Function(
+      _FakeManagedLease lease,
+      Revision3DialogLineEntryTechnicalPlan plan,
+    );
 typedef _ManagedCompilerCheckHook =
     FutureOr<ManagedRevision3CompilerCheckReceipt> Function(
       _FakeManagedLease lease,
@@ -3925,8 +4268,18 @@ typedef _InstalledDataAssetInspectionHook =
       AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
       AuthoringRevision3DataAssetPackageCandidate candidate,
     );
+typedef _DialogLocalizationReadHook =
+    FutureOr<AuthoringRevision3DialogLocalizationReadResult> Function(
+      _FakeManagedLease lease,
+      String localizationId,
+      int expectedLocalizationRevision,
+      String expectedLocId,
+    );
 
-final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
+final class _FakeManagedLease
+    implements
+        ManagedRevision3CurrentProjectLease,
+        ManagedRevision3DialogLocalizationReadLease {
   _FakeManagedLease({
     required this.root,
     required this.projectIdValue,
@@ -3936,8 +4289,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onVerify,
     this.onQuestInspection,
     this.onNpcInspection,
+    this.onDialogLocalizationRead,
     this.onManagedCompilerCheck,
     this.onNpcPublish,
+    this.onDialogLinePublish,
     this.onQuestPublish,
     this.onQuestOutlinePublish,
     this.onQuestTransitionsSeed,
@@ -3974,8 +4329,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final _VerifyHook? onVerify;
   final _QuestInspectionHook? onQuestInspection;
   final _NpcInspectionHook? onNpcInspection;
+  final _DialogLocalizationReadHook? onDialogLocalizationRead;
   final _ManagedCompilerCheckHook? onManagedCompilerCheck;
   final _NpcPublishHook? onNpcPublish;
+  final _DialogLinePublishHook? onDialogLinePublish;
   final _QuestPublishHook? onQuestPublish;
   final _QuestOutlinePublishHook? onQuestOutlinePublish;
   final _QuestTransitionsSeedHook? onQuestTransitionsSeed;
@@ -4006,6 +4363,10 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final List<String> questInspectionQuestIds = <String>[];
   int npcInspectionCalls = 0;
   final List<String> npcInspectionNpcIds = <String>[];
+  int dialogLocalizationReadCalls = 0;
+  final List<String> dialogLocalizationReadIds = <String>[];
+  final List<int> dialogLocalizationReadRevisions = <int>[];
+  final List<String> dialogLocalizationReadLocIds = <String>[];
   int managedCompilerCheckCalls = 0;
   final List<AuthoringRevision3ManagedCompilerEntityKind>
   managedCompilerCheckKinds = <AuthoringRevision3ManagedCompilerEntityKind>[];
@@ -4015,6 +4376,7 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   final List<String> managedCompilerCheckModuleIds = <String>[];
   final List<int> managedCompilerCheckModuleRevisions = <int>[];
   int npcPublishCalls = 0;
+  int dialogLinePublishCalls = 0;
   int questPublishCalls = 0;
   int questOutlinePublishCalls = 0;
   int questTransitionsSeedCalls = 0;
@@ -4100,6 +4462,29 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
       throw StateError('fake managed lease has no NPC source inspector');
     }
     return inspect(this, npcId);
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationReadCalls++;
+    dialogLocalizationReadIds.add(localizationId);
+    dialogLocalizationReadRevisions.add(expectedLocalizationRevision);
+    dialogLocalizationReadLocIds.add(expectedLocId);
+    final read = onDialogLocalizationRead;
+    if (read == null) {
+      throw StateError('fake managed lease has no localization reader');
+    }
+    return read(
+      this,
+      localizationId,
+      expectedLocalizationRevision,
+      expectedLocId,
+    );
   }
 
   @override
@@ -4314,6 +4699,18 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<Revision3DialogLineEntryPublication> prepareAndPublishDialogLineV1({
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  }) async {
+    dialogLinePublishCalls++;
+    final publish = onDialogLinePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no dialog-line publisher');
+    }
+    return publish(this, plan);
+  }
+
+  @override
   Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
     required String gameRoot,
     required Revision3VoiceTakeTechnicalPlan plan,
@@ -4417,6 +4814,21 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     }
   }
 }
+
+Revision3DialogLineEntryTechnicalPlan _dialogLinePlan({
+  required String projectId,
+  required int projectRevision,
+}) => Revision3DialogLineEntryTechnicalPlan.forCheckpoint(
+  catalog: Revision3DialogLineEntryCatalog.fromContentIndex(
+    _contentIndex(projectId: projectId, revision: projectRevision),
+  ),
+  input: Revision3DialogLineEntryInput.create(
+    lineDisplayName: 'Gate greeting',
+    speakerHint: 'Asghan',
+    locale: 'de',
+    text: 'Halt! Wer da?',
+  ),
+);
 
 Revision3VoiceTakeTechnicalPlan _voicePlan() {
   final catalog = Revision3VoiceCatalog.fromContentIndex(
@@ -4621,6 +5033,48 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+AuthoringRevision3DialogLocalizationReadResult
+_controllerDialogLocalizationReadResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) {
+  final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+    expectedHead: head,
+    localizationId: localizationId,
+    expectedLocalizationRevision: localizationRevision,
+    expectedLocId: locId,
+  );
+  return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'read_only',
+      'head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'localization_id': localizationId,
+      'localization_revision': localizationRevision,
+      'loc_id': locId,
+      'locales': <Object?>[
+        <String, Object?>{
+          'locale': 'de',
+          'preview': 'Bleib stehen!',
+          'truncated': false,
+          'has_nonempty_text': true,
+        },
+      ],
+      'content_authority': 'read_only_exact_current_localization',
+      'build_status': 'not_evaluated',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_applicable',
+    },
+    request: request,
+  );
+}
 
 AuthoringRevision3DataAssetPackageIndexResult
 _controllerDataAssetPackageIndexResult({

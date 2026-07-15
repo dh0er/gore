@@ -747,6 +747,99 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedActionNewQuestDescription => '创建带有目标和已验证父级标识的离线任务草稿。';
 
   @override
+  String get managedActionNewDialogLineTitle => '添加对话行';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      '编写本地化项目文本，或关联此项目中尚未使用的文本。这不会创建可在游戏中使用的对话主题。';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return '对话行已保存到项目修订版 $projectRevision。游戏和存档文件均未更改。';
+  }
+
+  @override
+  String get managedDialogLineIntroduction => '编写新的本地化对话行，或关联已属于此项目的文本。';
+
+  @override
+  String get managedDialogLineBoundary =>
+      '只会更改项目文件。这不会创建 AngelScript 主题或可在游戏中使用的对话，也绝不会更改游戏安装或存档文件。说话者字段只是标签，不会关联任何 NPC。';
+
+  @override
+  String get managedDialogLineCreateMode => '编写新文本';
+
+  @override
+  String get managedDialogLineReuseMode => '使用项目文本';
+
+  @override
+  String get managedDialogLineNameLabel => '对话行名称';
+
+  @override
+  String get managedDialogLineNameHint => '矿井入口问候';
+
+  @override
+  String get managedDialogLineSpeakerLabel => '说话者标签（可选）';
+
+  @override
+  String get managedDialogLineSpeakerHint => '例如 Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => '语言';
+
+  @override
+  String get managedDialogLineTextLabel => '对话文本';
+
+  @override
+  String get managedDialogLineReuseSearch => '搜索未使用的项目文本';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      '没有可关联的、未使用且结构完整的项目文本。请改为编写新文本。';
+
+  @override
+  String get managedDialogLineCreateSlotLabel => '为此语言准备 Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      '在项目中创建一个空的未解析 Voice 槽位。不会添加或部署录音。';
+
+  @override
+  String get managedDialogLineCancel => '取消';
+
+  @override
+  String get managedDialogLineSave => '保存到项目';
+
+  @override
+  String get managedDialogLineSaving => '正在保存…';
+
+  @override
+  String get managedDialogLineLoading => '正在读取项目的精确内容…';
+
+  @override
+  String get managedDialogLineLoadFailed => '无法读取项目当前的精确内容。未进行任何更改。';
+
+  @override
+  String get managedDialogLineRetry => '重试';
+
+  @override
+  String get managedDialogLineStale => '打开此窗口期间项目已更改。请关闭窗口，并从当前项目重试。';
+
+  @override
+  String get managedDialogLineRequiresReopen => '已无法安全验证当前项目。请关闭此窗口并重新打开托管项目。';
+
+  @override
+  String get managedDialogLineInvalidInput => '请检查突出显示的项目输入，并选择当前的精确选项。';
+
+  @override
+  String get managedDialogLineSaveFailed => '无法安全保存对话行。游戏和存档文件均未更改。';
+
+  @override
+  String get managedDialogLineDone => '完成';
+
+  @override
+  String get managedDialogLineAddRecording => '添加录音';
+
+  @override
   String get managedActionAddVoiceTakeTitle => '添加语音录音';
 
   @override
@@ -2109,6 +2202,99 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get managedActionNewQuestDescription => '创建带有目标和已验证父级标识的离线任务草稿。';
+
+  @override
+  String get managedActionNewDialogLineTitle => '添加对话行';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      '编写本地化项目文本，或关联此项目中尚未使用的文本。这不会创建可在游戏中使用的对话主题。';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return '对话行已保存到项目修订版 $projectRevision。游戏和存档文件均未更改。';
+  }
+
+  @override
+  String get managedDialogLineIntroduction => '编写新的本地化对话行，或关联已属于此项目的文本。';
+
+  @override
+  String get managedDialogLineBoundary =>
+      '只会更改项目文件。这不会创建 AngelScript 主题或可在游戏中使用的对话，也绝不会更改游戏安装或存档文件。说话者字段只是标签，不会关联任何 NPC。';
+
+  @override
+  String get managedDialogLineCreateMode => '编写新文本';
+
+  @override
+  String get managedDialogLineReuseMode => '使用项目文本';
+
+  @override
+  String get managedDialogLineNameLabel => '对话行名称';
+
+  @override
+  String get managedDialogLineNameHint => '矿井入口问候';
+
+  @override
+  String get managedDialogLineSpeakerLabel => '说话者标签（可选）';
+
+  @override
+  String get managedDialogLineSpeakerHint => '例如 Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => '语言';
+
+  @override
+  String get managedDialogLineTextLabel => '对话文本';
+
+  @override
+  String get managedDialogLineReuseSearch => '搜索未使用的项目文本';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      '没有可关联的、未使用且结构完整的项目文本。请改为编写新文本。';
+
+  @override
+  String get managedDialogLineCreateSlotLabel => '为此语言准备 Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      '在项目中创建一个空的未解析 Voice 槽位。不会添加或部署录音。';
+
+  @override
+  String get managedDialogLineCancel => '取消';
+
+  @override
+  String get managedDialogLineSave => '保存到项目';
+
+  @override
+  String get managedDialogLineSaving => '正在保存…';
+
+  @override
+  String get managedDialogLineLoading => '正在读取项目的精确内容…';
+
+  @override
+  String get managedDialogLineLoadFailed => '无法读取项目当前的精确内容。未进行任何更改。';
+
+  @override
+  String get managedDialogLineRetry => '重试';
+
+  @override
+  String get managedDialogLineStale => '打开此窗口期间项目已更改。请关闭窗口，并从当前项目重试。';
+
+  @override
+  String get managedDialogLineRequiresReopen => '已无法安全验证当前项目。请关闭此窗口并重新打开托管项目。';
+
+  @override
+  String get managedDialogLineInvalidInput => '请检查突出显示的项目输入，并选择当前的精确选项。';
+
+  @override
+  String get managedDialogLineSaveFailed => '无法安全保存对话行。游戏和存档文件均未更改。';
+
+  @override
+  String get managedDialogLineDone => '完成';
+
+  @override
+  String get managedDialogLineAddRecording => '添加录音';
 
   @override
   String get managedActionAddVoiceTakeTitle => '添加语音录音';

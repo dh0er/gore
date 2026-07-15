@@ -11,6 +11,8 @@ import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/managed_project_lock.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
+import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:path/path.dart' as p;
 
 import '../dataasset/dataasset_test_fixtures.dart';
@@ -107,6 +109,15 @@ void main() {
             head,
             project,
           ),
+          'authoring_store_read_revision3_dialog_localization_v1':
+              _dialogLocalizationReadResponse(
+                head: head,
+                projectId: '00000000000000000000000000000003',
+                projectRevision: 7,
+                localizationId: '00000000000000000000000000000021',
+                localizationRevision: 4,
+                locId: 'GORE_EXISTING_TEXT',
+              ),
           'authoring_store_read_revision3_dataasset_package_index_v1':
               _dataAssetPackageIndexResponse(head, project),
           'authoring_store_prepare_revision3_quest_draft_v3':
@@ -139,6 +150,13 @@ void main() {
         verification: AuthoringAssetVerification.full,
       );
       await adapter.readContentIndex(root: fixture.path, expectedHead: head);
+      await adapter.readDialogLocalizationV1(
+        root: fixture.path,
+        expectedHead: head,
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      );
       await adapter.readDataAssetPackageIndexV1(
         root: fixture.path,
         gameRoot: r'D:\Games\Gothic Remake',
@@ -162,6 +180,7 @@ void main() {
         'authoring_store_prepare_revision3_checkpoint',
         'authoring_store_open_revision3_head_bytes',
         'authoring_store_read_revision3_content_index_v1',
+        'authoring_store_read_revision3_dialog_localization_v1',
         'authoring_store_read_revision3_dataasset_package_index_v1',
         'authoring_store_prepare_revision3_quest_draft_v3',
         'authoring_store_prepare_revision3_npc_draft_v1',
@@ -186,16 +205,23 @@ void main() {
       });
       expect(core.calls[4].payload, <String, Object?>{
         'expected_head_json': head.canonicalJson,
-        'game_root': r'D:\Games\Gothic Remake',
+        'expected_localization_revision': 4,
+        'expected_loc_id': 'GORE_EXISTING_TEXT',
+        'localization_id': '00000000000000000000000000000021',
         'root': fixture.path,
       });
       expect(core.calls[5].payload, <String, Object?>{
+        'expected_head_json': head.canonicalJson,
+        'game_root': r'D:\Games\Gothic Remake',
+        'root': fixture.path,
+      });
+      expect(core.calls[6].payload, <String, Object?>{
         'current_project_json': project,
         'game_root': r'D:\Games\Gothic Remake',
         'quest_request_json': questRequest.canonicalJson,
         'root': fixture.path,
       });
-      expect(core.calls[6].payload, <String, Object?>{
+      expect(core.calls[7].payload, <String, Object?>{
         'current_project_json': project,
         'game_root': r'D:\Games\Gothic Remake',
         'npc_request_json': npcRequest.canonicalJson,
@@ -431,6 +457,71 @@ void main() {
       );
       expect(reopened.projectJson, results[1].projectJson);
       expect(reopened.projectRevision, 2);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'DialogLine create publishes only after candidate and fixed-head full reopens without a game root',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'dialog_line_publish');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 0, name: 'Dialog project');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final basisHead = session.head;
+      final plan = _dialogLinePlan();
+
+      final result = await session.prepareAndPublishDialogLineV1(plan: plan);
+
+      expect(store.dialogLinePrepareCalls, 1);
+      expect(store.dialogLineCurrentProjects, <String>[original]);
+      expect(
+        store.dialogLineRequests.single.expectedHead.canonicalJson,
+        basisHead.canonicalJson,
+      );
+      expect(store.dialogLineRequests.single.expectedRevision, 0);
+      expect(
+        store.dialogLineRequests.single.canonicalJson,
+        isNot(contains('game_root')),
+      );
+      expect(result.projectRevision, 1);
+      expect(result.projectId, '00000000000000000000000000000003');
+      expect(result.lineId, plan.lineId);
+      expect(result.localizationId, plan.localization.localizationId);
+      expect(
+        result.localizationAction,
+        AuthoringRevision3DialogLocalizationAction.created,
+      );
+      expect(result.voiceSlotId, plan.voiceSlot!.slotId);
+      expect(store.openedCheckpointHeads, contains(result.head.canonicalJson));
+      expect(store.openedPublishedHeads.last, result.head.canonicalJson);
+      expect(store.headVerifications.last, AuthoringAssetVerification.full);
+      expect(store.openVerifications.last, AuthoringAssetVerification.full);
+      expect(session.projectJson, result.projectJson);
+      expect(session.head.canonicalJson, result.head.canonicalJson);
+      expect(await session.headFile.readAsString(), result.head.canonicalJson);
+
+      await session.close();
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 1);
+      expect(reopened.projectJson, result.projectJson);
+      final project = jsonDecode(reopened.projectJson) as Map<String, Object?>;
+      final entities = (project['entities']! as Map).cast<String, Object?>();
+      expect(
+        entities.keys,
+        containsAll(<String>[
+          plan.lineId,
+          plan.localization.localizationId,
+          plan.voiceSlot!.slotId,
+        ]),
+      );
       await reopened.close();
     },
   );
@@ -2600,6 +2691,188 @@ void main() {
     },
   );
 
+  test(
+    'dialog localization read stays exact-head, serialized, and publication-free',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_exact',
+      );
+      final store = _FakeRevision3Store();
+      final original = _projectJson(
+        revision: 0,
+        name: 'Dialog localization exact',
+      );
+      final saved = _projectJson(
+        revision: 1,
+        name: 'After dialog localization',
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final prepareCalls = store.prepareCalls;
+      final exactHead = session.head.canonicalJson;
+      final headBytes = await session.headFile.readAsBytes();
+      final readEntered = Completer<void>();
+      final releaseRead = Completer<void>();
+      final savePrepareEntered = Completer<void>();
+      final releaseSavePrepare = Completer<void>();
+      store.afterDialogLocalizationRead = (_, _, _) async {
+        readEntered.complete();
+        await releaseRead.future;
+      };
+      store.afterPrepare = (_, _, _) async {
+        savePrepareEntered.complete();
+        await releaseSavePrepare.future;
+      };
+
+      final reading = session.readDialogLocalizationV1(
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      );
+      await readEntered.future;
+      final saving = session.save(saved);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.prepareCalls, prepareCalls);
+
+      releaseRead.complete();
+      final result = await reading;
+      await savePrepareEntered.future;
+      expect(await session.headFile.readAsBytes(), orderedEquals(headBytes));
+      expect(session.projectJson, original);
+      releaseSavePrepare.complete();
+      await saving;
+
+      expect(result.projectId, '00000000000000000000000000000003');
+      expect(result.projectRevision, 0);
+      expect(result.locales.single.preview, 'Bleib stehen!');
+      expect(store.dialogLocalizationReadCalls, 1);
+      expect(store.dialogLocalizationReadRoots, <String>[root.path]);
+      expect(store.dialogLocalizationReadExpectedHeads, <String>[exactHead]);
+      expect(store.dialogLocalizationReadIds, <String>[
+        '00000000000000000000000000000021',
+      ]);
+      expect(store.dialogLocalizationReadRevisions, <int>[4]);
+      expect(store.dialogLocalizationReadLocIds, <String>[
+        'GORE_EXISTING_TEXT',
+      ]);
+      expect(store.prepareCalls, prepareCalls + 1);
+      expect(session.projectRevision, 1);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'dialog localization stale candidate is retryable but mismatched response poisons',
+    () async {
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_retry',
+      );
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: _projectJson(
+          revision: 0,
+          name: 'Dialog localization retry',
+        ),
+      );
+      retryStore.nextDialogLocalizationReadError = const ModFfiException(
+        command: 'authoring_store_read_revision3_dialog_localization_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+        message: 'fake stale localization selection',
+      );
+      Future<AuthoringRevision3DialogLocalizationReadResult> retryRead() =>
+          retrySession.readDialogLocalizationV1(
+            localizationId: '00000000000000000000000000000021',
+            expectedLocalizationRevision: 4,
+            expectedLocId: 'GORE_EXISTING_TEXT',
+          );
+
+      await expectLater(
+        retryRead(),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+          ),
+        ),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect((await retryRead()).projectRevision, 0);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'dialog_localization_mismatch',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: _projectJson(
+              revision: 0,
+              name: 'Dialog localization mismatch',
+            ),
+          );
+      poisonStore.nextDialogLocalizationReadResponseMismatch = 'project-id';
+      await expectLater(
+        poisonSession.readDialogLocalizationV1(
+          localizationId: '00000000000000000000000000000021',
+          expectedLocalizationRevision: 4,
+          expectedLocId: 'GORE_EXISTING_TEXT',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await poisonSession.close();
+    },
+  );
+
+  test('dialog localization post-read head drift requires reopen', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dialog_localization_drift',
+    );
+    final store = _FakeRevision3Store();
+    final original = _projectJson(
+      revision: 0,
+      name: 'Dialog localization drift',
+    );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+    );
+    final external = store.register(
+      _projectJson(revision: 91, name: 'External localization winner'),
+    );
+    store.afterDialogLocalizationRead = (rootPath, _, _) => File(
+      p.join(rootPath, 'gore-project.json'),
+    ).writeAsString(external.canonicalJson, flush: true);
+
+    await expectLater(
+      session.readDialogLocalizationV1(
+        localizationId: '00000000000000000000000000000021',
+        expectedLocalizationRevision: 4,
+        expectedLocId: 'GORE_EXISTING_TEXT',
+      ),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+
+    expect(await session.headFile.readAsString(), external.canonicalJson);
+    expect(session.requiresReopen, isTrue);
+    expect(store.prepareCalls, 1);
+    await session.close();
+  });
+
   test('content read head drift poisons without publishing', () async {
     final root = await _projectRoot(fixture, suffix: 'content_drift');
     final store = _FakeRevision3Store();
@@ -4616,6 +4889,37 @@ Future<ManagedRevision3QuestContextEditCheckpoint> _publishQuestContext(
   expectedGiverSourceSeal: _contextSourceSeal(12, '2'),
 );
 
+Revision3DialogLineEntryTechnicalPlan _dialogLinePlan() {
+  final index = Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': '00000000000000000000000000000003',
+    'project_revision': 0,
+    'project_name': 'Dialog project',
+    'project_version': '1.0.0',
+    'project_author': 'revision-3 session tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 171698176,
+        'sha256':
+            'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+      },
+    },
+    'authoring_locales': <Object?>[],
+    'entity_counts': <String, Object?>{},
+    'entities': <Object?>[],
+    'assets': <Object?>[],
+  });
+  return Revision3DialogLineEntryTechnicalPlan.forCheckpoint(
+    catalog: Revision3DialogLineEntryCatalog.fromContentIndex(index),
+    input: Revision3DialogLineEntryInput.create(
+      lineDisplayName: 'Gate greeting',
+      speakerHint: 'Asghan',
+      locale: 'de',
+      text: 'Halt! Wer da?',
+    ),
+  );
+}
+
 AuthoringDraftContentSeal _contextSourceSeal(int bytes, String digit) =>
     AuthoringDraftContentSeal.fromJson(<String, Object?>{
       'byte_len': bytes,
@@ -4646,6 +4950,13 @@ typedef _AfterNpcPrepare =
     );
 
 typedef _AfterContentRead =
+    FutureOr<void> Function(
+      String root,
+      AuthoringWorkingHead expectedHead,
+      String projectJson,
+    );
+
+typedef _AfterDialogLocalizationRead =
     FutureOr<void> Function(
       String root,
       AuthoringWorkingHead expectedHead,
@@ -4789,6 +5100,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       <AuthoringAssetVerification>[];
   final List<AuthoringAssetVerification> headVerifications =
       <AuthoringAssetVerification>[];
+  final List<String> openedPublishedHeads = <String>[];
+  final List<String> openedCheckpointHeads = <String>[];
   final List<String?> expectedHeads = <String?>[];
   int _sequence = 0;
   int prepareCalls = 0;
@@ -4797,11 +5110,13 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int questTransitionsPrepareCalls = 0;
   int questContextPrepareCalls = 0;
   int npcPrepareCalls = 0;
+  int dialogLinePrepareCalls = 0;
   int voicePrepareCalls = 0;
   int voiceSelectionPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
+  int dialogLocalizationReadCalls = 0;
   int questInspectionCalls = 0;
   int npcInspectionCalls = 0;
   int managedCompilerCheckCalls = 0;
@@ -4817,6 +5132,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _AfterQuestPrepare? afterQuestPrepare;
   _AfterNpcPrepare? afterNpcPrepare;
   _AfterContentRead? afterContentRead;
+  _AfterDialogLocalizationRead? afterDialogLocalizationRead;
   _AfterQuestInspection? afterQuestInspection;
   _AfterNpcInspection? afterNpcInspection;
   _AfterManagedCompilerCheck? afterManagedCompilerCheck;
@@ -4836,6 +5152,9 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> npcCurrentProjects = <String>[];
   final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
       <AuthoringRevision3NpcDraftRequestV1>[];
+  final List<String> dialogLineCurrentProjects = <String>[];
+  final List<AuthoringRevision3DialogLineEntryRequestV1> dialogLineRequests =
+      <AuthoringRevision3DialogLineEntryRequestV1>[];
   final List<String> voiceSources = <String>[];
   final List<String> voiceGameRoots = <String>[];
   final List<String> voiceCurrentProjects = <String>[];
@@ -4860,6 +5179,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
+  Object? nextDialogLocalizationReadError;
+  String? nextDialogLocalizationReadResponseMismatch;
   Object? nextQuestInspectionError;
   String? nextQuestInspectionResponseMismatch;
   Object? nextNpcInspectionError;
@@ -4873,6 +5194,11 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   Object? nextDataAssetError;
   String? nextDataAssetResponseMismatch;
   final List<String> contentExpectedHeads = <String>[];
+  final List<String> dialogLocalizationReadRoots = <String>[];
+  final List<String> dialogLocalizationReadExpectedHeads = <String>[];
+  final List<String> dialogLocalizationReadIds = <String>[];
+  final List<int> dialogLocalizationReadRevisions = <int>[];
+  final List<String> dialogLocalizationReadLocIds = <String>[];
   final List<String> questInspectionRoots = <String>[];
   final List<String> questInspectionGameRoots = <String>[];
   final List<String> questInspectionExpectedHeads = <String>[];
@@ -4938,6 +5264,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     final rawHead = await File(
       p.join(root, 'gore-project.json'),
     ).readAsString();
+    openedPublishedHeads.add(rawHead);
     final head = AuthoringWorkingHead.fromCanonicalJson(rawHead);
     final project = _projectsByHead[rawHead];
     if (project == null) throw StateError('unknown published head');
@@ -4955,6 +5282,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     required AuthoringAssetVerification verification,
   }) async {
     headVerifications.add(verification);
+    openedCheckpointHeads.add(head.canonicalJson);
     final project = _projectsByHead[head.canonicalJson];
     if (project == null) throw StateError('unknown checkpoint head');
     final headOverride = nextHeadOverride;
@@ -5432,6 +5760,141 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   }
 
   @override
+  Future<AuthoringRevision3DialogLineEntryPreparation> prepareDialogLineV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLineEntryRequestV1 request,
+  }) async {
+    dialogLinePrepareCalls++;
+    dialogLineCurrentProjects.add(currentProjectJson);
+    dialogLineRequests.add(request);
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_dialog_line_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_HEAD_CONFLICT',
+        message: 'fake native dialog-line basis CAS rejected',
+      );
+    }
+
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = SplayTreeMap<String, Object?>.from(
+      (candidate['entities']! as Map).cast<String, Object?>(),
+    );
+    final locales = SplayTreeSet<String>.from(
+      (candidate['authoring_locales']! as List).cast<String>(),
+    );
+    final localization = request.localization;
+    final String localizationAction;
+    switch (localization) {
+      case AuthoringRevision3DialogLocalizationCreateIntentV1():
+        localizationAction = 'created';
+        locales.addAll(localization.texts.keys);
+        entities[localization.localizationId] = <String, Object?>{
+          'id': localization.localizationId,
+          'display_name': localization.displayName,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': localization.locId,
+          },
+          'revision': 0,
+          'payload': <String, Object?>{
+            'kind': 'localization_entry',
+            'data': <String, Object?>{
+              'loc_id': localization.locId,
+              'texts': localization.texts,
+            },
+          },
+        };
+      case AuthoringRevision3DialogLocalizationReuseExactIntentV1():
+        localizationAction = 'reused_exact';
+    }
+
+    final voiceSlots = SplayTreeMap<String, Object?>();
+    final slot = request.voiceSlot;
+    if (slot != null) {
+      locales.add(slot.locale);
+      voiceSlots[slot.locale] = _dialogLineRef(
+        request.expectedProjectId,
+        slot.slotId,
+        'voice_slot',
+      );
+      entities[slot.slotId] = <String, Object?>{
+        'id': slot.slotId,
+        'display_name': slot.displayName,
+        'origin': <String, Object?>{
+          'type': 'generated',
+          'generator_id': 'gore-authoring.voice-slot',
+          'generator_version': 1,
+          'owner': _dialogLineRef(
+            request.expectedProjectId,
+            request.lineId,
+            'dialog_line',
+          ),
+        },
+        'revision': 0,
+        'payload': <String, Object?>{
+          'kind': 'voice_slot',
+          'data': <String, Object?>{
+            'locale': slot.locale,
+            'target_resolution': <String, Object?>{'state': 'unresolved'},
+            'candidates': <Object?>[],
+          },
+        },
+      };
+    }
+    entities[request.lineId] = <String, Object?>{
+      'id': request.lineId,
+      'display_name': request.lineDisplayName,
+      'origin': <String, Object?>{
+        'type': 'new',
+        'authored_runtime_id': request.lineAuthoredIdentity,
+      },
+      'revision': 0,
+      'payload': <String, Object?>{
+        'kind': 'dialog_line',
+        'data': <String, Object?>{
+          'localization': _dialogLineRef(
+            request.expectedProjectId,
+            localization.localizationId,
+            'localization_entry',
+          ),
+          if (request.speakerHint != null) 'speaker_hint': request.speakerHint,
+          'voice_slots': voiceSlots,
+        },
+      },
+    };
+    candidate['authoring_locales'] = locales.toList(growable: false);
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3DialogLineEntryPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': localization.localizationId,
+        'localization_action': localizationAction,
+        'voice_slot_id': slot?.slotId,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'topic_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
   Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
     required String root,
     required String gameRoot,
@@ -5704,6 +6167,67 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
             : null,
       ),
       expectedHead: expectedHead,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationReadCalls++;
+    dialogLocalizationReadRoots.add(root);
+    dialogLocalizationReadExpectedHeads.add(expectedHead.canonicalJson);
+    dialogLocalizationReadIds.add(localizationId);
+    dialogLocalizationReadRevisions.add(expectedLocalizationRevision);
+    dialogLocalizationReadLocIds.add(expectedLocId);
+    final injectedError = nextDialogLocalizationReadError;
+    nextDialogLocalizationReadError = null;
+    if (injectedError != null) throw injectedError;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_read_revision3_dialog_localization_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_LOCALIZATION_HEAD_CONFLICT',
+        message: 'fake native dialog localization basis CAS rejected',
+      );
+    }
+    final projectJson = _projectsByHead[actual];
+    if (projectJson == null) {
+      throw StateError('unknown dialog localization checkpoint head');
+    }
+    final hook = afterDialogLocalizationRead;
+    afterDialogLocalizationRead = null;
+    await hook?.call(root, expectedHead, projectJson);
+
+    final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+    final mismatch = nextDialogLocalizationReadResponseMismatch;
+    nextDialogLocalizationReadResponseMismatch = null;
+    final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+      expectedHead: expectedHead,
+      localizationId: localizationId,
+      expectedLocalizationRevision: expectedLocalizationRevision,
+      expectedLocId: expectedLocId,
+    );
+    return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+      _dialogLocalizationReadResponse(
+        head: expectedHead,
+        projectId: mismatch == 'project-id'
+            ? '93939393939393939393939393939393'
+            : project['project_id']! as String,
+        projectRevision: mismatch == 'project-revision'
+            ? (project['revision']! as int) + 1
+            : project['revision']! as int,
+        localizationId: localizationId,
+        localizationRevision: expectedLocalizationRevision,
+        locId: expectedLocId,
+      ),
+      request: request,
     );
   }
 
@@ -6657,6 +7181,16 @@ String _projectJson({
   'asset_store': <String, Object?>{'assets': <String, Object?>{}},
 });
 
+Map<String, Object?> _dialogLineRef(
+  String projectId,
+  String entityId,
+  String expectedKind,
+) => <String, Object?>{
+  'project_id': projectId,
+  'id': entityId,
+  'expected_kind': expectedKind,
+};
+
 Map<String, Object?> _contentResponse(
   AuthoringWorkingHead head,
   String projectJson, {
@@ -6691,6 +7225,36 @@ Map<String, Object?> _contentResponse(
     'publication_status': 'not_applicable',
   };
 }
+
+Map<String, Object?> _dialogLocalizationReadResponse({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'read_only',
+  'head_json': head.canonicalJson,
+  'project_id': projectId,
+  'project_revision': projectRevision,
+  'localization_id': localizationId,
+  'localization_revision': localizationRevision,
+  'loc_id': locId,
+  'locales': <Object?>[
+    <String, Object?>{
+      'locale': 'de',
+      'preview': 'Bleib stehen!',
+      'truncated': false,
+      'has_nonempty_text': true,
+    },
+  ],
+  'content_authority': 'read_only_exact_current_localization',
+  'build_status': 'not_evaluated',
+  'runtime_status': 'runtime_unqualified',
+  'publication_status': 'not_applicable',
+};
 
 Map<String, Object?> _dataAssetPackageIndexResponse(
   AuthoringWorkingHead head,

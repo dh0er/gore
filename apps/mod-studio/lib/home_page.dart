@@ -38,6 +38,8 @@ import 'project/revision3_content_workspace.dart';
 import 'project/revision3_story_entity_workbench.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
+import 'project/revision3_dialog_line_authoring.dart';
+import 'project/revision3_dialog_line_dialog.dart';
 import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
@@ -901,6 +903,47 @@ class _HomePageState extends ConsumerState<HomePage>
           loadBaseGameCatalog: ref.read(
             revision3BaseGameContentCatalogLoaderProvider,
           ),
+          readDialogLocalization:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required localizationId,
+                required expectedLocalizationRevision,
+                required expectedLocId,
+              }) async {
+                try {
+                  return await ref
+                      .read(currentProjectCoordinatorProvider.notifier)
+                      .readCurrentRevision3DialogLocalization(
+                        expectedRoot: currentProject.root.path,
+                        expectedProjectId: expectedProjectId,
+                        expectedProjectRevision: expectedProjectRevision,
+                        expectedHead: currentProject.head,
+                        localizationId: localizationId,
+                        expectedLocalizationRevision:
+                            expectedLocalizationRevision,
+                        expectedLocId: expectedLocId,
+                      );
+                } on Revision3DialogLocalizationReadRequiresReopenException {
+                  throw const Revision3DialogLineEntryRequiresReopenException();
+                } on Revision3DialogLocalizationReadStaleCheckpointException {
+                  throw const Revision3DialogLineEntryStaleCheckpointException();
+                }
+              },
+          publishDialogLine:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .createCurrentRevision3DialogLine(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: expectedProjectId,
+                    expectedProjectRevision: expectedProjectRevision,
+                    expectedHead: currentProject.head,
+                    plan: plan,
+                  ),
           publishVoiceTake:
               ({
                 required expectedProjectId,
@@ -1436,6 +1479,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.verifyCurrentHead,
     required this.loadContentIndex,
     required this.loadBaseGameCatalog,
+    required this.readDialogLocalization,
+    required this.publishDialogLine,
     required this.publishVoiceTake,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTarget,
@@ -1475,6 +1520,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
   final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
+  final Revision3DialogLineEntryLocalizationReader readDialogLocalization;
+  final Revision3DialogLineEntryTechnicalPublisher publishDialogLine;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
@@ -1525,6 +1572,10 @@ class _ManagedRevision3ProjectViewState
   Revision3ContentIndexLoader get loadContentIndex => widget.loadContentIndex;
   Revision3BaseGameContentCatalogLoader get loadBaseGameCatalog =>
       widget.loadBaseGameCatalog;
+  Revision3DialogLineEntryLocalizationReader get readDialogLocalization =>
+      widget.readDialogLocalization;
+  Revision3DialogLineEntryTechnicalPublisher get publishDialogLine =>
+      widget.publishDialogLine;
   Revision3VoiceTechnicalPublisher get publishVoiceTake =>
       widget.publishVoiceTake;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
@@ -2335,12 +2386,22 @@ class _ManagedRevision3ProjectViewState
             Revision3ProjectSectionStatusCard(
               id: 'managed-localization',
               icon: Icons.translate_outlined,
-              title: l10n.managedCapabilityPlanned,
-              description: l10n.managedSectionLocalizationVoiceDescription,
+              title: l10n.managedCapabilityPartial,
+              description: l10n.managedActionNewDialogLineDescription,
             ),
           ],
           actionHeading: l10n.managedSectionActionsHeading,
           actionCards: [
+            Revision3ProjectSectionActionCard(
+              id: 'add-dialog-line',
+              icon: Icons.add_comment_outlined,
+              title: l10n.managedActionNewDialogLineTitle,
+              description: l10n.managedActionNewDialogLineDescription,
+              badge: l10n.managedCapabilityAvailable,
+              onPressed: project.requiresReopen
+                  ? null
+                  : () => unawaited(_openDialogLineEntry(context)),
+            ),
             Revision3ProjectSectionActionCard(
               id: 'add-voice-take',
               icon: Icons.mic_none_outlined,
@@ -2519,6 +2580,16 @@ class _ManagedRevision3ProjectViewState
       ),
       createActions: [
         Revision3ProjectDashboardAction(
+          id: 'create-dialog-line',
+          controlKey: const Key('managed-create-dialog-line'),
+          icon: Icons.add_comment_outlined,
+          title: l10n.managedActionNewDialogLineTitle,
+          description: l10n.managedActionNewDialogLineDescription,
+          onPressed: project.requiresReopen
+              ? null
+              : () => unawaited(_openDialogLineEntry(context)),
+        ),
+        Revision3ProjectDashboardAction(
           id: 'create-npc-draft',
           controlKey: const Key('managed-create-npc-draft'),
           icon: Icons.person_add_alt_1_outlined,
@@ -2621,7 +2692,55 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
-  Future<void> _openVoiceWizard(BuildContext context) async {
+  Future<void> _openDialogLineEntry(BuildContext context) async {
+    if (project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final result = await showDialog<Revision3DialogLineEntryDialogResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Revision3DialogLineEntryDialog(
+        service: Revision3DialogLineEntryAuthoringService(
+          loadContentIndex: loadContentIndex,
+          readExactLocalization: readDialogLocalization,
+          publishTechnicalPlan: publishDialogLine,
+        ),
+        copy: _dialogLineEntryCopy(l10n),
+        allowOpenVoiceNext: gameRoot != null,
+      ),
+    );
+    if (!context.mounted || result == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          l10n.managedActionNewDialogLineSaved(
+            result.publication.projectRevision,
+          ),
+        ),
+      ),
+    );
+    if (!result.openVoiceNext || gameRoot == null) return;
+
+    // Publication refreshes the managed project controller before it returns.
+    // Wait for this child to receive the new head-bound callbacks; reusing the
+    // old callback would correctly fail closed as a stale transaction.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!context.mounted ||
+        project.requiresReopen ||
+        project.projectRevision != result.publication.projectRevision) {
+      return;
+    }
+    await _openVoiceWizard(
+      context,
+      initialLineId: result.publication.lineId,
+      initialLocale: result.publication.locale,
+    );
+  }
+
+  Future<void> _openVoiceWizard(
+    BuildContext context, {
+    String? initialLineId,
+    String? initialLocale,
+  }) async {
     if (gameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3VoiceTakePublication>(
       context: context,
@@ -2630,6 +2749,8 @@ class _ManagedRevision3ProjectViewState
           loadContentIndex: loadContentIndex,
           publishTechnicalPlan: publishVoiceTake,
         ),
+        initialLineId: initialLineId,
+        initialLocale: initialLocale,
       ),
     );
     if (!context.mounted || publication == null) return;
@@ -2980,6 +3101,39 @@ class _ManagedRevision3ProjectViewState
   Future<void> _openSettings(BuildContext context) =>
       _showModStudioSettingsDialog(context);
 }
+
+Revision3DialogLineEntryDialogCopy _dialogLineEntryCopy(
+  AppLocalizations l10n,
+) => Revision3DialogLineEntryDialogCopy(
+  title: l10n.managedActionNewDialogLineTitle,
+  introduction: l10n.managedDialogLineIntroduction,
+  projectOnlyBoundary: l10n.managedDialogLineBoundary,
+  createMode: l10n.managedDialogLineCreateMode,
+  reuseMode: l10n.managedDialogLineReuseMode,
+  lineNameLabel: l10n.managedDialogLineNameLabel,
+  lineNameHint: l10n.managedDialogLineNameHint,
+  speakerLabel: l10n.managedDialogLineSpeakerLabel,
+  speakerHint: l10n.managedDialogLineSpeakerHint,
+  localeLabel: l10n.managedDialogLineLocaleLabel,
+  textLabel: l10n.managedDialogLineTextLabel,
+  reuseSearchLabel: l10n.managedDialogLineReuseSearch,
+  noReusableText: l10n.managedDialogLineNoReusableText,
+  createVoiceSlotLabel: l10n.managedDialogLineCreateSlotLabel,
+  createVoiceSlotHelp: l10n.managedDialogLineCreateSlotHelp,
+  cancel: l10n.managedDialogLineCancel,
+  save: l10n.managedDialogLineSave,
+  saving: l10n.managedDialogLineSaving,
+  loading: l10n.managedDialogLineLoading,
+  loadFailed: l10n.managedDialogLineLoadFailed,
+  retry: l10n.managedDialogLineRetry,
+  stale: l10n.managedDialogLineStale,
+  requiresReopen: l10n.managedDialogLineRequiresReopen,
+  invalidInput: l10n.managedDialogLineInvalidInput,
+  saveFailed: l10n.managedDialogLineSaveFailed,
+  saved: l10n.managedActionNewDialogLineSaved,
+  done: l10n.managedDialogLineDone,
+  addRecording: l10n.managedDialogLineAddRecording,
+);
 
 bool _hasIntactVoiceLine(Revision3ContentIndex index) {
   try {

@@ -10,6 +10,7 @@ import '../core/mod_ffi.dart';
 import 'managed_project_lock.dart';
 import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
+import 'revision3_dialog_line_authoring.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
 
@@ -272,6 +273,32 @@ final class ManagedRevision3NpcDraftCheckpoint {
   final String moduleNamespace;
   final String uniqueName;
   final String parentCatalogId;
+}
+
+/// One project-local DialogLine prerequisite returned only after native
+/// preparation, full candidate reopen, guarded fixed-head publication, and a
+/// full published reopen. It grants no topic, build, runtime, game, or save
+/// authority.
+final class ManagedRevision3DialogLineEntryCheckpoint {
+  const ManagedRevision3DialogLineEntryCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.localizationId,
+    required this.localizationAction,
+    required this.voiceSlotId,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String localizationId;
+  final AuthoringRevision3DialogLocalizationAction localizationAction;
+  final String? voiceSlotId;
 }
 
 /// One imported VoiceTake returned only after its native candidate was fully reopened,
@@ -610,6 +637,21 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3NpcDraftRequestV1 request,
   });
 
+  Future<AuthoringRevision3DialogLineEntryPreparation> prepareDialogLineV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLineEntryRequestV1 request,
+  });
+
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  });
+
   Future<AuthoringRevision3VoiceTakePreparation> prepareVoiceTakeV1({
     required String root,
     required String gameRoot,
@@ -884,6 +926,33 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogLineEntryPreparation> prepareDialogLineV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLineEntryRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3DialogLineV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => ffi.authoringStoreReadRevision3DialogLocalizationV1(
+    root: root,
+    expectedHead: expectedHead,
+    localizationId: localizationId,
+    expectedLocalizationRevision: expectedLocalizationRevision,
+    expectedLocId: expectedLocId,
   );
 
   @override
@@ -1812,6 +1881,119 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Create and publish one project-local DialogLine prerequisite without
+  /// reading or writing a game installation or save. The exact native request
+  /// is constructed only after entering the serialized managed-session lane.
+  Future<ManagedRevision3DialogLineEntryCheckpoint>
+  prepareAndPublishDialogLineV1({
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3DialogLineEntryCheckpoint
+      >(
+        operation: 'prepareAndPublishDialogLineV1',
+        handlePrepareError: _core._throwRevision3DialogLinePrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 dialog-line transaction has no exact project identity',
+            );
+          }
+          final request = AuthoringRevision3DialogLineEntryRequestV1.forProject(
+            expectedHead: basis.head,
+            currentProjectJson: basis.projectJson,
+            lineId: plan.lineId,
+            lineDisplayName: plan.lineDisplayName,
+            lineAuthoredIdentity: plan.lineAuthoredIdentity,
+            speakerHint: plan.speakerHint,
+            localization: plan.localization,
+            voiceSlot: plan.voiceSlot,
+          );
+          final prepared = await _store.prepareDialogLineV1(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.lineId != plan.lineId ||
+              prepared.localizationId != plan.localization.localizationId ||
+              prepared.voiceSlotId != plan.voiceSlot?.slotId ||
+              prepared.buildStatus !=
+                  AuthoringRevision3DialogBuildStatus.blocked ||
+              prepared.runtimeStatus !=
+                  AuthoringRevision3DialogRuntimeStatus.runtimeUnqualified ||
+              prepared.topicAuthority !=
+                  AuthoringRevision3DialogTopicAuthority.notGranted ||
+              prepared.publicationStatus !=
+                  AuthoringRevision3DialogPublicationStatus.notSupported) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 dialog-line preparation disagrees with its exact session basis or plan',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3DialogLineEntryCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3DialogLineEntryCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              lineId: prepared.lineId,
+              localizationId: prepared.localizationId,
+              localizationAction: prepared.localizationAction,
+              voiceSlotId: prepared.voiceSlotId,
+            ),
+          );
+        },
+      );
+
+  /// Read bounded per-locale previews from one exact managed LocalizationEntry.
+  ///
+  /// This read shares the serialized exact-head lane and carries neither game
+  /// input nor project JSON across FFI. It prepares and publishes nothing.
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _core.readExact<AuthoringRevision3DialogLocalizationReadResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 dialog localization read has no exact project identity',
+        );
+      }
+      final result = await _store.readDialogLocalizationV1(
+        root: root.path,
+        expectedHead: basis.head,
+        localizationId: localizationId,
+        expectedLocalizationRevision: expectedLocalizationRevision,
+        expectedLocId: expectedLocId,
+      );
+      if (result.head.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision ||
+          result.localizationId != localizationId ||
+          result.localizationRevision != expectedLocalizationRevision ||
+          result.locId != expectedLocId) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 dialog localization read disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'readDialogLocalizationV1',
+    handleReadError: _core._throwRevision3DialogLocalizationReadError,
+  );
 
   /// Import and publish one revision-3 Ogg-backed VoiceTake for an existing line/locale.
   ///
@@ -3727,6 +3909,79 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3DialogLinePrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_DIALOG_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLinePrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 dialog-line preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3DialogLocalizationReadError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_LOCALIZATION_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationReadErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 dialog localization could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoicePrepareError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_HEAD_CONFLICT') {
@@ -4436,6 +4691,26 @@ bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_NPC_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_NPC_STORE_GAME_ALIAS',
   'AUTHORING_REVISION3_NPC_UNSUPPORTED_GENERATION',
+}.contains(code);
+
+bool _revision3DialogLinePrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_DIALOG_ENTITY_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_IDENTITY_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_LOCALE_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_DIALOG_REVISION_LIMIT',
+}.contains(code);
+
+bool _revision3DialogLocalizationReadErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_IDENTITY_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_LOCALE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_NOT_FOUND',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
 }.contains(code);
 
 bool _revision3VoicePrepareErrorIsRetryable(String code) => const {

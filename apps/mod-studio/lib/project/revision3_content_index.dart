@@ -667,6 +667,15 @@ final class Revision3ContentDialogLineSummary {
   final List<String> voiceSlotLocales;
 }
 
+/// Structured LocalizationEntry facts retained from the validated wire
+/// projection. Authoring code must not recover locales from presentation text.
+final class Revision3ContentLocalizationEntrySummary {
+  Revision3ContentLocalizationEntrySummary({required List<String> locales})
+    : locales = List<String>.unmodifiable(locales);
+
+  final List<String> locales;
+}
+
 /// Structured QuestDraft facts retained from the exact-current projection.
 ///
 /// These values are the safe authoring seed for the outline editor. In
@@ -695,6 +704,7 @@ final class Revision3ContentSummary {
     required this.primaryIdentity,
     required this.secondaryText,
     required this.searchTerms,
+    required this.localizationEntry,
     required this.dialogLine,
     required this.voiceSlot,
     required this.voiceTake,
@@ -704,6 +714,7 @@ final class Revision3ContentSummary {
   final String primaryIdentity;
   final String secondaryText;
   final List<String> searchTerms;
+  final Revision3ContentLocalizationEntrySummary? localizationEntry;
   final Revision3ContentDialogLineSummary? dialogLine;
   final Revision3ContentVoiceSlotSummary? voiceSlot;
   final Revision3ContentVoiceTakeSummary? voiceTake;
@@ -723,6 +734,7 @@ final class Revision3ContentSummary {
     String primary;
     String secondary;
     final terms = <String>[];
+    Revision3ContentLocalizationEntrySummary? localizationEntry;
     Revision3ContentDialogLineSummary? dialogLine;
     Revision3ContentVoiceSlotSummary? voiceSlot;
     Revision3ContentVoiceTakeSummary? voiceTake;
@@ -738,6 +750,14 @@ final class Revision3ContentSummary {
           maxStringBytes: 64,
         );
         _requireSortedUnique(locales, '$context locales');
+        if (locales.any((locale) => !_contentLocaleIsCanonical(locale))) {
+          throw FormatException(
+            '$context locales contains a non-canonical locale',
+          );
+        }
+        localizationEntry = Revision3ContentLocalizationEntrySummary(
+          locales: locales,
+        );
         secondary = locales.isEmpty ? 'No authored locale' : locales.join(', ');
         terms.addAll(locales);
       case Revision3ContentEntityKind.dialogLine:
@@ -963,6 +983,7 @@ final class Revision3ContentSummary {
       primaryIdentity: primary,
       secondaryText: secondary,
       searchTerms: List<String>.unmodifiable([primary, secondary, ...terms]),
+      localizationEntry: localizationEntry,
       dialogLine: dialogLine,
       voiceSlot: voiceSlot,
       voiceTake: voiceTake,

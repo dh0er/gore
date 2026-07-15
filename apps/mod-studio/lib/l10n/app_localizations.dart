@@ -1448,6 +1448,180 @@ abstract class AppLocalizations {
   /// **'Create an offline Quest draft with objectives and verified parent identities.'**
   String get managedActionNewQuestDescription;
 
+  /// No description provided for @managedActionNewDialogLineTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Add dialog line'**
+  String get managedActionNewDialogLineTitle;
+
+  /// No description provided for @managedActionNewDialogLineDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write localized project text or connect an unused text already in this project. This does not create a playable dialog topic.'**
+  String get managedActionNewDialogLineDescription;
+
+  /// No description provided for @managedActionNewDialogLineSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog line saved in project revision {projectRevision}. The game and save files were not changed.'**
+  String managedActionNewDialogLineSaved(int projectRevision);
+
+  /// No description provided for @managedDialogLineIntroduction.
+  ///
+  /// In en, this message translates to:
+  /// **'Write a new localized dialog line or connect text that already belongs to this project.'**
+  String get managedDialogLineIntroduction;
+
+  /// No description provided for @managedDialogLineBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only project files change. This does not create an AngelScript topic or a playable dialog, and it never changes the game installation or save files. The speaker field is only a label; it does not link an NPC.'**
+  String get managedDialogLineBoundary;
+
+  /// No description provided for @managedDialogLineCreateMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Write new text'**
+  String get managedDialogLineCreateMode;
+
+  /// No description provided for @managedDialogLineReuseMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Use project text'**
+  String get managedDialogLineReuseMode;
+
+  /// No description provided for @managedDialogLineNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Line name'**
+  String get managedDialogLineNameLabel;
+
+  /// No description provided for @managedDialogLineNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Mine entrance greeting'**
+  String get managedDialogLineNameHint;
+
+  /// No description provided for @managedDialogLineSpeakerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Speaker label (optional)'**
+  String get managedDialogLineSpeakerLabel;
+
+  /// No description provided for @managedDialogLineSpeakerHint.
+  ///
+  /// In en, this message translates to:
+  /// **'For example, Viper'**
+  String get managedDialogLineSpeakerHint;
+
+  /// No description provided for @managedDialogLineLocaleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Language'**
+  String get managedDialogLineLocaleLabel;
+
+  /// No description provided for @managedDialogLineTextLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Dialog text'**
+  String get managedDialogLineTextLabel;
+
+  /// No description provided for @managedDialogLineReuseSearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Search unused project text'**
+  String get managedDialogLineReuseSearch;
+
+  /// No description provided for @managedDialogLineNoReusableText.
+  ///
+  /// In en, this message translates to:
+  /// **'There is no unused, structurally intact project text to connect. Write new text instead.'**
+  String get managedDialogLineNoReusableText;
+
+  /// No description provided for @managedDialogLineCreateSlotLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare this language for Voice'**
+  String get managedDialogLineCreateSlotLabel;
+
+  /// No description provided for @managedDialogLineCreateSlotHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'Creates an empty unresolved Voice slot in the project. It does not add or deploy a recording.'**
+  String get managedDialogLineCreateSlotHelp;
+
+  /// No description provided for @managedDialogLineCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedDialogLineCancel;
+
+  /// No description provided for @managedDialogLineSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save to project'**
+  String get managedDialogLineSave;
+
+  /// No description provided for @managedDialogLineSaving.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving…'**
+  String get managedDialogLineSaving;
+
+  /// No description provided for @managedDialogLineLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Reading exact project content…'**
+  String get managedDialogLineLoading;
+
+  /// No description provided for @managedDialogLineLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact current project content could not be read. Nothing was changed.'**
+  String get managedDialogLineLoadFailed;
+
+  /// No description provided for @managedDialogLineRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedDialogLineRetry;
+
+  /// No description provided for @managedDialogLineStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this window was open. Close it and try again from the current project.'**
+  String get managedDialogLineStale;
+
+  /// No description provided for @managedDialogLineRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The current project can no longer be verified safely. Close this window and reopen the managed project.'**
+  String get managedDialogLineRequiresReopen;
+
+  /// No description provided for @managedDialogLineInvalidInput.
+  ///
+  /// In en, this message translates to:
+  /// **'Check the highlighted project input and choose an exact current option.'**
+  String get managedDialogLineInvalidInput;
+
+  /// No description provided for @managedDialogLineSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The dialog line could not be saved safely. No game or save files were changed.'**
+  String get managedDialogLineSaveFailed;
+
+  /// No description provided for @managedDialogLineDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get managedDialogLineDone;
+
+  /// No description provided for @managedDialogLineAddRecording.
+  ///
+  /// In en, this message translates to:
+  /// **'Add recording'**
+  String get managedDialogLineAddRecording;
+
   /// No description provided for @managedActionAddVoiceTakeTitle.
   ///
   /// In en, this message translates to:

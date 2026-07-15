@@ -20,6 +20,7 @@ export '../dataasset/domain/reviewed_dataasset_schema.dart';
 part '../project/revision3_dataasset_stage.dart';
 part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
+part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_source_inspection.dart';
@@ -594,6 +595,37 @@ class ModFfi {
       response,
       expectedHead: expectedHead,
     );
+  }
+
+  /// Read bounded text previews for one exact-current managed LocalizationEntry.
+  ///
+  /// The wire carries no game root or project JSON and grants no mutation,
+  /// publication, build, deployment, topic, save, or runtime authority.
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  authoringStoreReadRevision3DialogLocalizationV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    const command = 'authoring_store_read_revision3_dialog_localization_v1';
+    _authoringRevision3Path(root, 'root');
+    final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+      expectedHead: expectedHead,
+      localizationId: localizationId,
+      expectedLocalizationRevision: expectedLocalizationRevision,
+      expectedLocId: expectedLocId,
+    );
+    final response = await _call(command, request._payload(root));
+    try {
+      return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+        response,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
   }
 
   /// Prepare immutable objects without publishing `gore-project.json`.
@@ -1335,6 +1367,49 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakePreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Create one project-local DialogLine and either create or exactly reuse
+  /// one managed LocalizationEntry, optionally with an empty VoiceSlot.
+  ///
+  /// This prepare-only route accepts no game root and grants no topic, build,
+  /// runtime, deployment, save, or native publication authority.
+  Future<AuthoringRevision3DialogLineEntryPreparation>
+  authoringStorePrepareRevision3DialogLineV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogLineEntryRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_dialog_line_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3RequestString(
+      request.canonicalJson,
+      'dialogLineRequestJson',
+      _maxAuthoringRevision3DialogLineRequestBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'dialog_line_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3DialogLineEntryPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

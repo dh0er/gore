@@ -777,6 +777,106 @@ class AppLocalizationsDe extends AppLocalizations {
       'Erstelle einen Offline-Quest-Entwurf mit Zielen und verifizierten übergeordneten Identitäten.';
 
   @override
+  String get managedActionNewDialogLineTitle => 'Dialogzeile hinzufügen';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'Schreibe lokalisierten Projekttext oder verbinde einen noch unbenutzten Text aus diesem Projekt. Dadurch entsteht noch kein spielbares Dialogthema.';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'Dialogzeile in Projektrevision $projectRevision gespeichert. Spiel und Spielstände wurden nicht verändert.';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      'Schreibe eine neue lokalisierte Dialogzeile oder verbinde Text, der bereits zu diesem Projekt gehört.';
+
+  @override
+  String get managedDialogLineBoundary =>
+      'Nur Projektdateien werden geändert. Dadurch entsteht weder ein AngelScript-Thema noch ein spielbarer Dialog; Spielinstallation und Spielstände bleiben unverändert. Das Sprecherfeld ist nur ein Label und verbindet keinen NPC.';
+
+  @override
+  String get managedDialogLineCreateMode => 'Neuen Text schreiben';
+
+  @override
+  String get managedDialogLineReuseMode => 'Projekttext verwenden';
+
+  @override
+  String get managedDialogLineNameLabel => 'Name der Zeile';
+
+  @override
+  String get managedDialogLineNameHint => 'Begrüßung am Mineneingang';
+
+  @override
+  String get managedDialogLineSpeakerLabel => 'Sprecher-Label (optional)';
+
+  @override
+  String get managedDialogLineSpeakerHint => 'Zum Beispiel Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => 'Sprache';
+
+  @override
+  String get managedDialogLineTextLabel => 'Dialogtext';
+
+  @override
+  String get managedDialogLineReuseSearch => 'Unbenutzten Projekttext suchen';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      'Es gibt keinen unbenutzten, strukturell intakten Projekttext zum Verbinden. Schreibe stattdessen neuen Text.';
+
+  @override
+  String get managedDialogLineCreateSlotLabel =>
+      'Diese Sprache für Voice vorbereiten';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'Erstellt einen leeren, noch nicht aufgelösten Voice-Slot im Projekt. Es wird keine Aufnahme hinzugefügt oder bereitgestellt.';
+
+  @override
+  String get managedDialogLineCancel => 'Abbrechen';
+
+  @override
+  String get managedDialogLineSave => 'Im Projekt speichern';
+
+  @override
+  String get managedDialogLineSaving => 'Wird gespeichert…';
+
+  @override
+  String get managedDialogLineLoading => 'Exakter Projektinhalt wird gelesen…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      'Der exakte aktuelle Projektinhalt konnte nicht gelesen werden. Es wurde nichts geändert.';
+
+  @override
+  String get managedDialogLineRetry => 'Erneut versuchen';
+
+  @override
+  String get managedDialogLineStale =>
+      'Das Projekt wurde geändert, während dieses Fenster geöffnet war. Schließe es und versuche es vom aktuellen Projektstand erneut.';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      'Das aktuelle Projekt kann nicht mehr sicher bestätigt werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut.';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      'Prüfe die markierte Projekteingabe und wähle eine exakte aktuelle Option.';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'Die Dialogzeile konnte nicht sicher gespeichert werden. Spiel und Spielstände wurden nicht verändert.';
+
+  @override
+  String get managedDialogLineDone => 'Fertig';
+
+  @override
+  String get managedDialogLineAddRecording => 'Aufnahme hinzufügen';
+
+  @override
   String get managedActionAddVoiceTakeTitle => 'Sprachaufnahme hinzufügen';
 
   @override

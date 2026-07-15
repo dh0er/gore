@@ -774,6 +774,108 @@ class AppLocalizationsFr extends AppLocalizations {
       'Créez un brouillon de quête hors ligne avec des objectifs et des identités parentes vérifiées.';
 
   @override
+  String get managedActionNewDialogLineTitle => 'Ajouter une ligne de dialogue';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'Écrivez un texte de projet localisé ou associez un texte inutilisé déjà présent dans ce projet. Cela ne crée aucun sujet de dialogue jouable.';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'Ligne de dialogue enregistrée dans la révision $projectRevision du projet. Le jeu et les sauvegardes n’ont pas été modifiés.';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      'Écrivez une nouvelle ligne de dialogue localisée ou associez un texte appartenant déjà à ce projet.';
+
+  @override
+  String get managedDialogLineBoundary =>
+      'Seuls les fichiers du projet sont modifiés. Cela ne crée ni sujet AngelScript ni dialogue jouable, et ne modifie jamais l’installation du jeu ou les sauvegardes. Le champ du locuteur n’est qu’une étiquette ; il ne relie aucun PNJ.';
+
+  @override
+  String get managedDialogLineCreateMode => 'Écrire un nouveau texte';
+
+  @override
+  String get managedDialogLineReuseMode => 'Utiliser un texte du projet';
+
+  @override
+  String get managedDialogLineNameLabel => 'Nom de la ligne';
+
+  @override
+  String get managedDialogLineNameHint => 'Accueil à l’entrée de la mine';
+
+  @override
+  String get managedDialogLineSpeakerLabel =>
+      'Étiquette du locuteur (facultatif)';
+
+  @override
+  String get managedDialogLineSpeakerHint => 'Par exemple, Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => 'Langue';
+
+  @override
+  String get managedDialogLineTextLabel => 'Texte du dialogue';
+
+  @override
+  String get managedDialogLineReuseSearch =>
+      'Rechercher un texte de projet inutilisé';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      'Aucun texte de projet inutilisé et structurellement valide ne peut être associé. Écrivez plutôt un nouveau texte.';
+
+  @override
+  String get managedDialogLineCreateSlotLabel =>
+      'Préparer cette langue pour Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'Crée un emplacement Voice vide et non résolu dans le projet. Aucun enregistrement n’est ajouté ni déployé.';
+
+  @override
+  String get managedDialogLineCancel => 'Annuler';
+
+  @override
+  String get managedDialogLineSave => 'Enregistrer dans le projet';
+
+  @override
+  String get managedDialogLineSaving => 'Enregistrement…';
+
+  @override
+  String get managedDialogLineLoading => 'Lecture du contenu exact du projet…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      'Le contenu actuel exact du projet n’a pas pu être lu. Rien n’a été modifié.';
+
+  @override
+  String get managedDialogLineRetry => 'Réessayer';
+
+  @override
+  String get managedDialogLineStale =>
+      'Le projet a changé pendant que cette fenêtre était ouverte. Fermez-la et réessayez depuis le projet actuel.';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      'Le projet actuel ne peut plus être vérifié en toute sécurité. Fermez cette fenêtre et rouvrez le projet géré.';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      'Vérifiez la saisie de projet mise en évidence et choisissez une option actuelle exacte.';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'La ligne de dialogue n’a pas pu être enregistrée en toute sécurité. Aucun fichier de jeu ou de sauvegarde n’a été modifié.';
+
+  @override
+  String get managedDialogLineDone => 'Terminé';
+
+  @override
+  String get managedDialogLineAddRecording => 'Ajouter un enregistrement';
+
+  @override
   String get managedActionAddVoiceTakeTitle => 'Ajouter une prise de voix';
 
   @override

@@ -24,6 +24,7 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
+import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_global_content_search.dart';
 import 'package:gore_mod/project/revision3_managed_compiler_check_panel.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
@@ -2239,6 +2240,391 @@ void main() {
   );
 
   testWidgets(
+    'empty managed project creates a dialog line and carries it into Voice',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_dialog_line_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '48484848484848484848484848484848';
+      Revision3DialogLineEntryTechnicalPlan? publishedPlan;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dialog-line-authoring'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) {
+          final plan = publishedPlan;
+          return plan == null
+              ? _contentIndex(
+                  projectId: lease.projectId,
+                  revision: lease.projectRevision,
+                )
+              : _dialogLineContentIndex(
+                  projectId: lease.projectId,
+                  revision: lease.projectRevision,
+                  plan: plan,
+                );
+        },
+        onDialogLinePublish: (lease, plan) {
+          expect(plan.lineDisplayName, 'Mine entrance warning');
+          expect(plan.speakerHint, 'Asghan');
+          expect(plan.locale, 'de');
+          final localization =
+              plan.localization
+                  as AuthoringRevision3DialogLocalizationCreateIntentV1;
+          expect(localization.displayName, 'Mine entrance warning text');
+          expect(localization.texts, <String, String>{
+            'de': 'Halt! Niemand betritt die Mine.',
+          });
+          expect(plan.voiceSlot?.locale, 'de');
+          expect(plan.voiceSlot?.displayName, 'Mine entrance warning de Voice');
+          publishedPlan = plan;
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3DialogLineEntryPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            lineId: plan.lineId,
+            localizationId: localization.localizationId,
+            localizationAction:
+                AuthoringRevision3DialogLocalizationAction.created,
+            voiceSlotId: plan.voiceSlot?.slotId,
+            locale: plan.locale,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+
+      final createButton = find.byKey(const Key('managed-create-dialog-line'));
+      expect(createButton, findsOneWidget);
+      expect(tester.widget<InkWell>(createButton).onTap, isNotNull);
+      final l10n = AppLocalizations.of(tester.element(createButton));
+
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-dialog-line'),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dialog-line-modal')),
+        findsOneWidget,
+      );
+      expect(find.text(l10n.managedDialogLineBoundary), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-name')),
+        'Mine entrance warning',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-speaker')),
+        'Asghan',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-locale')),
+        'de',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-text')),
+        'Halt! Niemand betritt die Mine.',
+      );
+      final submit = find.byKey(const Key('revision3-dialog-line-submit'));
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogLinePublishCalls, 1);
+      expect(publishedPlan, isNotNull);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-success')),
+        findsOneWidget,
+      );
+      expect(
+        find.text(l10n.managedActionNewDialogLineSaved(8)),
+        findsOneWidget,
+      );
+      expect(find.text(l10n.managedDialogLineBoundary), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dialog-line-open-voice')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const Key('revision3-voice-line-search')),
+            )
+            .controller
+            ?.text,
+        'Asghan — Mine entrance warning',
+      );
+      expect(
+        tester
+            .widget<TextFormField>(
+              find.byKey(const Key('revision3-voice-locale')),
+            )
+            .controller
+            ?.text,
+        'de',
+      );
+      expect(managed.voicePublishCalls, 0);
+
+      await tester.tap(find.byKey(const Key('revision3-voice-cancel')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<InkWell>(find.byKey(const Key('managed-add-voice-take')))
+            .onTap,
+        isNotNull,
+      );
+      expect(
+        find.text(l10n.managedActionNewDialogLineSaved(8)),
+        findsOneWidget,
+      );
+      expect(find.text('Build / Deploy'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'Home reuses exact project text only after bounded preview verification',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = '49494949494949494949494949494949';
+      const localizationId = '59595959595959595959595959595959';
+      const localizationRevision = 4;
+      const locId = 'GORE_SHARED_MINE_WARNING';
+      const displayName = 'Shared mine warning text';
+      const previewText = 'Halt! Dieser Weg bleibt gesperrt.';
+      Revision3DialogLineEntryTechnicalPlan? publishedPlan;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\dialog-line-reuse'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _dialogReuseContentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+          localizationId: localizationId,
+          localizationRevision: localizationRevision,
+          locId: locId,
+          displayName: displayName,
+          publishedPlan: publishedPlan,
+        ),
+        onDialogLocalizationRead:
+            (lease, requestedId, requestedRevision, requestedLocId) {
+              expect(lease.projectRevision, 7);
+              expect(lease.head.canonicalJson, _head(7).canonicalJson);
+              expect(requestedId, localizationId);
+              expect(requestedRevision, localizationRevision);
+              expect(requestedLocId, locId);
+              return _dialogLocalizationReadResult(
+                lease: lease,
+                localizationId: requestedId,
+                localizationRevision: requestedRevision,
+                locId: requestedLocId,
+                nonemptyPreview: previewText,
+              );
+            },
+        onDialogLinePublish: (lease, plan) {
+          expect(lease.projectRevision, 7);
+          expect(lease.head.canonicalJson, _head(7).canonicalJson);
+          expect(plan.lineDisplayName, 'Reused mine warning');
+          expect(plan.speakerHint, 'Asghan');
+          expect(plan.locale, 'de');
+          final reuse =
+              plan.localization
+                  as AuthoringRevision3DialogLocalizationReuseExactIntentV1;
+          expect(reuse.localizationId, localizationId);
+          expect(reuse.expectedLocalizationRevision, localizationRevision);
+          expect(reuse.expectedLocId, locId);
+          expect(plan.voiceSlot?.locale, 'de');
+          publishedPlan = plan;
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3DialogLineEntryPublication(
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            lineId: plan.lineId,
+            localizationId: reuse.localizationId,
+            localizationAction:
+                AuthoringRevision3DialogLocalizationAction.reusedExact,
+            voiceSlotId: plan.voiceSlot?.slotId,
+            locale: plan.locale,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      void expectTechnicalIdentityHidden() {
+        expect(
+          find.textContaining(
+            localizationId,
+            findRichText: true,
+            skipOffstage: false,
+          ),
+          findsNothing,
+        );
+        expect(
+          find.textContaining(locId, findRichText: true, skipOffstage: false),
+          findsNothing,
+        );
+        final plan = publishedPlan;
+        if (plan != null) {
+          expect(
+            find.textContaining(
+              plan.lineId,
+              findRichText: true,
+              skipOffstage: false,
+            ),
+            findsNothing,
+          );
+          expect(
+            find.textContaining(
+              plan.lineAuthoredIdentity,
+              findRichText: true,
+              skipOffstage: false,
+            ),
+            findsNothing,
+          );
+          final slot = plan.voiceSlot;
+          if (slot != null) {
+            expect(
+              find.textContaining(
+                slot.slotId,
+                findRichText: true,
+                skipOffstage: false,
+              ),
+              findsNothing,
+            );
+          }
+        }
+      }
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expectTechnicalIdentityHidden();
+
+      final createButton = find.byKey(const Key('managed-create-dialog-line'));
+      final l10n = AppLocalizations.of(tester.element(createButton));
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-create-dialog-line'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(l10n.managedDialogLineReuseMode));
+      await tester.pump();
+
+      expect(find.text(displayName), findsOneWidget);
+      expectTechnicalIdentityHidden();
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-name')),
+        'Reused mine warning',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-speaker')),
+        'Asghan',
+      );
+      await tester.tap(find.text(displayName));
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogLocalizationReadCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-reuse-preview')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-dialog-line-preview-text')),
+        findsOneWidget,
+      );
+      expect(find.text(previewText), findsOneWidget);
+      await tester.drag(
+        find.byKey(const Key('revision3-dialog-line-editor')),
+        const Offset(0, -280),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dialog-line-locale-de')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-dialog-line-locale-en')),
+        findsNothing,
+      );
+      expectTechnicalIdentityHidden();
+
+      final submit = find.byKey(const Key('revision3-dialog-line-submit'));
+      await tester.enterText(
+        find.byKey(const Key('revision3-dialog-line-locale')),
+        'en',
+      );
+      await tester.pump();
+      expect(tester.widget<FilledButton>(submit).onPressed, isNull);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-reuse-preview')),
+        findsNothing,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-dialog-line-locale-de')),
+      );
+      await tester.pump();
+      expect(tester.widget<FilledButton>(submit).onPressed, isNotNull);
+
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pumpAndSettle();
+
+      expect(managed.dialogLocalizationReadCalls, 2);
+      expect(managed.dialogLinePublishCalls, 1);
+      expect(publishedPlan, isNotNull);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(
+        find.byKey(const Key('revision3-dialog-line-success')),
+        findsOneWidget,
+      );
+      expectTechnicalIdentityHidden();
+
+      await tester.tap(find.byKey(const Key('revision3-dialog-line-done')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text(l10n.managedActionNewDialogLineSaved(8)),
+        findsOneWidget,
+      );
+      expectTechnicalIdentityHidden();
+    },
+  );
+
+  testWidgets(
     'visible managed Voice wizard forwards the configured safety game root',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -3923,7 +4309,18 @@ final class _FakeLegacyLease implements LegacyCurrentProjectLease {
   Future<void> saveToPath(String path) async => this.path = path;
 }
 
-final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
+typedef _DialogLocalizationReadCallback =
+    FutureOr<AuthoringRevision3DialogLocalizationReadResult> Function(
+      _FakeManagedLease lease,
+      String localizationId,
+      int expectedLocalizationRevision,
+      String expectedLocId,
+    );
+
+final class _FakeManagedLease
+    implements
+        ManagedRevision3CurrentProjectLease,
+        ManagedRevision3DialogLocalizationReadLease {
   _FakeManagedLease({
     required this.root,
     required this.projectId,
@@ -3941,6 +4338,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     this.onQuestTransitionsPublish,
     this.onQuestContextSeed,
     this.onQuestContextPublish,
+    this.onDialogLocalizationRead,
+    this.onDialogLinePublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
@@ -4033,6 +4432,12 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     Revision3QuestContextEditTechnicalPlan plan,
   )?
   onQuestContextPublish;
+  final _DialogLocalizationReadCallback? onDialogLocalizationRead;
+  final Revision3DialogLineEntryPublication Function(
+    _FakeManagedLease lease,
+    Revision3DialogLineEntryTechnicalPlan plan,
+  )?
+  onDialogLinePublish;
   final Revision3VoiceTakePublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -4098,6 +4503,8 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   int questTransitionsPublishCalls = 0;
   int questContextSeedCalls = 0;
   int questContextPublishCalls = 0;
+  int dialogLocalizationReadCalls = 0;
+  int dialogLinePublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
@@ -4122,6 +4529,26 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
     if (read != null) return read(this);
     return contentIndexBuilder?.call(this) ??
         (throw StateError('fake managed lease has no content index'));
+  }
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) async {
+    dialogLocalizationReadCalls++;
+    final read = onDialogLocalizationRead;
+    if (read == null) {
+      throw StateError('fake managed lease has no localization reader');
+    }
+    return read(
+      this,
+      localizationId,
+      expectedLocalizationRevision,
+      expectedLocId,
+    );
   }
 
   @override
@@ -4329,6 +4756,18 @@ final class _FakeManagedLease implements ManagedRevision3CurrentProjectLease {
   }
 
   @override
+  Future<Revision3DialogLineEntryPublication> prepareAndPublishDialogLineV1({
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  }) async {
+    dialogLinePublishCalls++;
+    final publish = onDialogLinePublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no dialog-line publisher');
+    }
+    return publish(this, plan);
+  }
+
+  @override
   Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
     required String gameRoot,
     required Revision3VoiceTakeTechnicalPlan plan,
@@ -4520,6 +4959,299 @@ Revision3ContentIndex _contentIndex({
   'entities': <Object?>[],
   'assets': <Object?>[],
 });
+
+AuthoringRevision3DialogLocalizationReadResult _dialogLocalizationReadResult({
+  required _FakeManagedLease lease,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+  required String nonemptyPreview,
+}) {
+  final request = AuthoringRevision3DialogLocalizationReadRequestV1(
+    expectedHead: lease.head,
+    localizationId: localizationId,
+    expectedLocalizationRevision: localizationRevision,
+    expectedLocId: locId,
+  );
+  return AuthoringRevision3DialogLocalizationReadResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'read_only',
+      'head_json': lease.head.canonicalJson,
+      'project_id': lease.projectId,
+      'project_revision': lease.projectRevision,
+      'localization_id': localizationId,
+      'localization_revision': localizationRevision,
+      'loc_id': locId,
+      'locales': <Object?>[
+        <String, Object?>{
+          'locale': 'de',
+          'preview': nonemptyPreview,
+          'truncated': false,
+          'has_nonempty_text': true,
+        },
+        <String, Object?>{
+          'locale': 'en',
+          'preview': '   ',
+          'truncated': false,
+          'has_nonempty_text': false,
+        },
+      ],
+      'content_authority': 'read_only_exact_current_localization',
+      'build_status': 'not_evaluated',
+      'runtime_status': 'runtime_unqualified',
+      'publication_status': 'not_applicable',
+    },
+    request: request,
+  );
+}
+
+Revision3ContentIndex _dialogReuseContentIndex({
+  required String projectId,
+  required int revision,
+  required String localizationId,
+  required int localizationRevision,
+  required String locId,
+  required String displayName,
+  required Revision3DialogLineEntryTechnicalPlan? publishedPlan,
+}) {
+  final plan = publishedPlan;
+  final slot = plan?.voiceSlot;
+  final entities =
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'id': localizationId,
+          'kind': 'localization_entry',
+          'display_name': displayName,
+          'revision': localizationRevision,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': locId,
+          },
+          'summary': <String, Object?>{
+            'kind': 'localization_entry',
+            'data': <String, Object?>{
+              'loc_id': locId,
+              'locales': <Object?>['de', 'en'],
+            },
+          },
+          'references': <Object?>[],
+          'asset_references': <Object?>[],
+        },
+        if (plan != null)
+          <String, Object?>{
+            'id': plan.lineId,
+            'kind': 'dialog_line',
+            'display_name': plan.lineDisplayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': plan.lineAuthoredIdentity,
+            },
+            'summary': <String, Object?>{
+              'kind': 'dialog_line',
+              'data': <String, Object?>{
+                'speaker_hint': plan.speakerHint,
+                'voice_slot_locales': <Object?>[if (slot != null) slot.locale],
+              },
+            },
+            'references': <Object?>[
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'dialog_localization',
+                entityId: localizationId,
+                expectedKind: 'localization_entry',
+              ),
+              if (slot != null)
+                _dialogLineEntityReference(
+                  projectId: projectId,
+                  role: 'dialog_voice_slot',
+                  qualifier: slot.locale,
+                  entityId: slot.slotId,
+                  expectedKind: 'voice_slot',
+                ),
+            ],
+            'asset_references': <Object?>[],
+          },
+        if (slot != null)
+          <String, Object?>{
+            'id': slot.slotId,
+            'kind': 'voice_slot',
+            'display_name': slot.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': 'GORE_VOICE_${slot.slotId.toUpperCase()}',
+            },
+            'summary': <String, Object?>{
+              'kind': 'voice_slot',
+              'data': <String, Object?>{
+                'locale': slot.locale,
+                'target_resolution': 'unresolved',
+                'candidate_count': 0,
+                'has_selected_take': false,
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+      ]..sort(
+        (left, right) =>
+            (left['id']! as String).compareTo(right['id']! as String),
+      );
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': revision,
+    'project_name': 'Home Dialog reuse project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 1,
+        'sha256': List<String>.filled(64, '5').join(),
+      },
+    },
+    'authoring_locales': <Object?>['de', 'en'],
+    'entity_counts': <String, Object?>{
+      'localization_entry': 1,
+      if (plan != null) 'dialog_line': 1,
+      if (slot != null) 'voice_slot': 1,
+    },
+    'entities': entities,
+    'assets': <Object?>[],
+  });
+}
+
+Revision3ContentIndex _dialogLineContentIndex({
+  required String projectId,
+  required int revision,
+  required Revision3DialogLineEntryTechnicalPlan plan,
+}) {
+  final localization =
+      plan.localization as AuthoringRevision3DialogLocalizationCreateIntentV1;
+  final slot = plan.voiceSlot;
+  final entities =
+      <Map<String, Object?>>[
+        <String, Object?>{
+          'id': localization.localizationId,
+          'kind': 'localization_entry',
+          'display_name': localization.displayName,
+          'revision': 0,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': localization.locId,
+          },
+          'summary': <String, Object?>{
+            'kind': 'localization_entry',
+            'data': <String, Object?>{
+              'loc_id': localization.locId,
+              'locales': <Object?>[...localization.texts.keys],
+            },
+          },
+          'references': <Object?>[],
+          'asset_references': <Object?>[],
+        },
+        <String, Object?>{
+          'id': plan.lineId,
+          'kind': 'dialog_line',
+          'display_name': plan.lineDisplayName,
+          'revision': 0,
+          'origin': <String, Object?>{
+            'type': 'new',
+            'authored_runtime_id': plan.lineAuthoredIdentity,
+          },
+          'summary': <String, Object?>{
+            'kind': 'dialog_line',
+            'data': <String, Object?>{
+              'speaker_hint': plan.speakerHint,
+              'voice_slot_locales': <Object?>[if (slot != null) slot.locale],
+            },
+          },
+          'references': <Object?>[
+            _dialogLineEntityReference(
+              projectId: projectId,
+              role: 'dialog_localization',
+              entityId: localization.localizationId,
+              expectedKind: 'localization_entry',
+            ),
+            if (slot != null)
+              _dialogLineEntityReference(
+                projectId: projectId,
+                role: 'dialog_voice_slot',
+                qualifier: slot.locale,
+                entityId: slot.slotId,
+                expectedKind: 'voice_slot',
+              ),
+          ],
+          'asset_references': <Object?>[],
+        },
+        if (slot != null)
+          <String, Object?>{
+            'id': slot.slotId,
+            'kind': 'voice_slot',
+            'display_name': slot.displayName,
+            'revision': 0,
+            'origin': <String, Object?>{
+              'type': 'new',
+              'authored_runtime_id': 'GORE_VOICE_${slot.slotId.toUpperCase()}',
+            },
+            'summary': <String, Object?>{
+              'kind': 'voice_slot',
+              'data': <String, Object?>{
+                'locale': slot.locale,
+                'target_resolution': 'unresolved',
+                'candidate_count': 0,
+                'has_selected_take': false,
+              },
+            },
+            'references': <Object?>[],
+            'asset_references': <Object?>[],
+          },
+      ]..sort(
+        (left, right) =>
+            (left['id']! as String).compareTo(right['id']! as String),
+      );
+  return Revision3ContentIndex.fromJsonObject(<String, Object?>{
+    'schema_revision': 1,
+    'project_id': projectId,
+    'project_revision': revision,
+    'project_name': 'Home Dialog project',
+    'project_version': '1.0.0',
+    'project_author': 'tests',
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 1,
+        'sha256': List<String>.filled(64, '5').join(),
+      },
+    },
+    'authoring_locales': <Object?>[...localization.texts.keys],
+    'entity_counts': <String, Object?>{
+      'localization_entry': 1,
+      'dialog_line': 1,
+      if (slot != null) 'voice_slot': 1,
+    },
+    'entities': entities,
+    'assets': <Object?>[],
+  });
+}
+
+Map<String, Object?> _dialogLineEntityReference({
+  required String projectId,
+  required String role,
+  String? qualifier,
+  required String entityId,
+  required String expectedKind,
+}) => <String, Object?>{
+  'role': role,
+  'qualifier': qualifier,
+  'target': <String, Object?>{
+    'project_id': projectId,
+    'entity_id': entityId,
+    'expected_kind': expectedKind,
+  },
+  'resolution': 'resolved',
+};
 
 Revision3ContentIndex _globalSearchContentIndex({
   required String projectId,

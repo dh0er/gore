@@ -130,6 +130,43 @@ void main() {
     expect(captured!.selectTake, isFalse);
   });
 
+  testWidgets(
+    'a preceding dialog action can preselect its exact line and locale',
+    (tester) async {
+      await _useLargeSurface(tester);
+      final service = Revision3VoiceAuthoringService(
+        loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async => _publication(
+              projectId: expectedProjectId,
+              revision: expectedProjectRevision + 1,
+              plan: plan,
+            ),
+      );
+
+      await _openWizard(
+        tester,
+        service: service,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+      );
+
+      expect(
+        _text(tester, find.byKey(const Key('revision3-voice-line-search'))),
+        _lineLabel,
+      );
+      expect(
+        _text(tester, find.byKey(const Key('revision3-voice-locale'))),
+        'de',
+      );
+      expect(_submitButton(tester).onPressed, isNotNull);
+    },
+  );
+
   testWidgets('duplicate results hide IDs and target changes reset selection', (
     tester,
   ) async {
@@ -513,6 +550,8 @@ Future<void> _openWizard(
   WidgetTester tester, {
   required Revision3VoiceAuthoringService service,
   Revision3VoiceOggPicker? picker,
+  String? initialLineId,
+  String? initialLocale,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -522,8 +561,12 @@ Future<void> _openWizard(
             key: const Key('open-voice-wizard'),
             onPressed: () => showDialog<Revision3VoiceTakePublication>(
               context: context,
-              builder: (_) =>
-                  Revision3VoiceTakeDialog(service: service, pickOgg: picker),
+              builder: (_) => Revision3VoiceTakeDialog(
+                service: service,
+                pickOgg: picker,
+                initialLineId: initialLineId,
+                initialLocale: initialLocale,
+              ),
             ),
             child: const Text('Open'),
           ),

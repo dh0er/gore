@@ -12,6 +12,7 @@ import 'managed_project_session.dart';
 import 'project_controller.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
+import 'revision3_dialog_line_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
@@ -126,6 +127,22 @@ final class Revision3NpcSourceInspectionStaleCheckpointException
     implements Exception {
   const Revision3NpcSourceInspectionStaleCheckpointException();
 }
+
+final class Revision3DialogLocalizationReadRequiresReopenException
+    implements Exception {
+  const Revision3DialogLocalizationReadRequiresReopenException();
+}
+
+final class Revision3DialogLocalizationReadStaleCheckpointException
+    implements Exception {
+  const Revision3DialogLocalizationReadStaleCheckpointException();
+}
+
+bool _revision3DialogLocalizationReadErrorIsStale(String code) => const {
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_IDENTITY_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_NOT_FOUND',
+  'AUTHORING_REVISION3_DIALOG_LOCALIZATION_REVISION_CONFLICT',
+}.contains(code);
 
 final class Revision3ManagedCompilerCheckRequiresReopenException
     implements Exception {
@@ -271,6 +288,9 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required Revision3NpcDraftAuthoringInput input,
   });
+  Future<Revision3DialogLineEntryPublication> prepareAndPublishDialogLineV1({
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  });
   Future<Revision3VoiceTakePublication> prepareAndPublishVoiceTakeV1({
     required String gameRoot,
     required Revision3VoiceTakeTechnicalPlan plan,
@@ -308,6 +328,17 @@ abstract interface class ManagedRevision3CurrentProjectLease {
   prepareAndPublishRemoveDataAssetStageV1({required String targetPath});
   Future<void> verifyCurrentHead();
   Future<void> close();
+}
+
+/// Optional exact-current capability for reading one managed LocalizationEntry.
+/// Keeping it separate avoids widening unrelated current-project test leases.
+abstract interface class ManagedRevision3DialogLocalizationReadLease {
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  });
 }
 
 typedef ManagedRevision3CurrentProjectOpener =
@@ -414,7 +445,9 @@ final class ProjectSessionLegacyCurrentProjectLease
 }
 
 final class _ManagedRevision3SessionLease
-    implements ManagedRevision3CurrentProjectLease {
+    implements
+        ManagedRevision3CurrentProjectLease,
+        ManagedRevision3DialogLocalizationReadLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -454,6 +487,18 @@ final class _ManagedRevision3SessionLease
   Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
     required String npcId,
   }) => _session.inspectNpcSourceV1(npcId: npcId);
+
+  @override
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readDialogLocalizationV1({
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _session.readDialogLocalizationV1(
+    localizationId: localizationId,
+    expectedLocalizationRevision: expectedLocalizationRevision,
+    expectedLocId: expectedLocId,
+  );
 
   @override
   Future<ManagedRevision3CompilerCheckReceipt> checkCompilerV1({
@@ -663,6 +708,22 @@ final class _ManagedRevision3SessionLease
       projectRevision: checkpoint.projectRevision,
       npcId: checkpoint.npcId,
       scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
+
+  @override
+  Future<Revision3DialogLineEntryPublication> prepareAndPublishDialogLineV1({
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishDialogLineV1(plan: plan);
+    return Revision3DialogLineEntryPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      localizationId: checkpoint.localizationId,
+      localizationAction: checkpoint.localizationAction,
+      voiceSlotId: checkpoint.voiceSlotId,
+      locale: plan.locale,
     );
   }
 
@@ -1345,6 +1406,84 @@ final class CurrentProjectCoordinator
       if (current.lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3ContentRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Read bounded previews for one exact LocalizationEntry from the visible
+  /// managed revision-3 checkpoint. No game, project mutation, or publication
+  /// input crosses this read-only capability boundary.
+  Future<AuthoringRevision3DialogLocalizationReadResult>
+  readCurrentRevision3DialogLocalization({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String localizationId,
+    required int expectedLocalizationRevision,
+    required String expectedLocId,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'dialog localization reads are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogLocalizationReadRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogLocalizationReadStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3DialogLocalizationReadLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed revision-3 lease cannot read dialog localization previews',
+      );
+    }
+    final reader = lease as ManagedRevision3DialogLocalizationReadLease;
+    try {
+      final result = await reader.readDialogLocalizationV1(
+        localizationId: localizationId,
+        expectedLocalizationRevision: expectedLocalizationRevision,
+        expectedLocId: expectedLocId,
+      );
+      if (result.head.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.localizationId != localizationId ||
+          result.localizationRevision != expectedLocalizationRevision ||
+          result.locId != expectedLocId) {
+        throw const Revision3DialogLocalizationReadStaleCheckpointException();
+      }
+      return result;
+    } on ModFfiException catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationReadRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogLocalizationReadErrorIsStale(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationReadStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLocalizationReadRequiresReopenException(),
           stackTrace,
         );
       }
@@ -2125,6 +2264,62 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3NpcDraftRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Create one project-local DialogLine prerequisite without touching a game
+  /// installation or save. The plan comes from a fresh exact ContentIndex and
+  /// is rebound to the managed head inside the serialized session lane.
+  Future<Revision3DialogLineEntryPublication> createCurrentRevision3DialogLine({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3DialogLineEntryTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'dialog-line authoring is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogLineEntryRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogLineEntryStaleCheckpointException();
+    }
+
+    try {
+      final publication = await lease.prepareAndPublishDialogLineV1(plan: plan);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.localizationId != plan.localization.localizationId ||
+          publication.voiceSlotId != plan.voiceSlot?.slotId ||
+          publication.locale != plan.locale) {
+        throw const CurrentProjectCoordinatorException(
+          'published dialog line disagrees with the current managed checkpoint',
+        );
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogLineEntryRequiresReopenException(),
           stackTrace,
         );
       }

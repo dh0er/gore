@@ -771,6 +771,108 @@ class AppLocalizationsPt extends AppLocalizations {
       'Crie um rascunho de missão offline com objetivos e identidades principais verificadas.';
 
   @override
+  String get managedActionNewDialogLineTitle => 'Adicionar linha de diálogo';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'Escreva texto localizado do projeto ou associe um texto ainda não usado deste projeto. Isto não cria um tópico de diálogo jogável.';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'Linha de diálogo guardada na revisão $projectRevision do projeto. O jogo e os ficheiros guardados não foram alterados.';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      'Escreva uma nova linha de diálogo localizada ou associe texto que já pertence a este projeto.';
+
+  @override
+  String get managedDialogLineBoundary =>
+      'Apenas os ficheiros do projeto são alterados. Isto não cria um tópico AngelScript nem um diálogo jogável e nunca altera a instalação do jogo ou os ficheiros guardados. O campo do interlocutor é apenas uma etiqueta; não associa nenhum NPC.';
+
+  @override
+  String get managedDialogLineCreateMode => 'Escrever novo texto';
+
+  @override
+  String get managedDialogLineReuseMode => 'Usar texto do projeto';
+
+  @override
+  String get managedDialogLineNameLabel => 'Nome da linha';
+
+  @override
+  String get managedDialogLineNameHint => 'Saudação à entrada da mina';
+
+  @override
+  String get managedDialogLineSpeakerLabel =>
+      'Etiqueta do interlocutor (opcional)';
+
+  @override
+  String get managedDialogLineSpeakerHint => 'Por exemplo, Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => 'Idioma';
+
+  @override
+  String get managedDialogLineTextLabel => 'Texto do diálogo';
+
+  @override
+  String get managedDialogLineReuseSearch =>
+      'Procurar texto do projeto não usado';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      'Não existe texto de projeto não usado e estruturalmente válido que possa ser associado. Escreva antes um novo texto.';
+
+  @override
+  String get managedDialogLineCreateSlotLabel =>
+      'Preparar este idioma para Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'Cria um espaço Voice vazio e não resolvido no projeto. Não adiciona nem implementa uma gravação.';
+
+  @override
+  String get managedDialogLineCancel => 'Cancelar';
+
+  @override
+  String get managedDialogLineSave => 'Guardar no projeto';
+
+  @override
+  String get managedDialogLineSaving => 'A guardar…';
+
+  @override
+  String get managedDialogLineLoading => 'A ler o conteúdo exato do projeto…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      'Não foi possível ler o conteúdo atual exato do projeto. Nada foi alterado.';
+
+  @override
+  String get managedDialogLineRetry => 'Tentar novamente';
+
+  @override
+  String get managedDialogLineStale =>
+      'O projeto foi alterado enquanto esta janela estava aberta. Feche-a e tente novamente a partir do projeto atual.';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      'Já não é possível verificar o projeto atual em segurança. Feche esta janela e volte a abrir o projeto gerido.';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      'Verifique a entrada do projeto realçada e escolha uma opção atual exata.';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'Não foi possível guardar a linha de diálogo em segurança. O jogo e os ficheiros guardados não foram alterados.';
+
+  @override
+  String get managedDialogLineDone => 'Concluído';
+
+  @override
+  String get managedDialogLineAddRecording => 'Adicionar gravação';
+
+  @override
   String get managedActionAddVoiceTakeTitle => 'Adicionar gravação de voz';
 
   @override
@@ -2200,6 +2302,107 @@ class AppLocalizationsPtBr extends AppLocalizationsPt {
   @override
   String get managedActionNewQuestDescription =>
       'Crie um rascunho de missão offline com objetivos e identidades principais verificadas.';
+
+  @override
+  String get managedActionNewDialogLineTitle => 'Adicionar linha de diálogo';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'Escreva um texto localizado do projeto ou vincule um texto ainda não usado deste projeto. Isso não cria um tópico de diálogo jogável.';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'Linha de diálogo salva na revisão $projectRevision do projeto. O jogo e os arquivos salvos não foram alterados.';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      'Escreva uma nova linha de diálogo localizada ou vincule um texto que já pertence a este projeto.';
+
+  @override
+  String get managedDialogLineBoundary =>
+      'Somente os arquivos do projeto são alterados. Isso não cria um tópico AngelScript nem um diálogo jogável e nunca altera a instalação do jogo ou os arquivos salvos. O campo do falante é apenas um rótulo; ele não vincula nenhum NPC.';
+
+  @override
+  String get managedDialogLineCreateMode => 'Escrever novo texto';
+
+  @override
+  String get managedDialogLineReuseMode => 'Usar texto do projeto';
+
+  @override
+  String get managedDialogLineNameLabel => 'Nome da linha';
+
+  @override
+  String get managedDialogLineNameHint => 'Saudação na entrada da mina';
+
+  @override
+  String get managedDialogLineSpeakerLabel => 'Rótulo do falante (opcional)';
+
+  @override
+  String get managedDialogLineSpeakerHint => 'Por exemplo, Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => 'Idioma';
+
+  @override
+  String get managedDialogLineTextLabel => 'Texto do diálogo';
+
+  @override
+  String get managedDialogLineReuseSearch =>
+      'Pesquisar texto do projeto não usado';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      'Não há texto de projeto não usado e estruturalmente válido que possa ser vinculado. Em vez disso, escreva um novo texto.';
+
+  @override
+  String get managedDialogLineCreateSlotLabel =>
+      'Preparar este idioma para Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'Cria um espaço Voice vazio e não resolvido no projeto. Não adiciona nem implanta uma gravação.';
+
+  @override
+  String get managedDialogLineCancel => 'Cancelar';
+
+  @override
+  String get managedDialogLineSave => 'Salvar no projeto';
+
+  @override
+  String get managedDialogLineSaving => 'Salvando…';
+
+  @override
+  String get managedDialogLineLoading => 'Lendo o conteúdo exato do projeto…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      'Não foi possível ler o conteúdo atual exato do projeto. Nada foi alterado.';
+
+  @override
+  String get managedDialogLineRetry => 'Tentar novamente';
+
+  @override
+  String get managedDialogLineStale =>
+      'O projeto foi alterado enquanto esta janela estava aberta. Feche-a e tente novamente a partir do projeto atual.';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      'Não é mais possível verificar o projeto atual com segurança. Feche esta janela e reabra o projeto gerenciado.';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      'Verifique a entrada do projeto destacada e escolha uma opção atual exata.';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'Não foi possível salvar a linha de diálogo com segurança. O jogo e os arquivos salvos não foram alterados.';
+
+  @override
+  String get managedDialogLineDone => 'Concluído';
+
+  @override
+  String get managedDialogLineAddRecording => 'Adicionar gravação';
 
   @override
   String get managedActionAddVoiceTakeTitle => 'Adicionar gravação de voz';

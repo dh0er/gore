@@ -754,6 +754,105 @@ class AppLocalizationsJa extends AppLocalizations {
       '目標と検証済みの親IDを含むオフラインのクエスト下書きを作成します。';
 
   @override
+  String get managedActionNewDialogLineTitle => 'ダイアログ行を追加';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'ローカライズしたプロジェクトテキストを作成するか、このプロジェクト内の未使用テキストを関連付けます。再生可能なダイアログトピックは作成されません。';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'ダイアログ行をプロジェクトリビジョン $projectRevision に保存しました。ゲームとセーブファイルは変更されていません。';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      '新しいローカライズ済みダイアログ行を作成するか、このプロジェクトに既に属するテキストを関連付けます。';
+
+  @override
+  String get managedDialogLineBoundary =>
+      '変更されるのはプロジェクトファイルだけです。AngelScriptトピックや再生可能なダイアログは作成されず、ゲームのインストールやセーブファイルも変更されません。話者欄は単なるラベルで、NPCとは関連付けられません。';
+
+  @override
+  String get managedDialogLineCreateMode => '新しいテキストを書く';
+
+  @override
+  String get managedDialogLineReuseMode => 'プロジェクトテキストを使用';
+
+  @override
+  String get managedDialogLineNameLabel => '行の名前';
+
+  @override
+  String get managedDialogLineNameHint => '鉱山入口での挨拶';
+
+  @override
+  String get managedDialogLineSpeakerLabel => '話者ラベル（任意）';
+
+  @override
+  String get managedDialogLineSpeakerHint => '例：Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => '言語';
+
+  @override
+  String get managedDialogLineTextLabel => 'ダイアログテキスト';
+
+  @override
+  String get managedDialogLineReuseSearch => '未使用のプロジェクトテキストを検索';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      '関連付け可能な、未使用で構造的に有効なプロジェクトテキストはありません。代わりに新しいテキストを書いてください。';
+
+  @override
+  String get managedDialogLineCreateSlotLabel => 'この言語のVoiceを準備';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'プロジェクトに未解決の空のVoiceスロットを作成します。録音の追加や配置は行いません。';
+
+  @override
+  String get managedDialogLineCancel => 'キャンセル';
+
+  @override
+  String get managedDialogLineSave => 'プロジェクトに保存';
+
+  @override
+  String get managedDialogLineSaving => '保存中…';
+
+  @override
+  String get managedDialogLineLoading => 'プロジェクトの正確な内容を読み取り中…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      '現在のプロジェクトの正確な内容を読み取れませんでした。変更はありません。';
+
+  @override
+  String get managedDialogLineRetry => '再試行';
+
+  @override
+  String get managedDialogLineStale =>
+      'このウィンドウを開いている間にプロジェクトが変更されました。閉じて、現在のプロジェクトから再試行してください。';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      '現在のプロジェクトを安全に検証できなくなりました。このウィンドウを閉じて、管理対象プロジェクトを開き直してください。';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      '強調表示されたプロジェクト入力を確認し、現在の正確な項目を選択してください。';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'ダイアログ行を安全に保存できませんでした。ゲームとセーブファイルは変更されていません。';
+
+  @override
+  String get managedDialogLineDone => '完了';
+
+  @override
+  String get managedDialogLineAddRecording => '録音を追加';
+
+  @override
   String get managedActionAddVoiceTakeTitle => 'ボイステイクを追加';
 
   @override

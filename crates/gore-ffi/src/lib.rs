@@ -90,6 +90,10 @@
 //!   archetype linkage, and complete base-game-plus-exact-current script collision inventory, then
 //!   prepares one exact-current NPC/ScriptModule checkpoint. It never publishes the fixed head or
 //!   grants build, spawn, runtime, deployment, save, or reusable catalog authority.
+//! - `authoring_store_prepare_revision3_dialog_line_v1` creates one new authored dialog line and
+//!   either creates or exactly reuses its managed localization, then fully reopens an immutable
+//!   unpublished revision-3 checkpoint. It accepts no game root and grants no topic, build,
+//!   runtime, deployment, save, or fixed-head publication authority.
 //! - `authoring_store_prepare_revision3_voice_take_v1` binds one existing dialog line and exact
 //!   locale to one unresolved VoiceSlot, imports one validated Ogg VoiceTake into immutable CAS,
 //!   and fully reopens an unpublished candidate. It never selects an unapproved take, resolves a
@@ -118,6 +122,9 @@
 //! - `authoring_store_read_revision3_content_index_v1` fully reopens one exact current revision-3
 //!   project and returns a bounded semantic entity/reference/asset projection without generated
 //!   source or blob bytes. It is read-only and grants no build, runtime, or publication authority.
+//! - `authoring_store_read_revision3_dialog_localization_v1` fully reopens one exact current
+//!   revision-3 LocalizationEntry twice and returns only bounded, sorted per-locale text previews.
+//!   It accepts no game, save, or caller-supplied project authority and never mutates the Store.
 //! - `authoring_store_import_ogg` and `authoring_store_verify_asset` import or verify bounded
 //!   content-addressed Ogg assets. `expected_head_json` is a strict CAS token: null means the fixed
 //!   head must be absent; a canonical string means it must match exactly.
@@ -160,6 +167,8 @@ mod authoring;
 mod authoring_content_revision3;
 mod authoring_dataasset_package_index_revision3;
 mod authoring_dataasset_revision3;
+mod authoring_dialog_localization_revision3;
+mod authoring_dialog_revision3;
 mod authoring_drafts;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
@@ -237,6 +246,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_checkpoint",
     "authoring_store_prepare_revision3_dataasset_edit_v1",
     "authoring_store_prepare_revision3_dataasset_stage_v1",
+    "authoring_store_prepare_revision3_dialog_line_v1",
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
     "authoring_store_prepare_revision3_quest_context_edit_v1",
@@ -250,6 +260,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
     "authoring_store_read_revision3_dataasset_package_index_v1",
+    "authoring_store_read_revision3_dialog_localization_v1",
     "authoring_store_verify_asset",
     "authoring_story_build_plan_v1_generate",
     "authoring_story_catalog_v1_build",
@@ -539,6 +550,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_dataasset_stage_v1" => {
             Some(authoring_dataasset_revision3::prepare_raw)
         }
+        "authoring_store_prepare_revision3_dialog_line_v1" => {
+            Some(authoring_dialog_revision3::prepare_revision3_dialog_line_v1_raw)
+        }
         "authoring_store_prepare_revision3_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_installed_dataasset_edit_v1_raw,
         ),
@@ -577,6 +591,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_read_revision3_dataasset_package_index_v1" => Some(
             authoring_dataasset_package_index_revision3::read_revision3_dataasset_package_index_v1_raw,
+        ),
+        "authoring_store_read_revision3_dialog_localization_v1" => Some(
+            authoring_dialog_localization_revision3::read_revision3_dialog_localization_v1_raw,
         ),
         "script_compile_install_state_v1" => {
             Some(script_compile_report::install_state_v1_raw)
@@ -1644,6 +1661,7 @@ mod tests {
                     "authoring_store_prepare_revision3_checkpoint",
                     "authoring_store_prepare_revision3_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
+                    "authoring_store_prepare_revision3_dialog_line_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
@@ -1657,6 +1675,7 @@ mod tests {
                     "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
                     "authoring_store_read_revision3_dataasset_package_index_v1",
+                    "authoring_store_read_revision3_dialog_localization_v1",
                     "authoring_store_verify_asset",
                     "authoring_story_build_plan_v1_generate",
                     "authoring_story_catalog_v1_build",
@@ -1793,6 +1812,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_dataasset_package_index_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_read_revision3_dialog_localization_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "voice_archive_match_line"));

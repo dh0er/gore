@@ -22,6 +22,7 @@ mod revision3_voice_build;
 mod story_collision;
 mod story_transaction;
 mod story_transaction_revision3;
+mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
@@ -177,6 +178,21 @@ pub use story_transaction_revision3::{
     Revision3QuestDraftIntentV2, Revision3QuestDraftRuntimeStatusV2, Revision3QuestEntityRoleV2,
     Revision3QuestSourceInspectionStatusV2, Revision3StoryIdentityKindV2,
     MAX_REVISION3_QUEST_DRAFT_DISPLAY_NAME_BYTES, MAX_REVISION3_QUEST_DRAFT_REQUEST_JSON_BYTES,
+};
+pub use story_transaction_revision3_dialog::{
+    apply_revision3_dialog_line_insert_transaction_v1, Revision3DialogBuildStatusV1,
+    Revision3DialogEmptyVoiceSlotIntentV1, Revision3DialogEntityRoleV1,
+    Revision3DialogLineInsertConflictV1, Revision3DialogLineInsertErrorV1,
+    Revision3DialogLineInsertEvaluationV1, Revision3DialogLineInsertOutcomeV1,
+    Revision3DialogLineInsertRejectionV1, Revision3DialogLineInsertRequestJsonErrorV1,
+    Revision3DialogLineInsertRequestV1, Revision3DialogLocalizationActionV1,
+    Revision3DialogLocalizationIntentV1, Revision3DialogPublicationStatusV1,
+    Revision3DialogRuntimeStatusV1, Revision3DialogTopicAuthorityV1,
+    MAX_REVISION3_DIALOG_AUTHORED_IDENTITY_BYTES_V1, MAX_REVISION3_DIALOG_DISPLAY_NAME_BYTES_V1,
+    MAX_REVISION3_DIALOG_LINE_REQUEST_JSON_BYTES_V1, MAX_REVISION3_DIALOG_LOCALIZATION_TEXTS_V1,
+    MAX_REVISION3_DIALOG_LOCALIZATION_TEXT_BYTES_V1,
+    MAX_REVISION3_DIALOG_LOCALIZATION_TEXT_TOTAL_BYTES_V1,
+    MAX_REVISION3_DIALOG_SPEAKER_HINT_BYTES_V1,
 };
 pub use story_transaction_revision3_npc::{
     apply_revision3_npc_draft_transaction_v1, Revision3NpcCatalogAuthorityV1,

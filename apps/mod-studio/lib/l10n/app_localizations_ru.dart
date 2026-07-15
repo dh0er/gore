@@ -772,6 +772,108 @@ class AppLocalizationsRu extends AppLocalizations {
       'Создать автономный черновик задания с целями и проверенными родительскими идентификаторами.';
 
   @override
+  String get managedActionNewDialogLineTitle => 'Добавить реплику диалога';
+
+  @override
+  String get managedActionNewDialogLineDescription =>
+      'Напишите локализованный текст проекта или привяжите неиспользуемый текст из этого проекта. Это не создаёт доступный в игре диалог.';
+
+  @override
+  String managedActionNewDialogLineSaved(int projectRevision) {
+    return 'Реплика диалога сохранена в ревизии проекта $projectRevision. Игра и файлы сохранений не изменены.';
+  }
+
+  @override
+  String get managedDialogLineIntroduction =>
+      'Напишите новую локализованную реплику диалога или привяжите текст, уже принадлежащий этому проекту.';
+
+  @override
+  String get managedDialogLineBoundary =>
+      'Изменяются только файлы проекта. Это не создаёт тему AngelScript или доступный в игре диалог и никогда не изменяет установку игры или файлы сохранений. Поле говорящего — только метка; оно не связывает реплику с NPC.';
+
+  @override
+  String get managedDialogLineCreateMode => 'Написать новый текст';
+
+  @override
+  String get managedDialogLineReuseMode => 'Использовать текст проекта';
+
+  @override
+  String get managedDialogLineNameLabel => 'Название реплики';
+
+  @override
+  String get managedDialogLineNameHint => 'Приветствие у входа в шахту';
+
+  @override
+  String get managedDialogLineSpeakerLabel =>
+      'Метка говорящего (необязательно)';
+
+  @override
+  String get managedDialogLineSpeakerHint => 'Например, Viper';
+
+  @override
+  String get managedDialogLineLocaleLabel => 'Язык';
+
+  @override
+  String get managedDialogLineTextLabel => 'Текст диалога';
+
+  @override
+  String get managedDialogLineReuseSearch =>
+      'Поиск неиспользуемого текста проекта';
+
+  @override
+  String get managedDialogLineNoReusableText =>
+      'Нет неиспользуемого и структурно корректного текста проекта, который можно привязать. Напишите новый текст.';
+
+  @override
+  String get managedDialogLineCreateSlotLabel =>
+      'Подготовить этот язык для Voice';
+
+  @override
+  String get managedDialogLineCreateSlotHelp =>
+      'Создаёт в проекте пустой неразрешённый слот Voice. Запись не добавляется и не развёртывается.';
+
+  @override
+  String get managedDialogLineCancel => 'Отмена';
+
+  @override
+  String get managedDialogLineSave => 'Сохранить в проекте';
+
+  @override
+  String get managedDialogLineSaving => 'Сохранение…';
+
+  @override
+  String get managedDialogLineLoading => 'Чтение точного содержимого проекта…';
+
+  @override
+  String get managedDialogLineLoadFailed =>
+      'Не удалось прочитать точное текущее содержимое проекта. Ничего не изменено.';
+
+  @override
+  String get managedDialogLineRetry => 'Повторить';
+
+  @override
+  String get managedDialogLineStale =>
+      'Проект изменился, пока это окно было открыто. Закройте его и повторите попытку из текущего проекта.';
+
+  @override
+  String get managedDialogLineRequiresReopen =>
+      'Текущий проект больше нельзя безопасно проверить. Закройте это окно и заново откройте управляемый проект.';
+
+  @override
+  String get managedDialogLineInvalidInput =>
+      'Проверьте выделенные данные проекта и выберите точный текущий вариант.';
+
+  @override
+  String get managedDialogLineSaveFailed =>
+      'Не удалось безопасно сохранить реплику диалога. Игра и файлы сохранений не изменены.';
+
+  @override
+  String get managedDialogLineDone => 'Готово';
+
+  @override
+  String get managedDialogLineAddRecording => 'Добавить запись';
+
+  @override
   String get managedActionAddVoiceTakeTitle => 'Добавить запись озвучки';
 
   @override
