@@ -989,11 +989,59 @@ class AppLocalizationsRu extends AppLocalizations {
 
   @override
   String get allDataLockedBody =>
-      'Для полного обозревателя свойств нужны декодированные приватные данные из кодека.';
+      'Полный просмотр данных сейчас доступен для сохранений в формате GSAV.';
 
   @override
   String get allDataDescription =>
-      'Ищите любое типизированное свойство по имени или пути. Числа, строки, перечисления и пути объектов доступны для редактирования; структуры пока отображаются только для чтения.';
+      'Просматривайте метаданные GSAV и все типизированные узлы разделов PUBLIC и PRIVATE. Безопасные скалярные значения и нативные структуры можно редактировать; контейнеры и необработанные байты также отображаются.';
+
+  @override
+  String get allDataEditable => 'Редактируемые';
+
+  @override
+  String get allDataReadOnly => 'Только для чтения';
+
+  @override
+  String get allDataType => 'Тип';
+
+  @override
+  String get allDataScalars => 'Скалярные значения';
+
+  @override
+  String get allDataStructs => 'Структуры';
+
+  @override
+  String get allDataContainers => 'Контейнеры';
+
+  @override
+  String get allDataOpaque => 'Необработанные байты';
+
+  @override
+  String get allDataNodes => 'Узлы';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count дочернего узла',
+      many: '$count дочерних узлов',
+      few: '$count дочерних узла',
+      one: '$count дочерний узел',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => 'Ожидает сохранения';
+
+  @override
+  String get allDataTagInputHint => 'Теги через запятую или с новой строки';
+
+  @override
+  String allDataTypedSource(String source) {
+    return 'Типизированные данные: $source';
+  }
 
   @override
   String get searchPropertiesLabel =>
@@ -2089,6 +2137,116 @@ class AppLocalizationsRu extends AppLocalizations {
   String backupStatusError(String details) {
     return 'Ошибка резервной копии: $details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': 'Квест',
+      'document': 'Документ',
+      'story': 'Сюжет',
+      'exploration': 'Исследование',
+      'combat': 'Бой',
+      'social': 'Общение',
+      'item': 'Предметы',
+      'learning': 'Обучение',
+      'guild': 'Гильдия',
+      'crime': 'Преступление',
+      'rest': 'Отдых',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': 'Квест начат',
+      'questSucceeded': 'Квест завершён',
+      'questFailed': 'Квест провален',
+      'documentRead': 'Документ прочитан',
+      'documentSegmentUnlocked': 'Запись открыта',
+      'documentSegmentViewed': 'Запись просмотрена',
+      'chapterCompleted': 'Глава завершена',
+      'areaEntered': 'Вход в область',
+      'areaLeft': 'Выход из области',
+      'characterKilled': 'Персонаж убит',
+      'characterDefeated': 'Персонаж побеждён',
+      'combatDodge': 'Уклонение от атаки',
+      'characterDebuffed': 'Наложено ослабление',
+      'tradeAvailable': 'Торговля разблокирована',
+      'itemObtained': 'Предмет получен',
+      'itemCrafted': 'Предмет создан',
+      'skillStateRecorded': 'Состояние навыков записано',
+      'recipeLearned': 'Рецепт изучен',
+      'guildJoined': 'Вступление в гильдию',
+      'crimeRecorded': 'Преступление записано',
+      'slept': 'Сон',
+      'storyEvent': 'Сюжетное событие',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action: $subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': 'Игровое время',
+      'duration': 'Длительность',
+      'chapter': 'Глава',
+      'instigator': 'Инициатор',
+      'affected': 'Цель',
+      'amount': 'Количество',
+      'primaryObject': 'Объект',
+      'secondaryObject': 'Контекст',
+      'segmentText': 'Текст записи',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return 'День $day, $time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value с';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => 'Герой';
+
+  @override
+  String get memoryEventDetails => 'Подробности';
+
+  @override
+  String get memoryEventTags => 'Теги';
+
+  @override
+  String get memoryEventTechnicalData => 'Технические данные';
+
+  @override
+  String get memoryEventIndex => 'Индекс';
+
+  @override
+  String get memoryEventPosition => 'Позиция';
+
+  @override
+  String get memoryEventPayload => 'Данные события';
+
+  @override
+  String get memoryEventSubject => 'Объект события';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {

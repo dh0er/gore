@@ -991,11 +991,60 @@ class AppLocalizationsPl extends AppLocalizations {
 
   @override
   String get allDataLockedBody =>
-      'Pełna przeglądarka właściwości wymaga odkodowanych prywatnych danych z kodeka.';
+      'Pełna przeglądarka danych jest obecnie dostępna dla zapisów w formacie GSAV.';
 
   @override
   String get allDataDescription =>
-      'Przeszukuj wszystkie typowane właściwości według nazwy lub ścieżki. Wartości liczbowe, ciągi, wyliczenia i ścieżki obiektów można edytować; struktury są na razie wyświetlane tylko do odczytu.';
+      'Przeglądaj metadane GSAV oraz wszystkie typowane węzły sekcji PUBLIC i PRIVATE. Bezpieczne wartości skalarne i struktury natywne można edytować; kontenery i nieprzetworzone bajty pozostają widoczne.';
+
+  @override
+  String get allDataEditable => 'Edytowalne';
+
+  @override
+  String get allDataReadOnly => 'Tylko do odczytu';
+
+  @override
+  String get allDataType => 'Typ';
+
+  @override
+  String get allDataScalars => 'Wartości skalarne';
+
+  @override
+  String get allDataStructs => 'Struktury';
+
+  @override
+  String get allDataContainers => 'Kontenery';
+
+  @override
+  String get allDataOpaque => 'Nieprzetworzone bajty';
+
+  @override
+  String get allDataNodes => 'Węzły';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count węzła podrzędnego',
+      many: '$count węzłów podrzędnych',
+      few: '$count węzły podrzędne',
+      one: '$count węzeł podrzędny',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => 'Do zapisania';
+
+  @override
+  String get allDataTagInputHint =>
+      'Tagi rozdzielone przecinkami lub podziałami wiersza';
+
+  @override
+  String allDataTypedSource(String source) {
+    return 'Dane typowane: $source';
+  }
 
   @override
   String get searchPropertiesLabel =>
@@ -2095,6 +2144,116 @@ class AppLocalizationsPl extends AppLocalizations {
   String backupStatusError(String details) {
     return 'Błąd kopii zapasowej: $details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': 'Zadanie',
+      'document': 'Dokument',
+      'story': 'Fabuła',
+      'exploration': 'Eksploracja',
+      'combat': 'Walka',
+      'social': 'Relacje',
+      'item': 'Przedmioty',
+      'learning': 'Nauka',
+      'guild': 'Gildia',
+      'crime': 'Przestępstwo',
+      'rest': 'Odpoczynek',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': 'Rozpoczęto zadanie',
+      'questSucceeded': 'Ukończono zadanie',
+      'questFailed': 'Zadanie nieudane',
+      'documentRead': 'Przeczytano dokument',
+      'documentSegmentUnlocked': 'Odkryto wpis',
+      'documentSegmentViewed': 'Wyświetlono wpis',
+      'chapterCompleted': 'Ukończono rozdział',
+      'areaEntered': 'Wejście do obszaru',
+      'areaLeft': 'Opuszczenie obszaru',
+      'characterKilled': 'Zabito postać',
+      'characterDefeated': 'Pokonano postać',
+      'combatDodge': 'Uniknięto ataku',
+      'characterDebuffed': 'Nałożono osłabienie',
+      'tradeAvailable': 'Odblokowano handel',
+      'itemObtained': 'Zdobyto przedmiot',
+      'itemCrafted': 'Wytworzono przedmiot',
+      'skillStateRecorded': 'Zapisano stan umiejętności',
+      'recipeLearned': 'Nauczono się receptury',
+      'guildJoined': 'Dołączono do gildii',
+      'crimeRecorded': 'Zarejestrowano przestępstwo',
+      'slept': 'Sen',
+      'storyEvent': 'Wydarzenie fabularne',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action: $subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': 'Czas gry',
+      'duration': 'Czas trwania',
+      'chapter': 'Rozdział',
+      'instigator': 'Sprawca',
+      'affected': 'Dotyczy',
+      'amount': 'Ilość',
+      'primaryObject': 'Obiekt',
+      'secondaryObject': 'Kontekst',
+      'segmentText': 'Tekst wpisu',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return 'Dzień $day, $time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value s';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => 'Bohater';
+
+  @override
+  String get memoryEventDetails => 'Szczegóły';
+
+  @override
+  String get memoryEventTags => 'Tagi';
+
+  @override
+  String get memoryEventTechnicalData => 'Dane techniczne';
+
+  @override
+  String get memoryEventIndex => 'Indeks';
+
+  @override
+  String get memoryEventPosition => 'Pozycja';
+
+  @override
+  String get memoryEventPayload => 'Dane zdarzenia';
+
+  @override
+  String get memoryEventSubject => 'Obiekt zdarzenia';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {

@@ -1966,10 +1966,9 @@ class _CollapsibleCardHeader extends StatelessWidget {
   }
 }
 
-/// Generic typed property browser: search every property in the decoded
-/// private payload and edit scalars and strings. This is the
-/// "everything is editable" surface — no curated field list, the user finds
-/// any value by name and edits the ones the core can safely patch.
+/// Exhaustive, source-aware GSAV browser for technical metadata plus the typed
+/// PUBLIC and PRIVATE property trees. Containers, structs and opaque payloads
+/// remain visible instead of being discarded by the scalar editor projection.
 class _AllDataPanel extends StatefulWidget {
   const _AllDataPanel({
     required this.inspection,
@@ -1987,6 +1986,8 @@ class _AllDataPanel extends StatefulWidget {
 
 class _AllDataPanelState extends State<_AllDataPanel> {
   static const _pageSizes = [25, 50, 100, 250, 500];
+  static const _sources = ['all', 'metadata', 'public', 'private'];
+  static const _kinds = ['all', 'scalar', 'struct', 'container', 'opaque'];
 
   final _controller = TextEditingController();
   TypedSearchResult? _result;
@@ -1994,6 +1995,10 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   int _requestSeq = 0;
   int _pageSize = 50;
   String _activeQuery = '';
+  String _source = 'private';
+  String _kind = 'all';
+  String _type = '';
+  bool? _editableFilter;
   // Tracks the inspection identity so _TypedPropertyRow can reset draft text
   // when a Reset/refresh produces a new inspection (same path, same values).
   Object? _inspectionReloadKey;
@@ -2004,15 +2009,14 @@ class _AllDataPanelState extends State<_AllDataPanel> {
   // writes. Lives alongside the pending registry: entries are added/removed in
   // _updatePending and the whole map is dropped whenever pending is cleared
   // centrally (new inspection identity).
-  final Map<String, String> _typedDrafts = {};
+  final Map<String, Object?> _typedDrafts = {};
 
   @override
   void initState() {
     super.initState();
     _inspectionReloadKey = widget.inspection;
-    // Empty query lists everything — show the first page as soon as the tab
-    // opens for a decoded save.
-    if (widget.inspection.privateDecoded) {
+    // Metadata and PUBLIC remain useful even when PRIVATE decoding failed.
+    if (widget.inspection.format == 'GSAV') {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _run(offset: 0);
       });
@@ -2029,6 +2033,10 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       // page one.
       _controller.clear();
       _activeQuery = '';
+      _source = 'private';
+      _kind = 'all';
+      _type = '';
+      _editableFilter = null;
       // Invalidate any in-flight search for the previous save.
       _requestSeq++;
       _inspectionReloadKey = widget.inspection;
@@ -2038,7 +2046,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
         _result = null;
         _searching = false;
       });
-      if (widget.inspection.privateDecoded) {
+      if (widget.inspection.format == 'GSAV') {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _run(offset: 0);
         });
@@ -2051,7 +2059,7 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       _inspectionReloadKey = widget.inspection;
       // Save/restore/refresh cleared pending centrally; the drafts mirror it.
       _typedDrafts.clear();
-      if (widget.inspection.privateDecoded) {
+      if (widget.inspection.format == 'GSAV') {
         final currentOffset = _result?.offset ?? 0;
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted) _run(offset: currentOffset);
@@ -2079,6 +2087,11 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       _activeQuery,
       offset: offset,
       limit: _pageSize,
+      includeNodes: true,
+      source: _source,
+      kind: _kind,
+      type: _type,
+      editable: _editableFilter,
     );
     if (!mounted || seq != _requestSeq) return;
     setState(() {
@@ -2100,10 +2113,28 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     _run(offset: 0);
   }
 
+  void _setSource(String value) {
+    if (_source == value) return;
+    setState(() => _source = value);
+    _run(offset: 0, newQuery: true);
+  }
+
+  void _setKind(String value) {
+    if (_kind == value) return;
+    setState(() => _kind = value);
+    _run(offset: 0, newQuery: true);
+  }
+
+  void _setEditableFilter(bool? value) {
+    if (_editableFilter == value) return;
+    setState(() => _editableFilter = value);
+    _run(offset: 0, newQuery: true);
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    if (!widget.inspection.privateDecoded) {
+    if (widget.inspection.format != 'GSAV') {
       return _MessagePane(
         icon: Icons.tune,
         title: l10n.tabAllData,
@@ -2112,62 +2143,233 @@ class _AllDataPanelState extends State<_AllDataPanel> {
     }
     final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.all(20),
-      child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: theme.colorScheme.outlineVariant),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.tune),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      l10n.tabAllData,
-                      style: theme.textTheme.titleMedium,
-                    ),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.account_tree_outlined,
+                        color: theme.colorScheme.primary,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              l10n.tabAllData,
+                              style: theme.textTheme.titleMedium,
+                            ),
+                            Text(
+                              l10n.allDataDescription,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      for (final source in _sources)
+                        ChoiceChip(
+                          avatar: Icon(_sourceIcon(source), size: 17),
+                          label: Text(
+                            source == 'all'
+                                ? l10n.categoryAll
+                                : source.toUpperCase(),
+                          ),
+                          selected: _source == source,
+                          onSelected: (_) => _setSource(source),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          // A PRIVATE query scans the exhaustive tree. Keep it
+                          // explicit so typing a word cannot enqueue several
+                          // million-node scans behind one another.
+                          onChanged: (_) => setState(() {}),
+                          textInputAction: TextInputAction.search,
+                          decoration: InputDecoration(
+                            labelText: l10n.searchPropertiesLabel,
+                            prefixIcon: const Icon(Icons.search),
+                            suffixIcon: _searching
+                                ? const Padding(
+                                    padding: EdgeInsets.all(12),
+                                    child: SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                  )
+                                : _controller.text.isEmpty
+                                ? null
+                                : IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: () {
+                                      _controller.clear();
+                                      _run(offset: 0, newQuery: true);
+                                    },
+                                  ),
+                          ),
+                          onSubmitted: (_) => _run(offset: 0, newQuery: true),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        tooltip: l10n.searchPropertiesLabel,
+                        onPressed: _searching
+                            ? null
+                            : () => _run(offset: 0, newQuery: true),
+                        icon: const Icon(Icons.search),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _buildFilters(theme),
+                  if (_result != null && _result!.error == null) ...[
+                    const SizedBox(height: 10),
+                    _buildSummary(theme, _result!),
+                  ],
                 ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                l10n.allDataDescription,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _controller,
-                decoration: InputDecoration(
-                  labelText: l10n.searchPropertiesLabel,
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: _searching
-                      ? const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: SizedBox(
-                            width: 16,
-                            height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        )
-                      : IconButton(
-                          icon: const Icon(Icons.arrow_forward),
-                          onPressed: () => _run(offset: 0, newQuery: true),
-                        ),
-                ),
-                onSubmitted: (_) => _run(offset: 0, newQuery: true),
-              ),
-              const SizedBox(height: 12),
-              _buildPaginationBar(theme),
-              const SizedBox(height: 8),
-              Expanded(child: _buildResults(theme)),
-            ],
+            ),
           ),
-        ),
+          const SizedBox(height: 8),
+          _buildPaginationBar(theme),
+          const SizedBox(height: 6),
+          Expanded(child: _buildResults(theme)),
+        ],
       ),
+    );
+  }
+
+  Widget _buildFilters(ThemeData theme) {
+    final l10n = AppLocalizations.of(context);
+    final resultTypes =
+        _result?.summary.types.keys.toList() ?? const <String>[];
+    final types = <String>{if (_type.isNotEmpty) _type, ...resultTypes}.toList()
+      ..sort();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Wrap(
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: 7,
+          runSpacing: 6,
+          children: [
+            for (final kind in _kinds)
+              ChoiceChip(
+                label: Text(
+                  kind == 'all' ? l10n.categoryAll : _kindLabel(l10n, kind),
+                ),
+                selected: _kind == kind,
+                onSelected: (_) => _setKind(kind),
+              ),
+            const SizedBox(width: 4),
+            ChoiceChip(
+              avatar: const Icon(Icons.edit_outlined, size: 16),
+              label: Text(l10n.allDataEditable),
+              selected: _editableFilter == true,
+              onSelected: (_) =>
+                  _setEditableFilter(_editableFilter == true ? null : true),
+            ),
+            ChoiceChip(
+              avatar: const Icon(Icons.lock_outline, size: 16),
+              label: Text(l10n.allDataReadOnly),
+              selected: _editableFilter == false,
+              onSelected: (_) =>
+                  _setEditableFilter(_editableFilter == false ? null : false),
+            ),
+            if (types.isNotEmpty)
+              SizedBox(
+                width: constraints.maxWidth < 520 ? constraints.maxWidth : 240,
+                child: DropdownButtonFormField<String>(
+                  key: ValueKey('all-data-type-$_type-${types.length}'),
+                  initialValue: _type,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.data_object, size: 18),
+                    labelText: l10n.allDataType,
+                  ),
+                  items: [
+                    DropdownMenuItem(value: '', child: Text(l10n.categoryAll)),
+                    for (final type in types)
+                      DropdownMenuItem(
+                        value: type,
+                        child: Text(type, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _type = value ?? '');
+                    _run(offset: 0, newQuery: true);
+                  },
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildSummary(ThemeData theme, TypedSearchResult result) {
+    final summary = result.summary;
+    return Wrap(
+      spacing: 7,
+      runSpacing: 6,
+      children: [
+        _AllDataMetric(
+          icon: Icons.dataset_outlined,
+          label:
+              '${AppLocalizations.of(context).allDataNodes}: ${result.total}',
+          color: theme.colorScheme.primary,
+        ),
+        _AllDataMetric(
+          icon: Icons.edit_outlined,
+          label:
+              '${AppLocalizations.of(context).allDataEditable}: ${summary.editable}',
+          color: theme.colorScheme.tertiary,
+        ),
+        _AllDataMetric(
+          icon: Icons.lock_outline,
+          label:
+              '${AppLocalizations.of(context).allDataReadOnly}: ${summary.readOnly}',
+          color: theme.colorScheme.outline,
+        ),
+        for (final source in summary.typedSources)
+          _AllDataMetric(
+            icon: Icons.verified_outlined,
+            label: AppLocalizations.of(
+              context,
+            ).allDataTypedSource(source.toUpperCase()),
+            color: theme.colorScheme.secondary,
+          ),
+      ],
     );
   }
 
@@ -2202,13 +2404,13 @@ class _AllDataPanelState extends State<_AllDataPanel> {
         body: l10n.noMatchesBody,
       );
     }
-    return ListView.separated(
+    final list = ListView.separated(
       itemCount: result.results.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
+      separatorBuilder: (_, _) => const SizedBox(height: 5),
       itemBuilder: (context, index) {
         final hit = result.results[index];
         return _TypedPropertyRow(
-          key: ValueKey(hit.display),
+          key: ValueKey(hit.stableId),
           hit: hit,
           editable: widget.editable && hit.editable,
           notifier: widget.notifier,
@@ -2216,6 +2418,27 @@ class _AllDataPanelState extends State<_AllDataPanel> {
           drafts: _typedDrafts,
         );
       },
+    );
+    if (result.warnings.isEmpty) return list;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(10),
+          margin: const EdgeInsets.only(bottom: 6),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.errorContainer,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            result.warnings.join('\n'),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onErrorContainer,
+            ),
+          ),
+        ),
+        Expanded(child: list),
+      ],
     );
   }
 
@@ -2288,6 +2511,54 @@ class _AllDataPanelState extends State<_AllDataPanel> {
       ],
     );
   }
+
+  static IconData _sourceIcon(String source) => switch (source) {
+    'metadata' => Icons.memory_outlined,
+    'public' => Icons.visibility_outlined,
+    'private' => Icons.lock_open_outlined,
+    _ => Icons.layers_outlined,
+  };
+
+  static String _kindLabel(AppLocalizations l10n, String kind) =>
+      switch (kind) {
+        'scalar' => l10n.allDataScalars,
+        'struct' => l10n.allDataStructs,
+        'container' => l10n.allDataContainers,
+        'opaque' => l10n.allDataOpaque,
+        _ => kind,
+      };
+}
+
+class _AllDataMetric extends StatelessWidget {
+  const _AllDataMetric({
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .10),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: color.withValues(alpha: .25)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 5),
+          Text(label, style: Theme.of(context).textTheme.labelMedium),
+        ],
+      ),
+    );
+  }
 }
 
 class _TypedPropertyRow extends StatefulWidget {
@@ -2307,7 +2578,7 @@ class _TypedPropertyRow extends StatefulWidget {
   // Rows seed from it on creation and write through it on change, so an edit
   // survives the row being disposed by search/pagination and stays visible
   // (instead of becoming a hidden pending edit) when the row comes back.
-  final Map<String, String> drafts;
+  final Map<String, Object?> drafts;
   // When provided, a change in identity forces a reseed of the field from the
   // canonical hit value (e.g. after a Reset that reverts to the same value).
   final Object? reloadKey;
@@ -2318,8 +2589,11 @@ class _TypedPropertyRow extends StatefulWidget {
 
 class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   late final TextEditingController _controller = TextEditingController(
-    text: widget.drafts[_pendingKey] ?? widget.hit.value,
+    text: _editorText(
+      widget.drafts[_pendingKey] ?? widget.hit.editValue ?? widget.hit.value,
+    ),
   );
+  final Map<String, String> _componentDrafts = {};
   // Unsaved bool toggle. The switch has no text controller to hold draft
   // state, so without this it would snap back to the canonical value on the
   // next rebuild even though the pending edit is registered.
@@ -2331,8 +2605,8 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     super.initState();
     _lastReloadKey = widget.reloadKey;
     final draft = widget.drafts[_pendingKey];
-    if (_isBool && draft != null) {
-      _boolDraft = draft == 'true';
+    if (_isBool && draft is bool) {
+      _boolDraft = draft;
     }
   }
 
@@ -2353,8 +2627,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
     if (keyChanged ||
         (widget.hit.value != oldWidget.hit.value &&
             _controller.text != widget.hit.value)) {
-      _controller.text = widget.hit.value;
+      _controller.text = _editorText(widget.hit.editValue ?? widget.hit.value);
       _boolDraft = null;
+      _componentDrafts.clear();
       // The drafts map is plain panel state (not a provider), so unlike the
       // pending registry it is safe to drop the stale entry here.
       widget.drafts.remove(_pendingKey);
@@ -2371,9 +2646,18 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   }
 
   bool get _isBool => widget.hit.type == 'BoolProperty';
+  bool get _isVector =>
+      widget.hit.isNativeStruct && widget.hit.editValue is Map;
+  bool get _isTags => widget.hit.structType == 'GameplayTagContainer';
+  bool get _isDateTime => widget.hit.structType == 'DateTime';
 
   /// Returns a key string that identifies this property in the pending registry.
   String get _pendingKey => 'typed:${widget.hit.path.join(' ')}';
+
+  static String _editorText(Object? value) {
+    if (value is List) return value.join(', ');
+    return value?.toString() ?? '';
+  }
 
   Object? _coerce(String text) {
     final type = widget.hit.type;
@@ -2382,7 +2666,9 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
       // be intentional, so no trim.
       return text;
     }
-    if (type == 'ObjectProperty' || type == 'EnumProperty') {
+    if (type == 'ObjectProperty' ||
+        type == 'ClassProperty' ||
+        type == 'EnumProperty') {
       return text.trim();
     }
     final raw = text.trim();
@@ -2406,23 +2692,39 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
 
   void _updatePending(String text) {
     if (!widget.editable) return;
-    final value = _coerce(text);
+    Object? value;
+    if (_isTags) {
+      value = text
+          .split(RegExp(r'[,\r\n]+'))
+          .map((tag) => tag.trim())
+          .where((tag) => tag.isNotEmpty)
+          .toList(growable: false);
+    } else if (_isDateTime) {
+      value = int.tryParse(text.trim());
+    } else if (widget.hit.isNativeStruct) {
+      value = text.trim();
+    } else {
+      value = _coerce(text);
+    }
     if (value == null) {
       // Invalid / unparseable — don't contribute to pending.
       widget.drafts.remove(_pendingKey);
       widget.notifier.clearPendingEdit(_pendingKey);
+      if (mounted) setState(() {});
       return;
     }
-    // Revert to original → clear pending.
-    if (text == widget.hit.value ||
-        (widget.hit.type != 'StrProperty' &&
-            widget.hit.type != 'NameProperty' &&
-            text.trim() == widget.hit.value.trim())) {
+    _setPendingValue(value);
+  }
+
+  void _setPendingValue(Object value) {
+    final original = widget.hit.editValue ?? _coerce(widget.hit.value);
+    if (_jsonEqual(value, original)) {
       widget.drafts.remove(_pendingKey);
       widget.notifier.clearPendingEdit(_pendingKey);
+      if (mounted) setState(() {});
       return;
     }
-    widget.drafts[_pendingKey] = text;
+    widget.drafts[_pendingKey] = value;
     widget.notifier.setPendingEdit(
       _pendingKey,
       PendingSaveEdit(
@@ -2434,64 +2736,232 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
         ],
       ),
     );
+    if (mounted) setState(() {});
+  }
+
+  bool _jsonEqual(Object? left, Object? right) {
+    try {
+      return jsonEncode(left) == jsonEncode(right);
+    } catch (_) {
+      return left == right;
+    }
+  }
+
+  void _updateVectorComponent(String name, String text) {
+    _componentDrafts[name] = text;
+    final source = (widget.drafts[_pendingKey] ?? widget.hit.editValue) as Map?;
+    final keys = (widget.hit.editValue as Map).keys
+        .whereType<String>()
+        .toList();
+    final next = <String, double>{};
+    for (final key in keys) {
+      final raw = _componentDrafts[key] ?? source?[key]?.toString() ?? '';
+      final parsed = double.tryParse(raw.trim());
+      if (parsed == null || !parsed.isFinite) {
+        widget.drafts.remove(_pendingKey);
+        widget.notifier.clearPendingEdit(_pendingKey);
+        if (mounted) setState(() {});
+        return;
+      }
+      next[key] = parsed;
+    }
+    _setPendingValue(next);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final hit = widget.hit;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SelectableText(hit.display, maxLines: 2),
-                Text(
-                  hit.type,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.colorScheme.outline,
+    final pending = widget.drafts.containsKey(_pendingKey);
+    final sourceColor = switch (hit.source) {
+      'metadata' => theme.colorScheme.outline,
+      'public' => theme.colorScheme.secondary,
+      _ => theme.colorScheme.primary,
+    };
+    final info = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(width: (hit.depth * 8.0).clamp(0, 48)),
+        Icon(_nodeIcon(hit.kind), size: 18, color: sourceColor),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SelectableText(hit.display, maxLines: 3),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 5,
+                runSpacing: 4,
+                children: [
+                  _NodeBadge(
+                    label: hit.source.toUpperCase(),
+                    color: sourceColor,
                   ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          if (!widget.editable)
-            SizedBox(
-              width: 220,
-              child: Text(
-                hit.value,
-                textAlign: TextAlign.right,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                ),
+                  _NodeBadge(label: hit.kind, color: theme.colorScheme.outline),
+                  _NodeBadge(
+                    label: hit.structType == null
+                        ? hit.type
+                        : '${hit.type} · ${hit.structType}',
+                    color: theme.colorScheme.tertiary,
+                  ),
+                  if (hit.childCount > 0)
+                    _NodeBadge(
+                      label: AppLocalizations.of(
+                        context,
+                      ).allDataChildren(hit.childCount),
+                      color: theme.colorScheme.secondary,
+                    ),
+                  if (pending)
+                    _NodeBadge(
+                      label: AppLocalizations.of(context).allDataPending,
+                      color: theme.colorScheme.error,
+                    ),
+                ],
               ),
-            )
-          else if (_isBool)
-            _BoolEditor(
-              value: _boolDraft ?? (hit.value == 'true'),
-              onChanged: (next) {
-                setState(() => _boolDraft = next);
-                _updatePending(next.toString());
-              },
-            )
-          else
+            ],
+          ),
+        ),
+      ],
+    );
+    final value = _buildValueEditor(theme);
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: pending
+            ? theme.colorScheme.primaryContainer.withValues(alpha: .32)
+            : theme.colorScheme.surfaceContainerLowest,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: pending
+              ? theme.colorScheme.primary.withValues(alpha: .45)
+              : theme.colorScheme.outlineVariant,
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 760) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [info, const SizedBox(height: 10), value],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(child: info),
+              const SizedBox(width: 18),
+              SizedBox(width: 380, child: value),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildValueEditor(ThemeData theme) {
+    final hit = widget.hit;
+    if (!widget.editable) {
+      return SelectableText(
+        hit.value.isEmpty && hit.childCount > 0
+            ? AppLocalizations.of(context).allDataChildren(hit.childCount)
+            : hit.value,
+        maxLines: 4,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+          fontFamily: hit.kind == 'opaque' ? 'monospace' : null,
+        ),
+      );
+    }
+    if (_isBool) {
+      return _BoolEditor(
+        value:
+            _boolDraft ??
+            (widget.drafts[_pendingKey] as bool? ?? hit.editValue == true),
+        onChanged: (next) {
+          setState(() => _boolDraft = next);
+          _setPendingValue(next);
+        },
+      );
+    }
+    if (_isVector) {
+      final source = (widget.drafts[_pendingKey] ?? hit.editValue) as Map;
+      final keys = (hit.editValue as Map).keys.whereType<String>().toList();
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final name in keys)
             SizedBox(
-              width: 220,
-              child: TextField(
-                controller: _controller,
-                onChanged: _updatePending,
+              width: 82,
+              child: TextFormField(
+                key: ValueKey(
+                  '${hit.stableId}-$name-${widget.reloadKey.hashCode}',
+                ),
+                initialValue:
+                    _componentDrafts[name] ?? source[name]?.toString() ?? '',
+                keyboardType: const TextInputType.numberWithOptions(
+                  decimal: true,
+                  signed: true,
+                ),
                 decoration: InputDecoration(
                   isDense: true,
-                  labelText: AppLocalizations.of(context).value,
+                  labelText: name.toUpperCase(),
                 ),
+                onChanged: (value) => _updateVectorComponent(name, value),
               ),
             ),
         ],
+      );
+    }
+    return TextField(
+      controller: _controller,
+      onChanged: _updatePending,
+      minLines: _isTags ? 2 : 1,
+      maxLines: _isTags ? 4 : 1,
+      decoration: InputDecoration(
+        isDense: true,
+        labelText: AppLocalizations.of(context).value,
+        helperText: _isTags
+            ? AppLocalizations.of(context).allDataTagInputHint
+            : null,
+      ),
+    );
+  }
+
+  static IconData _nodeIcon(String kind) => switch (kind) {
+    'array' || 'set' || 'objectArray' => Icons.data_array,
+    'map' => Icons.account_tree_outlined,
+    'struct' ||
+    'nativeStruct' ||
+    'instancedStruct' => Icons.view_in_ar_outlined,
+    'opaque' => Icons.hexagon_outlined,
+    'mapEntry' ||
+    'arrayElement' ||
+    'setElement' ||
+    'objectInstance' => Icons.subdirectory_arrow_right,
+    _ => Icons.data_object,
+  };
+}
+
+class _NodeBadge extends StatelessWidget {
+  const _NodeBadge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: .09),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(color: color),
       ),
     );
   }

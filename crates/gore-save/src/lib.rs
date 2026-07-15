@@ -10,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString, c_char};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -4324,9 +4324,6 @@ fn search_typed_properties(
     payload: &Value,
     backend: Option<&dyn codec_backend::CodecBackend>,
 ) -> Result<Value, CoreError> {
-    let backend = backend.ok_or_else(|| {
-        CoreError::Codec("typed property search requires a working codec backend".to_string())
-    })?;
     let query = payload.get("query").and_then(Value::as_str).unwrap_or("");
     let limit = payload
         .get("limit")
@@ -4340,16 +4337,32 @@ fn search_typed_properties(
         .map(|v| v as usize)
         .unwrap_or(0);
 
+    // Keep the original scalar-only contract for curated consumers such as
+    // hero attributes and GameTime. The All-data panel opts into the richer
+    // source-aware node model explicitly, so existing callers and pagination
+    // tests do not silently acquire container rows.
+    if payload
+        .get("includeNodes")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return browse_save_data(path, payload, backend, query, offset, limit);
+    }
+
+    let backend = backend.ok_or_else(|| {
+        CoreError::Codec("typed property search requires a working codec backend".to_string())
+    })?;
+
     let data = fs::read(path)?;
     if !data.starts_with(b"GSAV") {
         return Err(CoreError::UnsupportedEdit(
             "typed property search is only available for GSAV files".to_string(),
         ));
     }
-    let parts = split_gsav(&data)?;
-    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
-    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
-    let root = properties::parse_private_root(&decoded)?;
+    // Reuse the parsed-root cache (not only the decoded-byte cache). Before
+    // this, every page reparsed tens of megabytes even though all other typed
+    // read commands already shared the parsed tree.
+    let root = decode_private_root_cached(path, backend)?;
     let (hits, total) = properties::search_properties(&root, query, offset, limit);
 
     let results = hits
@@ -4373,6 +4386,588 @@ fn search_typed_properties(
         "count": results.len(),
         "results": results,
     }))
+}
+
+#[derive(Debug, Clone)]
+struct SaveDataNode {
+    id: String,
+    source: &'static str,
+    path: Vec<String>,
+    display: String,
+    type_name: String,
+    struct_type: Option<String>,
+    kind: String,
+    value: String,
+    child_count: usize,
+    depth: usize,
+}
+
+impl SaveDataNode {
+    fn to_json(&self) -> Value {
+        json!({
+            "id": self.id,
+            "source": self.source,
+            "path": self.path,
+            "display": self.display,
+            "type": self.type_name,
+            "structType": self.struct_type,
+            "kind": self.kind,
+            "value": self.value,
+            "editValue": Value::Null,
+            "editable": false,
+            "childCount": self.child_count,
+            "depth": self.depth,
+        })
+    }
+}
+
+struct SaveDataRequest<'a> {
+    source: &'a str,
+    query_terms: Vec<String>,
+    type_filter: Option<&'a str>,
+    kind_filter: Option<&'a str>,
+    editable_filter: Option<bool>,
+}
+
+#[derive(Default)]
+struct SaveDataStats {
+    source_counts: BTreeMap<String, usize>,
+    kind_counts: BTreeMap<String, usize>,
+    type_counts: BTreeMap<String, usize>,
+    editable: usize,
+    read_only: usize,
+}
+
+struct SaveDataPage {
+    offset: usize,
+    limit: usize,
+    total: usize,
+    results: Vec<Value>,
+    stats: SaveDataStats,
+}
+
+impl SaveDataPage {
+    fn new(offset: usize, limit: usize) -> Self {
+        Self {
+            offset,
+            limit,
+            total: 0,
+            results: Vec::with_capacity(limit),
+            stats: SaveDataStats::default(),
+        }
+    }
+
+    fn push_simple(&mut self, node: &SaveDataNode, request: &SaveDataRequest<'_>) {
+        if !save_data_node_matches(node, request) {
+            return;
+        }
+        let index = self.total;
+        self.total += 1;
+        self.stats.read_only += 1;
+        increment_browse_count(&mut self.stats.source_counts, node.source);
+        increment_browse_count(&mut self.stats.kind_counts, &node.kind);
+        increment_browse_count(&mut self.stats.type_counts, &node.type_name);
+        if index >= self.offset && self.results.len() < self.limit {
+            self.results.push(node.to_json());
+        }
+    }
+
+    fn push_property_tree(
+        &mut self,
+        source: &'static str,
+        root: &properties::RootObject,
+        request: &SaveDataRequest<'_>,
+        allow_edits: bool,
+    ) {
+        let before = self.total;
+        let page_end = self.offset.saturating_add(self.limit);
+        let local_offset = self.offset.saturating_sub(before);
+        let local_limit = if before >= page_end {
+            0
+        } else {
+            self.limit.saturating_sub(self.results.len())
+        };
+        let browsed = properties::browse_properties(
+            root,
+            &properties::PropertyBrowseOptions {
+                query: request.query_terms.join(" ").as_str(),
+                type_filter: request.type_filter,
+                kind_filter: request.kind_filter,
+                editable_filter: request.editable_filter,
+                offset: local_offset,
+                limit: local_limit,
+                allow_edits,
+            },
+        );
+        self.total += browsed.total;
+        *self
+            .stats
+            .source_counts
+            .entry(source.to_string())
+            .or_default() += browsed.total;
+        self.stats.editable += browsed.editable;
+        self.stats.read_only += browsed.read_only;
+        merge_browse_counts(&mut self.stats.kind_counts, browsed.kind_counts);
+        merge_browse_counts(&mut self.stats.type_counts, browsed.type_counts);
+        for node in browsed.nodes {
+            let id = format!("{source}:{}", node.ordinal);
+            self.results.push(json!({
+                "id": id,
+                "source": source,
+                "path": node.path,
+                "display": node.display,
+                "type": node.type_name,
+                "structType": node.struct_type,
+                "kind": node.kind,
+                "value": node.value_display,
+                "editValue": node.edit_value,
+                "editable": node.editable,
+                "childCount": node.child_count,
+                "depth": node.depth,
+            }));
+        }
+    }
+}
+
+fn increment_browse_count(counts: &mut BTreeMap<String, usize>, key: &str) {
+    if let Some(value) = counts.get_mut(key) {
+        *value += 1;
+    } else {
+        counts.insert(key.to_string(), 1);
+    }
+}
+
+fn merge_browse_counts(target: &mut BTreeMap<String, usize>, source: BTreeMap<String, usize>) {
+    for (key, value) in source {
+        *target.entry(key).or_default() += value;
+    }
+}
+
+fn save_data_node_matches(node: &SaveDataNode, request: &SaveDataRequest<'_>) -> bool {
+    if request.editable_filter == Some(true) {
+        return false;
+    }
+    if request.type_filter.is_some_and(|filter| {
+        !node
+            .type_name
+            .to_lowercase()
+            .contains(&filter.to_lowercase())
+            && !node
+                .struct_type
+                .as_deref()
+                .is_some_and(|value| value.to_lowercase().contains(&filter.to_lowercase()))
+    }) {
+        return false;
+    }
+    if request
+        .kind_filter
+        .filter(|filter| !filter.is_empty() && *filter != "all")
+        .is_some_and(|filter| !save_data_kind_matches(filter, &node.kind))
+    {
+        return false;
+    }
+    if request.query_terms.is_empty() {
+        return true;
+    }
+    let display = node.display.to_lowercase();
+    let type_name = node.type_name.to_lowercase();
+    let struct_type = node
+        .struct_type
+        .as_deref()
+        .unwrap_or_default()
+        .to_lowercase();
+    let kind = node.kind.to_lowercase();
+    let value = node.value.to_lowercase();
+    request.query_terms.iter().all(|term| {
+        display.contains(term)
+            || type_name.contains(term)
+            || struct_type.contains(term)
+            || kind.contains(term)
+            || value.contains(term)
+    })
+}
+
+fn save_data_kind_matches(filter: &str, kind: &str) -> bool {
+    match filter.to_lowercase().as_str() {
+        "container" => matches!(
+            kind,
+            "array"
+                | "map"
+                | "set"
+                | "objectArray"
+                | "arrayElement"
+                | "setElement"
+                | "mapEntry"
+                | "objectInstance"
+        ),
+        "struct" => matches!(kind, "struct" | "nativeStruct" | "instancedStruct"),
+        filter => kind.eq_ignore_ascii_case(filter),
+    }
+}
+
+fn browse_save_data(
+    path: &Path,
+    payload: &Value,
+    backend: Option<&dyn codec_backend::CodecBackend>,
+    query: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let source = payload
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or("all");
+    if !matches!(source, "all" | "metadata" | "public" | "private") {
+        return Err(CoreError::InvalidRequest(format!(
+            "unknown All-data source {source:?}"
+        )));
+    }
+    let editable_filter = match payload.get("editable") {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::String(value)) if value == "editable" => Some(true),
+        Some(Value::String(value)) if value == "readOnly" => Some(false),
+        _ => None,
+    };
+    let request = SaveDataRequest {
+        source,
+        query_terms: query.split_whitespace().map(str::to_lowercase).collect(),
+        type_filter: payload.get("type").and_then(Value::as_str),
+        kind_filter: payload.get("kind").and_then(Value::as_str),
+        editable_filter,
+    };
+    let data = fs::read(path)?;
+    if !data.starts_with(b"GSAV") {
+        return Err(CoreError::UnsupportedEdit(
+            "the exhaustive All-data browser currently supports GSAV files".to_string(),
+        ));
+    }
+    let parts = split_gsav(&data)?;
+    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
+    let mut page = SaveDataPage::new(offset, limit);
+    let mut warnings = Vec::<String>::new();
+    let mut typed_sources = Vec::<&str>::new();
+
+    if source == "all" || source == "metadata" {
+        for node in build_gsav_metadata_nodes(path, &data, &parts, &stream) {
+            page.push_simple(&node, &request);
+        }
+    }
+
+    if source == "all" || source == "public" {
+        match properties::parse_property_list_root(parts.public_payload) {
+            Ok(root) => {
+                typed_sources.push("public");
+                let root_node = SaveDataNode {
+                    id: "public:root".to_string(),
+                    source: "public",
+                    path: Vec::new(),
+                    display: "PUBLIC property list".to_string(),
+                    type_name: "PropertyList".to_string(),
+                    struct_type: None,
+                    kind: "struct".to_string(),
+                    value: format!(
+                        "{} properties · {} / {} bytes consumed",
+                        root.properties.len(),
+                        root.consumed,
+                        parts.public_payload.len()
+                    ),
+                    child_count: root.properties.len(),
+                    depth: 0,
+                };
+                page.push_simple(&root_node, &request);
+                page.push_property_tree("public", &root, &request, false);
+                if root.consumed < parts.public_payload.len() {
+                    let trailing = &parts.public_payload[root.consumed..];
+                    page.push_simple(
+                        &opaque_save_data_node(
+                            "public:trailing",
+                            "public",
+                            vec!["TrailingBytes".to_string()],
+                            "PUBLIC › trailing bytes",
+                            trailing,
+                        ),
+                        &request,
+                    );
+                }
+            }
+            Err(error) => {
+                warnings.push(format!("PUBLIC typed parse failed: {error}"));
+                page.push_simple(
+                    &opaque_save_data_node(
+                        "public:opaque",
+                        "public",
+                        vec!["Payload".to_string()],
+                        "PUBLIC payload (unparsed)",
+                        parts.public_payload,
+                    ),
+                    &request,
+                );
+            }
+        }
+    }
+
+    if source == "all" || source == "private" {
+        let private_root = backend
+            .ok_or_else(|| {
+                CoreError::Codec("PRIVATE data requires a working codec backend".to_string())
+            })
+            .and_then(|backend| decode_private_root_cached(path, backend));
+        match private_root {
+            Ok(root) => {
+                typed_sources.push("private");
+                let root_node = SaveDataNode {
+                    id: "private:root".to_string(),
+                    source: "private",
+                    path: Vec::new(),
+                    display: "PRIVATE root object".to_string(),
+                    type_name: "RootObject".to_string(),
+                    struct_type: Some(root.class.clone()),
+                    kind: "struct".to_string(),
+                    value: format!(
+                        "{} properties · class {} · flag {} · footer {}",
+                        root.properties.len(),
+                        root.class,
+                        root.flag,
+                        root.footer
+                    ),
+                    child_count: root.properties.len(),
+                    depth: 0,
+                };
+                page.push_simple(&root_node, &request);
+                page.push_property_tree("private", &root, &request, true);
+            }
+            Err(error) => {
+                warnings.push(format!("PRIVATE typed decode/parse failed: {error}"));
+                page.push_simple(
+                    &SaveDataNode {
+                        id: "private:unavailable".to_string(),
+                        source: "private",
+                        path: vec!["CompressedPayload".to_string()],
+                        display: "PRIVATE compressed payload".to_string(),
+                        type_name: "CompressedPayload".to_string(),
+                        struct_type: None,
+                        kind: "opaque".to_string(),
+                        value: format!(
+                            "{} compressed bytes · {} expected decoded bytes",
+                            stream.compressed_payload_size, stream.summary_uncompressed_size
+                        ),
+                        child_count: 0,
+                        depth: 0,
+                    },
+                    &request,
+                );
+            }
+        }
+    }
+
+    Ok(json!({
+        "query": query,
+        "source": request.source,
+        "offset": offset,
+        "limit": limit,
+        "total": page.total,
+        "count": page.results.len(),
+        "results": page.results,
+        "summary": {
+            "sources": page.stats.source_counts,
+            "kinds": page.stats.kind_counts,
+            "types": page.stats.type_counts,
+            "editable": page.stats.editable,
+            "readOnly": page.stats.read_only,
+            "typedSources": typed_sources,
+        },
+        "warnings": warnings,
+    }))
+}
+
+fn build_gsav_metadata_nodes(
+    path: &Path,
+    data: &[u8],
+    parts: &GsavParts<'_>,
+    stream: &CompressedStream,
+) -> Vec<SaveDataNode> {
+    let public_offset = 13usize;
+    let body_size = u32::from_le_bytes(data[5..9].try_into().unwrap());
+    let mut chunks = Vec::with_capacity(stream.chunks.len());
+    for chunk in &stream.chunks {
+        let start = chunk.compressed_offset;
+        let end = start
+            .saturating_add(chunk.compressed_size as usize)
+            .min(data.len());
+        let bytes = &data[start..end];
+        chunks.push(json!({
+            "index": chunk.index,
+            "compressedOffset": chunk.compressed_offset,
+            "compressedSize": chunk.compressed_size,
+            "uncompressedSize": chunk.uncompressed_size,
+            "sha1": sha1_hex(bytes),
+            "preview": bytes_preview(bytes),
+        }));
+    }
+    let metadata = json!({
+        "header": {
+            "magic": "GSAV",
+            "versionByte": parts.version,
+            "bodySizeField": body_size,
+            "bodySizeDelta": data.len() as i64 - i64::from(body_size),
+            "fileSize": data.len(),
+            "sha1": sha1_hex(data),
+            "path": path.display().to_string(),
+            "slot": path.file_stem().and_then(|value| value.to_str()),
+        },
+        "publicPayload": {
+            "offset": public_offset,
+            "size": parts.public_payload.len(),
+            "sha1": sha1_hex(parts.public_payload),
+        },
+        "compressedStream": {
+            "streamOffset": stream.stream_offset,
+            "uncompressedSizePrefix": stream.uncompressed_size_prefix,
+            "method": stream.method,
+            "packageTag": format!("0x{:08x}", stream.package_tag),
+            "headerVersion": format!("0x{:08x}", stream.header_version),
+            "maxChunkSize": stream.max_chunk_size,
+            "algorithmId": stream.algorithm_id,
+            "summaryCompressedSize": stream.summary_compressed_size,
+            "summaryUncompressedSize": stream.summary_uncompressed_size,
+            "chunkCount": stream.chunk_count,
+            "compressedPayloadOffset": stream.compressed_payload_offset,
+            "compressedPayloadSize": stream.compressed_payload_size,
+            "streamEndOffset": stream.stream_end_offset,
+            "trailingSize": stream.trailing_size,
+            "chunks": chunks,
+        },
+        "trailer": {
+            "offset": stream.stream_end_offset,
+            "size": parts.trailer.len(),
+            "sha1": sha1_hex(parts.trailer),
+            "preview": bytes_preview(parts.trailer),
+        },
+    });
+    let mut nodes = Vec::new();
+    flatten_metadata_value(&metadata, &mut Vec::new(), &mut String::new(), &mut nodes);
+    nodes.push(opaque_save_data_node(
+        "metadata:trailer-bytes",
+        "metadata",
+        vec!["trailer".to_string(), "bytes".to_string()],
+        "trailer › bytes",
+        parts.trailer,
+    ));
+    nodes
+}
+
+fn flatten_metadata_value(
+    value: &Value,
+    path: &mut Vec<String>,
+    display: &mut String,
+    nodes: &mut Vec<SaveDataNode>,
+) {
+    match value {
+        Value::Object(map) => {
+            for (name, child) in map {
+                let display_len = display.len();
+                if !display.is_empty() {
+                    display.push_str(" › ");
+                }
+                display.push_str(name);
+                path.push(name.clone());
+                push_metadata_value(child, path, display, nodes);
+                path.pop();
+                display.truncate(display_len);
+            }
+        }
+        Value::Array(values) => {
+            for (index, child) in values.iter().enumerate() {
+                let display_len = display.len();
+                let segment = format!("[{index}]");
+                display.push_str(&segment);
+                path.push(segment);
+                push_metadata_value(child, path, display, nodes);
+                path.pop();
+                display.truncate(display_len);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn push_metadata_value(
+    value: &Value,
+    path: &mut Vec<String>,
+    display: &mut String,
+    nodes: &mut Vec<SaveDataNode>,
+) {
+    let (type_name, kind, child_count, preview) = match value {
+        Value::Object(map) => (
+            "Object",
+            "struct",
+            map.len(),
+            format!("{} fields", map.len()),
+        ),
+        Value::Array(values) => (
+            "Array",
+            "array",
+            values.len(),
+            format!("{} elements", values.len()),
+        ),
+        Value::String(value) => ("String", "scalar", 0, value.clone()),
+        Value::Number(value) => ("Number", "scalar", 0, value.to_string()),
+        Value::Bool(value) => ("Boolean", "scalar", 0, value.to_string()),
+        Value::Null => ("Null", "scalar", 0, "null".to_string()),
+    };
+    nodes.push(SaveDataNode {
+        id: format!("metadata:{}", path.join("/")),
+        source: "metadata",
+        path: path.clone(),
+        display: display.clone(),
+        type_name: type_name.to_string(),
+        struct_type: None,
+        kind: kind.to_string(),
+        value: preview,
+        child_count,
+        depth: path.len().saturating_sub(1),
+    });
+    flatten_metadata_value(value, path, display, nodes);
+}
+
+fn opaque_save_data_node(
+    id: &str,
+    source: &'static str,
+    path: Vec<String>,
+    display: &str,
+    bytes: &[u8],
+) -> SaveDataNode {
+    SaveDataNode {
+        id: id.to_string(),
+        source,
+        depth: path.len().saturating_sub(1),
+        path,
+        display: display.to_string(),
+        type_name: "Bytes".to_string(),
+        struct_type: None,
+        kind: "opaque".to_string(),
+        value: format!(
+            "{} bytes · SHA-1 {} · {}",
+            bytes.len(),
+            sha1_hex(bytes),
+            bytes_preview(bytes)
+        ),
+        child_count: 0,
+    }
+}
+
+fn bytes_preview(bytes: &[u8]) -> String {
+    let preview = bytes
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if bytes.len() > 16 {
+        format!("{preview} …")
+    } else {
+        preview
+    }
 }
 
 /// Structured progression queries over the decoded private payload. Sections:
@@ -4458,16 +5053,10 @@ fn query_progression(
         .filter(|s| !s.is_empty())
         .or_else(|| group_filter.clone());
 
-    let data = fs::read(path)?;
-    if !data.starts_with(b"GSAV") {
-        return Err(CoreError::UnsupportedEdit(
-            "progression queries are only available for GSAV files".to_string(),
-        ));
-    }
-    let parts = split_gsav(&data)?;
-    let stream = parse_compressed_stream(&data, 13 + parts.public_payload.len())?;
-    let decoded = decoded_private_payload_cached(path, &data, &stream, backend)?;
-    let root = properties::parse_private_root(&decoded)?;
+    // Progression panels page and filter the same immutable tree repeatedly.
+    // Reuse the parsed-root cache (keyed by the full save hash) so every page
+    // click does not reparse the entire decoded payload.
+    let root = decode_private_root_cached(path, backend)?;
     match section {
         "quests" => progression_quests(
             &root,
@@ -5780,6 +6369,277 @@ fn encode_empty_name_set_property(name: &str) -> Vec<u8> {
     out
 }
 
+const MEMORY_EVENT_SUMMARY_BUDGET: usize = 32;
+const MEMORY_EVENT_CONTAINER_PREVIEW: usize = 6;
+const MEMORY_EVENT_SUMMARY_DEPTH: usize = 3;
+
+/// Turn the two native vector encodings observed for `FMemoryEvent.position`
+/// into a stable JSON shape. Position was present in the save schema all along
+/// but the old progression projection silently discarded it.
+fn memory_event_position(value: &properties::PropertyValue) -> Option<Value> {
+    let position = struct_member(value, "position").or_else(|| struct_member(value, "Position"))?;
+    match position {
+        properties::PropertyValue::Struct(properties::StructValue::Vector3 { x, y, z }) => {
+            Some(json!({ "x": x, "y": y, "z": z }))
+        }
+        properties::PropertyValue::Struct(properties::StructValue::Vector3f { x, y, z }) => {
+            Some(json!({ "x": f64::from(*x), "y": f64::from(*y), "z": f64::from(*z) }))
+        }
+        _ => None,
+    }
+}
+
+/// Bounded display projection for the dynamic `FInstancedStruct` carried by a
+/// memory event. A real item-inspection event contains maps with hundreds of
+/// entries, so returning the entire payload on every 50-row page would be both
+/// wasteful and a UI denial-of-service. Preserve the actual type, total field
+/// count and representative nested values under a strict shared node budget;
+/// the exhaustive All-data browser remains available for every omitted leaf.
+fn memory_event_payload(value: &properties::PropertyValue) -> Option<Value> {
+    let payload = struct_member(value, "Payload")?;
+    let (actual_type, properties) = match payload {
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(Some(instance))) => (
+            Some(instance.actual_type.as_str()),
+            instance.properties.as_slice(),
+        ),
+        properties::PropertyValue::Struct(properties::StructValue::Properties(properties)) => {
+            (None, properties.as_slice())
+        }
+        properties::PropertyValue::Struct(properties::StructValue::Instanced(None)) => return None,
+        _ => return None,
+    };
+    let mut budget = MEMORY_EVENT_SUMMARY_BUDGET;
+    let mut truncated = false;
+    let fields = summarize_memory_event_properties(properties, 0, &mut budget, &mut truncated);
+    Some(json!({
+        "type": actual_type,
+        "fieldCount": properties.len(),
+        "fields": fields,
+        "truncated": truncated,
+    }))
+}
+
+fn summarize_memory_event_properties(
+    properties: &[properties::Property],
+    depth: usize,
+    budget: &mut usize,
+    truncated: &mut bool,
+) -> Vec<Value> {
+    let mut fields = Vec::new();
+    for property in properties {
+        if *budget == 0 {
+            *truncated = true;
+            break;
+        }
+        let struct_type = property
+            .descriptor
+            .struct_type
+            .as_ref()
+            .map(|(name, _)| name.as_str());
+        let type_name = struct_type.map_or_else(
+            || property.type_name.clone(),
+            |name| format!("{} · {name}", property.type_name),
+        );
+        fields.push(json!({
+            "name": property.name,
+            "type": type_name,
+            "value": summarize_memory_event_value(
+                &property.value,
+                depth,
+                budget,
+                truncated,
+            ),
+        }));
+    }
+    fields
+}
+
+fn summarize_memory_event_value(
+    value: &properties::PropertyValue,
+    depth: usize,
+    budget: &mut usize,
+    truncated: &mut bool,
+) -> Value {
+    if *budget == 0 {
+        *truncated = true;
+        return json!("…");
+    }
+    *budget -= 1;
+    use properties::{PropertyValue as PV, StructValue as SV};
+    match value {
+        PV::Int(value) => json!(value),
+        PV::UInt32(value) => json!(value),
+        PV::Int64(value) => json!(value),
+        PV::Float(value) if value.is_finite() => json!(value),
+        PV::Double(value) if value.is_finite() => json!(value),
+        PV::Float(value) => json!(value.to_string()),
+        PV::Double(value) => json!(value.to_string()),
+        PV::Bool(value) => json!(value),
+        PV::Byte(value) => json!(value),
+        PV::Str(value) | PV::Name(value) | PV::Object(value) | PV::Enum(value) => json!(value),
+        PV::SoftObject(path) => soft_object_class_path(path)
+            .map(Value::String)
+            .unwrap_or_else(|| {
+                json!({
+                    "package": path.package_name,
+                    "asset": path.asset_name,
+                    "subPath": path.sub_path,
+                })
+            }),
+        PV::Struct(SV::Vector3 { x, y, z }) => json!({ "x": x, "y": y, "z": z }),
+        PV::Struct(SV::Vector3f { x, y, z }) => json!({
+            "x": f64::from(*x),
+            "y": f64::from(*y),
+            "z": f64::from(*z),
+        }),
+        PV::Struct(SV::Vector4 { x, y, z, w }) => {
+            json!({ "x": x, "y": y, "z": z, "w": w })
+        }
+        PV::Struct(SV::Vector2 { x, y }) => json!({ "x": x, "y": y }),
+        PV::Struct(SV::Guid(raw)) => Value::String(
+            raw.iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
+        PV::Struct(SV::DateTime(ticks)) => json!(ticks),
+        PV::Struct(SV::GameplayTagContainer(tags)) => json!(tags),
+        PV::Struct(SV::Instanced(None)) => Value::Null,
+        PV::Struct(SV::Instanced(Some(instance))) => {
+            if depth >= MEMORY_EVENT_SUMMARY_DEPTH {
+                if !instance.properties.is_empty() {
+                    *truncated = true;
+                }
+                return json!({
+                    "type": instance.actual_type,
+                    "fieldCount": instance.properties.len(),
+                });
+            }
+            json!({
+                "type": instance.actual_type,
+                "fieldCount": instance.properties.len(),
+                "fields": summarize_memory_event_properties(
+                    &instance.properties,
+                    depth + 1,
+                    budget,
+                    truncated,
+                ),
+            })
+        }
+        PV::Struct(SV::Properties(properties)) => {
+            if depth >= MEMORY_EVENT_SUMMARY_DEPTH {
+                if !properties.is_empty() {
+                    *truncated = true;
+                }
+                return json!({ "fieldCount": properties.len() });
+            }
+            json!({
+                "fieldCount": properties.len(),
+                "fields": summarize_memory_event_properties(
+                    properties,
+                    depth + 1,
+                    budget,
+                    truncated,
+                ),
+            })
+        }
+        PV::Array { elements } => {
+            summarize_memory_event_sequence(elements, depth, budget, truncated)
+        }
+        PV::Set { elements, .. } => {
+            summarize_memory_event_sequence(elements, depth, budget, truncated)
+        }
+        PV::Map { entries, .. } => {
+            let take = entries.len().min(MEMORY_EVENT_CONTAINER_PREVIEW);
+            if take < entries.len() || depth >= MEMORY_EVENT_SUMMARY_DEPTH {
+                *truncated = *truncated || !entries.is_empty();
+            }
+            let mut preview = Vec::new();
+            if depth < MEMORY_EVENT_SUMMARY_DEPTH {
+                for (key, value) in entries.iter().take(take) {
+                    if *budget == 0 {
+                        *truncated = true;
+                        break;
+                    }
+                    preview.push(json!({
+                        "key": summarize_memory_event_value(
+                            key,
+                            depth + 1,
+                            budget,
+                            truncated,
+                        ),
+                        "value": summarize_memory_event_value(
+                            value,
+                            depth + 1,
+                            budget,
+                            truncated,
+                        ),
+                    }));
+                }
+            }
+            json!({ "count": entries.len(), "entries": preview })
+        }
+        PV::ObjectInstances(instances) => {
+            let take = instances.len().min(MEMORY_EVENT_CONTAINER_PREVIEW);
+            if take < instances.len() || depth >= MEMORY_EVENT_SUMMARY_DEPTH {
+                *truncated = *truncated || !instances.is_empty();
+            }
+            let mut preview = Vec::new();
+            if depth < MEMORY_EVENT_SUMMARY_DEPTH {
+                for instance in instances.iter().take(take) {
+                    if *budget == 0 {
+                        *truncated = true;
+                        break;
+                    }
+                    preview.push(json!({
+                        "class": instance.class,
+                        "fieldCount": instance.properties.len(),
+                        "fields": summarize_memory_event_properties(
+                            &instance.properties,
+                            depth + 1,
+                            budget,
+                            truncated,
+                        ),
+                    }));
+                }
+            }
+            json!({ "count": instances.len(), "objects": preview })
+        }
+        PV::Opaque(bytes) => json!({
+            "byteCount": bytes.len(),
+            "sha1": sha1_hex(bytes),
+            "preview": bytes_preview(bytes),
+        }),
+    }
+}
+
+fn summarize_memory_event_sequence(
+    elements: &[properties::PropertyValue],
+    depth: usize,
+    budget: &mut usize,
+    truncated: &mut bool,
+) -> Value {
+    let take = elements.len().min(MEMORY_EVENT_CONTAINER_PREVIEW);
+    if take < elements.len() || depth >= MEMORY_EVENT_SUMMARY_DEPTH {
+        *truncated = *truncated || !elements.is_empty();
+    }
+    let mut preview = Vec::new();
+    if depth < MEMORY_EVENT_SUMMARY_DEPTH {
+        for element in elements.iter().take(take) {
+            if *budget == 0 {
+                *truncated = true;
+                break;
+            }
+            preview.push(summarize_memory_event_value(
+                element,
+                depth + 1,
+                budget,
+                truncated,
+            ));
+        }
+    }
+    json!({ "count": elements.len(), "items": preview })
+}
+
 fn progression_events(
     root: &properties::RootObject,
     query: &str,
@@ -5859,13 +6719,21 @@ fn progression_events(
                     match struct_member(element, name)
                         .and_then(|t| struct_member(t, "TotalSeconds"))
                     {
-                        Some(properties::PropertyValue::Double(v)) => Some(*v),
+                        Some(properties::PropertyValue::Double(v))
+                            if v.is_finite() && *v >= 0.0 && v.abs() < 1.0e300 =>
+                        {
+                            Some(*v)
+                        }
                         _ => None,
                     }
                 };
                 let name_member = |name: &str| -> Option<String> {
                     match struct_member(element, name) {
-                        Some(properties::PropertyValue::Name(s)) => Some(s.clone()),
+                        Some(properties::PropertyValue::Name(s))
+                            if !s.trim().is_empty() && !s.eq_ignore_ascii_case("None") =>
+                        {
+                            Some(s.clone())
+                        }
                         _ => None,
                     }
                 };
@@ -5876,9 +6744,13 @@ fn progression_events(
                     }
                 };
                 let magnitude = match struct_member(element, "Magnitude") {
-                    Some(properties::PropertyValue::Float(v)) => Some(f64::from(*v)),
+                    Some(properties::PropertyValue::Float(v)) if v.is_finite() => {
+                        Some(f64::from(*v))
+                    }
                     _ => None,
                 };
+                let position = memory_event_position(element);
+                let payload = memory_event_payload(element);
                 json!({
                     "index": index,
                     "tags": tags,
@@ -5889,6 +6761,8 @@ fn progression_events(
                     "affected": name_member("AffectedCharacterGlobalId"),
                     "optionalClass1": soft_member("OptionalClass1"),
                     "optionalClass2": soft_member("OptionalClass2"),
+                    "position": position,
+                    "payload": payload,
                 })
             };
             let matches_query = |event: &Value| -> bool {
@@ -5901,19 +6775,41 @@ fn progression_events(
                     event["affected"].to_string(),
                     event["optionalClass1"].to_string(),
                     event["optionalClass2"].to_string(),
+                    event["position"].to_string(),
+                    event["payload"].to_string(),
                 ]
                 .join(" ")
                 .to_ascii_lowercase();
                 hay.contains(query)
             };
-            let all: Vec<Value> = elements
-                .iter()
-                .enumerate()
-                .map(|(index, element)| event_json(index, element))
-                .filter(|e| matches_query(e))
-                .collect();
-            let total = all.len();
-            let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+            // The common unfiltered page must not summarize every dynamic
+            // payload in a character's full history. Some real Hero saves
+            // contain thousands of events and individual item payloads with
+            // hundreds of nested entries. Build only the requested page;
+            // filtered searches still inspect all summaries because payload
+            // values deliberately participate in the search haystack.
+            let (total, page) = if query.is_empty() {
+                (
+                    elements.len(),
+                    elements
+                        .iter()
+                        .enumerate()
+                        .skip(offset)
+                        .take(limit)
+                        .map(|(index, element)| event_json(index, element))
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                let all = elements
+                    .iter()
+                    .enumerate()
+                    .map(|(index, element)| event_json(index, element))
+                    .filter(|event| matches_query(event))
+                    .collect::<Vec<_>>();
+                let total = all.len();
+                let page = all.into_iter().skip(offset).take(limit).collect::<Vec<_>>();
+                (total, page)
+            };
             let mut array_path = base_path.clone();
             array_path.push(format!("{{{character}}}"));
             array_path.push("MemorizedEvents".to_string());
@@ -7451,6 +8347,7 @@ fn parse_private_factions_forgive_edit(
 enum TypedSetValue {
     Scalar(properties::ScalarValue),
     Text(String),
+    NativeStruct(Vec<u8>),
 }
 
 fn coerce_typed_value(
@@ -7527,9 +8424,207 @@ fn coerce_typed_value(
                 .map(|v| TypedSetValue::Text(v.to_string()))
                 .ok_or_else(|| err("a string"))
         }
+        "StructProperty" => {
+            coerce_native_struct_value(property, value).map(TypedSetValue::NativeStruct)
+        }
         other => Err(CoreError::UnsupportedEdit(format!(
             "private.typed.setValue does not support {other} targets \
-             (fixed-size scalars and string-valued properties only)"
+             (fixed-size scalars, strings and supported native structs only)"
+        ))),
+    }
+}
+
+fn coerce_native_struct_value(
+    property: &properties::Property,
+    value: &Value,
+) -> Result<Vec<u8>, CoreError> {
+    use properties::StructValue;
+    if property.tag_flags & properties::TAG_FLAG_NATIVE_SERIALIZE == 0 {
+        return Err(CoreError::UnsupportedEdit(
+            "private.typed.setValue only edits native-serialized StructProperty values; expand a tagged struct and edit its child leaves instead"
+                .to_string(),
+        ));
+    }
+    let descriptor = property
+        .descriptor
+        .struct_type
+        .as_ref()
+        .map(|(name, _)| name.as_str())
+        .ok_or_else(|| {
+            CoreError::UnsupportedEdit(
+                "native StructProperty is missing its struct descriptor".to_string(),
+            )
+        })?;
+    let object = || {
+        value.as_object().ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "private.typed.setValue: {descriptor} value must be an object"
+            ))
+        })
+    };
+    let component = |map: &serde_json::Map<String, Value>, name: &str| {
+        map.get(name)
+            .and_then(Value::as_f64)
+            .filter(|number| number.is_finite())
+            .ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "private.typed.setValue: {descriptor}.{name} must be a finite number"
+                ))
+            })
+    };
+    let ensure_descriptor = |allowed: &[&str]| {
+        if allowed.contains(&descriptor) {
+            Ok(())
+        } else {
+            Err(CoreError::Validation(format!(
+                "parsed native struct variant does not match descriptor {descriptor:?}"
+            )))
+        }
+    };
+    let ensure_size = |expected: usize| {
+        if property.value_size == expected {
+            Ok(())
+        } else {
+            Err(CoreError::Validation(format!(
+                "native struct {descriptor} has {} bytes, expected {expected}",
+                property.value_size
+            )))
+        }
+    };
+
+    match &property.value {
+        properties::PropertyValue::Struct(StructValue::Vector2 { .. }) => {
+            ensure_descriptor(&["Vector2D"])?;
+            ensure_size(16)?;
+            let map = object()?;
+            let mut bytes = Vec::with_capacity(16);
+            bytes.extend_from_slice(&component(map, "x")?.to_le_bytes());
+            bytes.extend_from_slice(&component(map, "y")?.to_le_bytes());
+            Ok(bytes)
+        }
+        properties::PropertyValue::Struct(StructValue::Vector3 { .. }) => {
+            ensure_descriptor(&["Vector", "Rotator"])?;
+            ensure_size(24)?;
+            let map = object()?;
+            let mut bytes = Vec::with_capacity(24);
+            bytes.extend_from_slice(&component(map, "x")?.to_le_bytes());
+            bytes.extend_from_slice(&component(map, "y")?.to_le_bytes());
+            bytes.extend_from_slice(&component(map, "z")?.to_le_bytes());
+            Ok(bytes)
+        }
+        properties::PropertyValue::Struct(StructValue::Vector3f { .. }) => {
+            ensure_descriptor(&["Vector", "Rotator"])?;
+            ensure_size(12)?;
+            let map = object()?;
+            let mut bytes = Vec::with_capacity(12);
+            for name in ["x", "y", "z"] {
+                let number = component(map, name)?;
+                let number = number as f32;
+                if !number.is_finite() {
+                    return Err(CoreError::InvalidRequest(format!(
+                        "private.typed.setValue: {descriptor}.{name} is outside the f32 range"
+                    )));
+                }
+                bytes.extend_from_slice(&number.to_le_bytes());
+            }
+            Ok(bytes)
+        }
+        properties::PropertyValue::Struct(StructValue::Vector4 { .. }) => {
+            ensure_descriptor(&["Vector4", "Quat"])?;
+            ensure_size(32)?;
+            let map = object()?;
+            let mut bytes = Vec::with_capacity(32);
+            for name in ["x", "y", "z", "w"] {
+                bytes.extend_from_slice(&component(map, name)?.to_le_bytes());
+            }
+            Ok(bytes)
+        }
+        properties::PropertyValue::Struct(StructValue::Guid(_)) => {
+            ensure_descriptor(&["Guid"])?;
+            ensure_size(16)?;
+            let raw = value.as_str().ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "private.typed.setValue: Guid value must be a 32-digit hexadecimal string"
+                        .to_string(),
+                )
+            })?;
+            let normalized = raw
+                .chars()
+                .filter(|character| !matches!(character, '-' | '{' | '}'))
+                .collect::<String>();
+            if normalized.len() != 32 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                return Err(CoreError::InvalidRequest(
+                    "private.typed.setValue: Guid value must contain exactly 32 hexadecimal digits"
+                        .to_string(),
+                ));
+            }
+            let mut bytes = Vec::with_capacity(16);
+            for index in (0..32).step_by(2) {
+                bytes.push(
+                    u8::from_str_radix(&normalized[index..index + 2], 16).map_err(|_| {
+                        CoreError::InvalidRequest(
+                            "private.typed.setValue: invalid Guid hexadecimal value".to_string(),
+                        )
+                    })?,
+                );
+            }
+            Ok(bytes)
+        }
+        properties::PropertyValue::Struct(StructValue::DateTime(_)) => {
+            ensure_descriptor(&["DateTime"])?;
+            ensure_size(8)?;
+            let ticks = value.as_i64().or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|raw| raw.trim().parse::<i64>().ok())
+            });
+            ticks
+                .map(|ticks| ticks.to_le_bytes().to_vec())
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(
+                        "private.typed.setValue: DateTime value must be an i64 tick count"
+                            .to_string(),
+                    )
+                })
+        }
+        properties::PropertyValue::Struct(StructValue::GameplayTagContainer(_)) => {
+            ensure_descriptor(&["GameplayTagContainer"])?;
+            let values = value.as_array().ok_or_else(|| {
+                CoreError::InvalidRequest(
+                    "private.typed.setValue: GameplayTagContainer value must be an array of tag strings"
+                        .to_string(),
+                )
+            })?;
+            let mut seen = HashMap::<&str, ()>::new();
+            let mut tags = Vec::with_capacity(values.len());
+            for value in values {
+                let tag = value
+                    .as_str()
+                    .filter(|tag| !tag.trim().is_empty())
+                    .ok_or_else(|| {
+                        CoreError::InvalidRequest(
+                            "private.typed.setValue: gameplay tags must be non-empty strings"
+                                .to_string(),
+                        )
+                    })?;
+                if seen.insert(tag, ()).is_some() {
+                    return Err(CoreError::InvalidRequest(format!(
+                        "private.typed.setValue: duplicate gameplay tag {tag:?}"
+                    )));
+                }
+                tags.push(tag);
+            }
+            let count = u32::try_from(tags.len())
+                .map_err(|_| CoreError::InvalidRequest("too many gameplay tags".to_string()))?;
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&count.to_le_bytes());
+            for tag in tags {
+                bytes.extend_from_slice(&properties::encode_fstring_value(tag));
+            }
+            Ok(bytes)
+        }
+        _ => Err(CoreError::UnsupportedEdit(format!(
+            "private.typed.setValue does not support native struct {descriptor:?}"
         ))),
     }
 }
@@ -7558,6 +8653,25 @@ fn apply_private_typed_set_value_edit_to_payload(
             properties::parse_private_root(&patched).map_err(|err| {
                 CoreError::Parse(format!(
                     "string patch produced an inconsistent payload: {err}"
+                ))
+            })?;
+            *payload = patched;
+            Ok(())
+        }
+        TypedSetValue::NativeStruct(bytes) => {
+            // Even fixed-size native structs go through the same scratch-copy
+            // proof as variable-length tag containers. The original payload is
+            // untouched unless a strict full parse accepts the replacement.
+            let mut patched = payload.clone();
+            properties::patch_value_bytes(
+                &mut patched,
+                &target,
+                &resolved.enclosing_size_fields,
+                &bytes,
+            )?;
+            properties::parse_private_root(&patched).map_err(|error| {
+                CoreError::Parse(format!(
+                    "native struct patch produced an inconsistent payload: {error}"
                 ))
             })?;
             *payload = patched;
@@ -12282,6 +13396,32 @@ mod tests {
         out
     }
 
+    fn native_struct_property(name: &str, struct_type: &str, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/CoreUObject"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.push(properties::TAG_FLAG_NATIVE_SERIALIZE);
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn opaque_property(name: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(&fstring(name));
+        out.extend_from_slice(&fstring("TextProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(bytes);
+        out
+    }
+
     fn gameplay_attribute(name: &str, base_value: f32, current_value: f32) -> Vec<u8> {
         [
             fstring("GameplayAttributeData"),
@@ -14005,6 +15145,228 @@ mod tests {
             page0["results"][0]["display"],
             page1["results"][0]["display"]
         );
+    }
+
+    #[test]
+    fn exhaustive_search_surfaces_metadata_public_private_and_every_node_kind() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-all-data.sav");
+        let mut vector = Vec::new();
+        vector.extend_from_slice(&1.0f64.to_le_bytes());
+        vector.extend_from_slice(&2.0f64.to_le_bytes());
+        vector.extend_from_slice(&3.0f64.to_le_bytes());
+        let private_payload = {
+            let mut payload = fstring("/Script/Test.Save");
+            payload.push(0);
+            payload.extend_from_slice(&int_property("Health", 42));
+            payload.extend_from_slice(&private_str_array_property("Names", &["Hero", "Diego"]));
+            payload.extend_from_slice(&native_struct_property("Location", "Vector", &vector));
+            payload.extend_from_slice(&opaque_property("LocalizedText", &[1, 2, 3, 4]));
+            payload.extend_from_slice(&fstring("None"));
+            payload.extend_from_slice(&7u32.to_le_bytes());
+            payload
+        };
+        let seed_compressed = b"seed-all-data".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot A"), &stream, &[9, 8, 7, 6]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        // Container metadata and PUBLIC are plain GSAV bytes and remain
+        // browsable even on a machine where the PRIVATE codec is unavailable.
+        for source in ["metadata", "public"] {
+            let without_codec = search_typed_properties(
+                &path,
+                &json!({
+                    "query": "",
+                    "includeNodes": true,
+                    "source": source,
+                    "offset": 0,
+                    "limit": 100,
+                }),
+                None,
+            )
+            .unwrap();
+            assert!(without_codec["total"].as_u64().unwrap() > 0, "{source}");
+            assert_eq!(without_codec["warnings"], json!([]), "{source}");
+        }
+
+        let response = search_typed_properties(
+            &path,
+            &json!({
+                "query": "",
+                "includeNodes": true,
+                "source": "all",
+                "offset": 0,
+                "limit": 1000,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+
+        assert!(response["summary"]["sources"]["metadata"].as_u64().unwrap() > 0);
+        assert!(response["summary"]["sources"]["public"].as_u64().unwrap() > 0);
+        assert!(response["summary"]["sources"]["private"].as_u64().unwrap() > 0);
+        assert_eq!(
+            response["summary"]["typedSources"],
+            json!(["public", "private"])
+        );
+        let rows = response["results"].as_array().unwrap();
+        assert!(rows.iter().any(|row| row["source"] == "metadata"));
+        assert!(rows.iter().any(|row| row["source"] == "public"));
+        assert!(rows.iter().any(|row| row["kind"] == "array"));
+        assert!(rows.iter().any(|row| row["kind"] == "arrayElement"));
+        assert!(rows.iter().any(|row| row["kind"] == "opaque"));
+        let vector = rows
+            .iter()
+            .find(|row| row["display"] == "Location")
+            .unwrap();
+        assert_eq!(vector["kind"], "nativeStruct");
+        assert_eq!(vector["editable"], true);
+        assert_eq!(vector["editValue"], json!({"x": 1.0, "y": 2.0, "z": 3.0}));
+        assert!(
+            rows.iter()
+                .filter(|row| row["source"] == "public")
+                .all(|row| row["editable"] == false)
+        );
+
+        let containers = search_typed_properties(
+            &path,
+            &json!({
+                "query": "",
+                "includeNodes": true,
+                "source": "private",
+                "kind": "container",
+                "offset": 0,
+                "limit": 100,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert!(containers["total"].as_u64().unwrap() >= 3);
+        assert!(
+            containers["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| matches!(row["kind"].as_str(), Some("array" | "arrayElement")))
+        );
+    }
+
+    #[test]
+    fn typed_set_value_roundtrips_supported_native_structs() {
+        let mut vector2 = Vec::new();
+        vector2.extend_from_slice(&1.0f64.to_le_bytes());
+        vector2.extend_from_slice(&2.0f64.to_le_bytes());
+        let mut vector3f = Vec::new();
+        for value in [1.0f32, 2.0, 3.0] {
+            vector3f.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut vector3 = Vec::new();
+        for value in [1.0f64, 2.0, 3.0] {
+            vector3.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut vector4 = Vec::new();
+        for value in [1.0f64, 2.0, 3.0, 4.0] {
+            vector4.extend_from_slice(&value.to_le_bytes());
+        }
+        let guid = [0x11u8; 16];
+        let datetime = 123_i64.to_le_bytes();
+        let mut tags = 1u32.to_le_bytes().to_vec();
+        tags.extend_from_slice(&fstring("State.Alive"));
+
+        let mut payload = fstring("/Script/Test.Save");
+        payload.push(0);
+        payload.extend_from_slice(&native_struct_property("V2", "Vector2D", &vector2));
+        payload.extend_from_slice(&native_struct_property("V3f", "Vector", &vector3f));
+        payload.extend_from_slice(&native_struct_property("V3", "Rotator", &vector3));
+        payload.extend_from_slice(&native_struct_property("V4", "Vector4", &vector4));
+        payload.extend_from_slice(&native_struct_property("Q", "Quat", &vector4));
+        payload.extend_from_slice(&native_struct_property("Id", "Guid", &guid));
+        payload.extend_from_slice(&native_struct_property("When", "DateTime", &datetime));
+        payload.extend_from_slice(&native_struct_property(
+            "Tags",
+            "GameplayTagContainer",
+            &tags,
+        ));
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+
+        let edits = [
+            ("V2", json!({"x": 10.0, "y": 20.0})),
+            ("V3f", json!({"x": 11.0, "y": 21.0, "z": 31.0})),
+            ("V3", json!({"x": 12.0, "y": 22.0, "z": 32.0})),
+            ("V4", json!({"x": 13.0, "y": 23.0, "z": 33.0, "w": 43.0})),
+            ("Q", json!({"x": 14.0, "y": 24.0, "z": 34.0, "w": 44.0})),
+            ("Id", json!("00112233445566778899aabbccddeeff")),
+            ("When", json!(987654321_i64)),
+            ("Tags", json!(["State.Alive", "Guild.Human.OldCamp"])),
+        ];
+        for (name, value) in edits {
+            apply_private_typed_set_value_edit_to_payload(
+                &mut payload,
+                &PrivateTypedSetValueEdit {
+                    path: properties::parse_path(&[name.to_string()]).unwrap(),
+                    value,
+                },
+            )
+            .unwrap();
+        }
+
+        let root = properties::parse_private_root(&payload).unwrap();
+        use properties::{PropertyValue as PV, StructValue as SV};
+        assert_eq!(
+            root.properties[0].value,
+            PV::Struct(SV::Vector2 { x: 10.0, y: 20.0 })
+        );
+        assert_eq!(
+            root.properties[1].value,
+            PV::Struct(SV::Vector3f {
+                x: 11.0,
+                y: 21.0,
+                z: 31.0,
+            })
+        );
+        assert_eq!(
+            root.properties[2].value,
+            PV::Struct(SV::Vector3 {
+                x: 12.0,
+                y: 22.0,
+                z: 32.0,
+            })
+        );
+        assert_eq!(
+            root.properties[5].value,
+            PV::Struct(SV::Guid([
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ]))
+        );
+        assert_eq!(
+            root.properties[6].value,
+            PV::Struct(SV::DateTime(987654321))
+        );
+        assert_eq!(
+            root.properties[7].value,
+            PV::Struct(SV::GameplayTagContainer(vec![
+                "State.Alive".to_string(),
+                "Guild.Human.OldCamp".to_string(),
+            ]))
+        );
+
+        let before = payload.clone();
+        let invalid = PrivateTypedSetValueEdit {
+            path: properties::parse_path(&["Id".to_string()]).unwrap(),
+            value: json!("not-a-guid"),
+        };
+        assert!(apply_private_typed_set_value_edit_to_payload(&mut payload, &invalid).is_err());
+        assert_eq!(payload, before, "failed native edits must be atomic");
     }
 
     #[test]
@@ -17346,8 +18708,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-events.sav");
         let private_payload = {
-            // One memory event struct: EventTags (native GameplayTagContainer)
-            // + Time (InGameTime property list) + AffectedCharacterGlobalId.
+            // One memory event struct with the common scalar fields plus the
+            // position and type-specific InstancedStruct payload that real
+            // G1R saves carry.
             let event = {
                 let mut tags_body = 1u32.to_le_bytes().to_vec();
                 tags_body.extend_from_slice(&fstring("Memory.Quest.Started"));
@@ -17368,6 +18731,17 @@ mod tests {
                     &time_body,
                     0,
                 ));
+                let duration_body = {
+                    let mut t = private_double_property("TotalSeconds", -f64::MAX);
+                    t.extend_from_slice(&fstring("None"));
+                    t
+                };
+                e.extend_from_slice(&private_struct_property(
+                    "Duration",
+                    "InGameTime",
+                    &duration_body,
+                    0,
+                ));
                 let mut affected = fstring("AffectedCharacterGlobalId");
                 affected.extend_from_slice(&fstring("NameProperty"));
                 affected.extend_from_slice(&0u32.to_le_bytes());
@@ -17376,6 +18750,47 @@ mod tests {
                 affected.push(0);
                 affected.extend_from_slice(&hero);
                 e.extend_from_slice(&affected);
+
+                let mut instigator = fstring("InstigatorGlobalId");
+                instigator.extend_from_slice(&fstring("NameProperty"));
+                instigator.extend_from_slice(&0u32.to_le_bytes());
+                let none = fstring("None");
+                instigator.extend_from_slice(&(none.len() as u32).to_le_bytes());
+                instigator.push(0);
+                instigator.extend_from_slice(&none);
+                e.extend_from_slice(&instigator);
+
+                let mut position_body = Vec::new();
+                position_body.extend_from_slice(&12.5f64.to_le_bytes());
+                position_body.extend_from_slice(&(-3.25f64).to_le_bytes());
+                position_body.extend_from_slice(&99.0f64.to_le_bytes());
+                e.extend_from_slice(&private_struct_property(
+                    "position",
+                    "Vector",
+                    &position_body,
+                    properties::TAG_FLAG_NATIVE_SERIALIZE,
+                ));
+
+                let payload_properties = {
+                    let mut field = fstring("EventName");
+                    field.extend_from_slice(&fstring("NameProperty"));
+                    field.extend_from_slice(&0u32.to_le_bytes());
+                    let value = fstring("MudVoiceline1");
+                    field.extend_from_slice(&(value.len() as u32).to_le_bytes());
+                    field.push(0);
+                    field.extend_from_slice(&value);
+                    field.extend_from_slice(&fstring("None"));
+                    field
+                };
+                let mut payload_body = fstring("/Script/G1R.StoryEventPayload");
+                payload_body.extend_from_slice(&(payload_properties.len() as u32).to_le_bytes());
+                payload_body.extend_from_slice(&payload_properties);
+                e.extend_from_slice(&private_struct_property(
+                    "Payload",
+                    "InstancedStruct",
+                    &payload_body,
+                    properties::TAG_FLAG_NATIVE_SERIALIZE,
+                ));
                 e
             };
             // MemorizedEvents: ArrayProperty of MemoryEvent structs (inline
@@ -17442,6 +18857,30 @@ mod tests {
         assert_eq!(event["tags"], json!(["Memory.Quest.Started"]));
         assert_eq!(event["timeSeconds"], 1234.5);
         assert_eq!(event["affected"], "Hero");
+        assert!(event["durationSeconds"].is_null());
+        assert!(event["instigator"].is_null());
+        assert_eq!(
+            event["position"],
+            json!({ "x": 12.5, "y": -3.25, "z": 99.0 })
+        );
+        assert_eq!(event["payload"]["type"], "/Script/G1R.StoryEventPayload");
+        assert_eq!(event["payload"]["fieldCount"], 1);
+        assert_eq!(event["payload"]["fields"][0]["name"], "EventName");
+        assert_eq!(event["payload"]["fields"][0]["value"], "MudVoiceline1");
+
+        // Payload values participate in the query, so users can find an
+        // event by meaningful content rather than only by its generic tag.
+        let filtered = query_progression(
+            &path,
+            &json!({
+                "section": "events",
+                "character": "Hero",
+                "query": "mudvoiceline"
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(filtered["total"], 1);
 
         // Tag query filter.
         let filtered = query_progression(

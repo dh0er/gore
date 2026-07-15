@@ -118,11 +118,11 @@ void main() {
       );
       expect(eventCalls, isNotEmpty);
 
-      // And the canned Hero event actually renders (its tag row) — the old
+      // And the canned Hero event actually renders as a semantic card — the old
       // empty state ("select a character") is gone for the player. (The
       // "Events — <name>" info label was removed; the ActorDetailHeader
-      // identifies the selection, so the canned tag proves data rendered.)
-      expect(find.text('MEMORY_HERO_EVENT'), findsOneWidget);
+      // identifies the selection, so the event-card key proves data rendered.)
+      expect(find.byKey(const ValueKey('memory-event-0')), findsOneWidget);
       expect(find.text('Select a character to see events'), findsNothing);
     },
   );
@@ -178,9 +178,9 @@ void main() {
         ),
         isNotEmpty,
       );
-      // The canned Hero event content renders — proof the (re-keyed) Hero
+      // The canned Hero event card renders — proof the (re-keyed) Hero
       // events query returned and populated the list.
-      expect(find.text('MEMORY_HERO_EVENT'), findsOneWidget);
+      expect(find.byKey(const ValueKey('memory-event-0')), findsOneWidget);
     },
   );
 

@@ -944,11 +944,57 @@ class AppLocalizationsZh extends AppLocalizations {
   String get factionGuildOther => '其他/个人';
 
   @override
-  String get allDataLockedBody => '完整的属性浏览器需要来自编解码器的已解码私有负载数据。';
+  String get allDataLockedBody => '目前，完整的数据源浏览器可用于 GSAV 存档文件。';
 
   @override
   String get allDataDescription =>
-      '按名称或路径搜索每个类型化属性。标量、字符串、枚举和对象路径可编辑；结构体目前以只读方式显示。';
+      '浏览 GSAV 元数据以及 PUBLIC/PRIVATE 中的所有类型化节点。可安全修改的标量值和原生结构体值均可编辑；容器和未解析的字节数据也会显示。';
+
+  @override
+  String get allDataEditable => '可编辑';
+
+  @override
+  String get allDataReadOnly => '只读';
+
+  @override
+  String get allDataType => '类型';
+
+  @override
+  String get allDataScalars => '标量';
+
+  @override
+  String get allDataStructs => '结构体';
+
+  @override
+  String get allDataContainers => '容器';
+
+  @override
+  String get allDataOpaque => '未解析数据';
+
+  @override
+  String get allDataNodes => '节点';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 个子节点',
+      one: '1 个子节点',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => '待保存';
+
+  @override
+  String get allDataTagInputHint => '用逗号或换行分隔标签';
+
+  @override
+  String allDataTypedSource(String source) {
+    return '$source 类型化数据';
+  }
 
   @override
   String get searchPropertiesLabel => '搜索属性（留空 = 列出全部） — 例如 Health、GameTime';
@@ -2005,6 +2051,116 @@ class AppLocalizationsZh extends AppLocalizations {
   String backupStatusError(String details) {
     return '备份错误：$details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': '任务',
+      'document': '文档',
+      'story': '剧情',
+      'exploration': '探索',
+      'combat': '战斗',
+      'social': '社交',
+      'item': '物品',
+      'learning': '学习',
+      'guild': '公会',
+      'crime': '犯罪',
+      'rest': '休息',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': '任务已开始',
+      'questSucceeded': '任务已完成',
+      'questFailed': '任务失败',
+      'documentRead': '已阅读文档',
+      'documentSegmentUnlocked': '已发现条目',
+      'documentSegmentViewed': '已查看条目',
+      'chapterCompleted': '章节已完成',
+      'areaEntered': '进入区域',
+      'areaLeft': '离开区域',
+      'characterKilled': '角色已被杀死',
+      'characterDefeated': '角色已被击败',
+      'combatDodge': '已闪避攻击',
+      'characterDebuffed': '已施加负面效果',
+      'tradeAvailable': '已解锁交易',
+      'itemObtained': '获得物品',
+      'itemCrafted': '制作物品',
+      'skillStateRecorded': '已记录技能状态',
+      'recipeLearned': '学会配方',
+      'guildJoined': '加入公会',
+      'crimeRecorded': '犯罪已记录',
+      'slept': '睡眠',
+      'storyEvent': '剧情事件',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action：$subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': '游戏时间',
+      'duration': '持续时间',
+      'chapter': '章节',
+      'instigator': '触发者',
+      'affected': '受影响对象',
+      'amount': '数量',
+      'primaryObject': '对象',
+      'secondaryObject': '上下文',
+      'segmentText': '条目文本',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return '第 $day 天，$time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value 秒';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => '主角';
+
+  @override
+  String get memoryEventDetails => '详细信息';
+
+  @override
+  String get memoryEventTags => '标签';
+
+  @override
+  String get memoryEventTechnicalData => '技术信息';
+
+  @override
+  String get memoryEventIndex => '索引';
+
+  @override
+  String get memoryEventPosition => '位置';
+
+  @override
+  String get memoryEventPayload => '事件数据';
+
+  @override
+  String get memoryEventSubject => '关联对象';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {
@@ -3142,11 +3298,57 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String get factionGuildOther => '其他/个人';
 
   @override
-  String get allDataLockedBody => '完整的属性浏览器需要来自编解码器的已解码私有负载数据。';
+  String get allDataLockedBody => '目前，完整的数据源浏览器可用于 GSAV 存档文件。';
 
   @override
   String get allDataDescription =>
-      '按名称或路径搜索每个类型化属性。标量、字符串、枚举和对象路径可编辑；结构体目前以只读方式显示。';
+      '浏览 GSAV 元数据以及 PUBLIC/PRIVATE 中的所有类型化节点。可安全修改的标量值和原生结构体值均可编辑；容器和未解析的字节数据也会显示。';
+
+  @override
+  String get allDataEditable => '可编辑';
+
+  @override
+  String get allDataReadOnly => '只读';
+
+  @override
+  String get allDataType => '类型';
+
+  @override
+  String get allDataScalars => '标量';
+
+  @override
+  String get allDataStructs => '结构体';
+
+  @override
+  String get allDataContainers => '容器';
+
+  @override
+  String get allDataOpaque => '未解析数据';
+
+  @override
+  String get allDataNodes => '节点';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count 个子节点',
+      one: '1 个子节点',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => '待保存';
+
+  @override
+  String get allDataTagInputHint => '用逗号或换行分隔标签';
+
+  @override
+  String allDataTypedSource(String source) {
+    return '$source 类型化数据';
+  }
 
   @override
   String get searchPropertiesLabel => '搜索属性（留空 = 列出全部） — 例如 Health、GameTime';
@@ -4203,6 +4405,116 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
   String backupStatusError(String details) {
     return '备份错误：$details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': '任务',
+      'document': '文档',
+      'story': '剧情',
+      'exploration': '探索',
+      'combat': '战斗',
+      'social': '社交',
+      'item': '物品',
+      'learning': '学习',
+      'guild': '公会',
+      'crime': '犯罪',
+      'rest': '休息',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': '任务已开始',
+      'questSucceeded': '任务已完成',
+      'questFailed': '任务失败',
+      'documentRead': '已阅读文档',
+      'documentSegmentUnlocked': '已发现条目',
+      'documentSegmentViewed': '已查看条目',
+      'chapterCompleted': '章节已完成',
+      'areaEntered': '进入区域',
+      'areaLeft': '离开区域',
+      'characterKilled': '角色已被杀死',
+      'characterDefeated': '角色已被击败',
+      'combatDodge': '已闪避攻击',
+      'characterDebuffed': '已施加负面效果',
+      'tradeAvailable': '已解锁交易',
+      'itemObtained': '获得物品',
+      'itemCrafted': '制作物品',
+      'skillStateRecorded': '已记录技能状态',
+      'recipeLearned': '学会配方',
+      'guildJoined': '加入公会',
+      'crimeRecorded': '犯罪已记录',
+      'slept': '睡眠',
+      'storyEvent': '剧情事件',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action：$subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': '游戏时间',
+      'duration': '持续时间',
+      'chapter': '章节',
+      'instigator': '触发者',
+      'affected': '受影响对象',
+      'amount': '数量',
+      'primaryObject': '对象',
+      'secondaryObject': '上下文',
+      'segmentText': '条目文本',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return '第 $day 天，$time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value 秒';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => '主角';
+
+  @override
+  String get memoryEventDetails => '详细信息';
+
+  @override
+  String get memoryEventTags => '标签';
+
+  @override
+  String get memoryEventTechnicalData => '技术信息';
+
+  @override
+  String get memoryEventIndex => '索引';
+
+  @override
+  String get memoryEventPosition => '位置';
+
+  @override
+  String get memoryEventPayload => '事件数据';
+
+  @override
+  String get memoryEventSubject => '关联对象';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {

@@ -17,11 +17,16 @@ import 'package:goresave/loc/progression_loc.dart';
 
 import '../domain/editor_models.dart';
 import '../domain/editor_notifier.dart';
+import '../domain/glossary_npc_catalog.dart';
+import '../domain/glossary_segment_text_catalog.dart';
+import '../domain/item_catalog.dart';
 import '../domain/knowledge_catalog.dart';
+import '../domain/memory_event_presentation.dart';
 import '../domain/pending_edits.dart';
 import '../domain/progression_models.dart';
 import '../domain/quest_journal.dart';
 import 'add_knowledge_entry_dialog.dart';
+import 'memory_event_card.dart';
 import 'npc_relationship_editor.dart';
 
 /// All five EQuestState values, in dropdown order.
@@ -1488,11 +1493,14 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
 
   String? _selectedCharacter;
   MemoryEventsPage _events = const MemoryEventsPage();
-  MemoryEventEdit? _pendingEvent;
+  Map<int, MemoryEventEdit> _pendingEvents = {};
   bool _loadingEvents = false;
   // Epoch guards the events loader so a stale load never clobbers a newer one.
   int _eventsEpoch = 0;
   int _eventPageSize = _defaultPageSize;
+  ItemCatalog? _eventItemCatalog;
+  List<NpcGlossaryCatalogEntry> _eventNpcCatalog = const [];
+  GlossarySegmentTextCatalog _eventSegmentTextCatalog = const {};
   // True when the selected character has no LongTermMemoryByGlobalId entry yet
   // (the common case for an NPC the hero never interacted with). The core
   // reports this via a benign "has no memory entry" error; we treat it as
@@ -1510,7 +1518,39 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
   @override
   void initState() {
     super.initState();
+    _loadEventPresentationCatalogs();
     _selectCharacter(widget.globalId);
+  }
+
+  /// The presentation layer can already fall back to readable class/tag names,
+  /// so catalog failures must never make the events list unavailable. Load the
+  /// bundled item and glossary indexes opportunistically and rebuild once to
+  /// upgrade raw references to their in-game names and segment labels.
+  Future<void> _loadEventPresentationCatalogs() async {
+    ItemCatalog? items;
+    List<NpcGlossaryCatalogEntry> npcs = const [];
+    GlossarySegmentTextCatalog segmentTexts = const {};
+    try {
+      items = await ItemCatalog.loadBundled();
+    } catch (_) {
+      // A missing optional catalog only reduces the quality of the fallback.
+    }
+    try {
+      npcs = await loadGlossaryNpcCatalog();
+    } catch (_) {
+      // Keep rendering events from their save identifiers.
+    }
+    try {
+      segmentTexts = await loadGlossarySegmentTextCatalog();
+    } catch (_) {
+      // Segment prose is optional; class and catalog labels still work.
+    }
+    if (!mounted) return;
+    setState(() {
+      _eventItemCatalog = items;
+      _eventNpcCatalog = npcs;
+      _eventSegmentTextCatalog = segmentTexts;
+    });
   }
 
   @override
@@ -1530,9 +1570,12 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     final epoch = ++_eventsEpoch;
     setState(() {
       _selectedCharacter = id;
-      _pendingEvent = id == null
-          ? null
-          : widget.notifier.pendingMemoryEventEdit(id);
+      _pendingEvents = id == null
+          ? {}
+          : {
+              for (final edit in widget.notifier.pendingMemoryEventEdits(id))
+                edit.index: edit,
+            };
       _loadingEvents = id != null;
       _events = const MemoryEventsPage(); // clear stale page immediately
       _noEventsYet = false;
@@ -1577,7 +1620,14 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     _loadEvents(offset: 0);
   }
 
-  Future<void> _confirmAndApply(
+  void _queueEvent(MemoryEventEdit edit) {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    if (!widget.notifier.setPendingMemoryEventEdit(character, edit)) return;
+    setState(() => _pendingEvents[edit.index] = edit);
+  }
+
+  Future<void> _confirmAndQueueDuplicate(
     BuildContext context,
     MemoryEventEdit edit,
     String title,
@@ -1602,16 +1652,21 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
       ),
     );
     if (confirmed != true) return;
-    final character = _selectedCharacter;
-    if (!mounted || character == null) return;
-    setState(() => _pendingEvent = edit);
-    widget.notifier.setPendingMemoryEventEdit(character, edit);
+    if (!mounted) return;
+    _queueEvent(edit);
   }
 
-  void _clearPendingEvent() {
+  void _clearPendingEvent(int index) {
     final character = _selectedCharacter;
     if (character == null) return;
-    setState(() => _pendingEvent = null);
+    setState(() => _pendingEvents.remove(index));
+    widget.notifier.clearPendingMemoryEventEdit(character, index: index);
+  }
+
+  void _clearAllPendingEvents() {
+    final character = _selectedCharacter;
+    if (character == null) return;
+    setState(() => _pendingEvents.clear());
     widget.notifier.clearPendingMemoryEventEdit(character);
   }
 
@@ -1621,6 +1676,19 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
     final scheme = widget.theme.colorScheme;
     final character = _selectedCharacter;
     final showObjectIds = ref.watch(showObjectIdsProvider);
+    final lang = ref.watch(currentGameLangProvider);
+    final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
+    final eventPresenter = MemoryEventPresenter(
+      l10n: l10n,
+      lang: lang,
+      locCatalog: locCatalog,
+      itemCatalog: _eventItemCatalog,
+      npcGlossaryCatalog: _eventNpcCatalog,
+      segmentTextCatalog: _eventSegmentTextCatalog,
+    );
+    final pendingEvent = _pendingEvents.isEmpty
+        ? null
+        : _pendingEvents.values.first;
 
     return Card(
       child: Padding(
@@ -1661,7 +1729,7 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                       ),
                       const Divider(height: 12),
                     ],
-                    if (_pendingEvent != null) ...[
+                    if (pendingEvent != null) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 12,
@@ -1674,7 +1742,7 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                         child: Row(
                           children: [
                             Icon(
-                              _pendingEvent!.isRemove
+                              pendingEvent.isRemove
                                   ? Icons.delete_outline
                                   : Icons.copy_outlined,
                               size: 18,
@@ -1683,16 +1751,15 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: Text(
-                                _pendingEvent!.isRemove
-                                    ? l10n.memoryEventRemovalQueued
-                                    : l10n.memoryEventDuplicationQueued,
+                                '${pendingEvent.isRemove ? l10n.memoryEventRemovalQueued : l10n.memoryEventDuplicationQueued}'
+                                '${_pendingEvents.length > 1 ? ' (${_pendingEvents.length})' : ''}',
                                 style: TextStyle(
                                   color: scheme.onSecondaryContainer,
                                 ),
                               ),
                             ),
                             TextButton.icon(
-                              onPressed: _clearPendingEvent,
+                              onPressed: _clearAllPendingEvents,
                               icon: const Icon(Icons.undo, size: 18),
                               label: Text(l10n.cancel),
                             ),
@@ -1729,99 +1796,51 @@ class _EventsDetailState extends ConsumerState<EventsDetail> {
                           ? const Center(child: CircularProgressIndicator())
                           : ListView.separated(
                               itemCount: _events.events.length,
+                              padding: const EdgeInsets.symmetric(vertical: 4),
                               separatorBuilder: (_, _) =>
-                                  const Divider(height: 1),
+                                  const SizedBox(height: 8),
                               itemBuilder: (context, index) {
                                 final event = _events.events[index];
-                                final tagLabel = event.tags.isEmpty
-                                    ? l10n.noTags
-                                    : event.tags.join(', ');
-                                final timeStr = event.timeSeconds != null
-                                    ? event.timeSeconds!.toStringAsFixed(0)
-                                    : '?';
-                                final affected = showObjectIds
-                                    ? event.affected ?? ''
-                                    : '';
+                                final pendingEventForRow =
+                                    _pendingEvents[event.index];
                                 final isPendingEvent =
-                                    _pendingEvent?.index == event.index;
-                                final pendingRemoval =
-                                    isPendingEvent &&
-                                    (_pendingEvent?.isRemove ?? false);
-                                return ListTile(
-                                  dense: true,
-                                  title: SelectableText(
-                                    tagLabel,
-                                    maxLines: 1,
-                                    style: pendingRemoval
-                                        ? TextStyle(
-                                            color: scheme.onSurfaceVariant,
-                                            decoration:
-                                                TextDecoration.lineThrough,
-                                          )
-                                        : null,
-                                  ),
-                                  subtitle: SelectableText(
-                                    l10n
-                                        .eventSubtitle(timeStr, affected)
-                                        .trimRight(),
-                                    maxLines: 1,
-                                  ),
-                                  trailing: widget.editable && isPendingEvent
-                                      ? IconButton(
-                                          icon: const Icon(
-                                            Icons.undo,
-                                            size: 20,
+                                    pendingEventForRow != null;
+                                return MemoryEventCard(
+                                  event: event,
+                                  presentation: eventPresenter.present(event),
+                                  editable: widget.editable,
+                                  showObjectIds: showObjectIds,
+                                  pendingRemoval:
+                                      pendingEventForRow?.isRemove ?? false,
+                                  onUndo: widget.editable && isPendingEvent
+                                      ? () => _clearPendingEvent(event.index)
+                                      : null,
+                                  onRemove:
+                                      widget.editable &&
+                                          !isPendingEvent &&
+                                          !_loadingEvents &&
+                                          (pendingEvent == null ||
+                                              pendingEvent.isRemove)
+                                      ? () => _queueEvent(
+                                          MemoryEventEdit.remove(
+                                            arrayPath: _events.arrayPath,
+                                            index: event.index,
                                           ),
-                                          tooltip: l10n.cancel,
-                                          onPressed: _clearPendingEvent,
                                         )
-                                      : widget.editable
-                                      ? Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            IconButton(
-                                              icon: const Icon(
-                                                Icons.delete_outline,
-                                                size: 20,
-                                              ),
-                                              tooltip: l10n.removeEvent,
-                                              onPressed:
-                                                  _loadingEvents ||
-                                                      _pendingEvent != null
-                                                  ? null
-                                                  : () => _confirmAndApply(
-                                                      context,
-                                                      MemoryEventEdit.remove(
-                                                        arrayPath:
-                                                            _events.arrayPath,
-                                                        index: event.index,
-                                                      ),
-                                                      l10n.removeMemoryEventTitle,
-                                                      l10n.removeMemoryEventBody,
-                                                    ),
-                                            ),
-                                            IconButton(
-                                              icon: const Icon(
-                                                Icons.copy_outlined,
-                                                size: 20,
-                                              ),
-                                              tooltip: l10n.duplicateEvent,
-                                              onPressed:
-                                                  _loadingEvents ||
-                                                      _pendingEvent != null
-                                                  ? null
-                                                  : () => _confirmAndApply(
-                                                      context,
-                                                      MemoryEventEdit.duplicate(
-                                                        arrayPath:
-                                                            _events.arrayPath,
-                                                        index: event.index,
-                                                      ),
-                                                      l10n.duplicateMemoryEventTitle,
-                                                      l10n.duplicateMemoryEventBody,
-                                                    ),
-                                            ),
-                                          ],
+                                      : null,
+                                  onDuplicate:
+                                      widget.editable &&
+                                          !isPendingEvent &&
+                                          !_loadingEvents &&
+                                          _pendingEvents.isEmpty
+                                      ? () => _confirmAndQueueDuplicate(
+                                          context,
+                                          MemoryEventEdit.duplicate(
+                                            arrayPath: _events.arrayPath,
+                                            index: event.index,
+                                          ),
+                                          l10n.duplicateMemoryEventTitle,
+                                          l10n.duplicateMemoryEventBody,
                                         )
                                       : null,
                                 );
