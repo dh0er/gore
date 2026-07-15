@@ -576,4 +576,54 @@ void main() {
     });
     expect(backup.canRestore, isFalse);
   });
+
+  test('TypedSearchResult reads exhaustive node metadata and facets', () {
+    final result = TypedSearchResult.fromJson({
+      'source': 'all',
+      'offset': 50,
+      'limit': 50,
+      'total': 120,
+      'warnings': ['PRIVATE parse failed'],
+      'summary': {
+        'sources': {'metadata': 20, 'public': 30, 'private': 70},
+        'kinds': {'scalar': 80, 'nativeStruct': 12},
+        'types': {'FloatProperty': 15, 'StructProperty': 20},
+        'editable': 42,
+        'readOnly': 78,
+        'typedSources': ['public', 'private'],
+      },
+      'results': [
+        {
+          'id': 'private:77',
+          'source': 'private',
+          'path': ['Transform', 'Location'],
+          'display': 'Transform › Location',
+          'type': 'StructProperty',
+          'structType': 'Vector',
+          'kind': 'nativeStruct',
+          'value': 'x: 1, y: 2, z: 3',
+          'editValue': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+          'editable': true,
+          'childCount': 0,
+          'depth': 1,
+        },
+      ],
+    });
+
+    expect(result.source, 'all');
+    expect(result.pageIndex, 1);
+    expect(result.pageCount, 3);
+    expect(result.warnings, ['PRIVATE parse failed']);
+    expect(result.summary.sources['private'], 70);
+    expect(result.summary.editable, 42);
+    expect(result.summary.typedSources, ['public', 'private']);
+    final hit = result.results.single;
+    expect(hit.stableId, 'private:77');
+    expect(hit.source, 'private');
+    expect(hit.kind, 'nativeStruct');
+    expect(hit.structType, 'Vector');
+    expect(hit.isNativeStruct, isTrue);
+    expect(hit.editValue, {'x': 1.0, 'y': 2.0, 'z': 3.0});
+    expect(hit.depth, 1);
+  });
 }

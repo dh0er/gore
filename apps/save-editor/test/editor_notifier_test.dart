@@ -817,6 +817,61 @@ void main() {
   );
 
   test(
+    'partial commit refreshes and preserves unwritten edits when second write throws',
+    () async {
+      final core = _ThrowSecondWriteCoreService(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      notifier.setPendingEdit(
+        'npc.revive:A',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'A'},
+            },
+          ],
+        ),
+      );
+      notifier.setPendingEdit(
+        'npc.revive:B',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.npc.revive',
+              'value': {'id': 'B'},
+            },
+          ],
+        ),
+      );
+
+      final scansBefore = core.refreshScans;
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('native worker died'));
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:A'), isFalse);
+      expect(notifier.state.pendingEdits.containsKey('npc.revive:B'), isTrue);
+      expect(core.refreshScans, scansBefore + 1);
+      expect(notifier.state.saveProgress, isNull);
+    },
+  );
+
+  test(
     'partial commit keeps the uncommitted add when several share one key',
     () async {
       // Regression: several inventory adds queue under ONE pending key but each
@@ -2325,6 +2380,46 @@ void main() {
     expect(notifier.state.error, contains('roundtrip'));
   });
 
+  test('exhaustive typed search forwards source and node filters', () async {
+    final core = _RecordingCoreService(
+      typedSearchData: {
+        'source': 'all',
+        'offset': 0,
+        'limit': 100,
+        'total': 0,
+        'count': 0,
+        'results': <Object?>[],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    await notifier.searchTypedProperties(
+      'Vector',
+      limit: 100,
+      includeNodes: true,
+      source: 'all',
+      kind: 'struct',
+      type: 'StructProperty',
+      editable: true,
+    );
+
+    final request = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(request.payload, {
+      'path': r'C:\tmp\saves\G1R-001.sav',
+      'query': 'Vector',
+      'offset': 0,
+      'limit': 100,
+      'includeNodes': true,
+      'source': 'all',
+      'kind': 'struct',
+      'type': 'StructProperty',
+      'editable': true,
+    });
+  });
+
   test('loadHeroAttributes searches the hero attribute subtree', () async {
     final core = _RecordingCoreService(
       typedSearchData: {
@@ -2628,6 +2723,212 @@ void main() {
     );
     expect((write.payload['edits'] as List).single, edit.toEditJson());
   });
+
+  test(
+    'memory-event removals stack uniquely and save index-descending as singleton writes',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 4),
+        ),
+        isTrue,
+      );
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 9),
+        ),
+        isTrue,
+      );
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 6),
+        ),
+        isTrue,
+      );
+      // Re-queuing the same removal is idempotent, not a second splice.
+      expect(
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          const MemoryEventEdit.remove(arrayPath: path, index: 6),
+        ),
+        isTrue,
+      );
+
+      expect(
+        notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index),
+        [9, 6, 4],
+      );
+      expect(notifier.pendingEditCount, 3);
+
+      expect(await notifier.saveAllPending(), isTrue);
+      final writes = core.requests
+          .where((request) => request.command == 'write_save')
+          .toList();
+      expect(writes, hasLength(3));
+      expect(
+        writes.map(
+          (write) =>
+              ((((write.payload['edits'] as List).single as Map)['value']
+                          as Map)['index']
+                      as num)
+                  .toInt(),
+        ),
+        [9, 6, 4],
+      );
+      expect(writes.map((write) => write.payload['backup']), [
+        true,
+        false,
+        false,
+      ]);
+      expect(
+        writes.every((write) => (write.payload['edits'] as List).length == 1),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'one pending memory-event removal can be undone without clearing peers',
+    () async {
+      final notifier = EditorNotifier(
+        _RecordingCoreService(),
+        saveDir: r'C:\tmp\saves',
+      );
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      for (final index in [2, 8, 5]) {
+        notifier.setPendingMemoryEventEdit(
+          'Hero',
+          MemoryEventEdit.remove(arrayPath: path, index: index),
+        );
+      }
+
+      notifier.clearPendingMemoryEventEdit('Hero', index: 5);
+
+      expect(
+        notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index),
+        [8, 2],
+      );
+      expect(notifier.pendingEditCount, 2);
+      notifier.clearPendingMemoryEventEdit('Hero');
+      expect(notifier.pendingMemoryEventEdits('Hero'), isEmpty);
+    },
+  );
+
+  test('memory-event duplicate is exclusive with pending removals', () async {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+    expect(
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 3),
+      ),
+      isTrue,
+    );
+
+    expect(
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.duplicate(arrayPath: path, index: 7),
+      ),
+      isFalse,
+    );
+    expect(notifier.pendingMemoryEventEdits('Hero').map((edit) => edit.index), [
+      3,
+    ]);
+  });
+
+  test(
+    'saveAllPending rejects remove plus duplicate for the same array',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      notifier.setPendingEdit(
+        'raw-memory-structural-edits',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.arrayRemove',
+              'value': {'path': path, 'index': 2},
+            },
+            {
+              'path': 'private.typed.arrayDuplicate',
+              'value': {'path': path, 'index': 7},
+            },
+          ],
+        ),
+      );
+
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('same array'));
+    },
+  );
+
+  test(
+    'saveAllPending rejects a typed descendant of a removed event array',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 7),
+      );
+      notifier.setPendingEdit(
+        'all-data-memory-time',
+        const PendingSaveEdit(
+          edits: [
+            {
+              'path': 'private.typed.setValue',
+              'value': {
+                'path': [...path, '[2]', 'Time', 'TotalSeconds'],
+                'value': 12.0,
+              },
+            },
+          ],
+        ),
+      );
+
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('structural event change'));
+    },
+  );
+
+  test(
+    'saveAllPending rejects memory-event removal alongside NPC revive',
+    () async {
+      final core = _RecordingCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      const path = ['LongTermMemoryByGlobalId', '{Hero}', 'MemorizedEvents'];
+      notifier.setPendingMemoryEventEdit(
+        'Hero',
+        const MemoryEventEdit.remove(arrayPath: path, index: 7),
+      );
+      notifier.setPendingNpcRevive('Asghan-1');
+
+      expect(await notifier.saveAllPending(), isFalse);
+      expect(core.requests.where((r) => r.command == 'write_save'), isEmpty);
+      expect(notifier.state.error, contains('same array'));
+    },
+  );
 
   test('clearing a pending memory event performs no write', () async {
     final core = _RecordingCoreService();
@@ -4457,6 +4758,34 @@ class _FailSecondWriteCoreService extends _RecordingCoreService {
           'ok': false,
           'error': {'message': 'second write failed'},
         };
+      }
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Succeeds the first write_save, then throws like a failed worker/native FFI
+/// call. This must enter the same partial-commit convergence path as an
+/// `ok: false` response because the first write has already changed disk.
+class _ThrowSecondWriteCoreService extends _RecordingCoreService {
+  _ThrowSecondWriteCoreService({super.scanData});
+
+  var _writes = 0;
+  var refreshScans = 0;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'scan_save_dir') refreshScans++;
+    if (command == 'write_save') {
+      _writes++;
+      if (_writes >= 2) {
+        requests.add(
+          _RecordedRequest(command, Map<String, Object?>.from(payload)),
+        );
+        throw Exception('native worker died');
       }
     }
     return super.execute(command, payload: payload);

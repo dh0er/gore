@@ -1781,14 +1781,86 @@ abstract class AppLocalizations {
   /// No description provided for @allDataLockedBody.
   ///
   /// In en, this message translates to:
-  /// **'The full property browser needs decoded private payload data from the codec.'**
+  /// **'The exhaustive source browser is currently available for GSAV save files.'**
   String get allDataLockedBody;
 
   /// No description provided for @allDataDescription.
   ///
   /// In en, this message translates to:
-  /// **'Search every typed property by name or path. Scalars, strings, enums and object paths are editable; structs are shown read-only for now.'**
+  /// **'Browse GSAV metadata and every typed PUBLIC/PRIVATE node. Safe scalar and native-struct values are editable; containers and opaque bytes remain visible.'**
   String get allDataDescription;
+
+  /// No description provided for @allDataEditable.
+  ///
+  /// In en, this message translates to:
+  /// **'Editable'**
+  String get allDataEditable;
+
+  /// No description provided for @allDataReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only'**
+  String get allDataReadOnly;
+
+  /// No description provided for @allDataType.
+  ///
+  /// In en, this message translates to:
+  /// **'Type'**
+  String get allDataType;
+
+  /// No description provided for @allDataScalars.
+  ///
+  /// In en, this message translates to:
+  /// **'Scalars'**
+  String get allDataScalars;
+
+  /// No description provided for @allDataStructs.
+  ///
+  /// In en, this message translates to:
+  /// **'Structs'**
+  String get allDataStructs;
+
+  /// No description provided for @allDataContainers.
+  ///
+  /// In en, this message translates to:
+  /// **'Containers'**
+  String get allDataContainers;
+
+  /// No description provided for @allDataOpaque.
+  ///
+  /// In en, this message translates to:
+  /// **'Opaque'**
+  String get allDataOpaque;
+
+  /// No description provided for @allDataNodes.
+  ///
+  /// In en, this message translates to:
+  /// **'Nodes'**
+  String get allDataNodes;
+
+  /// No description provided for @allDataChildren.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 child} other{{count} children}}'**
+  String allDataChildren(int count);
+
+  /// No description provided for @allDataPending.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get allDataPending;
+
+  /// No description provided for @allDataTagInputHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Comma- or line-separated tags'**
+  String get allDataTagInputHint;
+
+  /// No description provided for @allDataTypedSource.
+  ///
+  /// In en, this message translates to:
+  /// **'{source} typed'**
+  String allDataTypedSource(String source);
 
   /// No description provided for @searchPropertiesLabel.
   ///
@@ -3545,6 +3617,96 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Backup error: {details}'**
   String backupStatusError(String details);
+
+  /// No description provided for @memoryEventCategory.
+  ///
+  /// In en, this message translates to:
+  /// **'{category, select, quest{Quest} document{Document} story{Story} exploration{Exploration} combat{Combat} social{Social} item{Items} learning{Learning} guild{Guild} crime{Crime} rest{Rest} other{{fallback}}}'**
+  String memoryEventCategory(String category, String fallback);
+
+  /// No description provided for @memoryEventAction.
+  ///
+  /// In en, this message translates to:
+  /// **'{kind, select, questStarted{Quest started} questSucceeded{Quest completed} questFailed{Quest failed} documentRead{Document read} documentSegmentUnlocked{Entry discovered} documentSegmentViewed{Entry viewed} chapterCompleted{Chapter completed} areaEntered{Area entered} areaLeft{Area left} characterKilled{Character killed} characterDefeated{Character defeated} combatDodge{Attack dodged} characterDebuffed{Debuff applied} tradeAvailable{Trading unlocked} itemObtained{Item obtained} itemCrafted{Item crafted} skillStateRecorded{Skill state recorded} recipeLearned{Recipe learned} guildJoined{Guild joined} crimeRecorded{Crime recorded} slept{Slept} storyEvent{Story event} other{{fallback}}}'**
+  String memoryEventAction(String kind, String fallback);
+
+  /// No description provided for @memoryEventTitleWithSubject.
+  ///
+  /// In en, this message translates to:
+  /// **'{action}: {subject}'**
+  String memoryEventTitleWithSubject(String action, String subject);
+
+  /// No description provided for @memoryEventFact.
+  ///
+  /// In en, this message translates to:
+  /// **'{fact, select, gameTime{Game time} duration{Duration} chapter{Chapter} instigator{Initiated by} affected{Affected} amount{Amount} primaryObject{Object} secondaryObject{Context} segmentText{Entry text} other{{fallback}}}'**
+  String memoryEventFact(String fact, String fallback);
+
+  /// No description provided for @memoryEventGameTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Day {day}, {time}'**
+  String memoryEventGameTime(int day, String time);
+
+  /// No description provided for @memoryEventSecondsValue.
+  ///
+  /// In en, this message translates to:
+  /// **'{value} s'**
+  String memoryEventSecondsValue(String value);
+
+  /// No description provided for @memoryEventMoreValues.
+  ///
+  /// In en, this message translates to:
+  /// **'{values} +{count}'**
+  String memoryEventMoreValues(String values, int count);
+
+  /// No description provided for @memoryEventHero.
+  ///
+  /// In en, this message translates to:
+  /// **'Hero'**
+  String get memoryEventHero;
+
+  /// No description provided for @memoryEventDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'Details'**
+  String get memoryEventDetails;
+
+  /// No description provided for @memoryEventTags.
+  ///
+  /// In en, this message translates to:
+  /// **'Tags'**
+  String get memoryEventTags;
+
+  /// No description provided for @memoryEventTechnicalData.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical data'**
+  String get memoryEventTechnicalData;
+
+  /// No description provided for @memoryEventIndex.
+  ///
+  /// In en, this message translates to:
+  /// **'Index'**
+  String get memoryEventIndex;
+
+  /// No description provided for @memoryEventPosition.
+  ///
+  /// In en, this message translates to:
+  /// **'Position'**
+  String get memoryEventPosition;
+
+  /// No description provided for @memoryEventPayload.
+  ///
+  /// In en, this message translates to:
+  /// **'Payload'**
+  String get memoryEventPayload;
+
+  /// No description provided for @memoryEventSubject.
+  ///
+  /// In en, this message translates to:
+  /// **'Subject'**
+  String get memoryEventSubject;
 
   /// No description provided for @glossaryCatalogSegmentLabel.
   ///

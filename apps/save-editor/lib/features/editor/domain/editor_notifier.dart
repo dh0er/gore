@@ -990,14 +990,14 @@ class EditorNotifier extends StateNotifier<EditorState> {
       }
     }
 
-    // Memory-event remove/duplicate edits are index-addressed. The Events UI
-    // deliberately queues at most one per character, but validate the central
-    // registry as well so another surface cannot accidentally queue two edits
-    // for the same array and have the second target an index shifted by the
-    // first sub-write. Also reject a raw value edit inside that array: applying
-    // both would make it ambiguous whether the value edit belongs to the event
-    // being removed/duplicated or to its post-splice neighbour.
-    final structuralArrayPaths = <List<Object?>>[];
+    // Structural array edits are index-addressed. Multiple REMOVES for one
+    // array are safe when they target distinct original indices and run from
+    // highest to lowest: a higher splice cannot shift a lower target. Keep
+    // duplicate exclusive, however; insertion mixed with another structural
+    // intent is rejected rather than assigning surprising index semantics.
+    // Also reject a raw value edit inside a structurally edited array, where a
+    // splice could retarget that descendant.
+    final structuralArrayGroups = <_StructuralArrayGroup>[];
     for (final keyed in allEdits) {
       final op = keyed.edit['path'];
       if (op != 'private.typed.arrayRemove' &&
@@ -1008,15 +1008,48 @@ class EditorNotifier extends StateNotifier<EditorState> {
       final rawPath = value is Map ? value['path'] : null;
       if (rawPath is! List) continue;
       final path = List<Object?>.from(rawPath);
-      if (structuralArrayPaths.any((other) => _sameEditorPath(other, path))) {
+      final rawIndex = value is Map ? value['index'] : null;
+      if (rawIndex is! num || rawIndex < 0 || rawIndex != rawIndex.toInt()) {
+        continue;
+      }
+      _StructuralArrayGroup? group;
+      for (final candidate in structuralArrayGroups) {
+        if (_sameEditorPath(candidate.path, path)) {
+          group = candidate;
+          break;
+        }
+      }
+      group ??= _StructuralArrayGroup(path);
+      if (!structuralArrayGroups.contains(group)) {
+        structuralArrayGroups.add(group);
+      }
+      final index = rawIndex.toInt();
+      if (group.edits.any((candidate) => candidate.index == index)) {
         state = state.copyWith(
           error: _l10n.editorMultipleStructuralArrayEdits(path.join(' › ')),
         );
         return false;
       }
-      structuralArrayPaths.add(path);
+      group.edits.add(
+        _IndexedStructuralEdit(
+          keyed: keyed,
+          index: index,
+          isDuplicate: op == 'private.typed.arrayDuplicate',
+        ),
+      );
     }
-    for (final arrayPath in structuralArrayPaths) {
+    for (final group in structuralArrayGroups) {
+      if (group.edits.length > 1 &&
+          group.edits.any((edit) => edit.isDuplicate)) {
+        state = state.copyWith(
+          error: _l10n.editorMultipleStructuralArrayEdits(
+            group.path.join(' › '),
+          ),
+        );
+        return false;
+      }
+      group.edits.sort((left, right) => right.index.compareTo(left.index));
+      final arrayPath = group.path;
       final conflictingValuePath = typedPaths.where(
         (path) => _editorPathIsPrefix(arrayPath, path),
       );
@@ -1025,6 +1058,24 @@ class EditorNotifier extends StateNotifier<EditorState> {
         error: _l10n.editorStructuralArrayConflict(arrayPath.join(' › ')),
       );
       return false;
+    }
+    // Revive removes defeat/kill events across every owner's MemorizedEvents
+    // array. Combining it with an index-addressed edit to one of those arrays
+    // could shift the queued target before its sub-write, so require separate
+    // saves for those intentions.
+    final hasNpcRevive = allEdits.any(
+      (keyed) => keyed.edit['path'] == 'private.npc.revive',
+    );
+    if (hasNpcRevive) {
+      for (final group in structuralArrayGroups) {
+        if (!group.path.contains('MemorizedEvents')) continue;
+        state = state.copyWith(
+          error: _l10n.editorMultipleStructuralArrayEdits(
+            group.path.join(' › '),
+          ),
+        );
+        return false;
+      }
     }
 
     // Splicing structural edits (inventory, knowledge, glossary segments,
@@ -1058,6 +1109,23 @@ class EditorNotifier extends StateNotifier<EditorState> {
     final splicing = allEdits
         .where((k) => splicingPaths.contains(k.edit['path']))
         .toList();
+    // Reorder only the occupied positions for each array path. Other splicing
+    // operations retain their stable order, while every allowed remove group
+    // reaches its singleton sub-writes index-descending even if another caller
+    // inserted the pending edits out of order.
+    for (final group in structuralArrayGroups) {
+      final positions = <int>[];
+      for (var i = 0; i < splicing.length; i++) {
+        if (group.edits.any(
+          (entry) => identical(entry.keyed.edit, splicing[i].edit),
+        )) {
+          positions.add(i);
+        }
+      }
+      for (var i = 0; i < positions.length; i++) {
+        splicing[positions[i]] = group.edits[i].keyed;
+      }
+    }
     // Adding a segment needs an existing SegmentUnlocked event as its byte
     // template. If the same Save removes its last unlock first, a later add can
     // no longer be encoded. Stable-partition only the glossary slots so all
@@ -1198,16 +1266,26 @@ class EditorNotifier extends StateNotifier<EditorState> {
       try {
         for (var i = 0; i < worklist.length; i++) {
           final sub = worklist[i];
-          final response = await _execute(
-            'write_save',
-            payload: {
-              'path': savePath,
-              // Backup-once: only the first sub-write snapshots the pristine file.
-              'backup': i == 0,
-              if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
-              'edits': sub.edits,
-            },
-          );
+          Map<String, Object?> response;
+          try {
+            response = await _execute(
+              'write_save',
+              payload: {
+                'path': savePath,
+                // Backup-once: only the first sub-write snapshots the pristine file.
+                'backup': i == 0,
+                if (sub.syncPersistentDataList) 'syncPersistentDataList': true,
+                'edits': sub.edits,
+              },
+            );
+          } catch (error) {
+            // Treat a worker/native exception exactly like a structured failed
+            // sub-write. Earlier writes may already be on disk, so the shared
+            // partial-failure path below must refresh the inspection and
+            // rehydrate only the still-unwritten pending edits.
+            failureError = _l10n.editorSaveFailed('$error');
+            break;
+          }
           if (response['ok'] != true) {
             // Stop on the first failure. Earlier sub-writes already committed.
             failureError = _l10n.editorSaveFailed(_errorDetails(response));
@@ -2176,6 +2254,11 @@ class EditorNotifier extends StateNotifier<EditorState> {
     String query, {
     int offset = 0,
     int limit = 50,
+    String source = 'private',
+    bool includeNodes = false,
+    String? kind,
+    String? type,
+    bool? editable,
   }) async {
     final path = state.selectedPath;
     if (path == null) {
@@ -2189,6 +2272,12 @@ class EditorNotifier extends StateNotifier<EditorState> {
           'query': query,
           'offset': offset,
           'limit': limit,
+          if (includeNodes) 'includeNodes': true,
+          if (includeNodes) 'source': source,
+          if (includeNodes && kind != null && kind != 'all') 'kind': kind,
+          if (includeNodes && type != null && type.trim().isNotEmpty)
+            'type': type.trim(),
+          if (includeNodes && editable != null) 'editable': editable,
         },
       );
       if (response['ok'] != true) {
@@ -2776,26 +2865,71 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   static const _memoryEventPendingPrefix = 'progression.events:';
 
-  /// Queue one index-addressed event remove/duplicate for [character]. No file
-  /// is written here; [saveAllPending] gives the structural edit its own
-  /// reparsed sub-write when the user presses the global Save button. A second
-  /// draft for the same character replaces the first, which prevents stale
-  /// indices from accumulating for one memory array.
-  void setPendingMemoryEventEdit(String character, MemoryEventEdit edit) {
+  /// Queue an index-addressed event edit for [character]. Multiple distinct
+  /// removals are kept in descending original-index order; each becomes its own
+  /// reparsed sub-write in [saveAllPending], so removing a higher index never
+  /// shifts a lower pending target. Duplicate is intentionally exclusive with
+  /// every other edit for the character because mixing insertion and removal
+  /// intents makes the pending row indices ambiguous.
+  ///
+  /// Returns false when [edit] conflicts with an already-pending duplicate or
+  /// removal. Re-queuing the same operation for the same index is idempotent.
+  bool setPendingMemoryEventEdit(String character, MemoryEventEdit edit) {
+    final existing = pendingMemoryEventEdits(character);
+    for (final pending in existing) {
+      if (pending.index != edit.index) continue;
+      return pending.isRemove == edit.isRemove;
+    }
+    if (existing.isNotEmpty &&
+        (!edit.isRemove || existing.any((pending) => !pending.isRemove))) {
+      return false;
+    }
+    final updated = [...existing, edit]
+      ..sort((left, right) => right.index.compareTo(left.index));
     setPendingEdit(
       '$_memoryEventPendingPrefix$character',
-      PendingSaveEdit(edits: [edit.toEditJson()]),
+      PendingSaveEdit(
+        edits: [for (final pending in updated) pending.toEditJson()],
+      ),
     );
+    return true;
   }
 
-  void clearPendingMemoryEventEdit(String character) {
-    clearPendingEdit('$_memoryEventPendingPrefix$character');
+  /// Clear one pending event index, or every pending event for [character]
+  /// when [index] is omitted.
+  void clearPendingMemoryEventEdit(String character, {int? index}) {
+    final key = '$_memoryEventPendingPrefix$character';
+    if (index == null) {
+      clearPendingEdit(key);
+      return;
+    }
+    final pending = pendingEditFor(key);
+    if (pending == null) return;
+    final remaining = pending.edits.where((raw) {
+      final parsed = MemoryEventEdit.fromEditJson(raw);
+      return parsed == null || parsed.index != index;
+    }).toList();
+    if (remaining.length == pending.edits.length) return;
+    if (remaining.isEmpty) {
+      clearPendingEdit(key);
+    } else {
+      setPendingEdit(key, PendingSaveEdit(edits: remaining));
+    }
   }
 
-  MemoryEventEdit? pendingMemoryEventEdit(String character) {
+  List<MemoryEventEdit> pendingMemoryEventEdits(String character) {
     final pending = pendingEditFor('$_memoryEventPendingPrefix$character');
-    if (pending == null || pending.edits.length != 1) return null;
-    return MemoryEventEdit.fromEditJson(pending.edits.single);
+    if (pending == null) return const [];
+    return pending.edits
+        .map(MemoryEventEdit.fromEditJson)
+        .whereType<MemoryEventEdit>()
+        .toList(growable: false);
+  }
+
+  /// Backwards-compatible singular view used by older callers/tests.
+  MemoryEventEdit? pendingMemoryEventEdit(String character) {
+    final pending = pendingMemoryEventEdits(character);
+    return pending.length == 1 ? pending.single : null;
   }
 
   /// Register a PENDING revive of an NPC under the per-NPC key `npc.revive:$id`.
@@ -3007,6 +3141,25 @@ class _KeyedEdit {
 
   final String key;
   final Map<String, Object?> edit;
+}
+
+class _IndexedStructuralEdit {
+  const _IndexedStructuralEdit({
+    required this.keyed,
+    required this.index,
+    required this.isDuplicate,
+  });
+
+  final _KeyedEdit keyed;
+  final int index;
+  final bool isDuplicate;
+}
+
+class _StructuralArrayGroup {
+  _StructuralArrayGroup(this.path);
+
+  final List<Object?> path;
+  final List<_IndexedStructuralEdit> edits = [];
 }
 
 bool _sameEditorPath(List<Object?> left, List<Object?> right) {

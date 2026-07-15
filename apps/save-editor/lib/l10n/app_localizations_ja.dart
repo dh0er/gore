@@ -959,12 +959,57 @@ class AppLocalizationsJa extends AppLocalizations {
   String get factionGuildOther => 'その他/個人';
 
   @override
-  String get allDataLockedBody =>
-      '完全なプロパティブラウザには、コーデックでデコードされたプライベートペイロードデータが必要です。';
+  String get allDataLockedBody => 'この包括的なデータブラウザーは、現在 GSAV セーブファイルで利用できます。';
 
   @override
   String get allDataDescription =>
-      'すべての型付きプロパティを名前またはパスで検索できます。スカラー、文字列、列挙型、オブジェクトパスは編集可能です。構造体は現時点では読み取り専用で表示されます。';
+      'GSAV のメタデータと、PUBLIC/PRIVATE の型付きノードをすべて参照できます。安全に扱えるスカラー値とネイティブ構造体の値は編集可能で、コンテナーと未解析のバイト列も表示されます。';
+
+  @override
+  String get allDataEditable => '編集可能';
+
+  @override
+  String get allDataReadOnly => '読み取り専用';
+
+  @override
+  String get allDataType => '型';
+
+  @override
+  String get allDataScalars => 'スカラー';
+
+  @override
+  String get allDataStructs => '構造体';
+
+  @override
+  String get allDataContainers => 'コンテナー';
+
+  @override
+  String get allDataOpaque => '未解析データ';
+
+  @override
+  String get allDataNodes => 'ノード';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '子ノード $count 件',
+      one: '子ノード 1 件',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => '未保存';
+
+  @override
+  String get allDataTagInputHint => 'タグをカンマまたは改行で区切って入力';
+
+  @override
+  String allDataTypedSource(String source) {
+    return '$source（型付き）';
+  }
 
   @override
   String get searchPropertiesLabel => 'プロパティを検索（空欄ですべて表示） — 例: Health、GameTime';
@@ -2031,6 +2076,116 @@ class AppLocalizationsJa extends AppLocalizations {
   String backupStatusError(String details) {
     return 'バックアップエラー: $details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': 'クエスト',
+      'document': '文書',
+      'story': 'ストーリー',
+      'exploration': '探索',
+      'combat': '戦闘',
+      'social': '交流',
+      'item': 'アイテム',
+      'learning': '習得',
+      'guild': 'ギルド',
+      'crime': '犯罪',
+      'rest': '休息',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': 'クエスト開始',
+      'questSucceeded': 'クエスト完了',
+      'questFailed': 'クエスト失敗',
+      'documentRead': '文書を読んだ',
+      'documentSegmentUnlocked': '項目を発見',
+      'documentSegmentViewed': '項目を閲覧',
+      'chapterCompleted': 'チャプター完了',
+      'areaEntered': 'エリアに入った',
+      'areaLeft': 'エリアを出た',
+      'characterKilled': 'キャラクターを殺害',
+      'characterDefeated': 'キャラクターを撃破',
+      'combatDodge': '攻撃を回避',
+      'characterDebuffed': '弱体効果を付与',
+      'tradeAvailable': '取引を解禁',
+      'itemObtained': 'アイテム入手',
+      'itemCrafted': 'アイテム作成',
+      'skillStateRecorded': 'スキル状態を記録',
+      'recipeLearned': 'レシピ習得',
+      'guildJoined': 'ギルド加入',
+      'crimeRecorded': '犯罪を記録',
+      'slept': '睡眠',
+      'storyEvent': 'ストーリーイベント',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action: $subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': 'ゲーム時間',
+      'duration': '継続時間',
+      'chapter': 'チャプター',
+      'instigator': '発生元',
+      'affected': '影響対象',
+      'amount': '数量',
+      'primaryObject': 'オブジェクト',
+      'secondaryObject': '関連情報',
+      'segmentText': '項目テキスト',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return '$day日目、$time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value秒';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => '主人公';
+
+  @override
+  String get memoryEventDetails => '詳細';
+
+  @override
+  String get memoryEventTags => 'タグ';
+
+  @override
+  String get memoryEventTechnicalData => '技術情報';
+
+  @override
+  String get memoryEventIndex => 'インデックス';
+
+  @override
+  String get memoryEventPosition => '位置';
+
+  @override
+  String get memoryEventPayload => 'イベントデータ';
+
+  @override
+  String get memoryEventSubject => '関連対象';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {

@@ -385,6 +385,68 @@ void main() {
     });
   });
 
+  testWidgets('All data shows source-aware nodes and edits a native vector', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1200, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final core = _FakeCoreService();
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          coreServiceProvider.overrideWithValue(core),
+          editorSettingsStoreProvider.overrideWithValue(
+            const NoopEditorSettingsStore(),
+          ),
+        ],
+        child: const GoresaveApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(Tab, 'All data'));
+    await tester.pumpAndSettle();
+
+    final search = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(search.payload['includeNodes'], isTrue);
+    expect(search.payload['source'], 'private');
+    expect(find.text('PRIVATE typed'), findsOneWidget);
+    expect(find.text('Transform › Location'), findsOneWidget);
+    expect(find.text('nativeStruct'), findsOneWidget);
+    expect(find.text('12 children'), findsOneWidget);
+    expect(find.widgetWithText(TextFormField, 'X'), findsOneWidget);
+
+    final queryField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.textInputAction == TextInputAction.search,
+    );
+    final initialSearchCount = core.requests
+        .where((request) => request.command == 'search_typed_properties')
+        .length;
+    await tester.enterText(queryField, 'Location');
+    await tester.pump(const Duration(milliseconds: 500));
+    expect(
+      core.requests
+          .where((request) => request.command == 'search_typed_properties')
+          .length,
+      initialSearchCount,
+      reason: 'typing must not enqueue an exhaustive scan per keystroke',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.search);
+    await tester.pumpAndSettle();
+    final submittedSearch = core.requests.lastWhere(
+      (request) => request.command == 'search_typed_properties',
+    );
+    expect(submittedSearch.payload['query'], 'Location');
+
+    await tester.enterText(find.widgetWithText(TextFormField, 'X'), '9');
+    await tester.pump();
+    expect(find.widgetWithText(FilledButton, 'Save (1)'), findsOneWidget);
+  });
+
   testWidgets('Settings debug section exposes codec status and inspection '
       'JSON', (tester) async {
     // Tall surface so all Settings cards (including the debug section) lay out
@@ -1022,6 +1084,53 @@ class _FakeCoreService implements GoresaveCoreService {
             'path': payload['path'],
             'restoredFrom': payload['backupPath'],
             'backupPath': r'C:\tmp\saves\G1R-001.sav.bak.300',
+          },
+        };
+      case 'search_typed_properties':
+        return {
+          'ok': true,
+          'data': {
+            'source': payload['source'] ?? 'private',
+            'offset': payload['offset'] ?? 0,
+            'limit': payload['limit'] ?? 50,
+            'total': 2,
+            'count': 2,
+            'summary': {
+              'sources': {'private': 2},
+              'kinds': {'nativeStruct': 1, 'array': 1},
+              'types': {'StructProperty': 1, 'ArrayProperty': 1},
+              'editable': 1,
+              'readOnly': 1,
+              'typedSources': ['private'],
+            },
+            'results': [
+              {
+                'id': 'private:1',
+                'source': 'private',
+                'path': ['Transform', 'Location'],
+                'display': 'Transform › Location',
+                'type': 'StructProperty',
+                'structType': 'Vector',
+                'kind': 'nativeStruct',
+                'value': 'x: 1, y: 2, z: 3',
+                'editValue': {'x': 1.0, 'y': 2.0, 'z': 3.0},
+                'editable': true,
+                'childCount': 0,
+                'depth': 1,
+              },
+              {
+                'id': 'private:2',
+                'source': 'private',
+                'path': ['Events'],
+                'display': 'Events',
+                'type': 'ArrayProperty',
+                'kind': 'array',
+                'value': '12 elements',
+                'editable': false,
+                'childCount': 12,
+                'depth': 0,
+              },
+            ],
           },
         };
       case 'query_progression':

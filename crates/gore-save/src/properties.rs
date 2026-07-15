@@ -26,6 +26,8 @@
 //! property list (`TagName: NameProperty`), only the container is packed.
 
 use crate::{CoreError, Reader};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap};
 
 pub const TAG_FLAG_NATIVE_SERIALIZE: u8 = 0x08;
 pub const TAG_FLAG_BOOL_TRUE: u8 = 0x10;
@@ -379,6 +381,49 @@ pub struct PropertyHit {
     pub editable: bool,
 }
 
+/// One node in the exhaustive property browser. Unlike [`PropertyHit`], this
+/// represents containers, native structs, inline container elements and opaque
+/// payloads as well as scalar leaves. `edit_value` is the lossless JSON shape
+/// accepted by `private.typed.setValue`; it is only populated for nodes that
+/// are actually addressable and editable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyNode {
+    /// Deterministic DFS ordinal, stable across queries/filters for one tree.
+    pub ordinal: usize,
+    pub path: Vec<String>,
+    pub display: String,
+    pub type_name: String,
+    pub struct_type: Option<String>,
+    pub kind: String,
+    pub value_display: String,
+    pub edit_value: Option<Value>,
+    pub editable: bool,
+    pub child_count: usize,
+    pub depth: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyBrowseOptions<'a> {
+    pub query: &'a str,
+    pub type_filter: Option<&'a str>,
+    pub kind_filter: Option<&'a str>,
+    pub editable_filter: Option<bool>,
+    pub offset: usize,
+    pub limit: usize,
+    /// PUBLIC properties share the grammar but are intentionally read-only.
+    pub allow_edits: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PropertyBrowseResult {
+    pub nodes: Vec<PropertyNode>,
+    pub total: usize,
+    pub editable: usize,
+    pub read_only: usize,
+    pub kind_counts: BTreeMap<String, usize>,
+    pub type_counts: BTreeMap<String, usize>,
+}
+
 /// Walk the whole property tree and collect properties whose display path
 /// contains every whitespace-separated term in `query` (case-insensitive). An
 /// empty query matches everything. Returns the `[offset, offset+limit)` page of
@@ -404,6 +449,7 @@ pub fn search_properties(
         &root.properties,
         &mut Vec::new(),
         &mut String::new(),
+        true,
         &mut ctx,
     );
     (hits, total)
@@ -468,8 +514,13 @@ fn walk_search(
     props: &[Property],
     path: &mut Vec<String>,
     display: &mut String,
+    ancestors_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
+    let mut name_counts = HashMap::<&str, usize>::new();
+    for property in props {
+        *name_counts.entry(property.name.as_str()).or_default() += 1;
+    }
     for p in props {
         let display_len = display.len();
         if !display.is_empty() {
@@ -477,6 +528,8 @@ fn walk_search(
         }
         display.push_str(&p.name);
         path.push(p.name.clone());
+        let addressable =
+            ancestors_addressable && name_counts.get(p.name.as_str()).copied() == Some(1);
 
         // Leaf value?
         if let Some(value_display) = scalar_display(&p.value) {
@@ -486,11 +539,11 @@ fn walk_search(
                     display: display.clone(),
                     type_name: p.type_name.clone(),
                     value_display,
-                    editable: scalar_editable(&p.value),
+                    editable: addressable && scalar_editable(&p.value),
                 });
             }
         } else {
-            walk_value_search(&p.value, path, display, ctx);
+            walk_value_search(&p.value, path, display, addressable, ctx);
         }
 
         path.pop();
@@ -502,29 +555,66 @@ fn walk_value_search(
     value: &PropertyValue,
     path: &mut Vec<String>,
     display: &mut String,
+    ancestors_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
     match value {
         PropertyValue::Struct(StructValue::Properties(inner)) => {
-            walk_search(inner, path, display, ctx);
+            walk_search(inner, path, display, ancestors_addressable, ctx);
         }
         PropertyValue::Struct(StructValue::Instanced(Some(i))) => {
-            walk_search(&i.properties, path, display, ctx);
+            walk_search(&i.properties, path, display, ancestors_addressable, ctx);
         }
         PropertyValue::ObjectInstances(objs) => {
             for (idx, obj) in objs.iter().enumerate() {
-                descend_indexed(idx, &obj.properties, path, display, ctx);
+                descend_indexed(
+                    idx,
+                    &obj.properties,
+                    path,
+                    display,
+                    ancestors_addressable,
+                    ctx,
+                );
             }
         }
         PropertyValue::Map { entries, .. } => {
-            for (key, val) in entries {
-                let key_label = map_key_label(key);
-                descend_value(&format!("{{{key_label}}}"), val, path, display, ctx);
+            let labels = entries
+                .iter()
+                .map(|(key, _)| map_key_to_string(key))
+                .collect::<Vec<_>>();
+            let mut counts = HashMap::<&str, usize>::new();
+            for label in labels.iter().flatten() {
+                *counts.entry(label.as_str()).or_default() += 1;
+            }
+            for (index, ((_, value), label)) in entries.iter().zip(labels.iter()).enumerate() {
+                let unique = label
+                    .as_deref()
+                    .is_some_and(|label| counts.get(label).copied() == Some(1));
+                let segment = match label {
+                    Some(label) if unique => format!("{{{label}}}"),
+                    Some(label) => format!("{{{label}}} [#{index}]"),
+                    None => format!("{{? #{index}}}"),
+                };
+                descend_value(
+                    &segment,
+                    value,
+                    path,
+                    display,
+                    ancestors_addressable && unique,
+                    ctx,
+                );
             }
         }
         PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
             for (idx, el) in elements.iter().enumerate() {
-                descend_value(&format!("[{idx}]"), el, path, display, ctx);
+                descend_value(
+                    &format!("[{idx}]"),
+                    el,
+                    path,
+                    display,
+                    ancestors_addressable,
+                    ctx,
+                );
             }
         }
         _ => {}
@@ -536,13 +626,14 @@ fn descend_indexed(
     props: &[Property],
     path: &mut Vec<String>,
     display: &mut String,
+    descendants_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
     let display_len = display.len();
     let seg = format!("[{idx}]");
     display.push_str(&seg);
     path.push(seg);
-    walk_search(props, path, display, ctx);
+    walk_search(props, path, display, descendants_addressable, ctx);
     path.pop();
     display.truncate(display_len);
 }
@@ -552,6 +643,7 @@ fn descend_value(
     value: &PropertyValue,
     path: &mut Vec<String>,
     display: &mut String,
+    descendants_addressable: bool,
     ctx: &mut SearchCtx,
 ) {
     let display_len = display.len();
@@ -572,16 +664,10 @@ fn descend_value(
             });
         }
     } else {
-        walk_value_search(value, path, display, ctx);
+        walk_value_search(value, path, display, descendants_addressable, ctx);
     }
     path.pop();
     display.truncate(display_len);
-}
-
-fn map_key_label(key: &PropertyValue) -> String {
-    // Delegate to the resolver's segment renderer so search-built paths always
-    // round-trip through `resolve`. Unaddressable key types collapse to "?".
-    map_key_to_string(key).unwrap_or_else(|| "?".to_string())
 }
 
 fn hex_guid(raw: &[u8; 16]) -> String {
@@ -604,6 +690,524 @@ fn container_value_type(value: &PropertyValue) -> &'static str {
         PropertyValue::SoftObject(_) => "SoftObjectProperty",
         _ => "StructProperty",
     }
+}
+
+/// Exhaustive, filterable view of a typed property tree. The traversal always
+/// counts the full matching set for stable pagination, but allocates/clones a
+/// [`PropertyNode`] only for the requested page. That distinction matters for
+/// real saves with more than a million nodes.
+pub fn browse_properties(
+    root: &RootObject,
+    options: &PropertyBrowseOptions<'_>,
+) -> PropertyBrowseResult {
+    let terms = options
+        .query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    let mut ctx = BrowseCtx {
+        terms,
+        type_filter: options
+            .type_filter
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase),
+        kind_filter: options
+            .kind_filter
+            .filter(|value| !value.is_empty() && *value != "all")
+            .map(str::to_lowercase),
+        editable_filter: options.editable_filter,
+        allow_edits: options.allow_edits,
+        offset: options.offset,
+        limit: options.limit,
+        visited: 0,
+        total: 0,
+        editable: 0,
+        read_only: 0,
+        kind_counts: BTreeMap::new(),
+        type_counts: BTreeMap::new(),
+        nodes: Vec::with_capacity(options.limit.min(1000)),
+    };
+    walk_browse_properties(
+        &root.properties,
+        &mut Vec::new(),
+        &mut String::new(),
+        true,
+        &mut ctx,
+    );
+    PropertyBrowseResult {
+        nodes: ctx.nodes,
+        total: ctx.total,
+        editable: ctx.editable,
+        read_only: ctx.read_only,
+        kind_counts: ctx.kind_counts,
+        type_counts: ctx.type_counts,
+    }
+}
+
+struct BrowseCtx {
+    terms: Vec<String>,
+    type_filter: Option<String>,
+    kind_filter: Option<String>,
+    editable_filter: Option<bool>,
+    allow_edits: bool,
+    offset: usize,
+    limit: usize,
+    /// Counts every visible tree node before filtering. Used as a stable id.
+    visited: usize,
+    total: usize,
+    editable: usize,
+    read_only: usize,
+    kind_counts: BTreeMap<String, usize>,
+    type_counts: BTreeMap<String, usize>,
+    nodes: Vec<PropertyNode>,
+}
+
+impl BrowseCtx {
+    /// Return the stable node ordinal when this match belongs to the requested
+    /// page, or `None` when it is filtered/outside the page.
+    fn slot(
+        &mut self,
+        display: &str,
+        type_name: &str,
+        struct_type: Option<&str>,
+        kind: &str,
+        value_display: &str,
+        addressable_editable: bool,
+    ) -> Option<usize> {
+        let ordinal = self.visited;
+        self.visited += 1;
+        let editable = self.allow_edits && addressable_editable;
+        if self
+            .editable_filter
+            .is_some_and(|wanted| wanted != editable)
+        {
+            return None;
+        }
+        if self.type_filter.as_ref().is_some_and(|wanted| {
+            !type_name.to_lowercase().contains(wanted)
+                && !struct_type.is_some_and(|value| value.to_lowercase().contains(wanted))
+        }) {
+            return None;
+        }
+        if self
+            .kind_filter
+            .as_deref()
+            .is_some_and(|wanted| !kind_filter_matches(wanted, kind))
+        {
+            return None;
+        }
+        if !self.terms.is_empty() {
+            let display = display.to_lowercase();
+            let type_name = type_name.to_lowercase();
+            let struct_type = struct_type.unwrap_or_default().to_lowercase();
+            let kind = kind.to_lowercase();
+            let value = value_display.to_lowercase();
+            if !self.terms.iter().all(|term| {
+                display.contains(term)
+                    || type_name.contains(term)
+                    || struct_type.contains(term)
+                    || kind.contains(term)
+                    || value.contains(term)
+            }) {
+                return None;
+            }
+        }
+        if editable {
+            self.editable += 1;
+        } else {
+            self.read_only += 1;
+        }
+        increment_count(&mut self.kind_counts, kind);
+        increment_count(&mut self.type_counts, type_name);
+        let match_index = self.total;
+        self.total += 1;
+        (match_index >= self.offset && self.nodes.len() < self.limit).then_some(ordinal)
+    }
+}
+
+fn increment_count(counts: &mut BTreeMap<String, usize>, key: &str) {
+    if let Some(count) = counts.get_mut(key) {
+        *count += 1;
+    } else {
+        counts.insert(key.to_string(), 1);
+    }
+}
+
+fn kind_filter_matches(filter: &str, kind: &str) -> bool {
+    match filter {
+        "container" => matches!(
+            kind,
+            "array"
+                | "map"
+                | "set"
+                | "objectArray"
+                | "arrayElement"
+                | "setElement"
+                | "mapEntry"
+                | "objectInstance"
+        ),
+        "struct" => matches!(kind, "struct" | "nativeStruct" | "instancedStruct"),
+        other => kind.eq_ignore_ascii_case(other),
+    }
+}
+
+fn walk_browse_properties(
+    props: &[Property],
+    path: &mut Vec<String>,
+    display: &mut String,
+    ancestors_addressable: bool,
+    ctx: &mut BrowseCtx,
+) {
+    // `resolve_chain` selects the first property with a matching name. Mark
+    // duplicate-name siblings read-only so the UI never promises a path that
+    // could silently resolve to the wrong occurrence.
+    let mut name_counts = HashMap::<&str, usize>::new();
+    for property in props {
+        *name_counts.entry(property.name.as_str()).or_default() += 1;
+    }
+    for property in props {
+        let display_len = display.len();
+        if !display.is_empty() {
+            display.push_str(" › ");
+        }
+        display.push_str(&property.name);
+        path.push(property.name.clone());
+        let addressable =
+            ancestors_addressable && name_counts.get(property.name.as_str()).copied() == Some(1);
+        let kind = property_kind(&property.value);
+        let struct_type = property
+            .descriptor
+            .struct_type
+            .as_ref()
+            .map(|(name, _)| name.as_str());
+        let value_display = browse_value_preview(&property.value);
+        let addressable_editable = addressable && browse_value_editable(&property.value);
+        if let Some(ordinal) = ctx.slot(
+            display,
+            &property.type_name,
+            struct_type,
+            kind,
+            &value_display,
+            addressable_editable,
+        ) {
+            ctx.nodes.push(PropertyNode {
+                ordinal,
+                path: path.clone(),
+                display: display.clone(),
+                type_name: property.type_name.clone(),
+                struct_type: struct_type.map(str::to_string),
+                kind: kind.to_string(),
+                value_display,
+                edit_value: addressable_editable
+                    .then(|| browse_value_json(&property.value))
+                    .flatten(),
+                editable: ctx.allow_edits && addressable_editable,
+                child_count: browse_child_count(&property.value),
+                depth: path.len().saturating_sub(1),
+            });
+        }
+        walk_browse_value_children(&property.value, path, display, addressable, ctx);
+        path.pop();
+        display.truncate(display_len);
+    }
+}
+
+fn walk_browse_value_children(
+    value: &PropertyValue,
+    path: &mut Vec<String>,
+    display: &mut String,
+    ancestors_addressable: bool,
+    ctx: &mut BrowseCtx,
+) {
+    match value {
+        PropertyValue::Struct(StructValue::Properties(inner)) => {
+            walk_browse_properties(inner, path, display, ancestors_addressable, ctx);
+        }
+        PropertyValue::Struct(StructValue::Instanced(Some(instance))) => {
+            walk_browse_properties(
+                &instance.properties,
+                path,
+                display,
+                ancestors_addressable,
+                ctx,
+            );
+        }
+        PropertyValue::ObjectInstances(instances) => {
+            for (index, instance) in instances.iter().enumerate() {
+                let segment = format!("[{index}]");
+                descend_browse_inline(
+                    &segment,
+                    "ObjectInstance",
+                    "objectInstance",
+                    &format!(
+                        "{} · {} properties",
+                        instance.class,
+                        instance.properties.len()
+                    ),
+                    instance.properties.len(),
+                    None,
+                    path,
+                    display,
+                    ancestors_addressable,
+                    ctx,
+                    |path, display, addressable, ctx| {
+                        walk_browse_properties(
+                            &instance.properties,
+                            path,
+                            display,
+                            addressable,
+                            ctx,
+                        )
+                    },
+                );
+            }
+        }
+        PropertyValue::Map { entries, .. } => {
+            let labels = entries
+                .iter()
+                .map(|(key, _)| map_key_to_string(key))
+                .collect::<Vec<_>>();
+            let mut counts = HashMap::<&str, usize>::new();
+            for label in labels.iter().flatten() {
+                *counts.entry(label.as_str()).or_default() += 1;
+            }
+            for (index, ((key, entry_value), label)) in
+                entries.iter().zip(labels.iter()).enumerate()
+            {
+                let unique = label
+                    .as_deref()
+                    .is_some_and(|value| counts.get(value).copied() == Some(1));
+                let segment = match label {
+                    Some(label) if unique => format!("{{{label}}}"),
+                    Some(label) => format!("{{{label}}} [#{index}]"),
+                    None => format!("{{? #{index}}}"),
+                };
+                let key_preview = browse_value_preview(key);
+                let value_preview = browse_value_preview(entry_value);
+                let preview = format!("{key_preview} → {value_preview}");
+                let child_count = browse_child_count(entry_value);
+                descend_browse_inline(
+                    &segment,
+                    container_value_type(entry_value),
+                    "mapEntry",
+                    &preview,
+                    child_count,
+                    inline_struct_type(entry_value),
+                    path,
+                    display,
+                    ancestors_addressable && unique,
+                    ctx,
+                    |path, display, addressable, ctx| {
+                        walk_browse_value_children(entry_value, path, display, addressable, ctx)
+                    },
+                );
+            }
+        }
+        PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => {
+            let is_set = matches!(value, PropertyValue::Set { .. });
+            for (index, element) in elements.iter().enumerate() {
+                let segment = format!("[{index}]");
+                let preview = browse_value_preview(element);
+                descend_browse_inline(
+                    &segment,
+                    container_value_type(element),
+                    if is_set { "setElement" } else { "arrayElement" },
+                    &preview,
+                    browse_child_count(element),
+                    inline_struct_type(element),
+                    path,
+                    display,
+                    ancestors_addressable,
+                    ctx,
+                    |path, display, addressable, ctx| {
+                        walk_browse_value_children(element, path, display, addressable, ctx)
+                    },
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn descend_browse_inline<F>(
+    segment: &str,
+    type_name: &str,
+    kind: &str,
+    value_display: &str,
+    child_count: usize,
+    struct_type: Option<&str>,
+    path: &mut Vec<String>,
+    display: &mut String,
+    descendants_addressable: bool,
+    ctx: &mut BrowseCtx,
+    descend: F,
+) where
+    F: FnOnce(&mut Vec<String>, &mut String, bool, &mut BrowseCtx),
+{
+    let display_len = display.len();
+    display.push_str(segment);
+    path.push(segment.to_string());
+    if let Some(ordinal) = ctx.slot(display, type_name, struct_type, kind, value_display, false) {
+        ctx.nodes.push(PropertyNode {
+            ordinal,
+            path: path.clone(),
+            display: display.clone(),
+            type_name: type_name.to_string(),
+            struct_type: struct_type.map(str::to_string),
+            kind: kind.to_string(),
+            value_display: value_display.to_string(),
+            edit_value: None,
+            editable: false,
+            child_count,
+            depth: path.len().saturating_sub(1),
+        });
+    }
+    descend(path, display, descendants_addressable, ctx);
+    path.pop();
+    display.truncate(display_len);
+}
+
+fn property_kind(value: &PropertyValue) -> &'static str {
+    match value {
+        PropertyValue::Struct(StructValue::Properties(_)) => "struct",
+        PropertyValue::Struct(StructValue::Instanced(_)) => "instancedStruct",
+        PropertyValue::Struct(_) => "nativeStruct",
+        PropertyValue::Array { .. } => "array",
+        PropertyValue::ObjectInstances(_) => "objectArray",
+        PropertyValue::Set { .. } => "set",
+        PropertyValue::Map { .. } => "map",
+        PropertyValue::Opaque(_) => "opaque",
+        _ => "scalar",
+    }
+}
+
+fn inline_struct_type(value: &PropertyValue) -> Option<&'static str> {
+    match value {
+        PropertyValue::Struct(StructValue::Vector3 { .. }) => Some("Vector"),
+        PropertyValue::Struct(StructValue::Vector3f { .. }) => Some("Vector3f"),
+        PropertyValue::Struct(StructValue::Vector4 { .. }) => Some("Vector4/Quat"),
+        PropertyValue::Struct(StructValue::Vector2 { .. }) => Some("Vector2D"),
+        PropertyValue::Struct(StructValue::Guid(_)) => Some("Guid"),
+        PropertyValue::Struct(StructValue::DateTime(_)) => Some("DateTime"),
+        PropertyValue::Struct(StructValue::GameplayTagContainer(_)) => Some("GameplayTagContainer"),
+        PropertyValue::Struct(StructValue::Instanced(_)) => Some("InstancedStruct"),
+        PropertyValue::Struct(StructValue::Properties(_)) => Some("Struct"),
+        _ => None,
+    }
+}
+
+fn browse_child_count(value: &PropertyValue) -> usize {
+    match value {
+        PropertyValue::Struct(StructValue::Properties(inner)) => inner.len(),
+        PropertyValue::Struct(StructValue::Instanced(Some(instance))) => instance.properties.len(),
+        PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => tags.len(),
+        PropertyValue::Array { elements } | PropertyValue::Set { elements, .. } => elements.len(),
+        PropertyValue::ObjectInstances(instances) => instances.len(),
+        PropertyValue::Map { entries, .. } => entries.len(),
+        _ => 0,
+    }
+}
+
+fn browse_value_editable(value: &PropertyValue) -> bool {
+    scalar_editable(value)
+        || matches!(
+            value,
+            PropertyValue::Struct(
+                StructValue::Vector2 { .. }
+                    | StructValue::Vector3 { .. }
+                    | StructValue::Vector3f { .. }
+                    | StructValue::Vector4 { .. }
+                    | StructValue::Guid(_)
+                    | StructValue::DateTime(_)
+                    | StructValue::GameplayTagContainer(_)
+            )
+        )
+}
+
+fn browse_value_preview(value: &PropertyValue) -> String {
+    match value {
+        PropertyValue::SoftObject(path) => {
+            let mut value = format!("{}.{}", path.package_name, path.asset_name);
+            if !path.sub_path.is_empty() {
+                value.push(':');
+                value.push_str(&path.sub_path);
+            }
+            value
+        }
+        PropertyValue::Struct(StructValue::Vector3 { x, y, z }) => {
+            format!("x: {x}, y: {y}, z: {z}")
+        }
+        PropertyValue::Struct(StructValue::Vector3f { x, y, z }) => {
+            format!("x: {x}, y: {y}, z: {z}")
+        }
+        PropertyValue::Struct(StructValue::Vector4 { x, y, z, w }) => {
+            format!("x: {x}, y: {y}, z: {z}, w: {w}")
+        }
+        PropertyValue::Struct(StructValue::Vector2 { x, y }) => format!("x: {x}, y: {y}"),
+        PropertyValue::Struct(StructValue::Guid(raw)) => hex_guid(raw),
+        PropertyValue::Struct(StructValue::DateTime(ticks)) => ticks.to_string(),
+        PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => tags.join(", "),
+        PropertyValue::Struct(StructValue::Instanced(Some(instance))) => format!(
+            "{} · {} properties",
+            instance.actual_type,
+            instance.properties.len()
+        ),
+        PropertyValue::Struct(StructValue::Instanced(None)) => "empty".to_string(),
+        PropertyValue::Struct(StructValue::Properties(inner)) => {
+            format!("{} properties", inner.len())
+        }
+        PropertyValue::Array { elements } => format!("{} elements", elements.len()),
+        PropertyValue::ObjectInstances(instances) => format!("{} objects", instances.len()),
+        PropertyValue::Set { elements, .. } => format!("{} elements", elements.len()),
+        PropertyValue::Map { entries, .. } => format!("{} entries", entries.len()),
+        PropertyValue::Opaque(bytes) => opaque_preview(bytes),
+        other => scalar_display(other).unwrap_or_default(),
+    }
+}
+
+fn opaque_preview(bytes: &[u8]) -> String {
+    let preview = bytes
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if bytes.len() > 16 {
+        format!("{} bytes · {preview} …", bytes.len())
+    } else {
+        format!("{} bytes · {preview}", bytes.len())
+    }
+}
+
+fn browse_value_json(value: &PropertyValue) -> Option<Value> {
+    Some(match value {
+        PropertyValue::Int(value) => json!(value),
+        PropertyValue::UInt32(value) => json!(value),
+        PropertyValue::Int64(value) => json!(value),
+        PropertyValue::Float(value) => json!(value),
+        PropertyValue::Double(value) => json!(value),
+        PropertyValue::Bool(value) => json!(value),
+        PropertyValue::Byte(value) => json!(value),
+        PropertyValue::Str(value)
+        | PropertyValue::Name(value)
+        | PropertyValue::Object(value)
+        | PropertyValue::Enum(value) => json!(value),
+        PropertyValue::Struct(StructValue::Vector3 { x, y, z }) => {
+            json!({ "x": x, "y": y, "z": z })
+        }
+        PropertyValue::Struct(StructValue::Vector3f { x, y, z }) => {
+            json!({ "x": x, "y": y, "z": z })
+        }
+        PropertyValue::Struct(StructValue::Vector4 { x, y, z, w }) => {
+            json!({ "x": x, "y": y, "z": z, "w": w })
+        }
+        PropertyValue::Struct(StructValue::Vector2 { x, y }) => json!({ "x": x, "y": y }),
+        PropertyValue::Struct(StructValue::Guid(raw)) => json!(hex_guid(raw)),
+        PropertyValue::Struct(StructValue::DateTime(ticks)) => json!(ticks),
+        PropertyValue::Struct(StructValue::GameplayTagContainer(tags)) => json!(tags),
+        _ => return None,
+    })
 }
 
 /// Depth-first search for the first property named `name` anywhere in the
@@ -3114,6 +3718,86 @@ mod tests {
             resolve(&root.properties, &segs).unwrap().value,
             PropertyValue::Float(64.0)
         );
+    }
+
+    #[test]
+    fn exhaustive_browser_marks_unaddressable_and_duplicate_map_keys_read_only() {
+        fn leaf(name: &str, value: i32) -> PropertyValue {
+            PropertyValue::Struct(StructValue::Properties(vec![Property {
+                name: name.to_string(),
+                type_name: "IntProperty".to_string(),
+                descriptor: Descriptor::default(),
+                array_index: 0,
+                tag_flags: 0,
+                value_offset: 32,
+                value_size: 4,
+                value: PropertyValue::Int(value),
+            }]))
+        }
+        let root = RootObject {
+            class: "/Script/Test.Save".to_string(),
+            flag: 0,
+            properties: vec![Property {
+                name: "Values".to_string(),
+                type_name: "MapProperty".to_string(),
+                descriptor: Descriptor::default(),
+                array_index: 0,
+                tag_flags: 0,
+                value_offset: 16,
+                value_size: 64,
+                value: PropertyValue::Map {
+                    num_to_remove: 0,
+                    entries: vec![
+                        (PropertyValue::Float(1.0), leaf("FloatKeyLeaf", 1)),
+                        (
+                            PropertyValue::Name("Same".to_string()),
+                            leaf("DuplicateLeaf", 2),
+                        ),
+                        (
+                            PropertyValue::Name("Same".to_string()),
+                            leaf("DuplicateLeaf", 3),
+                        ),
+                    ],
+                },
+            }],
+            footer: 0,
+            consumed: 0,
+        };
+        let result = browse_properties(
+            &root,
+            &PropertyBrowseOptions {
+                query: "Leaf",
+                type_filter: None,
+                kind_filter: None,
+                editable_filter: None,
+                offset: 0,
+                limit: 100,
+                allow_edits: true,
+            },
+        );
+        let leaves = result
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "scalar")
+            .collect::<Vec<_>>();
+        assert_eq!(leaves.len(), 3);
+        assert!(leaves.iter().all(|node| !node.editable));
+        assert!(leaves.iter().all(|node| node.edit_value.is_none()));
+        assert!(
+            leaves
+                .iter()
+                .any(|node| node.path.iter().any(|segment| segment.contains("? #0")))
+        );
+        assert_eq!(
+            leaves
+                .iter()
+                .filter(|node| node.display.contains("Same"))
+                .count(),
+            2
+        );
+        let (legacy, total) = search_properties(&root, "Leaf", 0, 100);
+        assert_eq!(total, 3);
+        assert!(legacy.iter().all(|hit| !hit.editable));
     }
 
     #[test]

@@ -10,6 +10,13 @@ class TypedPropertyHit {
     required this.type,
     required this.value,
     required this.editable,
+    this.id = '',
+    this.source = 'private',
+    this.kind = 'scalar',
+    this.structType,
+    this.editValue,
+    this.childCount = 0,
+    this.depth = 0,
   });
 
   factory TypedPropertyHit.fromJson(Map<String, Object?> json) {
@@ -23,6 +30,13 @@ class TypedPropertyHit {
       type: json['type'] as String? ?? '',
       value: json['value'] as String? ?? '',
       editable: json['editable'] as bool? ?? false,
+      id: json['id'] as String? ?? '',
+      source: json['source'] as String? ?? 'private',
+      kind: json['kind'] as String? ?? 'scalar',
+      structType: json['structType'] as String?,
+      editValue: json['editValue'],
+      childCount: (json['childCount'] as num?)?.toInt() ?? 0,
+      depth: (json['depth'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -32,6 +46,63 @@ class TypedPropertyHit {
   final String type;
   final String value;
   final bool editable;
+
+  /// Stable within one parsed save, independent of the active search/filter.
+  final String id;
+  final String source;
+  final String kind;
+  final String? structType;
+
+  /// Lossless JSON shape accepted by `private.typed.setValue`.
+  final Object? editValue;
+  final int childCount;
+  final int depth;
+
+  String get stableId => id.isEmpty ? '$source:${path.join('/')}' : id;
+
+  bool get isNativeStruct => kind == 'nativeStruct';
+}
+
+class TypedSearchSummary {
+  const TypedSearchSummary({
+    this.sources = const {},
+    this.kinds = const {},
+    this.types = const {},
+    this.editable = 0,
+    this.readOnly = 0,
+    this.typedSources = const [],
+  });
+
+  factory TypedSearchSummary.fromJson(Map<String, Object?> json) {
+    Map<String, int> counts(Object? raw) {
+      if (raw is! Map) return const {};
+      return {
+        for (final entry in raw.entries)
+          if (entry.key is String && entry.value is num)
+            entry.key as String: (entry.value as num).toInt(),
+      };
+    }
+
+    return TypedSearchSummary(
+      sources: counts(json['sources']),
+      kinds: counts(json['kinds']),
+      types: counts(json['types']),
+      editable: (json['editable'] as num?)?.toInt() ?? 0,
+      readOnly: (json['readOnly'] as num?)?.toInt() ?? 0,
+      typedSources:
+          (json['typedSources'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
+          const [],
+    );
+  }
+
+  final Map<String, int> sources;
+  final Map<String, int> kinds;
+  final Map<String, int> types;
+  final int editable;
+  final int readOnly;
+  final List<String> typedSources;
 }
 
 /// Result of a typed property search over the decoded private payload.
@@ -41,6 +112,9 @@ class TypedSearchResult {
     this.offset = 0,
     this.limit = 50,
     this.total = 0,
+    this.source = 'private',
+    this.summary = const TypedSearchSummary(),
+    this.warnings = const [],
     this.error,
   });
 
@@ -55,6 +129,17 @@ class TypedSearchResult {
       offset: (json['offset'] as num?)?.toInt() ?? 0,
       limit: (json['limit'] as num?)?.toInt() ?? 50,
       total: (json['total'] as num?)?.toInt() ?? 0,
+      source: json['source'] as String? ?? 'private',
+      summary: json['summary'] is Map
+          ? TypedSearchSummary.fromJson(
+              (json['summary'] as Map).cast<String, Object?>(),
+            )
+          : const TypedSearchSummary(),
+      warnings:
+          (json['warnings'] as List?)?.whereType<String>().toList(
+            growable: false,
+          ) ??
+          const [],
     );
   }
 
@@ -62,6 +147,9 @@ class TypedSearchResult {
   final int offset;
   final int limit;
   final int total;
+  final String source;
+  final TypedSearchSummary summary;
+  final List<String> warnings;
   final String? error;
 
   /// Zero-based index of the current page.

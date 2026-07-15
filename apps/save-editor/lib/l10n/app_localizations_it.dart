@@ -982,11 +982,58 @@ class AppLocalizationsIt extends AppLocalizations {
 
   @override
   String get allDataLockedBody =>
-      'Il browser completo delle proprietà richiede dati privati decodificati dal codec.';
+      'Il browser completo delle sorgenti è attualmente disponibile per i salvataggi GSAV.';
 
   @override
   String get allDataDescription =>
-      'Cerca ogni proprietà tipizzata per nome o percorso. Scalari, stringhe, enum e percorsi di oggetti sono modificabili; gli struct sono mostrati in sola lettura per ora.';
+      'Esplora i metadati GSAV e tutti i nodi tipizzati PUBLIC/PRIVATE. I valori scalari e le strutture native sicure sono modificabili; i contenitori e i byte opachi restano visibili.';
+
+  @override
+  String get allDataEditable => 'Modificabile';
+
+  @override
+  String get allDataReadOnly => 'Sola lettura';
+
+  @override
+  String get allDataType => 'Tipo';
+
+  @override
+  String get allDataScalars => 'Scalari';
+
+  @override
+  String get allDataStructs => 'Strutture';
+
+  @override
+  String get allDataContainers => 'Contenitori';
+
+  @override
+  String get allDataOpaque => 'Opachi';
+
+  @override
+  String get allDataNodes => 'Nodi';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count elementi figli',
+      one: '1 elemento figlio',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => 'In sospeso';
+
+  @override
+  String get allDataTagInputHint =>
+      'Tag separati da virgole o interruzioni di riga';
+
+  @override
+  String allDataTypedSource(String source) {
+    return 'Sorgente tipizzata: $source';
+  }
 
   @override
   String get searchPropertiesLabel =>
@@ -2088,6 +2135,116 @@ class AppLocalizationsIt extends AppLocalizations {
   String backupStatusError(String details) {
     return 'Errore del backup: $details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': 'Missione',
+      'document': 'Documento',
+      'story': 'Storia',
+      'exploration': 'Esplorazione',
+      'combat': 'Combattimento',
+      'social': 'Sociale',
+      'item': 'Oggetti',
+      'learning': 'Apprendimento',
+      'guild': 'Gilda',
+      'crime': 'Crimine',
+      'rest': 'Riposo',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': 'Missione iniziata',
+      'questSucceeded': 'Missione completata',
+      'questFailed': 'Missione fallita',
+      'documentRead': 'Documento letto',
+      'documentSegmentUnlocked': 'Voce scoperta',
+      'documentSegmentViewed': 'Voce visualizzata',
+      'chapterCompleted': 'Capitolo completato',
+      'areaEntered': 'Area raggiunta',
+      'areaLeft': 'Area lasciata',
+      'characterKilled': 'Personaggio ucciso',
+      'characterDefeated': 'Personaggio sconfitto',
+      'combatDodge': 'Attacco schivato',
+      'characterDebuffed': 'Malus applicato',
+      'tradeAvailable': 'Commercio sbloccato',
+      'itemObtained': 'Oggetto ottenuto',
+      'itemCrafted': 'Oggetto creato',
+      'skillStateRecorded': 'Stato abilità registrato',
+      'recipeLearned': 'Ricetta appresa',
+      'guildJoined': 'Ingresso nella gilda',
+      'crimeRecorded': 'Crimine registrato',
+      'slept': 'Riposo',
+      'storyEvent': 'Evento della storia',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action: $subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': 'Tempo di gioco',
+      'duration': 'Durata',
+      'chapter': 'Capitolo',
+      'instigator': 'Avviato da',
+      'affected': 'Interessato',
+      'amount': 'Quantità',
+      'primaryObject': 'Oggetto',
+      'secondaryObject': 'Contesto',
+      'segmentText': 'Testo della voce',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return 'Giorno $day, $time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value s';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => 'Eroe';
+
+  @override
+  String get memoryEventDetails => 'Dettagli';
+
+  @override
+  String get memoryEventTags => 'Tag';
+
+  @override
+  String get memoryEventTechnicalData => 'Dati tecnici';
+
+  @override
+  String get memoryEventIndex => 'Indice';
+
+  @override
+  String get memoryEventPosition => 'Posizione';
+
+  @override
+  String get memoryEventPayload => 'Contenuto';
+
+  @override
+  String get memoryEventSubject => 'Soggetto';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {

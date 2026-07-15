@@ -54,6 +54,37 @@ void main() {
     }
   });
 
+  test('feature translations are not copied from the English template', () {
+    const mustBeLocalized = <String>{
+      'allDataLockedBody',
+      'allDataDescription',
+      'allDataChildren',
+      'allDataTagInputHint',
+      'allDataTypedSource',
+      'memoryEventCategory',
+      'memoryEventAction',
+      'memoryEventFact',
+      'memoryEventGameTime',
+    };
+    final template = _readArb(templateFile);
+    final localeFiles = l10nDirectory.listSync().whereType<File>().where(
+      (file) =>
+          RegExp(r'app_[\w]+\.arb$').hasMatch(file.path) &&
+          !file.path.endsWith('app_en.arb'),
+    );
+
+    for (final file in localeFiles) {
+      final arb = _readArb(file);
+      for (final key in mustBeLocalized) {
+        expect(
+          arb[key],
+          isNot(template[key]),
+          reason: '${file.path}:$key must not use the English fallback',
+        );
+      }
+    }
+  });
+
   test('every locale covers all known advanced attribute fallbacks', () {
     const advancedAttributeIds = <String>{
       'Alcohol',

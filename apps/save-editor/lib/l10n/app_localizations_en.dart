@@ -975,11 +975,57 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get allDataLockedBody =>
-      'The full property browser needs decoded private payload data from the codec.';
+      'The exhaustive source browser is currently available for GSAV save files.';
 
   @override
   String get allDataDescription =>
-      'Search every typed property by name or path. Scalars, strings, enums and object paths are editable; structs are shown read-only for now.';
+      'Browse GSAV metadata and every typed PUBLIC/PRIVATE node. Safe scalar and native-struct values are editable; containers and opaque bytes remain visible.';
+
+  @override
+  String get allDataEditable => 'Editable';
+
+  @override
+  String get allDataReadOnly => 'Read-only';
+
+  @override
+  String get allDataType => 'Type';
+
+  @override
+  String get allDataScalars => 'Scalars';
+
+  @override
+  String get allDataStructs => 'Structs';
+
+  @override
+  String get allDataContainers => 'Containers';
+
+  @override
+  String get allDataOpaque => 'Opaque';
+
+  @override
+  String get allDataNodes => 'Nodes';
+
+  @override
+  String allDataChildren(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count children',
+      one: '1 child',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get allDataPending => 'Pending';
+
+  @override
+  String get allDataTagInputHint => 'Comma- or line-separated tags';
+
+  @override
+  String allDataTypedSource(String source) {
+    return '$source typed';
+  }
 
   @override
   String get searchPropertiesLabel =>
@@ -2069,6 +2115,116 @@ class AppLocalizationsEn extends AppLocalizations {
   String backupStatusError(String details) {
     return 'Backup error: $details';
   }
+
+  @override
+  String memoryEventCategory(String category, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(category, {
+      'quest': 'Quest',
+      'document': 'Document',
+      'story': 'Story',
+      'exploration': 'Exploration',
+      'combat': 'Combat',
+      'social': 'Social',
+      'item': 'Items',
+      'learning': 'Learning',
+      'guild': 'Guild',
+      'crime': 'Crime',
+      'rest': 'Rest',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventAction(String kind, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'questStarted': 'Quest started',
+      'questSucceeded': 'Quest completed',
+      'questFailed': 'Quest failed',
+      'documentRead': 'Document read',
+      'documentSegmentUnlocked': 'Entry discovered',
+      'documentSegmentViewed': 'Entry viewed',
+      'chapterCompleted': 'Chapter completed',
+      'areaEntered': 'Area entered',
+      'areaLeft': 'Area left',
+      'characterKilled': 'Character killed',
+      'characterDefeated': 'Character defeated',
+      'combatDodge': 'Attack dodged',
+      'characterDebuffed': 'Debuff applied',
+      'tradeAvailable': 'Trading unlocked',
+      'itemObtained': 'Item obtained',
+      'itemCrafted': 'Item crafted',
+      'skillStateRecorded': 'Skill state recorded',
+      'recipeLearned': 'Recipe learned',
+      'guildJoined': 'Guild joined',
+      'crimeRecorded': 'Crime recorded',
+      'slept': 'Slept',
+      'storyEvent': 'Story event',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventTitleWithSubject(String action, String subject) {
+    return '$action: $subject';
+  }
+
+  @override
+  String memoryEventFact(String fact, String fallback) {
+    String _temp0 = intl.Intl.selectLogic(fact, {
+      'gameTime': 'Game time',
+      'duration': 'Duration',
+      'chapter': 'Chapter',
+      'instigator': 'Initiated by',
+      'affected': 'Affected',
+      'amount': 'Amount',
+      'primaryObject': 'Object',
+      'secondaryObject': 'Context',
+      'segmentText': 'Entry text',
+      'other': '$fallback',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String memoryEventGameTime(int day, String time) {
+    return 'Day $day, $time';
+  }
+
+  @override
+  String memoryEventSecondsValue(String value) {
+    return '$value s';
+  }
+
+  @override
+  String memoryEventMoreValues(String values, int count) {
+    return '$values +$count';
+  }
+
+  @override
+  String get memoryEventHero => 'Hero';
+
+  @override
+  String get memoryEventDetails => 'Details';
+
+  @override
+  String get memoryEventTags => 'Tags';
+
+  @override
+  String get memoryEventTechnicalData => 'Technical data';
+
+  @override
+  String get memoryEventIndex => 'Index';
+
+  @override
+  String get memoryEventPosition => 'Position';
+
+  @override
+  String get memoryEventPayload => 'Payload';
+
+  @override
+  String get memoryEventSubject => 'Subject';
 
   @override
   String glossaryCatalogSegmentLabel(String segmentId, String fallback) {
