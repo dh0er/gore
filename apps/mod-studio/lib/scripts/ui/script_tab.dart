@@ -12,8 +12,11 @@ import '../../app/game_paths.dart'; // gameRootFromExe
 import '../../app/ui/path_tree.dart';
 import '../../core/mod_ffi.dart';
 import '../../core/providers.dart';
+import '../domain/script_compile_install_state_provider.dart';
+import '../domain/script_compile_report.dart';
 import '../domain/script_mods_notifier.dart';
 import '../domain/script_modules_provider.dart';
+import 'script_compile_install_state_banner.dart';
 
 /// Selected script path: a browse TREE path (tree/flat-list taps) or a staged
 /// mod's key = REAL relPath (staged-panel taps, staging). The two spaces are
@@ -240,11 +243,24 @@ class _ScriptTabState extends ConsumerState<ScriptTab> {
   Widget build(BuildContext context) {
     final modulesAsync = ref.watch(scriptModulesProvider);
     final state = ref.watch(scriptModsProvider);
+    final installSafety = ref.watch(scriptCompileInstallSafetyProvider);
     final selectedKey = ref.watch(_selectedModuleProvider);
     final scheme = Theme.of(context).colorScheme;
 
     return Column(
       children: [
+        if (installSafety.showBlockingBanner)
+          ScriptCompileInstallStateBanner(
+            state: installSafety,
+            onRecheck: () =>
+                ref.read(scriptCompileInstallSafetyProvider.notifier).refresh(),
+            onViewRecoveryReport: installSafety.recoveryReport == null
+                ? null
+                : () => showScriptCompileReportDialog(
+                    context,
+                    installSafety.recoveryReport!,
+                  ),
+          ),
         Expanded(
           child: modulesAsync.when(
             loading: () => const Center(child: CircularProgressIndicator()),
@@ -501,7 +517,7 @@ class _VanillaModuleDetailState extends ConsumerState<_VanillaModuleDetail> {
     // Watched in build (not in the tap callback) so the pristine-cache path
     // tracks the configured game.
     final cache = scriptCachePath(ref);
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -785,12 +801,15 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
   bool _busy = false;
   String? _status;
   bool _error = false;
+  ScriptCompileReport? _compileReport;
 
   @override
   Widget build(BuildContext context) {
     final mod = widget.mod;
+    final installSafety = ref.watch(scriptCompileInstallSafetyProvider);
+    final visibleReport = installSafety.recoveryReport ?? _compileReport;
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -832,6 +851,7 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
                     setState(() {
                       _error = false;
                       _status = 'Symbol policy changed — compile again.';
+                      _compileReport = null;
                     });
                   },
           ),
@@ -847,7 +867,12 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
               FilledButton.icon(
                 icon: const Icon(Icons.build_outlined, size: 18),
                 label: const Text('Compile'),
-                onPressed: (_busy || mod.asPath.isEmpty) ? null : _compile,
+                onPressed:
+                    (_busy ||
+                        mod.asPath.isEmpty ||
+                        !installSafety.liveMutationAllowed)
+                    ? null
+                    : _compile,
               ),
             ],
           ),
@@ -864,6 +889,16 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
                 style: TextStyle(
                   color: _error ? scheme.error : scheme.onSurfaceVariant,
                 ),
+              ),
+            ),
+          if (visibleReport != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                label: const Text('Compiler report'),
+                onPressed: () =>
+                    showScriptCompileReportDialog(context, visibleReport),
               ),
             ),
         ],
@@ -886,6 +921,13 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     // Changing the source invalidates any prior compile (clears mini + hash). Operate on the
     // captured mod.
     notifier.setMod(mod.withSource(file.path));
+    if (mounted) {
+      setState(() {
+        _error = false;
+        _status = 'Source changed — compile again.';
+        _compileReport = null;
+      });
+    }
   }
 
   Future<void> _compile() async {
@@ -894,6 +936,7 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     // or ref afterwards would write the result to the wrong mod (or throw on the disposed ref).
     final mod = widget.mod;
     final notifier = ref.read(scriptModsProvider.notifier);
+    final installSafety = ref.read(scriptCompileInstallSafetyProvider.notifier);
     final gameRoot = gameRootFromExe(ref.read(gameExePathProvider));
     final ffi = ModFfi(ref.read(coreServiceProvider));
     if (gameRoot == null) {
@@ -903,14 +946,32 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       });
       return;
     }
+    final confirmed = await _confirmCompile();
+    if (confirmed != true || !mounted) return;
     setState(() {
       _busy = true;
       _error = false;
-      _status = 'Compiling via game…';
+      _status = 'Rechecking game installation safety…';
+      if (ref.read(scriptCompileInstallSafetyProvider).recoveryReport == null) {
+        _compileReport = null;
+      }
     });
+    Directory? work;
     try {
-      final work = await Directory.systemTemp.createTemp('goremod_as_compile_');
-      final r = await ffi.scriptCompile(
+      final checked = await installSafety.refresh();
+      if (!checked.liveMutationAllowed) {
+        if (mounted) {
+          setState(() {
+            _error = true;
+            _status =
+                'Compile blocked: close the game or resolve the recovery/inspection warning, then choose Recheck.';
+          });
+        }
+        return;
+      }
+      if (mounted) setState(() => _status = 'Compiling via game…');
+      work = await Directory.systemTemp.createTemp('goremod_as_compile_');
+      final report = await ffi.scriptCompileReportV1(
         gameDir: gameRoot,
         op: scriptOpToString(mod.op),
         moduleName: mod.moduleName,
@@ -919,8 +980,29 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
         workDir: work.path,
         allowNewSymbols: mod.allowNewSymbols,
       );
-      final mini = r['mini_path'] as String;
-      final resolvedName = (r['module'] as String?) ?? mod.moduleName;
+      installSafety.recordCompileReport(report);
+      await installSafety.refresh();
+      if (!report.compiled) {
+        var cleanupWarning = '';
+        if (!report.recoveryRequired) {
+          try {
+            await work.delete(recursive: true);
+          } catch (_) {
+            cleanupWarning =
+                ' Temporary compiler workspace could not be removed: ${work.path}';
+          }
+        }
+        if (mounted) {
+          setState(() {
+            if (!report.recoveryRequired) _compileReport = report;
+            _error = true;
+            _status = '${_failedCompileSummary(report)}$cleanupWarning';
+          });
+        }
+        return;
+      }
+      final mini = report.miniPath!;
+      final resolvedName = report.module!;
       // Fingerprint the .as that was just compiled (using the CAPTURED mod) so a later edit to the
       // source reads as not-fresh. IO failure => empty hash, which scriptCompileFresh treats as
       // not-fresh (safe: blocks deploy until a clean recompile).
@@ -937,6 +1019,12 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       // notifier's protected `state` directly is intentional — `ref` is off-limits post-dispose.
       // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
       if (!notifier.state.items.containsKey(mod.key)) {
+        try {
+          await work.delete(recursive: true);
+        } catch (_) {
+          // The result is intentionally discarded. A leftover temp workspace is preferable to
+          // resurrecting a removed mod or deleting any path outside the directory we created.
+        }
         if (mounted) {
           setState(() {
             _status = 'Compiled, but the mod was removed — discarded.';
@@ -960,13 +1048,20 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
       // Be honest when fingerprinting the .as failed (hash == ''): compiledHash is empty, so
       // scriptCompileFresh is false and Build/Deploy stays disabled — don't claim "Compiled ✓".
       if (mounted) {
-        setState(
-          () => _status = hash.isEmpty
+        setState(() {
+          _compileReport = report;
+          _status = hash.isEmpty
               ? 'Compiled, but could not fingerprint the source — re-pick or edit the .as to enable deploy.'
-              : 'Compiled ✓',
-        );
+              : _compiledSummary(report);
+        });
       }
     } catch (e) {
+      final checked = await installSafety.refresh();
+      if (work != null && checked.liveMutationAllowed) {
+        try {
+          await work.delete(recursive: true);
+        } catch (_) {}
+      }
       if (mounted) {
         setState(() {
           _error = true;
@@ -976,5 +1071,58 @@ class _ModDetailState extends ConsumerState<_ModDetail> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<bool?> _confirmCompile() => showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Compile with the game'),
+      content: const Text(
+        'Close Gothic 1 Remake before continuing. The compiler temporarily stages a complete '
+        'AngelScript tree in the game installation, then restores every touched path. It does '
+        'not load or change a save. If exact restoration cannot be proven, Mod Studio will stop '
+        'and show recovery details.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Compile'),
+        ),
+      ],
+    ),
+  );
+
+  String _failedCompileSummary(ScriptCompileReport report) {
+    if (report.recoveryRequired) {
+      return 'Compilation stopped: exact game-install restoration could not be proven. Open the compiler report before another compile.';
+    }
+    final messages = report.diagnostics?.messages ?? const [];
+    final firstErrors = messages.where(
+      (message) => message.severity == ScriptCompilerDiagnosticSeverity.error,
+    );
+    if (firstErrors.isNotEmpty) {
+      final diagnostic = firstErrors.first;
+      return '${diagnostic.location}: ${diagnostic.message}';
+    }
+    return report.failure?.message ?? 'Compilation failed.';
+  }
+
+  String _compiledSummary(ScriptCompileReport report) {
+    final diagnostics = report.diagnostics!;
+    if (diagnostics.usedNormalFallback) {
+      return 'Compiled ✓ — diagnostics hook unavailable; normal compiler fallback used.';
+    }
+    final count = diagnostics.messages.length;
+    if (count > 0) {
+      final omitted = diagnostics.omitted == 0
+          ? ''
+          : ' (+${diagnostics.omitted} omitted)';
+      return 'Compiled ✓ — $count compiler message(s)$omitted.';
+    }
+    return 'Compiled ✓';
   }
 }

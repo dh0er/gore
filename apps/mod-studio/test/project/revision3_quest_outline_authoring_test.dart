@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 
 import '../support/revision3_quest_outline_fixture.dart';
@@ -49,6 +50,9 @@ void main() {
       expect(input.expectedQuestRevision, 4);
       expect(input.moduleId, revision3QuestOutlineModuleId);
       expect(input.expectedModuleRevision, 5);
+      expect(input.usesStableObjectiveSlots, isFalse);
+      expect(input.objectiveSlots, isNull);
+      expect(input.expectedTransitionPlanSeal, isNull);
       expect(() => input.objectiveTitles.clear(), throwsUnsupportedError);
     },
   );
@@ -82,4 +86,72 @@ void main() {
       );
     },
   );
+
+  test('semantic edit retains every stable objective slot and plan seal', () {
+    final fixture = Revision3QuestOutlineFixture();
+    final index = fixture.contentIndex(questGeneratorVersion: 4);
+    final quest = index.entityById(revision3QuestOutlineQuestId)!;
+    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+      currentProjectJson: fixture.semanticProjectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      expectedModuleId: revision3QuestOutlineModuleId,
+      expectedModuleRevision: fixture.moduleRevision,
+    );
+
+    final input = Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+      index: index,
+      quest: quest,
+      seed: seed,
+      displayName: 'Find Homer safely',
+      title: 'Secure the old gate',
+      objectives: const [
+        Revision3QuestOutlineObjectiveEdit(
+          slot: 3,
+          title: 'Report the secured gate',
+        ),
+        Revision3QuestOutlineObjectiveEdit(
+          slot: 1,
+          title: 'Ask Asghan about Homer',
+        ),
+        Revision3QuestOutlineObjectiveEdit(
+          slot: 2,
+          title: 'Inspect the old gate',
+        ),
+      ],
+    );
+
+    expect(input.usesStableObjectiveSlots, isTrue);
+    expect(input.objectiveSlots, [3, 1, 2]);
+    expect(input.expectedTransitionPlanSeal, isNotNull);
+    expect(
+      input.expectedTransitionPlanSeal?.sha256,
+      seed.transitionPlanSeal.sha256,
+    );
+    expect(() => input.objectiveSlots!.add(4), throwsUnsupportedError);
+    expect(
+      () => Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+        index: index,
+        quest: quest,
+        seed: seed,
+        displayName: 'Find Homer safely',
+        title: 'Secure the old gate',
+        objectives: const [
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 1,
+            title: 'Ask Asghan about Homer',
+          ),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 1,
+            title: 'Inspect the old gate',
+          ),
+          Revision3QuestOutlineObjectiveEdit(
+            slot: 3,
+            title: 'Report the secured gate',
+          ),
+        ],
+      ),
+      throwsFormatException,
+    );
+  });
 }

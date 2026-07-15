@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../core/mod_ffi.dart';
 import 'revision3_content_index.dart';
 import 'revision3_quest_outline_authoring.dart';
+import 'revision3_quest_transitions_authoring.dart';
 
 /// Count-preserving editor for the visible outline of one exact managed-R3
 /// QuestDraft. It intentionally exposes no technical identity or runtime
@@ -11,12 +13,14 @@ class Revision3QuestOutlineEditDialog extends StatefulWidget {
     required this.index,
     required this.quest,
     required this.publish,
+    this.loadTransitionSeed,
     super.key,
   });
 
   final Revision3ContentIndex index;
   final Revision3ContentEntity quest;
   final Revision3QuestOutlineEditPublisher publish;
+  final Revision3QuestTransitionsSeedLoader? loadTransitionSeed;
 
   @override
   State<Revision3QuestOutlineEditDialog> createState() =>
@@ -27,13 +31,25 @@ class _Revision3QuestOutlineEditDialogState
     extends State<Revision3QuestOutlineEditDialog> {
   late final TextEditingController _displayName;
   late final TextEditingController _title;
-  late final List<TextEditingController> _objectives;
+  late final List<_Revision3QuestOutlineObjectiveField> _objectives;
+  AuthoringRevision3QuestTransitionsSeed? _transitionSeed;
   String? _error;
+  late bool _loading;
   bool _busy = false;
   bool _checkpointLocked = false;
+  int _loadGeneration = 0;
 
   Revision3ContentQuestDraftSummary get _summary =>
       widget.quest.summary.questDraft!;
+
+  bool get _usesStableObjectiveSlots =>
+      _transitionSeed?.legacySynthetic == false;
+
+  bool get _objectiveEditingEnabled =>
+      !_loading &&
+      !_busy &&
+      !_checkpointLocked &&
+      (widget.loadTransitionSeed == null || _transitionSeed != null);
 
   @override
   void initState() {
@@ -41,15 +57,22 @@ class _Revision3QuestOutlineEditDialogState
     final summary = _summary;
     _displayName = TextEditingController(text: widget.quest.displayName);
     _title = TextEditingController(text: summary.title);
-    _objectives = [
-      for (final objective in summary.objectiveTitles)
-        TextEditingController(text: objective),
+    _objectives = <_Revision3QuestOutlineObjectiveField>[
+      for (var index = 0; index < summary.objectiveTitles.length; index++)
+        _Revision3QuestOutlineObjectiveField(
+          slot: index + 1,
+          controller: TextEditingController(
+            text: summary.objectiveTitles[index],
+          ),
+        ),
     ];
+    _loading = widget.loadTransitionSeed != null;
     _displayName.addListener(_fieldChanged);
     _title.addListener(_fieldChanged);
-    for (final controller in _objectives) {
-      controller.addListener(_fieldChanged);
+    for (final objective in _objectives) {
+      objective.controller.addListener(_fieldChanged);
     }
+    if (_loading) _loadTransitionSeed();
   }
 
   @override
@@ -58,9 +81,10 @@ class _Revision3QuestOutlineEditDialogState
     _title.removeListener(_fieldChanged);
     _displayName.dispose();
     _title.dispose();
-    for (final controller in _objectives) {
-      controller.removeListener(_fieldChanged);
-      controller.dispose();
+    _loadGeneration++;
+    for (final objective in _objectives) {
+      objective.controller.removeListener(_fieldChanged);
+      objective.controller.dispose();
     }
     super.dispose();
   }
@@ -69,13 +93,127 @@ class _Revision3QuestOutlineEditDialogState
     if (mounted) setState(() => _error = null);
   }
 
+  Future<void> _loadTransitionSeed() async {
+    final loader = widget.loadTransitionSeed;
+    if (loader == null) return;
+    final generation = ++_loadGeneration;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final moduleReferences = widget.quest.references
+          .where(
+            (reference) =>
+                reference.role == 'draft_script_module' &&
+                reference.qualifier == null &&
+                reference.resolution ==
+                    Revision3ContentReferenceResolution.resolved &&
+                reference.target.projectId == widget.index.projectId &&
+                reference.target.expectedKind ==
+                    Revision3ContentEntityKind.scriptModule,
+          )
+          .toList(growable: false);
+      if (moduleReferences.length != 1) {
+        throw const FormatException(
+          'The selected Quest does not own exactly one generated script.',
+        );
+      }
+      final module = widget.index.entityById(
+        moduleReferences.single.target.entityId,
+      );
+      if (module == null ||
+          module.kind != Revision3ContentEntityKind.scriptModule) {
+        throw const FormatException(
+          'The selected Quest script is not available in this project view.',
+        );
+      }
+      final seed = await loader(
+        questId: widget.quest.id,
+        expectedQuestRevision: widget.quest.revision,
+        expectedModuleId: module.id,
+        expectedModuleRevision: module.revision,
+      );
+      final seedTitles = [
+        for (final objective in seed.objectives) objective.title,
+      ];
+      if (seedTitles.length != _summary.objectiveTitles.length ||
+          !_sameStrings(seedTitles, _summary.objectiveTitles)) {
+        throw const FormatException(
+          'The Quest behavior seed disagrees with the visible objectives.',
+        );
+      }
+      Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+        index: widget.index,
+        quest: widget.quest,
+        seed: seed,
+        displayName: widget.quest.displayName,
+        title: _summary.title,
+        objectives: [
+          for (final objective in seed.objectives)
+            Revision3QuestOutlineObjectiveEdit(
+              slot: objective.slot,
+              title: objective.title,
+            ),
+        ],
+      );
+      if (!mounted || generation != _loadGeneration) return;
+      for (final objective in _objectives) {
+        objective.controller.removeListener(_fieldChanged);
+        objective.controller.dispose();
+      }
+      setState(() {
+        _objectives
+          ..clear()
+          ..addAll([
+            for (final objective in seed.objectives)
+              _Revision3QuestOutlineObjectiveField(
+                slot: objective.slot,
+                controller: TextEditingController(text: objective.title)
+                  ..addListener(_fieldChanged),
+              ),
+          ]);
+        _transitionSeed = seed;
+        _loading = false;
+      });
+    } on Revision3QuestTransitionsStaleCheckpointException {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _checkpointLocked = true;
+        _error =
+            'The project changed while this editor opened. Close it and reopen the Quest from the refreshed library.';
+      });
+    } on Revision3QuestTransitionsRequiresReopenException {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _checkpointLocked = true;
+        _error =
+            'The project checkpoint can no longer be verified. Close this editor and reopen the managed project.';
+      });
+    } catch (_) {
+      if (!mounted || generation != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _error =
+            'Quest objective identities could not be loaded. No project or game files were changed.';
+      });
+    }
+  }
+
   bool get _hasChanges {
     if (_displayName.text != widget.quest.displayName ||
         _title.text != _summary.title) {
       return true;
     }
+    final seed = _transitionSeed;
     for (var index = 0; index < _objectives.length; index++) {
-      if (_objectives[index].text != _summary.objectiveTitles[index]) {
+      final expectedSlot = seed?.objectives[index].slot ?? index + 1;
+      final expectedTitle =
+          seed?.objectives[index].title ?? _summary.objectiveTitles[index];
+      if (_objectives[index].slot != expectedSlot ||
+          _objectives[index].controller.text != expectedTitle) {
         return true;
       }
     }
@@ -83,7 +221,11 @@ class _Revision3QuestOutlineEditDialogState
   }
 
   void _move(int from, int to) {
-    if (_busy || _checkpointLocked || to < 0 || to >= _objectives.length) {
+    if (_loading ||
+        _busy ||
+        _checkpointLocked ||
+        to < 0 ||
+        to >= _objectives.length) {
       return;
     }
     setState(() {
@@ -94,9 +236,14 @@ class _Revision3QuestOutlineEditDialogState
   }
 
   Future<void> _save() async {
-    if (_busy || _checkpointLocked) return;
+    if (_loading ||
+        _busy ||
+        _checkpointLocked ||
+        (widget.loadTransitionSeed != null && _transitionSeed == null)) {
+      return;
+    }
     final objectiveTitles = [
-      for (final controller in _objectives) controller.text,
+      for (final objective in _objectives) objective.controller.text,
     ];
     final problem = Revision3QuestOutlineEditInput.validateFields(
       displayName: _displayName.text,
@@ -109,13 +256,29 @@ class _Revision3QuestOutlineEditDialogState
     }
     final Revision3QuestOutlineEditInput input;
     try {
-      input = Revision3QuestOutlineEditInput.forQuest(
-        index: widget.index,
-        quest: widget.quest,
-        displayName: _displayName.text,
-        title: _title.text,
-        objectiveTitles: objectiveTitles,
-      );
+      final seed = _transitionSeed;
+      input = seed == null
+          ? Revision3QuestOutlineEditInput.forQuest(
+              index: widget.index,
+              quest: widget.quest,
+              displayName: _displayName.text,
+              title: _title.text,
+              objectiveTitles: objectiveTitles,
+            )
+          : Revision3QuestOutlineEditInput.forQuestWithTransitionSeed(
+              index: widget.index,
+              quest: widget.quest,
+              seed: seed,
+              displayName: _displayName.text,
+              title: _title.text,
+              objectives: [
+                for (final objective in _objectives)
+                  Revision3QuestOutlineObjectiveEdit(
+                    slot: objective.slot,
+                    title: objective.controller.text,
+                  ),
+              ],
+            );
     } on FormatException catch (error) {
       setState(() => _error = error.message);
       return;
@@ -168,7 +331,9 @@ class _Revision3QuestOutlineEditDialogState
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Rename the library entry, Quest title, or existing objectives. Objective count, technical identity, module, parent and giver stay unchanged.',
+                _usesStableObjectiveSlots
+                    ? 'Rename the library entry, Quest title, or existing objectives. Reordering keeps each objective identity and its behavior connections intact.'
+                    : 'Rename the library entry, Quest title, or existing objectives. Objective count and Quest relationships stay unchanged.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 12),
@@ -202,6 +367,14 @@ class _Revision3QuestOutlineEditDialogState
               const SizedBox(height: 18),
               Text('Objectives', style: Theme.of(context).textTheme.titleSmall),
               const SizedBox(height: 6),
+              if (_loading) ...[
+                const LinearProgressIndicator(
+                  key: Key('revision3-quest-outline-loading-identities'),
+                ),
+                const SizedBox(height: 10),
+                const Text('Loading stable objective identities…'),
+                const SizedBox(height: 10),
+              ],
               for (var index = 0; index < _objectives.length; index++)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
@@ -210,8 +383,8 @@ class _Revision3QuestOutlineEditDialogState
                       Expanded(
                         child: TextField(
                           key: Key('revision3-quest-outline-objective-$index'),
-                          controller: _objectives[index],
-                          enabled: !_busy && !_checkpointLocked,
+                          controller: _objectives[index].controller,
+                          enabled: _objectiveEditingEnabled,
                           decoration: InputDecoration(
                             labelText: 'Objective ${index + 1}',
                           ),
@@ -220,7 +393,7 @@ class _Revision3QuestOutlineEditDialogState
                       IconButton(
                         key: Key('revision3-quest-outline-objective-up-$index'),
                         tooltip: 'Move objective up',
-                        onPressed: !_busy && !_checkpointLocked && index > 0
+                        onPressed: _objectiveEditingEnabled && index > 0
                             ? () => _move(index, index - 1)
                             : null,
                         icon: const Icon(Icons.arrow_upward),
@@ -231,8 +404,7 @@ class _Revision3QuestOutlineEditDialogState
                         ),
                         tooltip: 'Move objective down',
                         onPressed:
-                            !_busy &&
-                                !_checkpointLocked &&
+                            _objectiveEditingEnabled &&
                                 index + 1 < _objectives.length
                             ? () => _move(index, index + 1)
                             : null,
@@ -243,7 +415,7 @@ class _Revision3QuestOutlineEditDialogState
                 ),
               const SizedBox(height: 6),
               Text(
-                '${summary.objectiveTitles.length} existing objective${summary.objectiveTitles.length == 1 ? '' : 's'}. Objective count and Quest relationships stay unchanged.',
+                '${summary.objectiveTitles.length} existing objective${summary.objectiveTitles.length == 1 ? '' : 's'}. ${_usesStableObjectiveSlots ? 'Objective count, stable IDs and Quest relationships stay unchanged.' : 'Objective count and Quest relationships stay unchanged.'}',
                 key: const Key('revision3-quest-outline-fixed-context'),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
@@ -260,6 +432,18 @@ class _Revision3QuestOutlineEditDialogState
                   ),
                 ),
               ],
+              if (!_loading &&
+                  widget.loadTransitionSeed != null &&
+                  _transitionSeed == null &&
+                  !_checkpointLocked) ...[
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  key: const Key('revision3-quest-outline-retry-identities'),
+                  onPressed: _busy ? null : _loadTransitionSeed,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry loading objectives'),
+                ),
+              ],
             ],
           ),
         ),
@@ -272,7 +456,15 @@ class _Revision3QuestOutlineEditDialogState
         ),
         FilledButton.icon(
           key: const Key('revision3-quest-outline-save'),
-          onPressed: _busy || _checkpointLocked || !_hasChanges ? null : _save,
+          onPressed:
+              _loading ||
+                  _busy ||
+                  _checkpointLocked ||
+                  (widget.loadTransitionSeed != null &&
+                      _transitionSeed == null) ||
+                  !_hasChanges
+              ? null
+              : _save,
           icon: _busy
               ? const SizedBox.square(
                   dimension: 16,
@@ -284,4 +476,22 @@ class _Revision3QuestOutlineEditDialogState
       ],
     );
   }
+}
+
+final class _Revision3QuestOutlineObjectiveField {
+  const _Revision3QuestOutlineObjectiveField({
+    required this.slot,
+    required this.controller,
+  });
+
+  final int slot;
+  final TextEditingController controller;
+}
+
+bool _sameStrings(List<String> left, List<String> right) {
+  if (left.length != right.length) return false;
+  for (var index = 0; index < left.length; index++) {
+    if (left[index] != right[index]) return false;
+  }
+  return true;
 }

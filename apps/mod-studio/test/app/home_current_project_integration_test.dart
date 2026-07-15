@@ -1275,6 +1275,20 @@ void main() {
         projectRevision: 7,
         head: _head(7),
         contentIndexBuilder: (_) => currentFixture.contentIndex(),
+        onQuestTransitionsSeed:
+            (
+              lease,
+              questId,
+              expectedQuestRevision,
+              expectedModuleId,
+              expectedModuleRevision,
+            ) => AuthoringRevision3QuestTransitionsSeed.forProject(
+              currentProjectJson: currentFixture.projectJson,
+              questId: questId,
+              expectedQuestRevision: expectedQuestRevision,
+              expectedModuleId: expectedModuleId,
+              expectedModuleRevision: expectedModuleRevision,
+            ),
         onQuestOutlinePublish: (lease, input) {
           expect(input.questId, revision3QuestOutlineQuestId);
           expect(input.moduleId, revision3QuestOutlineModuleId);

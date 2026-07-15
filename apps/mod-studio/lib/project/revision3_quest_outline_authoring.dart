@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../core/mod_ffi.dart';
 import 'revision3_content_index.dart';
 
 typedef Revision3QuestOutlineEditPublisher =
@@ -21,7 +22,16 @@ final class Revision3QuestOutlineEditInput {
     required this.displayName,
     required this.title,
     required List<String> objectiveTitles,
-  }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles);
+    List<int>? objectiveSlots,
+    AuthoringDraftContentSeal? expectedTransitionPlanSeal,
+  }) : objectiveTitles = List<String>.unmodifiable(objectiveTitles),
+       objectiveSlots = objectiveSlots == null
+           ? null
+           : List<int>.unmodifiable(objectiveSlots),
+       expectedTransitionPlanSeal = _requireStableObjectivePair(
+         objectiveSlots,
+         expectedTransitionPlanSeal,
+       );
 
   factory Revision3QuestOutlineEditInput.forQuest({
     required Revision3ContentIndex index,
@@ -88,6 +98,62 @@ final class Revision3QuestOutlineEditInput {
     );
   }
 
+  /// Creates a slot-preserving edit for a semantic Quest. Legacy seeds keep
+  /// using the count-preserving V1 transaction; semantic seeds carry the exact
+  /// active slot permutation and plan seal into the native V2 CAS boundary.
+  factory Revision3QuestOutlineEditInput.forQuestWithTransitionSeed({
+    required Revision3ContentIndex index,
+    required Revision3ContentEntity quest,
+    required AuthoringRevision3QuestTransitionsSeed seed,
+    required String displayName,
+    required String title,
+    required List<Revision3QuestOutlineObjectiveEdit> objectives,
+  }) {
+    final base = Revision3QuestOutlineEditInput.forQuest(
+      index: index,
+      quest: quest,
+      displayName: displayName,
+      title: title,
+      objectiveTitles: [for (final objective in objectives) objective.title],
+    );
+    if (seed.projectId != index.projectId ||
+        seed.projectRevision != index.projectRevision ||
+        seed.questId != base.questId ||
+        seed.questRevision != base.expectedQuestRevision ||
+        seed.moduleId != base.moduleId ||
+        seed.moduleRevision != base.expectedModuleRevision ||
+        objectives.length != seed.objectives.length) {
+      throw const FormatException(
+        'The Quest behavior seed no longer matches this project view.',
+      );
+    }
+    final activeSlots = seed.objectives
+        .map((objective) => objective.slot)
+        .toSet();
+    final requestedSlots = objectives
+        .map((objective) => objective.slot)
+        .toSet();
+    if (requestedSlots.length != objectives.length ||
+        requestedSlots.length != activeSlots.length ||
+        !requestedSlots.containsAll(activeSlots)) {
+      throw const FormatException(
+        'Keep every existing Quest objective exactly once.',
+      );
+    }
+    if (seed.legacySynthetic) return base;
+    return Revision3QuestOutlineEditInput._(
+      questId: base.questId,
+      expectedQuestRevision: base.expectedQuestRevision,
+      moduleId: base.moduleId,
+      expectedModuleRevision: base.expectedModuleRevision,
+      displayName: base.displayName,
+      title: base.title,
+      objectiveTitles: base.objectiveTitles,
+      objectiveSlots: [for (final objective in objectives) objective.slot],
+      expectedTransitionPlanSeal: seed.transitionPlanSeal,
+    );
+  }
+
   final String questId;
   final int expectedQuestRevision;
   final String moduleId;
@@ -95,6 +161,10 @@ final class Revision3QuestOutlineEditInput {
   final String displayName;
   final String title;
   final List<String> objectiveTitles;
+  final List<int>? objectiveSlots;
+  final AuthoringDraftContentSeal? expectedTransitionPlanSeal;
+
+  bool get usesStableObjectiveSlots => objectiveSlots != null;
 
   static String? validateFields({
     required String displayName,
@@ -150,6 +220,28 @@ final class Revision3QuestOutlineEditInput {
 
   static bool _isControl(int rune) =>
       rune < 0x20 || (rune >= 0x7f && rune <= 0x9f);
+}
+
+final class Revision3QuestOutlineObjectiveEdit {
+  const Revision3QuestOutlineObjectiveEdit({
+    required this.slot,
+    required this.title,
+  });
+
+  final int slot;
+  final String title;
+}
+
+AuthoringDraftContentSeal? _requireStableObjectivePair(
+  List<int>? objectiveSlots,
+  AuthoringDraftContentSeal? expectedTransitionPlanSeal,
+) {
+  if ((objectiveSlots == null) != (expectedTransitionPlanSeal == null)) {
+    throw const FormatException(
+      'Stable objective slots and their transition plan seal must be supplied together.',
+    );
+  }
+  return expectedTransitionPlanSeal;
 }
 
 final class Revision3QuestOutlineEditPublication {

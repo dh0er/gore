@@ -3,7 +3,11 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gore_mod/app/domain/shared_config.dart';
+import 'package:gore_mod/app/domain/ui_settings.dart' show sharedConfigProvider;
+import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/core/providers.dart';
 import 'package:gore_mod/project/project_io.dart';
 import 'package:gore_mod/project/project_model.dart';
 import 'package:gore_mod/scripts/domain/script_mods_notifier.dart';
@@ -53,6 +57,204 @@ Future<void> _pumpTab(
 }
 
 void main() {
+  testWidgets('compile confirms live staging and shows normal-fallback report', (
+    tester,
+  ) async {
+    final fixture = Directory.systemTemp.createTempSync(
+      'gore-script-report-widget-',
+    );
+    addTearDown(() => fixture.deleteSync(recursive: true));
+    Directory(p.join(fixture.path, 'G1R')).createSync();
+    final source = File(p.join(fixture.path, 'Bar.as'))
+      ..writeAsStringSync('class Bar {}\n');
+    final config = SharedConfig(File(p.join(fixture.path, 'config.json')))
+      ..setGamePath(fixture.path);
+    final core = _ScriptCompileFixtureCore();
+    addTearDown(core.deleteCreatedWorkspaces);
+    final staged = ScriptMod(
+      op: ScriptOp.edit,
+      moduleName: 'Bar',
+      relPath: 'Bar.as',
+      asPath: source.path,
+    );
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          sharedConfigProvider.overrideWithValue(config),
+          coreServiceProvider.overrideWithValue(core),
+          scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+          scriptModsProvider.overrideWith(
+            (ref) => ScriptModsNotifier()..setMod(staged),
+          ),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Bar.as').first);
+    await tester.pump();
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Compile'));
+    await tester.pumpAndSettle();
+    expect(find.text('Compile with the game'), findsOneWidget);
+    expect(
+      find.textContaining('temporarily stages a complete AngelScript tree'),
+      findsOneWidget,
+    );
+    expect(
+      core.calls.where((call) => call.command == 'script_compile_report_v1'),
+      isEmpty,
+    );
+
+    await tester.tap(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.widgetWithText(FilledButton, 'Compile'),
+      ),
+    );
+    await tester.pump();
+    await tester.runAsync(() async {
+      for (
+        var attempt = 0;
+        attempt < 20 &&
+            core.calls.every(
+              (call) => call.command != 'script_compile_report_v1',
+            );
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    });
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(
+      core.calls.where((call) => call.command == 'script_compile_report_v1'),
+      hasLength(1),
+    );
+    expect(
+      find.text(
+        'Compiled ✓ — diagnostics hook unavailable; normal compiler fallback used.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.text('Compiler report'));
+    await tester.pumpAndSettle();
+    expect(find.text('Compiler report'), findsNWidgets(2));
+    expect(
+      find.textContaining('Game install: restored exactly'),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.textContaining(
+          'hook unavailable; normal compiler fallback used',
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'recovery report survives selection changes until a safe recheck',
+    (tester) async {
+      final fixture = Directory.systemTemp.createTempSync(
+        'gore-script-recovery-widget-',
+      );
+      addTearDown(() => fixture.deleteSync(recursive: true));
+      Directory(p.join(fixture.path, 'G1R')).createSync();
+      final source = File(p.join(fixture.path, 'Bar.as'))
+        ..writeAsStringSync('class Bar {}\n');
+      final config = SharedConfig(File(p.join(fixture.path, 'config.json')))
+        ..setGamePath(fixture.path);
+      final core = _ScriptCompileFixtureCore(compileRecovery: true);
+      addTearDown(core.deleteCreatedWorkspaces);
+      final staged = ScriptMod(
+        op: ScriptOp.edit,
+        moduleName: 'Bar',
+        relPath: 'Bar.as',
+        asPath: source.path,
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sharedConfigProvider.overrideWithValue(config),
+            coreServiceProvider.overrideWithValue(core),
+            scriptModulesProvider.overrideWith((ref) async => _fakeModules()),
+            scriptModsProvider.overrideWith(
+              (ref) => ScriptModsNotifier()..setMod(staged),
+            ),
+          ],
+          child: const MaterialApp(home: Scaffold(body: ScriptTab())),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bar.as').first);
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, 'Compile'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(FilledButton, 'Compile'),
+        ),
+      );
+      await tester.pump();
+      await tester.runAsync(() async {
+        for (
+          var attempt = 0;
+          attempt < 100 &&
+              core.calls.every(
+                (call) => call.command != 'script_compile_report_v1',
+              );
+          attempt++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+      });
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(
+        find.byKey(const Key('script-compile-install-state-banner')),
+        findsOneWidget,
+      );
+      expect(find.text('Game installation recovery required'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Compile'))
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(find.text('Gameplay'));
+      await tester.pump();
+      await tester.tap(find.text('Foo.as'));
+      await tester.pump();
+      expect(find.text('Game installation recovery required'), findsOneWidget);
+
+      core.safe = true;
+      await tester.tap(
+        find.byKey(const Key('script-compile-install-state-recheck')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('script-compile-install-state-banner')),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('Bar.as').first);
+      await tester.pump();
+      expect(
+        tester
+            .widget<FilledButton>(find.widgetWithText(FilledButton, 'Compile'))
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
   testWidgets('existing-module edit can explicitly opt in to new symbols', (
     tester,
   ) async {
@@ -732,4 +934,109 @@ void main() {
       expect(File(out).existsSync(), isFalse);
     }
   });
+}
+
+final class _ScriptCompileFixtureCore implements GoreCoreFfiService {
+  _ScriptCompileFixtureCore({this.compileRecovery = false});
+
+  final bool compileRecovery;
+  bool safe = true;
+  final List<({String command, Map<String, Object?> payload})> calls = [];
+  final List<Directory> _createdWorkspaces = [];
+
+  @override
+  bool get isAvailable => true;
+
+  @override
+  String get description => 'script compile fixture';
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    calls.add((command: command, payload: payload));
+    switch (command) {
+      case 'script_compile_install_state_v1':
+        if (!safe) {
+          return <String, Object?>{
+            'ok': true,
+            'disposition': 'recovery_artifacts_present',
+            'safe_to_compile': false,
+            'game_process': 'not_running',
+            'artifacts': <Object?>[
+              <String, Object?>{
+                'kind': 'compile_lock',
+                'display_path': r'C:\Game\.gore-compile.lock',
+                'path_truncated': false,
+              },
+            ],
+            'issues': <Object?>[],
+          };
+        }
+        return <String, Object?>{
+          'ok': true,
+          'disposition': 'safe_to_compile',
+          'safe_to_compile': true,
+          'game_process': 'not_running',
+          'artifacts': <Object?>[],
+          'issues': <Object?>[],
+        };
+      case 'script_compile_report_v1':
+        final work = Directory(payload['work_dir']! as String);
+        _createdWorkspaces.add(work);
+        if (compileRecovery) {
+          safe = false;
+          return <String, Object?>{
+            'ok': true,
+            'outcome': 'failed',
+            'mini_path': null,
+            'module': null,
+            'compile_error': <String, Object?>{
+              'code': 'COMPILE_INSTALL_RECOVERY_REQUIRED',
+              'message': 'existing recovery evidence blocks compilation',
+            },
+            'compiler_diagnostics': null,
+            'install_restore': 'not_started',
+            'recovery_required': true,
+          };
+        }
+        final owned = Directory(
+          p.join(work.path, 'gore-owned-compile-a1b2c3d4e5f6'),
+        )..createSync();
+        File(
+          p.join(owned.path, '.gore-owned-compile-v1'),
+        ).writeAsStringSync('gore-owned-compile-staging-v1\n');
+        final mini = File(p.join(owned.path, 'module.cache'))
+          ..writeAsBytesSync(const [1, 2, 3]);
+        return <String, Object?>{
+          'ok': true,
+          'outcome': 'compiled',
+          'mini_path': mini.path,
+          'module': 'Bar',
+          'compile_error': null,
+          'compiler_diagnostics': <String, Object?>{
+            'capture': 'unavailable_fallback',
+            'messages': <Object?>[],
+            'omitted': 0,
+          },
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+        };
+      default:
+        return <String, Object?>{
+          'ok': false,
+          'error': <String, Object?>{
+            'code': 'UNKNOWN_COMMAND',
+            'message': 'unexpected command $command',
+          },
+        };
+    }
+  }
+
+  void deleteCreatedWorkspaces() {
+    for (final workspace in _createdWorkspaces) {
+      if (workspace.existsSync()) workspace.deleteSync(recursive: true);
+    }
+  }
 }

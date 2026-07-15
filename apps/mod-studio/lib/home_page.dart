@@ -2425,6 +2425,7 @@ class _ManagedRevision3ProjectView extends StatelessWidget {
         index: index,
         quest: quest,
         publish: editQuestOutline,
+        loadTransitionSeed: loadQuestTransitionsSeed,
       ),
     );
     if (!context.mounted || publication == null) return;

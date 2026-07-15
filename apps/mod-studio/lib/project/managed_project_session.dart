@@ -487,6 +487,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   });
 
+  Future<AuthoringRevision3QuestOutlineEditPreparationV2>
+  prepareQuestOutlineEditV2({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV2 request,
+  });
+
   Future<AuthoringRevision3QuestTransitionsEditPreparation>
   prepareQuestTransitionsEditV1({
     required String root,
@@ -668,6 +675,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3QuestOutlineEditPreparationV2>
+  prepareQuestOutlineEditV2({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV2 request,
+  }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV2(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -1311,6 +1330,101 @@ class ManagedRevision3AuthoringProjectSession {
               prepared.moduleRevision != request.expectedModuleRevision + 1) {
             throw const ManagedProjectVerificationException(
               'revision-3 Quest outline preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3QuestOutlineEditCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3QuestOutlineEditCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              questId: prepared.questId,
+              moduleId: prepared.moduleId,
+              questRevision: prepared.questRevision,
+              moduleRevision: prepared.moduleRevision,
+            ),
+          );
+        },
+      );
+
+  /// Stable-slot-aware outline edit for an exact semantic Quest. Objective
+  /// titles and order may change, while the active slot set and transition
+  /// graph remain bound to the exact transition-plan seal.
+  Future<ManagedRevision3QuestOutlineEditCheckpoint>
+  prepareAndPublishQuestOutlineEditV2({
+    required String questId,
+    required int expectedQuestRevision,
+    required String expectedModuleId,
+    required int expectedModuleRevision,
+    required AuthoringDraftContentSeal expectedTransitionPlanSeal,
+    required String displayName,
+    required String title,
+    required List<int> objectiveSlots,
+    required List<String> objectiveTitles,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3QuestOutlineEditCheckpoint
+      >(
+        operation: 'prepareAndPublishQuestOutlineEditV2',
+        handlePrepareError: _core._throwRevision3QuestOutlinePrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest outline-v2 edit has no exact project identity',
+            );
+          }
+          if (objectiveSlots.length != objectiveTitles.length) {
+            throw const FormatException(
+              'revision-3 Quest outline-v2 slots and titles disagree',
+            );
+          }
+          final request =
+              AuthoringRevision3QuestOutlineEditRequestV2.forProject(
+                expectedHead: basis.head,
+                currentProjectJson: basis.projectJson,
+                questId: questId,
+                expectedQuestRevision: expectedQuestRevision,
+                expectedModuleId: expectedModuleId,
+                expectedModuleRevision: expectedModuleRevision,
+                expectedTransitionPlanSeal: expectedTransitionPlanSeal,
+                displayName: displayName,
+                questTitle: title,
+                objectives: [
+                  for (var index = 0; index < objectiveSlots.length; index++)
+                    AuthoringRevision3QuestOutlineObjectiveEditV2(
+                      slot: objectiveSlots[index],
+                      title: objectiveTitles[index],
+                    ),
+                ],
+              );
+          final prepared = await _store.prepareQuestOutlineEditV2(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.questId != request.questId ||
+              prepared.moduleId != request.moduleId ||
+              prepared.questRevision != request.expectedQuestRevision + 1 ||
+              prepared.moduleRevision != request.expectedModuleRevision + 1 ||
+              prepared.buildStatus !=
+                  AuthoringRevision3QuestOutlineBuildStatus.blocked ||
+              prepared.runtimeStatus !=
+                  AuthoringRevision3QuestOutlineRuntimeStatus
+                      .runtimeUnqualified ||
+              prepared.publicationStatus !=
+                  AuthoringRevision3QuestOutlinePublicationStatus
+                      .notSupported) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Quest outline-v2 preparation disagrees with its exact session basis or request',
             );
           }
           return _ManagedPreparedCheckpoint<
@@ -2827,7 +2941,8 @@ class _ManagedProjectSessionCore {
     StackTrace stackTrace,
   ) {
     if (error is ModFfiException) {
-      if (error.code == 'AUTHORING_REVISION3_QUEST_OUTLINE_HEAD_CONFLICT') {
+      if (error.code == 'AUTHORING_REVISION3_QUEST_OUTLINE_HEAD_CONFLICT' ||
+          error.code == 'AUTHORING_REVISION3_QUEST_OUTLINE_V2_HEAD_CONFLICT') {
         _requiresReopen = true;
         Error.throwWithStackTrace(
           ManagedProjectHeadConflictException(error.message),
@@ -3698,6 +3813,23 @@ bool _revision3QuestOutlinePrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_QUEST_OUTLINE_SHAPE_CONFLICT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_SIGNED_WIRE_LIMIT',
   'AUTHORING_REVISION3_QUEST_OUTLINE_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_INPUT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_MODULE_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_NO_CHANGES',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_PLAN_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_QUEST_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUEST_INVALID',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_REQUIRES_SEMANTIC_QUEST',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_REVISION_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_STORE_LIMIT',
+  'AUTHORING_REVISION3_QUEST_OUTLINE_V2_TARGET_CONFLICT',
 }.contains(code);
 
 bool _revision3QuestTransitionsPrepareErrorIsRetryable(String code) => const {

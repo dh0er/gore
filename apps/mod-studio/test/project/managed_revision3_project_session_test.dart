@@ -1333,12 +1333,65 @@ void main() {
         everyElement(AuthoringAssetVerification.full),
       );
 
+      final semanticSeed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 1,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 1,
+      );
+      expect(semanticSeed.legacySynthetic, isFalse);
+      final originalTransitions = semanticSeed.transitionPlan.canonicalJson;
+      final outlined = await session.prepareAndPublishQuestOutlineEditV2(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 1,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 1,
+        expectedTransitionPlanSeal: semanticSeed.transitionPlanSeal,
+        displayName: 'Find Homer safely',
+        title: 'Secure the old gate',
+        objectiveSlots: const [3, 1, 2],
+        objectiveTitles: const [
+          'Report the secured gate',
+          'Ask Asghan about Homer',
+          'Inspect the old gate',
+        ],
+      );
+      expect(store.questOutlinePrepareCalls, 1);
+      expect(outlined.projectRevision, fixtureProject.projectRevision + 2);
+      expect(outlined.questRevision, fixtureProject.questRevision + 2);
+      expect(outlined.moduleRevision, fixtureProject.moduleRevision + 2);
+      final editedSeed = await session.readQuestTransitionsSeedV1(
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixtureProject.questRevision + 2,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixtureProject.moduleRevision + 2,
+      );
+      expect(editedSeed.objectives.map((objective) => objective.slot), [
+        3,
+        1,
+        2,
+      ]);
+      expect(editedSeed.objectives.map((objective) => objective.title), [
+        'Report the secured gate',
+        'Ask Asghan about Homer',
+        'Inspect the old gate',
+      ]);
+      final originalPlan = jsonDecode(originalTransitions) as Map;
+      final editedPlan =
+          jsonDecode(editedSeed.transitionPlan.canonicalJson) as Map;
+      expect(editedPlan['objective_slots'], originalPlan['objective_slots']);
+      expect(
+        editedPlan['next_slot_ordinal'],
+        originalPlan['next_slot_ordinal'],
+      );
+      expect(editedPlan['transitions'], originalPlan['transitions']);
+
       await session.close();
       final reopened = await ManagedRevision3AuthoringProjectSession.open(
         root: root,
         store: store,
       );
-      expect(reopened.projectJson, published.projectJson);
+      expect(reopened.projectJson, outlined.projectJson);
       await reopened.close();
     },
   );
@@ -4744,6 +4797,89 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     response['head_json'] = candidateHead.canonicalJson;
     return AuthoringRevision3QuestOutlineEditPreparation.fromJson(
       response,
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3QuestOutlineEditPreparationV2>
+  prepareQuestOutlineEditV2({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV2 request,
+  }) async {
+    questOutlinePrepareCalls++;
+    final injected = nextQuestOutlineError;
+    nextQuestOutlineError = null;
+    if (injected != null) throw injected;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_quest_outline_edit_v2',
+        code: 'AUTHORING_REVISION3_QUEST_OUTLINE_V2_HEAD_CONFLICT',
+        message: 'fake native Quest outline-v2 basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[request.questId]! as Map).cast<String, Object?>();
+    quest['revision'] = request.expectedQuestRevision + 1;
+    quest['display_name'] = request.displayName;
+    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+    final questData = (questPayload['data']! as Map).cast<String, Object?>();
+    final input = (questData['input']! as Map).cast<String, Object?>();
+    input['title'] = request.questTitle;
+    input['objective_title'] = request.objectives.first.title;
+    input['additional_objective_titles'] = [
+      for (final objective in request.objectives.skip(1)) objective.title,
+    ];
+    final transitionPlan = (input['transition_plan']! as Map)
+        .cast<String, Object?>();
+    transitionPlan['objective_order'] = [
+      for (final objective in request.objectives) objective.slot,
+    ];
+
+    final module = (entities[request.moduleId]! as Map).cast<String, Object?>();
+    module['revision'] = request.expectedModuleRevision + 1;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final source = '${moduleData['source']}\n// outline-v2 fixture';
+    moduleData['source'] = source;
+    moduleData['source_sha256'] = crypto.sha256
+        .convert(utf8.encode(source))
+        .toString();
+    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
+
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    final plan = AuthoringRevision3QuestTransitionPlanV1.fromJson(
+      transitionPlan,
+    );
+    return AuthoringRevision3QuestOutlineEditPreparationV2.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'quest_id': request.questId,
+        'module_id': request.moduleId,
+        'quest_revision': request.expectedQuestRevision + 1,
+        'module_revision': request.expectedModuleRevision + 1,
+        'transition_plan_seal': <String, Object?>{
+          'byte_len': plan.contentSeal.byteLength,
+          'sha256': plan.contentSeal.sha256,
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
       currentProjectJson: currentProjectJson,
       request: request,
     );

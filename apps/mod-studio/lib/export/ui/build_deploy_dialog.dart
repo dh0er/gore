@@ -15,6 +15,8 @@ import '../../loc/domain/loc_edits_notifier.dart';
 import '../../project/dialog_topics_notifier.dart';
 import '../../project/project_controller.dart';
 import '../../scripts/domain/script_mods_notifier.dart';
+import '../../scripts/domain/script_compile_install_state_provider.dart';
+import '../../scripts/ui/script_compile_install_state_banner.dart';
 import '../../textures/domain/texture_replacements_notifier.dart';
 import '../../voice/domain/voice_edits_notifier.dart';
 
@@ -76,8 +78,17 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
   });
 
   Future<void> _deploy(String gameRoot) => _run(() async {
-    final tmp = await Directory.systemTemp.createTemp('goremod_build_');
+    final installSafety = ref.read(scriptCompileInstallSafetyProvider.notifier);
+    Directory? tmp;
     try {
+      final checked = await installSafety.refresh();
+      if (!mounted) return;
+      if (!checked.liveMutationAllowed) {
+        throw StateError(
+          'Deploy blocked: close the game or resolve the recovery/inspection warning, then choose Recheck.',
+        );
+      }
+      tmp = await Directory.systemTemp.createTemp('goremod_build_');
       // createTemp is async; if the dialog closed while it ran, don't gather state from a
       // disposed ref or deploy to the game after the UI is gone.
       if (!mounted) return;
@@ -86,21 +97,30 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
       await _ffi.modDeploy(bundle, gameRoot);
       _set('Deployed to game. Launch the game to see your changes.');
     } finally {
-      // The bundle was deployed (copied into the game); the temp build dir is no longer
-      // needed, so don't leave it behind under the system temp directory.
-      try {
-        await tmp.delete(recursive: true);
-      } catch (_) {}
+      // A failed mutation can itself leave recovery evidence. Always re-probe;
+      // the controller records probe failures as blocking state without
+      // replacing the primary build/deploy error.
+      await installSafety.refresh();
+      if (tmp != null) {
+        try {
+          await tmp.delete(recursive: true);
+        } catch (_) {}
+      }
     }
   });
 
   Future<void> _undeploy(String gameRoot) => _run(() async {
-    final undone = await _ffi.modUndeploy(gameRoot);
-    _set(
-      undone
-          ? 'Undeployed — original game files restored.'
-          : 'Nothing was deployed — no changes to undo.',
-    );
+    final installSafety = ref.read(scriptCompileInstallSafetyProvider.notifier);
+    try {
+      final undone = await _ffi.modUndeploy(gameRoot);
+      _set(
+        undone
+            ? 'Undeployed — original game files restored.'
+            : 'Nothing was deployed — no changes to undo.',
+      );
+    } finally {
+      await installSafety.refresh();
+    }
   });
 
   @override
@@ -113,6 +133,7 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
     final scripts = ref.watch(scriptModsProvider).count;
     final dialogTopics = ref.watch(dialogTopicsProvider).count;
     final voiceEdits = ref.watch(voiceEditsProvider);
+    final installSafety = ref.watch(scriptCompileInstallSafetyProvider);
     final voice = voiceEdits.count;
     // Adding a new archive member is preserved as authoring data, but that path has not yet
     // passed runtime qualification. Keep it visible as Draft content without presenting Build
@@ -148,6 +169,13 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (installSafety.showBlockingBanner)
+                ScriptCompileInstallStateBanner(
+                  state: installSafety,
+                  onRecheck: () => ref
+                      .read(scriptCompileInstallSafetyProvider.notifier)
+                      .refresh(),
+                ),
               TextFormField(
                 initialValue: ref.read(modNameProvider),
                 decoration: const InputDecoration(
@@ -243,7 +271,8 @@ class _BuildDeployDialogState extends ConsumerState<BuildDeployDialog> {
                   gameRoot == null ||
                   !hasContent ||
                   scriptsNotReady ||
-                  hasDraftVoiceAdds)
+                  hasDraftVoiceAdds ||
+                  !installSafety.liveMutationAllowed)
               ? null
               : () => _deploy(gameRoot),
           icon: const Icon(Icons.rocket_launch_outlined, size: 18),

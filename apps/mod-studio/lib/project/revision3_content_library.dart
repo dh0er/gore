@@ -99,6 +99,7 @@ enum _EntityToolAction {
 }
 
 const _stableSlotQuestGeneratorVersion = 4;
+const _stableSlotQuestGeneratorId = 'gore-authoring.draft-quest-skeleton';
 
 /// First real managed-R3 content surface.
 ///
@@ -915,8 +916,8 @@ class _EntityDetails extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final backlinks = index.backlinksToEntity(entity.id);
-    final outlineRequiresV2 = _questOutlineRequiresV2(index, entity);
-    final editQuestOutline = outlineRequiresV2 ? null : onEditQuestOutline;
+    final editQuestOutline = onEditQuestOutline;
+    final outlineUsesStableSlots = _questOutlineUsesStableSlots(index, entity);
     return KeyedSubtree(
       key: ValueKey('revision3-content-entity-details-${entity.id}'),
       child: ListView(
@@ -970,11 +971,11 @@ class _EntityDetails extends StatelessWidget {
                       contentPadding: EdgeInsets.zero,
                       leading: const Icon(Icons.format_list_bulleted_outlined),
                       title: const Text('Name & objectives'),
-                      subtitle: outlineRequiresV2
-                          ? const Text(
-                              'Not available yet after adding custom behavior',
-                            )
-                          : null,
+                      subtitle: Text(
+                        outlineUsesStableSlots
+                            ? 'Keeps objective IDs and behavior connections intact'
+                            : 'Keeps objective count and Quest relationships intact',
+                      ),
                     ),
                   ),
                   PopupMenuItem(
@@ -1430,7 +1431,7 @@ class _ContentLoadError extends StatelessWidget {
   }
 }
 
-bool _questOutlineRequiresV2(
+bool _questOutlineUsesStableSlots(
   Revision3ContentIndex index,
   Revision3ContentEntity quest,
 ) {
@@ -1444,12 +1445,14 @@ bool _questOutlineRequiresV2(
       continue;
     }
     final module = index.entityById(reference.target.entityId);
-    final generatorVersion = module?.origin.generatorVersion;
-    if (module?.kind == Revision3ContentEntityKind.scriptModule &&
-        generatorVersion != null &&
-        generatorVersion >= _stableSlotQuestGeneratorVersion) {
-      return true;
-    }
+    final owner = module?.origin.generatedOwner;
+    return module?.kind == Revision3ContentEntityKind.scriptModule &&
+        module?.origin.type == 'generated' &&
+        module?.origin.label == _stableSlotQuestGeneratorId &&
+        module?.origin.generatorVersion == _stableSlotQuestGeneratorVersion &&
+        owner?.projectId == index.projectId &&
+        owner?.entityId == quest.id &&
+        owner?.expectedKind == Revision3ContentEntityKind.questDraft;
   }
   return false;
 }

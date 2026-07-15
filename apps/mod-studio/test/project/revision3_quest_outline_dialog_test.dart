@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_dialog.dart';
+import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 
 import '../support/revision3_quest_outline_fixture.dart';
 
@@ -151,13 +153,164 @@ void main() {
       isNull,
     );
   });
+
+  testWidgets(
+    'semantic Quest reorders stable slots without losing behavior identity',
+    (tester) async {
+      final fixture = Revision3QuestOutlineFixture();
+      final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: fixture.semanticProjectJson,
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+      );
+      Revision3QuestOutlineEditInput? received;
+      await _open(
+        tester,
+        semantic: true,
+        loadTransitionSeed:
+            ({
+              required questId,
+              required expectedQuestRevision,
+              required expectedModuleId,
+              required expectedModuleRevision,
+            }) async => seed,
+        publish: ({required input}) async {
+          received = input;
+          return _publication(input);
+        },
+      );
+
+      expect(
+        find.byKey(const Key('revision3-quest-outline-loading-identities')),
+        findsNothing,
+      );
+      final moveDown = find.byKey(
+        const Key('revision3-quest-outline-objective-down-0'),
+      );
+      expect(
+        tester.widget<IconButton>(moveDown).onPressed,
+        isNotNull,
+        reason: tester
+            .widgetList<Text>(find.byType(Text))
+            .map((text) => text.data)
+            .whereType<String>()
+            .join(' | '),
+      );
+      await tester.ensureVisible(moveDown);
+      await tester.pump();
+      await tester.tap(moveDown);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-outline-objective-0')),
+        'Inspect the secured gate',
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
+      await tester.pumpAndSettle();
+
+      expect(received, isNotNull);
+      expect(received!.usesStableObjectiveSlots, isTrue);
+      expect(received!.objectiveSlots, [2, 1, 3]);
+      expect(received!.objectiveTitles, [
+        'Inspect the secured gate',
+        'Ask Asghan about Homer',
+        'Report the secured gate',
+      ]);
+      expect(
+        received!.expectedTransitionPlanSeal?.sha256,
+        seed.transitionPlanSeal.sha256,
+      );
+    },
+  );
+
+  testWidgets(
+    'failed identity load keeps objectives locked until retry succeeds',
+    (tester) async {
+      final fixture = Revision3QuestOutlineFixture();
+      final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+        currentProjectJson: fixture.semanticProjectJson,
+        questId: revision3QuestOutlineQuestId,
+        expectedQuestRevision: fixture.questRevision,
+        expectedModuleId: revision3QuestOutlineModuleId,
+        expectedModuleRevision: fixture.moduleRevision,
+      );
+      var loadCalls = 0;
+      await _open(
+        tester,
+        semantic: true,
+        loadTransitionSeed:
+            ({
+              required questId,
+              required expectedQuestRevision,
+              required expectedModuleId,
+              required expectedModuleRevision,
+            }) async {
+              loadCalls++;
+              if (loadCalls == 1) throw StateError('fixture load failure');
+              return seed;
+            },
+        publish: ({required input}) async => _publication(input),
+      );
+
+      expect(loadCalls, 1);
+      expect(
+        find.textContaining('objective identities could not be loaded'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('revision3-quest-outline-objective-0')),
+            )
+            .enabled,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('revision3-quest-outline-objective-down-0')),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      final retry = find.byKey(
+        const Key('revision3-quest-outline-retry-identities'),
+      );
+      await tester.ensureVisible(retry);
+      await tester.pump();
+      await tester.tap(retry);
+      await tester.pumpAndSettle();
+
+      expect(loadCalls, 2);
+      expect(
+        tester
+            .widget<TextField>(
+              find.byKey(const Key('revision3-quest-outline-objective-0')),
+            )
+            .enabled,
+        isTrue,
+      );
+      expect(
+        find.textContaining(
+          'Reordering keeps each objective identity and its behavior connections intact',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }
 
 Future<void> _open(
   WidgetTester tester, {
   required Revision3QuestOutlineEditPublisher publish,
+  Revision3QuestTransitionsSeedLoader? loadTransitionSeed,
+  bool semantic = false,
 }) async {
-  final index = Revision3QuestOutlineFixture().contentIndex();
+  final index = Revision3QuestOutlineFixture().contentIndex(
+    questGeneratorVersion: semantic ? 4 : 3,
+  );
   final quest = index.entityById(revision3QuestOutlineQuestId)!;
   await tester.pumpWidget(
     MaterialApp(
@@ -170,6 +323,7 @@ Future<void> _open(
                 index: index,
                 quest: quest,
                 publish: publish,
+                loadTransitionSeed: loadTransitionSeed,
               ),
             ),
             child: const Text('Open'),

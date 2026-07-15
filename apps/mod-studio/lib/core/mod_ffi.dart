@@ -1,12 +1,16 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:path/path.dart' as p;
 
 import '../dataasset/domain/dataasset_inspection.dart';
 import '../dataasset/domain/dataasset_semantic_edit.dart';
 import '../dataasset/domain/reviewed_dataasset_schema.dart';
 import '../project/revision3_content_index.dart';
+import '../scripts/domain/script_compile_install_state.dart';
+import '../scripts/domain/script_compile_report.dart';
 import 'core_service.dart';
 
 export '../dataasset/domain/dataasset_inspection.dart';
@@ -20,6 +24,7 @@ part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_source_inspection.dart';
 part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
+part '../project/revision3_quest_outline_v2.dart';
 part '../project/revision3_quest_source_inspection.dart';
 part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_voice_build.dart';
@@ -1046,6 +1051,42 @@ class ModFfi {
     }
   }
 
+  /// Prepare a stable-slot-aware outline edit for one exact-current semantic
+  /// Quest. Native code preserves the transition graph and returns only an
+  /// unpublished, build-blocked candidate.
+  Future<AuthoringRevision3QuestOutlineEditPreparationV2>
+  authoringStorePrepareRevision3QuestOutlineEditV2({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3QuestOutlineEditRequestV2 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_quest_outline_edit_v2';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'quest_outline_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3QuestOutlineEditPreparationV2.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Prepare one fresh-Story-catalog-backed context edit for an exact-current
   /// managed revision-3 Quest and its already-owned generated ScriptModule.
   ///
@@ -1671,6 +1712,126 @@ class ModFfi {
     'work_dir': workDir,
     'allow_new_symbols': allowNewSymbols,
   });
+
+  /// Compile through the transactional game compiler and retain bounded structured diagnostics.
+  ///
+  /// Compiler failure is returned as [ScriptCompileReport.failure], not thrown. Transport/schema
+  /// failures remain exceptions. The report separately proves whether the temporary live-install
+  /// transaction restored every path exactly.
+  Future<ScriptCompileReport> scriptCompileReportV1({
+    required String gameDir,
+    required String op,
+    required String moduleName,
+    required String relPath,
+    required String asPath,
+    required String workDir,
+    bool allowNewSymbols = false,
+  }) async {
+    const command = 'script_compile_report_v1';
+    final response = await _call(command, {
+      'game_dir': gameDir,
+      'op': op,
+      'module_name': moduleName,
+      'rel_path': relPath,
+      'as_path': asPath,
+      'work_dir': workDir,
+      'allow_new_symbols': allowNewSymbols,
+    });
+    try {
+      final report = ScriptCompileReport.fromJson(response);
+      if (report.compiled) {
+        _requireOwnedScriptCompileOutput(
+          workDir: workDir,
+          miniPath: report.miniPath!,
+        );
+      }
+      return report;
+    } on FormatException {
+      throw const ModFfiException._malformed(
+        command: command,
+        reason: 'compile report schema is invalid',
+      );
+    }
+  }
+
+  /// Read-only, fail-closed inspection of whether the configured game install
+  /// may enter a compiler/deploy mutation window.
+  Future<ScriptCompileInstallState> scriptCompileInstallStateV1({
+    required String gameDir,
+  }) async {
+    const command = 'script_compile_install_state_v1';
+    final response = await _call(command, {'game_dir': gameDir});
+    try {
+      return ScriptCompileInstallState.fromJson(response);
+    } on FormatException {
+      throw const ModFfiException._malformed(
+        command: command,
+        reason: 'compile install-state schema is invalid',
+      );
+    }
+  }
+}
+
+const _scriptCompileOwnedChildPrefix = 'gore-owned-compile-';
+const _scriptCompileOwnedMarkerName = '.gore-owned-compile-v1';
+const _scriptCompileOwnedMarkerBytes = 'gore-owned-compile-staging-v1\n';
+final _scriptCompileOwnedChildPattern = RegExp(
+  r'^gore-owned-compile-[0-9a-f]{12}$',
+);
+
+void _requireOwnedScriptCompileOutput({
+  required String workDir,
+  required String miniPath,
+}) {
+  try {
+    _requireOwnedScriptCompileOutputOnDisk(
+      workDir: workDir,
+      miniPath: miniPath,
+    );
+  } on FileSystemException {
+    throw const FormatException('compile output ownership could not be read');
+  }
+}
+
+void _requireOwnedScriptCompileOutputOnDisk({
+  required String workDir,
+  required String miniPath,
+}) {
+  final normalizedWork = p.normalize(p.absolute(workDir));
+  final normalizedMini = p.normalize(p.absolute(miniPath));
+  if (!p.isAbsolute(workDir) ||
+      !p.isAbsolute(miniPath) ||
+      p.normalize(workDir) != workDir ||
+      p.normalize(miniPath) != miniPath ||
+      p.basename(normalizedMini) != 'module.cache') {
+    throw const FormatException('compile output path is not canonical');
+  }
+  final child = p.dirname(normalizedMini);
+  final childName = p.basename(child);
+  if (!p.equals(p.dirname(child), normalizedWork) ||
+      !childName.startsWith(_scriptCompileOwnedChildPrefix) ||
+      !_scriptCompileOwnedChildPattern.hasMatch(childName)) {
+    throw const FormatException('compile output is not a direct owned child');
+  }
+  if (FileSystemEntity.typeSync(normalizedWork, followLinks: false) !=
+          FileSystemEntityType.directory ||
+      FileSystemEntity.typeSync(child, followLinks: false) !=
+          FileSystemEntityType.directory ||
+      FileSystemEntity.typeSync(normalizedMini, followLinks: false) !=
+          FileSystemEntityType.file) {
+    throw const FormatException('compile output is not a regular owned file');
+  }
+  final marker = p.join(child, _scriptCompileOwnedMarkerName);
+  if (FileSystemEntity.typeSync(marker, followLinks: false) !=
+      FileSystemEntityType.file) {
+    throw const FormatException('compile output ownership marker is missing');
+  }
+  final markerFile = File(marker);
+  final markerBytes = markerFile.lengthSync();
+  if (markerBytes != utf8.encode(_scriptCompileOwnedMarkerBytes).length ||
+      markerFile.readAsStringSync() != _scriptCompileOwnedMarkerBytes) {
+    throw const FormatException('compile output ownership marker is invalid');
+  }
 }
 
 class ModFfiException implements Exception {

@@ -195,7 +195,7 @@ void main() {
   });
 
   testWidgets(
-    'V4 Quest disables legacy outline while context and transitions stay available',
+    'V4 Quest keeps stable-slot outline, context and transitions available',
     (tester) async {
       await _setSurfaceSize(tester, const Size(1200, 800));
       var outlineCalls = 0;
@@ -203,6 +203,7 @@ void main() {
       await _pumpLoadedLibrary(
         tester,
         questGeneratorVersion: 4,
+        questGeneratorId: 'gore-authoring.draft-quest-skeleton',
         editQuestOutline: (index, quest) async => outlineCalls++,
         editQuestContext: (index, quest) async => contextCalls++,
         editQuestTransitions: (index, quest) async {},
@@ -220,10 +221,10 @@ void main() {
               find.byKey(Key('revision3-content-edit-quest-outline-$_questId')),
             )
             .enabled,
-        isFalse,
+        isTrue,
       );
       expect(
-        find.text('Not available yet after adding custom behavior'),
+        find.text('Keeps objective IDs and behavior connections intact'),
         findsOneWidget,
       );
       expect(
@@ -245,10 +246,44 @@ void main() {
         isTrue,
       );
 
+      await tester.tap(find.text('Name & objectives'));
+      await tester.pumpAndSettle();
+      expect(outlineCalls, 1);
+      await tester.tap(
+        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Description & connections'));
       await tester.pumpAndSettle();
-      expect(outlineCalls, 0);
       expect(contextCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'unrelated V4 generator does not claim stable objective identities',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      await _pumpLoadedLibrary(
+        tester,
+        questGeneratorVersion: 4,
+        questGeneratorId: 'gore-authoring.unrelated-generator',
+        editQuestOutline: (index, quest) async {},
+      );
+      await tester.tap(find.byKey(Key('revision3-content-entity-$_questId')));
+      await tester.pump();
+      await tester.tap(
+        find.byKey(Key('revision3-content-edit-quest-$_questId')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text('Keeps objective count and Quest relationships intact'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Keeps objective IDs and behavior connections intact'),
+        findsNothing,
+      );
     },
   );
 
@@ -887,6 +922,7 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
 Future<void> _pumpLoadedLibrary(
   WidgetTester tester, {
   int questGeneratorVersion = 2,
+  String questGeneratorId = 'gore-authoring.quest-draft',
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
@@ -896,7 +932,10 @@ Future<void> _pumpLoadedLibrary(
 }) async {
   await _pumpLibrary(
     tester,
-    load: () async => _fixture(questGeneratorVersion: questGeneratorVersion),
+    load: () async => _fixture(
+      questGeneratorVersion: questGeneratorVersion,
+      questGeneratorId: questGeneratorId,
+    ),
     editQuestOutline: editQuestOutline,
     editQuestContext: editQuestContext,
     editQuestTransitions: editQuestTransitions,
@@ -941,6 +980,7 @@ Revision3ContentIndex _fixture({
   int revision = 7,
   bool duplicateBacklinks = false,
   int questGeneratorVersion = 2,
+  String questGeneratorId = 'gore-authoring.quest-draft',
   bool includeNpc = true,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
@@ -1037,7 +1077,7 @@ Revision3ContentIndex _fixture({
       'revision': 0,
       'origin': <String, Object?>{
         'type': 'generated',
-        'generator_id': 'gore-authoring.quest-draft',
+        'generator_id': questGeneratorId,
         'generator_version': questGeneratorVersion,
         'owner': <String, Object?>{
           'project_id': _projectId,
@@ -1048,7 +1088,7 @@ Revision3ContentIndex _fixture({
       'summary': <String, Object?>{
         'kind': 'script_module',
         'data': <String, Object?>{
-          'generator_id': 'gore-authoring.quest-draft',
+          'generator_id': questGeneratorId,
           'generator_version': questGeneratorVersion,
           'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
           'module_relative_path': 'Project/Quests/FindHomer.as',

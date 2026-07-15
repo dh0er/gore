@@ -1,10 +1,28 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/core_service.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:path/path.dart' as p;
+
+Map<String, Object?> _compiledScriptReport(String miniPath) =>
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'compiled',
+      'mini_path': miniPath,
+      'module': 'GoreMods.Probe',
+      'compile_error': null,
+      'compiler_diagnostics': <String, Object?>{
+        'capture': 'captured',
+        'messages': <Object?>[],
+        'omitted': 0,
+      },
+      'install_restore': 'restored_exact',
+      'recovery_required': false,
+    };
 
 String _draftSourceSha256(String source) =>
     crypto.sha256.convert(utf8.encode(source)).toString();
@@ -1005,6 +1023,264 @@ void main() {
     expect(core.calls.single.command, 'script_compile');
     expect(core.calls.single.payload['allow_new_symbols'], isTrue);
   });
+
+  test(
+    'scriptCompileReportV1 returns compiler failure as structured data',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_report_v1': {
+            'ok': true,
+            'outcome': 'failed',
+            'mini_path': null,
+            'module': null,
+            'compile_error': {
+              'code': 'COMPILER_REGEN_FAILED',
+              'message': 'compiler rejected the source',
+            },
+            'compiler_diagnostics': {
+              'capture': 'captured',
+              'messages': [
+                {
+                  'file': 'GoreMods/Probe.as',
+                  'line': 5,
+                  'column': 9,
+                  'severity': 'error',
+                  'message': 'Expected expression',
+                },
+              ],
+              'omitted': 0,
+            },
+            'install_restore': 'restored_exact',
+            'recovery_required': false,
+          },
+        },
+      );
+
+      final report = await ModFfi(core).scriptCompileReportV1(
+        gameDir: r'C:\Game',
+        op: 'add',
+        moduleName: 'GoreMods.Probe',
+        relPath: 'GoreMods/Probe.as',
+        asPath: r'C:\Source\Probe.as',
+        workDir: r'C:\Temp\compile',
+        allowNewSymbols: true,
+      );
+
+      expect(report.compiled, isFalse);
+      expect(report.failure!.code, 'COMPILER_REGEN_FAILED');
+      expect(report.diagnostics!.messages.single.line, 5);
+      expect(core.calls.single.command, 'script_compile_report_v1');
+      expect(core.calls.single.payload['allow_new_symbols'], isTrue);
+    },
+  );
+
+  test('scriptCompileReportV1 rejects a malformed success envelope', () async {
+    final core = FakeGoreCoreFfiService(
+      responses: {
+        'script_compile_report_v1': {
+          'ok': true,
+          'outcome': 'compiled',
+          'mini_path': 'mini.cache',
+          'module': 'GoreMods.Probe',
+          'compile_error': null,
+          'compiler_diagnostics': null,
+          'install_restore': 'restored_exact',
+          'recovery_required': false,
+        },
+      },
+    );
+
+    final error = await _captureModFfiException(
+      ModFfi(core).scriptCompileReportV1(
+        gameDir: r'C:\Game',
+        op: 'add',
+        moduleName: 'GoreMods.Probe',
+        relPath: 'GoreMods/Probe.as',
+        asPath: r'C:\Source\Probe.as',
+        workDir: r'C:\Temp\compile',
+      ),
+    );
+
+    expect(error.code, ModFfiException.malformedNativeResponseCode);
+    expect(
+      error.message,
+      'malformed native response: compile report schema is invalid',
+    );
+  });
+
+  test(
+    'scriptCompileReportV1 accepts only a marked direct owned output',
+    () async {
+      final work = Directory.systemTemp.createTempSync(
+        'gore-owned-output-test-',
+      );
+      addTearDown(() => work.deleteSync(recursive: true));
+      final owned = Directory(
+        p.join(work.path, 'gore-owned-compile-a1b2c3d4e5f6'),
+      )..createSync();
+      File(
+        p.join(owned.path, '.gore-owned-compile-v1'),
+      ).writeAsStringSync('gore-owned-compile-staging-v1\n');
+      final mini = File(p.join(owned.path, 'module.cache'))
+        ..writeAsBytesSync(const [1, 2, 3]);
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_report_v1': _compiledScriptReport(mini.path),
+        },
+      );
+
+      final report = await ModFfi(core).scriptCompileReportV1(
+        gameDir: r'C:\Game',
+        op: 'add',
+        moduleName: 'GoreMods.Probe',
+        relPath: 'GoreMods/Probe.as',
+        asPath: r'C:\Source\Probe.as',
+        workDir: work.path,
+      );
+
+      expect(report.compiled, isTrue);
+      expect(report.miniPath, mini.path);
+    },
+  );
+
+  test(
+    'scriptCompileReportV1 maps missing ownership evidence to malformed',
+    () async {
+      final work = Directory.systemTemp.createTempSync(
+        'gore-owned-output-test-',
+      );
+      addTearDown(() => work.deleteSync(recursive: true));
+      final owned = Directory(
+        p.join(work.path, 'gore-owned-compile-a1b2c3d4e5f6'),
+      )..createSync();
+      final mini = File(p.join(owned.path, 'module.cache'))
+        ..writeAsBytesSync(const [1]);
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_report_v1': _compiledScriptReport(mini.path),
+        },
+      );
+
+      final error = await _captureModFfiException(
+        ModFfi(core).scriptCompileReportV1(
+          gameDir: r'C:\Game',
+          op: 'add',
+          moduleName: 'GoreMods.Probe',
+          relPath: 'GoreMods/Probe.as',
+          asPath: r'C:\Source\Probe.as',
+          workDir: work.path,
+        ),
+      );
+
+      expect(error.code, ModFfiException.malformedNativeResponseCode);
+    },
+  );
+
+  test(
+    'scriptCompileReportV1 rejects an extended-prefix output response',
+    () async {
+      final work = Directory.systemTemp.createTempSync(
+        'gore-owned-output-test-',
+      );
+      addTearDown(() => work.deleteSync(recursive: true));
+      final owned = Directory(
+        p.join(work.path, 'gore-owned-compile-a1b2c3d4e5f6'),
+      )..createSync();
+      File(
+        p.join(owned.path, '.gore-owned-compile-v1'),
+      ).writeAsStringSync('gore-owned-compile-staging-v1\n');
+      final mini = File(p.join(owned.path, 'module.cache'))
+        ..writeAsBytesSync(const [1]);
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_report_v1': _compiledScriptReport(
+            '\\\\?\\${mini.path}',
+          ),
+        },
+      );
+
+      final error = await _captureModFfiException(
+        ModFfi(core).scriptCompileReportV1(
+          gameDir: r'C:\Game',
+          op: 'add',
+          moduleName: 'GoreMods.Probe',
+          relPath: 'GoreMods/Probe.as',
+          asPath: r'C:\Source\Probe.as',
+          workDir: work.path,
+        ),
+      );
+
+      expect(error.code, ModFfiException.malformedNativeResponseCode);
+    },
+  );
+
+  test('scriptCompileReportV1 rejects non-native owned-child shapes', () async {
+    final work = Directory.systemTemp.createTempSync('gore-owned-output-test-');
+    addTearDown(() => work.deleteSync(recursive: true));
+    final candidates = <Directory>[
+      Directory(p.join(work.path, 'nested', 'gore-owned-compile-a1b2c3d4e5f6')),
+      Directory(p.join(work.path, 'gore-owned-compile-A1b2c3d4e5f6')),
+    ];
+    for (final candidate in candidates) {
+      candidate.createSync(recursive: true);
+      File(
+        p.join(candidate.path, '.gore-owned-compile-v1'),
+      ).writeAsStringSync('gore-owned-compile-staging-v1\n');
+      final mini = File(p.join(candidate.path, 'module.cache'))
+        ..writeAsBytesSync(const [1]);
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_report_v1': _compiledScriptReport(mini.path),
+        },
+      );
+
+      final error = await _captureModFfiException(
+        ModFfi(core).scriptCompileReportV1(
+          gameDir: r'C:\Game',
+          op: 'add',
+          moduleName: 'GoreMods.Probe',
+          relPath: 'GoreMods/Probe.as',
+          asPath: r'C:\Source\Probe.as',
+          workDir: work.path,
+        ),
+      );
+
+      expect(
+        error.code,
+        ModFfiException.malformedNativeResponseCode,
+        reason: candidate.path,
+      );
+    }
+  });
+
+  test(
+    'scriptCompileInstallStateV1 sends the root and parses safety',
+    () async {
+      final core = FakeGoreCoreFfiService(
+        responses: {
+          'script_compile_install_state_v1': <String, Object?>{
+            'ok': true,
+            'disposition': 'safe_to_compile',
+            'safe_to_compile': true,
+            'game_process': 'not_running',
+            'artifacts': <Object?>[],
+            'issues': <Object?>[],
+          },
+        },
+      );
+
+      final state = await ModFfi(
+        core,
+      ).scriptCompileInstallStateV1(gameDir: r'C:\Game');
+
+      expect(state.safeToCompile, isTrue);
+      expect(core.calls.single.command, 'script_compile_install_state_v1');
+      expect(core.calls.single.payload, <String, Object?>{
+        'game_dir': r'C:\Game',
+      });
+    },
+  );
 
   test(
     'voiceArchiveMatchLine sends the command and parses a strict result',

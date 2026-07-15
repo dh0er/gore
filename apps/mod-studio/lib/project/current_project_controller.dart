@@ -484,15 +484,29 @@ final class _ManagedRevision3SessionLease
   prepareAndPublishQuestOutlineEditV1({
     required Revision3QuestOutlineEditInput input,
   }) async {
-    final checkpoint = await _session.prepareAndPublishQuestOutlineEditV1(
-      questId: input.questId,
-      expectedQuestRevision: input.expectedQuestRevision,
-      expectedModuleId: input.moduleId,
-      expectedModuleRevision: input.expectedModuleRevision,
-      displayName: input.displayName,
-      title: input.title,
-      objectiveTitles: input.objectiveTitles,
-    );
+    final slots = input.objectiveSlots;
+    final planSeal = input.expectedTransitionPlanSeal;
+    final checkpoint = slots == null || planSeal == null
+        ? await _session.prepareAndPublishQuestOutlineEditV1(
+            questId: input.questId,
+            expectedQuestRevision: input.expectedQuestRevision,
+            expectedModuleId: input.moduleId,
+            expectedModuleRevision: input.expectedModuleRevision,
+            displayName: input.displayName,
+            title: input.title,
+            objectiveTitles: input.objectiveTitles,
+          )
+        : await _session.prepareAndPublishQuestOutlineEditV2(
+            questId: input.questId,
+            expectedQuestRevision: input.expectedQuestRevision,
+            expectedModuleId: input.moduleId,
+            expectedModuleRevision: input.expectedModuleRevision,
+            expectedTransitionPlanSeal: planSeal,
+            displayName: input.displayName,
+            title: input.title,
+            objectiveSlots: slots,
+            objectiveTitles: input.objectiveTitles,
+          );
     return Revision3QuestOutlineEditPublication(
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,

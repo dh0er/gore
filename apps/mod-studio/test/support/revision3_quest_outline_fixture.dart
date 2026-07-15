@@ -41,6 +41,31 @@ final class Revision3QuestOutlineFixture {
   final List<String> objectiveTitles;
 
   String get projectJson => jsonEncode(projectObject());
+
+  String get semanticProjectJson {
+    final project = projectObject();
+    final entities = (project['entities']! as Map).cast<String, Object?>();
+    final quest = (entities[revision3QuestOutlineQuestId]! as Map)
+        .cast<String, Object?>();
+    final questPayload = (quest['payload']! as Map).cast<String, Object?>();
+    final questData = (questPayload['data']! as Map).cast<String, Object?>();
+    questData['generator_version'] = 4;
+    final input = (questData['input']! as Map).cast<String, Object?>();
+    input['transition_plan'] =
+        AuthoringRevision3QuestTransitionPlanV1.legacySeed(
+          objectiveTitles.length,
+        ).toJson();
+    final module = (entities[revision3QuestOutlineModuleId]! as Map)
+        .cast<String, Object?>();
+    final origin = (module['origin']! as Map).cast<String, Object?>();
+    origin['generator_version'] = 4;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    moduleData['generator_version'] = 4;
+    moduleData['input_fingerprint'] = revision3QuestInputFingerprint(input);
+    return jsonEncode(project);
+  }
+
   // A real revision-3 WorkingHead seals the sharded SnapshotManifest, not the
   // monolithic project JSON returned by open. Keep the fixture intentionally
   // different so Dart cannot accidentally conflate those two byte domains.
@@ -272,8 +297,9 @@ final class Revision3QuestOutlineFixture {
     'publication_status': 'not_supported',
   };
 
-  Revision3ContentIndex
-  contentIndex() => Revision3ContentIndex.fromJsonObject(<String, Object?>{
+  Revision3ContentIndex contentIndex({
+    int questGeneratorVersion = 3,
+  }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
     'schema_revision': 1,
     'project_id': revision3QuestOutlineProjectId,
     'project_revision': projectRevision,
@@ -332,7 +358,7 @@ final class Revision3QuestOutlineFixture {
         'origin': <String, Object?>{
           'type': 'generated',
           'generator_id': 'gore-authoring.draft-quest-skeleton',
-          'generator_version': 3,
+          'generator_version': questGeneratorVersion,
           'owner': <String, Object?>{
             'project_id': revision3QuestOutlineProjectId,
             'entity_id': revision3QuestOutlineQuestId,
@@ -343,7 +369,7 @@ final class Revision3QuestOutlineFixture {
           'kind': 'script_module',
           'data': <String, Object?>{
             'generator_id': 'gore-authoring.draft-quest-skeleton',
-            'generator_version': 3,
+            'generator_version': questGeneratorVersion,
             'module_namespace': 'PROJECT.QUESTS.FINDHOMER',
             'module_relative_path': 'PROJECT/QUESTS/FINDHOMER.as',
             'status': <String, Object?>{
