@@ -561,6 +561,12 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
 `disasm`/`decompile`, `catalog`/`dump`/`stubs`, multi-mod `mgr`).
 
 **It can:**
+- Create or open a **managed revision-3 project** and author bounded offline NPC
+  Drafts, Quest Drafts and existing-Quest outline/context/lifecycle edits,
+  Voice takes, and reviewed DataAsset stages through exact-head transactions.
+  Selected managed Quests and NPCs expose **Source/Profile & checks**, including
+  an evidence-only game-compiler check with structured diagnostics, exact
+  restoration/recovery handling, and no retained compiler artifact.
 - Edit **item/stat values** by browsing the categorized item catalog and editing
   fields (the override domain).
 - Edit **localized text and dialog-line IDs**, and stage selectable runtime
@@ -576,6 +582,9 @@ modding with live previews and `.goremod` project files. Auto-updates on launch
   standalone Lua override mod** to share.
 
 **It can not:**
+- Build, deploy, spawn, or runtime-qualify managed revision-3 NPC/Quest Drafts;
+  compiler acceptance proves only one exact generated source and keeps output
+  discarded. Managed Voice has a separately labelled offline-only bundle.
 - Edit **save files** — that's [save-editor](#gore-save-editor).
 - Hand-write custom Lua logic — use `gore scaffold` + the [gore-lua helpers](#gore-lua-helper-library).
 - Patch arbitrary game files outside the five supported domains.

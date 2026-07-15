@@ -615,6 +615,38 @@ AngelScript, module path, IDs, and seals. This is not a compiler invocation:
 publication remains `not_supported`. The inspection grants no artifact,
 authoring, compile, build, deploy, runtime, or fixed-head authority.
 
+### Separate exact-current compiler evidence
+
+After the read-only inspection succeeds, **Source & checks** now offers an
+explicit **Check with game compiler** action. It does not turn the inspection
+result into compiler input. The app sends only the Store root, configured game
+root, exact working head, and selected Quest ID. Native code independently
+reopens the Store, derives the Quest and ScriptModule revisions, namespace,
+relative path, persisted source, and source SHA-256, then acquires the shared
+install-mutation guard. No caller can select the compiler work directory.
+
+Under that guard native code regenerates the exact Quest source with fresh
+installed-game/catalog/collision evidence, requires equality with the persisted
+module, stages it with fixed additive/new-symbol policy in an unreported native-
+private workspace, invokes the game compiler, restores every touched
+installation path, and neutralizes the mini-cache through its retained create-
+new/no-follow file handle. The closed response exposes bounded structured
+diagnostics and exact project/entity/module bindings, but no source, cache,
+staging, or reusable artifact path. A compiled result is accepted only while
+both native and the managed session retain the same exact head, restoration is
+exact, no recovery is required, and output disposal is proven.
+
+Compiler rejection is ordinary evidence. Post-attempt Store drift retains the
+diagnostics but revokes exact-current acceptance and requires reopening. Restore
+uncertainty enters the shared app-wide install safety gate and blocks later
+compiler/deploy mutation until a fresh native probe proves safety. Native
+staging is neither selected nor cleaned through an app-provided path.
+
+This is compiler evidence for one exact generated source only. No compiled
+artifact is adopted, the project is not published, and build, deploy, runtime,
+quest behavior, dialog selection, persistence, save safety, and publication
+remain unqualified.
+
 ## Mod Studio boundary
 
 Mod Studio now provides the bounded Draft wizard, count-preserving legacy
@@ -626,7 +658,7 @@ complete diagnostics, build lowering, deployment, and runtime test workflow are
 not part of this slice. The deterministic generator itself does not invoke the
 compiler or compose a cache.
 
-The native compiler now has a separate bounded structured-report API that
+The native compiler now has a bounded structured-report API that
 retains diagnostics-capture disposition and file/line/column/severity/message
 records without reparsing formatted compiler errors. True hook/signature/
 preflight absence uses the normal compiler fallback exactly once. If the first
@@ -634,13 +666,14 @@ generator already completed, `UnavailableWithoutFallback` uses that result and
 does not start a second process. Invalid capture becomes `CaptureInvalid` and
 rejects an otherwise usable cache; an unconfirmed process exit remains
 fail-closed, preserves recovery state, and exposes no possibly live capture.
-The generic Scripts workspace now consumes that structured report: it requires
+The generic Scripts workspace consumes that structured report: it requires
 an explicit close-game confirmation, shows compiler diagnostics and fallback
 status, accepts output only after an exact install restore, and surfaces retained
-recovery as the dominant failure state. This remains separate from managed
-Quest/NPC authoring. There is still no exact-current managed-Quest compiler
-command, so the report does not change any Quest readiness status in this
-document.
+recovery as the dominant failure state. Managed Quest/NPC checks reuse the same
+guard and diagnostic model through their stricter Store-derived commands, but
+discard output instead of adopting the generic mini-cache. They change only the
+selected source's compiler-evidence status; all build/runtime readiness gates in
+this document remain closed.
 
 Offline compiler/compose/reopen evidence now covers the listed lifecycle
 field/hook/handler/getter/call shapes, but not one exact renderer-produced

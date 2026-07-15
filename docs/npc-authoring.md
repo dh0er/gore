@@ -257,3 +257,36 @@ four-MiB plan envelopes before allocating the canonical result. The exposed
 route has no compiler, build, spawn, deployment, mutation, or publication entry
 point. Successful source regeneration is therefore not evidence of class
 residence, discovery, spawning, distinct runtime state, or save safety.
+
+## Exact-current compiler check
+
+When a configured installation is available, the same **Profile & checks**
+dialog now offers a separate evidence-only compiler action. The app submits
+only the managed Store root, configured game root, exact working head, selected
+NPC ID. It cannot submit source text, module identity, compiler policy, a work
+directory, or an output path.
+
+Native code reopens the exact project and derives the NPC revision, owned
+ScriptModule revision, namespace, relative path, persisted source, and source
+SHA-256 before acquiring the shared install-mutation guard. Under that guard it
+re-runs the closed NPC source inspection, verifies fresh game inputs, stages the
+derived source with fixed additive/new-symbol policy in an unreported native-
+private workspace, runs the game compiler, restores every touched install path,
+and neutralizes the mini-cache through the exact file handle retained from its
+create-new/no-follow write. The response contains bounded file/line/column/
+severity diagnostics and exact project/entity/module evidence, but no source,
+mini-cache, staging, or reusable artifact path.
+
+Studio accepts the result as “exact source accepted” only when native and the
+managed session both retain the same exact head, the compiler accepted the
+source, installation restoration is exact, no recovery is required, and output
+disposal is proven. A post-attempt Store drift keeps the diagnostics but makes
+them stale and requires reopening. Restore uncertainty is retained in the
+app-wide install safety gate and blocks every later compiler or deploy mutation
+until a fresh native probe proves the installation safe. Native staging is an
+internal implementation detail and is never caller-selected or returned.
+
+This closes only the selected generated-source compiler check. It still grants
+no production build, cache adoption, deployment, class residence, spawn,
+runtime, publication, or save authority. The remaining production, residence,
+and spawn blockers stay visible after compiler acceptance.
