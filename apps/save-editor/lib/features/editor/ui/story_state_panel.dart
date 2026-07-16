@@ -526,6 +526,7 @@ class _StoryValueTile extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          const SizedBox(height: 4),
           if (showObjectIds) ...[
             SelectableText(
               value.id,
