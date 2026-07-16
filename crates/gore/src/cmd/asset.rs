@@ -11,8 +11,7 @@ use gore_asset::dataasset_workflow::{
     apply_fixed_leaf_selector_patch_with_codes, asset_package_limits, generation_mismatch_reason,
     read_chained_extract_receipt, read_extract_receipt_v2, read_patch_receipt_v2,
     read_verified_file_bounded, validate_extract_receipt_components,
-    validate_extract_receipt_envelope, validate_patch_output_against_carrier,
-    validate_patch_receipt_envelope, validate_patched_sidecars,
+    validate_extract_receipt_envelope, validate_patch_receipt_envelope,
     validate_sidecar_generation_mapping, AssetGenerationReceipt, ComponentDigestProof,
     ExtractCompositeStoreAnchor, ExtractReceiptEnvelope, ExtractReceiptOutput,
     ExtractReceiptSource, ExtractUsmapProof, FixedLeafPatchDiagnosticCodes, GenerationChunkAnchor,
@@ -24,6 +23,11 @@ use gore_asset::dataasset_workflow::{
     MAX_COOKED_PACKAGE_BYTES, MAX_GAME_ASSET_SEGMENTS, MAX_MOUNT_UCAS_BYTES, MAX_MOUNT_UTOC_BYTES,
     MAX_OPTIONAL_SIDECAR_BYTES, MAX_SELECTOR_BYTES, MAX_USMAP_BYTES, PATCH_RECEIPT_SUFFIX,
 };
+use gore_asset::legacy_offline_pack::{
+    stage_offline_dataasset_pack_v1, verify_patch_receipted_offline_dataasset_package_v1,
+    OfflineDataAssetPackPublicationV1, OfflineDataAssetPackRequestV1,
+    OfflinePackPublicationUncertainReasonV1,
+};
 use gore_asset::{
     describe_fixed_leaves, FixedLeafDescriptor, FixedLeafSelector, FixedLeafSelectorStep,
     LegacyPackageEnvelope, PackageCarrier, PackageComponent, PackagePairSeal, PropertySpanWalker,
@@ -33,11 +37,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-const PACK_RECEIPT_NAME: &str = "gore-asset-pack.json";
-// `pack` adds `cooked/G1R/Content` above the accepted virtual path. Keep cleanup
-// comfortably above that maximum while still refusing adversarial deep trees.
+// Keep owned extract-staging cleanup comfortably above the accepted virtual
+// path depth while still refusing adversarial deep trees.
 const MAX_STAGING_TREE_DEPTH: usize = MAX_GAME_ASSET_SEGMENTS + 32;
-const MAX_STAGING_TREE_ENTRIES: usize = MAX_GAME_ASSET_SEGMENTS + 32;
 const MAX_PAKS_SCAN_DEPTH: usize = 16;
 const MAX_PAKS_SCAN_ENTRIES: usize = 4096;
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -203,7 +205,6 @@ struct GameMountInventory {
 #[derive(Debug)]
 struct AssetMount {
     leaf: String,
-    cooked_uasset: PathBuf,
 }
 
 #[derive(Debug)]
@@ -301,15 +302,6 @@ impl StagingDirectory {
 
     fn disarm(&mut self) {
         self.armed = false;
-    }
-
-    fn cleanup(&mut self, code: &'static str) -> Result<()> {
-        self.verify_owned(code)?;
-        validate_tree_no_reparse(&self.path, MAX_STAGING_TREE_DEPTH, 4096, code)?;
-        fs::remove_dir_all(&self.path)
-            .with_context(|| format!("{code}: removing owned staging directory"))?;
-        self.armed = false;
-        Ok(())
     }
 }
 
@@ -640,448 +632,59 @@ fn extract(args: ExtractArgs) -> Result<()> {
 }
 
 fn pack(args: PackArgs) -> Result<()> {
-    let mount = validate_game_asset_path(&args.asset, "ASSET_PACK_ASSET")?;
-    validate_triplet_name(&args.name)?;
-    let game = resolve_game_root(&args.game, "ASSET_PACK_GAME")?;
-    let out = prepare_absent_output_directory(&args.out, &game, "ASSET_PACK_OUTPUT")?;
-    let mount_inventory = capture_game_mount_inventory(&game, "ASSET_PACK_GAME")?;
-    let (global_utoc_seal, global_ucas_seal) = seal_global_script_store(&game, "ASSET_PACK_GAME")?;
+    let request =
+        OfflineDataAssetPackRequestV1::prepare(&args.game, &args.asset, &args.name, &args.out)?;
     let verified_patch = read_patch_receipt_v2(&args.patch_receipt)?;
-    let patch_receipt_input = verified_patch.input();
     let patch_receipt = verified_patch.receipt();
     if patch_receipt.asset != args.asset || patch_receipt.provenance.generation.asset != args.asset
     {
         bail!("ASSET_GENERATION_MISMATCH: patch receipt targets a different asset");
     }
     let verified_extract = read_chained_extract_receipt(&verified_patch)?;
-    let extract_receipt = verified_extract.receipt();
-    let extract_binding = verified_extract.binding();
-    if extract_receipt.asset != patch_receipt.asset
-        || extract_receipt.generation != patch_receipt.provenance.generation
-        || extract_receipt.package_seal != patch_receipt.input_package_seal
-        || extract_binding.components() != patch_receipt.provenance.extract_components
-        || extract_binding.sidecars() != patch_receipt.provenance.extracted_sidecars
-    {
-        bail!(
-            "ASSET_PATCH_RECEIPT: chained extract asset, generation, package, or component provenance mismatch"
-        );
-    }
-    if patch_receipt.provenance.usmap.file_name != extract_binding.copied_usmap().relative_path
-        || patch_receipt.provenance.usmap.length != extract_binding.copied_usmap().length
-        || patch_receipt.provenance.usmap.sha256 != extract_binding.copied_usmap().sha256
-    {
-        bail!("ASSET_PATCH_RECEIPT: copied USMAP provenance mismatch");
-    }
-    if patch_receipt.output_sidecars.len() != extract_binding.sidecars().len()
-        || patch_receipt
-            .output_sidecars
-            .iter()
-            .zip(extract_binding.sidecars())
-            .any(|(output, extracted)| {
-                output.role != extracted.role
-                    || output.length != extracted.length
-                    || output.sha256 != extracted.sha256
-            })
-    {
-        bail!("ASSET_PATCH_RECEIPT: patched sidecars differ from extracted provenance");
-    }
-    validate_sidecar_generation_mapping(
-        &patch_receipt.output_sidecars,
-        &patch_receipt.provenance.generation,
-        "ASSET_PATCH_RECEIPT",
-    )?;
-
-    let input_uasset = validate_existing_path_no_reparse(&args.uasset, false, "ASSET_PACK_INPUT")?;
-    input_uasset
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .filter(|stem| !stem.is_empty())
-        .context("ASSET_PACK_INPUT: input requires a non-empty UTF-8 file stem")?;
-    let package_limits = asset_package_limits();
-    let carrier =
-        PackageCarrier::load(&input_uasset, package_limits).context("ASSET_PACK_INPUT")?;
-    let source_paths = carrier
-        .source_paths()
-        .context("ASSET_PACK_INPUT: loaded package has no source paths")?;
-    let source_uasset = source_paths.uasset().to_path_buf();
-    let source_uexp = source_paths.uexp().to_path_buf();
-    let source_seal = PackagePairSeal::capture(&carrier);
-    if source_seal != patch_receipt.output_package_seal {
-        bail!("ASSET_GENERATION_MISMATCH: input package pair differs from patch receipt");
-    }
-    validate_patch_output_against_carrier(&verified_patch, &source_uasset, &source_uexp, &carrier)?;
-    let pair_bytes = u64::try_from(carrier.len(PackageComponent::Uasset))?
-        .checked_add(u64::try_from(carrier.len(PackageComponent::Uexp))?)
-        .context("ASSET_PACK_INPUT: cooked size overflowed")?;
-    let validated_sidecar_seals =
-        validate_patched_sidecars(&verified_patch, &source_uasset, pair_bytes)?;
-
-    // Resolve and hash the live target generation before any output staging is
-    // created. This catches hotfixes and newly winning sibling containers even
-    // when the edited legacy pair itself still parses.
-    let main_utoc = gore_tex::paths::main_container(&game).context("ASSET_PACK_CONTAINER")?;
-    let current_usmap = gore_tex::paths::usmap(&game).context("ASSET_PACK_USMAP")?;
-    let main_utoc_seal = digest_regular_file_bounded(
-        &main_utoc,
-        MAX_CONTAINER_COMPONENT_BYTES,
-        "ASSET_PACK_CONTAINER",
-    )?;
-    let main_ucas_identity = HeldFileIdentity::open(
-        &main_utoc.with_extension("ucas"),
-        64 * 1024 * 1024 * 1024,
-        "ASSET_PACK_CONTAINER",
-    )?;
-    let current_usmap_seal =
-        digest_regular_file_bounded(&current_usmap, MAX_USMAP_BYTES, "ASSET_PACK_USMAP")?;
-    let required_generation_chunks: Vec<_> = patch_receipt
-        .provenance
-        .generation
-        .target_chunks
-        .iter()
-        .map(|chunk| chunk.chunk_id.clone())
-        .collect();
-    let generation_probe = gore_tex::container::probe_asset_generation_for_chunks_verified(
-        &main_utoc_seal.path,
+    let package = verify_patch_receipted_offline_dataasset_package_v1(
         &args.asset,
-        &required_generation_chunks,
-    )
-    .context("ASSET_PACK_GENERATION")?;
-    let mut generation_utoc_seals = Vec::with_capacity(generation_probe.metadata_utocs.len());
-    for source_utoc in &generation_probe.metadata_utocs {
-        generation_utoc_seals.push(digest_regular_file_bounded(
-            source_utoc,
-            MAX_CONTAINER_COMPONENT_BYTES,
-            "ASSET_PACK_GENERATION",
-        )?);
-    }
-    let current_generation = build_generation_receipt(
-        &args.asset,
-        &current_usmap_seal,
-        &main_utoc_seal,
-        &global_utoc_seal,
-        &global_ucas_seal,
-        &generation_probe.consumed_chunks,
-        &generation_utoc_seals,
+        &args.uasset,
+        &verified_patch,
+        &verified_extract,
     )?;
-    if current_generation != patch_receipt.provenance.generation {
-        let reason =
-            generation_mismatch_reason(&patch_receipt.provenance.generation, &current_generation);
-        bail!(
-            "ASSET_GENERATION_MISMATCH: installed target/USMAP/UTOC/global generation changed since extract ({reason}); re-extract and reapply the patch"
-        );
-    }
+    let publication =
+        stage_offline_dataasset_pack_v1(package, request)?.publish_with_bound_receipt_new()?;
 
-    let parent = out
-        .parent()
-        .context("ASSET_PACK_OUTPUT: output has no parent")?;
-    let mut staging = create_staging_directory(parent, "pack", "ASSET_PACK_OUTPUT")?;
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    let cooked_root = staging.path.join("cooked");
-    let build_root = staging.path.join("triplet");
-    fs::create_dir(&cooked_root).context("ASSET_PACK_STAGE")?;
-    fs::create_dir(&build_root).context("ASSET_PACK_STAGE")?;
-    let staged_uasset = cooked_root.join(&mount.cooked_uasset);
-    let staged_relative_parent = mount
-        .cooked_uasset
-        .parent()
-        .context("ASSET_PACK_ASSET: cooked asset has no parent")?;
-    create_relative_directory_chain(&cooked_root, staged_relative_parent, "ASSET_PACK_STAGE")?;
-    write_new_synced(
-        &staged_uasset,
-        carrier.bytes(PackageComponent::Uasset),
-        "ASSET_PACK_STAGE",
-    )?;
-    write_new_synced(
-        &staged_uasset.with_extension("uexp"),
-        carrier.bytes(PackageComponent::Uexp),
-        "ASSET_PACK_STAGE",
-    )?;
-    let mut staged_input_seals = vec![
-        digest_regular_file_bounded(
-            &staged_uasset,
-            package_limits.max_uasset_bytes,
-            "ASSET_PACK_STAGE",
-        )?,
-        digest_regular_file_bounded(
-            &staged_uasset.with_extension("uexp"),
-            package_limits.max_uexp_bytes,
-            "ASSET_PACK_STAGE",
-        )?,
-    ];
-
-    let mut input_components = vec![
-        packed_input_receipt(
-            &source_uasset,
-            &mount.cooked_uasset,
-            u64::try_from(carrier.len(PackageComponent::Uasset))?,
-            &source_seal.uasset_sha256,
+    let (published, warning) = match &publication {
+        OfflineDataAssetPackPublicationV1::Published(published) => (published, None),
+        OfflineDataAssetPackPublicationV1::PublishedWithCleanupWarning(warning) => (
+            warning.published(),
+            Some(("staging_cleanup_failed", warning.detail())),
         ),
-        packed_input_receipt(
-            &source_uexp,
-            &mount.cooked_uasset.with_extension("uexp"),
-            u64::try_from(carrier.len(PackageComponent::Uexp))?,
-            &source_seal.uexp_sha256,
-        ),
-    ];
-    let mut cooked_total = pair_bytes;
-    let sidecar_source_seals = validated_sidecar_seals;
-    let mut expected_sidecars = [false; 3];
-    for (expected, validated) in patch_receipt
-        .output_sidecars
-        .iter()
-        .zip(&sidecar_source_seals)
-    {
-        let (_, source) = sidecar_path(&source_uasset, expected.role, "ASSET_PACK_SIDECAR")?;
-        let (target_relative_name, target) =
-            sidecar_path(&staged_uasset, expected.role, "ASSET_PACK_SIDECAR")?;
-        let copied = copy_optional_verified_file(
-            &source,
-            &target,
-            MAX_OPTIONAL_SIDECAR_BYTES,
-            "ASSET_PACK_SIDECAR",
-        )?
-        .context("ASSET_PACK_SIDECAR: validated sidecar disappeared while staging")?;
-        let PublishedCopy {
-            source_seal: seal,
-            mut ownership,
-            ..
-        } = copied;
-        ownership.disarm();
-        if seal.length != validated.length() || &seal.sha256 != validated.sha256() {
-            bail!("ASSET_PACK_SIDECAR: sidecar changed after pre-staging validation");
-        }
-        cooked_total = cooked_total
-            .checked_add(seal.length)
-            .context("ASSET_PACK_SIDECAR: cooked size overflowed")?;
-        if cooked_total > MAX_COOKED_PACKAGE_BYTES {
-            bail!(
-                "ASSET_PACK_SIDECAR: cooked package is {cooked_total} bytes; aggregate limit is {MAX_COOKED_PACKAGE_BYTES}"
-            );
-        }
-        let target_relative = mount.cooked_uasset.with_file_name(target_relative_name);
-        input_components.push(packed_input_receipt(
-            &seal.path,
-            &target_relative,
-            seal.length,
-            &seal.sha256,
-        ));
-        expected_sidecars[expected.role.index()] = true;
-        staged_input_seals.push(digest_regular_file_bounded(
-            &target,
-            MAX_OPTIONAL_SIDECAR_BYTES,
-            "ASSET_PACK_STAGE",
-        )?);
-    }
-
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &staging.path,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_STAGE",
-    )?;
-    for seal in &staged_input_seals {
-        reverify_file_seal(
-            seal,
-            MAX_OPTIONAL_SIDECAR_BYTES.max(package_limits.max_uexp_bytes),
-            "ASSET_PACK_STAGE",
-        )?;
-    }
-    drop(carrier);
-
-    let repacked = gore_tex::container::repack_to_zen_verified(
-        &cooked_root,
-        &args.name,
-        &build_root,
-        &game,
-        false,
-    )
-    .context("ASSET_PACK_CONVERT")?;
-    let triplet = repacked.triplet;
-    let mut pack_source_utoc_paths = std::collections::BTreeSet::new();
-    pack_source_utoc_paths.extend(repacked.metadata_utocs.iter().cloned());
-    for chunk in &repacked.source_chunks {
-        pack_source_utoc_paths.insert(chunk.source_utoc.clone());
-    }
-    let mut pack_source_utoc_seals = Vec::with_capacity(pack_source_utoc_paths.len());
-    for source_utoc in pack_source_utoc_paths {
-        pack_source_utoc_seals.push(digest_regular_file_bounded(
-            &source_utoc,
-            MAX_CONTAINER_COMPONENT_BYTES,
-            "ASSET_PACK_GAME",
-        )?);
-    }
-    let pack_source_utoc_receipts: Vec<_> = pack_source_utoc_seals
-        .iter()
-        .map(source_file_receipt)
-        .collect();
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &staging.path,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_OUTPUT",
-    )?;
-    for seal in &staged_input_seals {
-        reverify_file_seal(
-            seal,
-            MAX_OPTIONAL_SIDECAR_BYTES.max(package_limits.max_uexp_bytes),
-            "ASSET_PACK_STAGE",
-        )?;
-    }
-    let reopened = gore_tex::container::verify_single_package_triplet(
-        &triplet[0],
-        &triplet[2],
-        &args.asset,
-        gore_tex::container::ExpectedSidecars {
-            bulk: expected_sidecars[0],
-            optional_bulk: expected_sidecars[1],
-            memory_mapped_bulk: expected_sidecars[2],
-        },
-    )
-    .context("ASSET_PACK_REOPEN")?;
-
-    let mut triplet_receipts = Vec::with_capacity(3);
-    let mut triplet_seals = Vec::with_capacity(3);
-    for path in &triplet {
-        sync_existing_regular_file(path, "ASSET_PACK_OUTPUT")?;
-        let seal =
-            digest_regular_file_bounded(path, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
-        let relative = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("ASSET_PACK_OUTPUT: non-UTF-8 triplet filename")?;
-        triplet_receipts.push(component_receipt(relative, seal.length, &seal.sha256));
-        triplet_seals.push(seal);
-    }
-    validate_flat_triplet_directory(&build_root, &args.name)?;
-
-    let receipt = json!({
-        "format": "gore.asset.pack.v2",
-        "status": "packed",
-        "asset": args.asset,
-        "name": args.name,
-        "generation_bound": true,
-        "provenance": {
-            "patch_receipt": ReceiptFileSeal {
-                path: patch_receipt_input.path().display().to_string(),
-                length: patch_receipt_input.length(),
-                sha256: encode_hex(patch_receipt_input.sha256()),
-            },
-            "extract_receipt": patch_receipt.provenance.extract_receipt.clone(),
-            "generation": current_generation.clone(),
-            "input_package_seal": patch_receipt.input_package_seal.clone(),
-            "patched_package_seal": patch_receipt.output_package_seal.clone(),
-        },
-        "source": {
-            "game_root": game.display().to_string(),
-            "consumed_chunks": repacked.source_chunks,
-            "source_container_tocs": pack_source_utoc_receipts,
-            "content_binding": "script-object and container-header chunks were verified against the winning containers' TOC BLAKE3 hashes before conversion",
-            "global_script_store": {
-                "utoc": source_file_receipt(&global_utoc_seal),
-                "ucas": source_file_receipt(&global_ucas_seal),
-            },
-        },
-        "input": {
-            "package_seal": source_seal,
-            "components": input_components,
-        },
-        "output": {
-            "root": out.display().to_string(),
-            "receipt": PACK_RECEIPT_NAME,
-            "triplet": triplet_receipts,
-            "reopened_packages": [reopened.package.clone()],
-            "strict_reopen": reopened,
-            "compressed": false,
-        },
-        "deployed": false,
-    });
-    let printable = serde_json::to_string_pretty(&receipt)?;
-    write_new_synced(
-        &build_root.join(PACK_RECEIPT_NAME),
-        printable.as_bytes(),
-        "ASSET_PACK_RECEIPT",
-    )?;
-    reverify_file_seal(
-        &global_utoc_seal,
-        MAX_CONTAINER_COMPONENT_BYTES,
-        "ASSET_PACK_GAME",
-    )?;
-    reverify_file_seal(
-        &global_ucas_seal,
-        MAX_CONTAINER_COMPONENT_BYTES,
-        "ASSET_PACK_GAME",
-    )?;
-    for seal in &pack_source_utoc_seals {
-        reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_GAME")?;
-    }
-    reverify_file_seal(
-        &main_utoc_seal,
-        MAX_CONTAINER_COMPONENT_BYTES,
-        "ASSET_PACK_GENERATION",
-    )?;
-    main_ucas_identity.reverify("ASSET_PACK_GENERATION")?;
-    reverify_file_seal(
-        &current_usmap_seal,
-        MAX_USMAP_BYTES,
-        "ASSET_PACK_GENERATION",
-    )?;
-    for seal in &generation_utoc_seals {
-        reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_GENERATION")?;
-    }
-    let reloaded = PackageCarrier::load(&source_uasset, package_limits)
-        .context("ASSET_PACK_INPUT: reverifying source package")?;
-    if PackagePairSeal::capture(&reloaded) != source_seal {
-        bail!("ASSET_PACK_INPUT: source package changed during pack");
-    }
-    for seal in &sidecar_source_seals {
-        seal.reverify(MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_SIDECAR")?;
-    }
-    for seal in &triplet_seals {
-        reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
-    }
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &staging.path,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_OUTPUT",
-    )?;
-    run_final_publish_gate(
-        &mount_inventory,
-        "ASSET_PACK_GAME",
-        || {
-            probe_current_generation_receipt(
-                &game,
-                &args.asset,
-                &patch_receipt.provenance.generation,
-                "ASSET_PACK_GENERATION",
+        OfflineDataAssetPackPublicationV1::PublicationUncertain(uncertain) => {
+            let reason = match uncertain.reason() {
+                OfflinePackPublicationUncertainReasonV1::ParentDurabilitySyncFailed { .. } => {
+                    "parent_durability_sync_failed"
+                }
+            };
+            (
+                uncertain.published(),
+                Some((reason, uncertain.reason().detail())),
             )
-        },
-        |current| {
-            if current != &patch_receipt.provenance.generation {
-                let reason =
-                    generation_mismatch_reason(&patch_receipt.provenance.generation, current);
-                bail!(
-                    "ASSET_GENERATION_MISMATCH: target generation changed before pack publication ({reason})"
-                );
-            }
-            Ok(())
-        },
-    )?;
-    publish_staged_directory(&build_root, &out, "ASSET_PACK_OUTPUT")?;
-    staging.cleanup("ASSET_PACK_OUTPUT")?;
+        }
+    };
 
     if args.json {
-        println!("{printable}");
+        println!("{}", published.printable_receipt());
     } else {
+        let receipt = published.receipt();
         println!(
             "PACKED\tasset={}\tname={}\toutput={}\treceipt={}\tdeployed=false",
             serde_json::to_string(&receipt["asset"])?,
             serde_json::to_string(&receipt["name"])?,
-            serde_json::to_string(&out.display().to_string())?,
-            serde_json::to_string(&out.join(PACK_RECEIPT_NAME).display().to_string())?,
+            serde_json::to_string(&published.output().display().to_string())?,
+            serde_json::to_string(&published.receipt_path().display().to_string())?,
+        );
+    }
+    if let Some((reason, detail)) = warning {
+        eprintln!(
+            "WARNING\tcode=ASSET_PACK_POST_PUBLICATION\tpublished=true\tretry=false\treason={reason}\tdetail={}",
+            serde_json::to_string(detail)?,
         );
     }
     Ok(())
@@ -1113,31 +716,7 @@ fn validate_game_asset_path(asset: &str, code: &'static str) -> Result<AssetMoun
         .last()
         .expect("a non-empty segment list was checked above")
         .to_string();
-    let mut cooked_uasset = PathBuf::from("G1R");
-    cooked_uasset.push("Content");
-    for segment in segments {
-        cooked_uasset.push(segment);
-    }
-    cooked_uasset.set_extension("uasset");
-    Ok(AssetMount {
-        leaf,
-        cooked_uasset,
-    })
-}
-
-fn validate_triplet_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.len() > 96
-        || !name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        || windows_reserved_name(name)
-    {
-        bail!(
-            "ASSET_PACK_NAME: --name must be 1..=96 ASCII letters, digits, '_' or '-', and not a reserved device name"
-        );
-    }
-    Ok(())
+    Ok(AssetMount { leaf })
 }
 
 fn windows_reserved_name(name: &str) -> bool {
@@ -1510,35 +1089,6 @@ fn create_staging_directory(
         identity,
         armed: true,
     })
-}
-
-fn create_relative_directory_chain(
-    root: &Path,
-    relative: &Path,
-    code: &'static str,
-) -> Result<PathBuf> {
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        let Component::Normal(component) = component else {
-            bail!("{code}: non-normal staged path component is refused");
-        };
-        current.push(component);
-        fs::create_dir(&current).with_context(|| {
-            format!(
-                "{code}: exclusively creating staged directory '{}'",
-                current.display()
-            )
-        })?;
-        let metadata = fs::symlink_metadata(&current)
-            .with_context(|| format!("{code}: inspecting '{}'", current.display()))?;
-        if metadata_is_reparse(&metadata) || !metadata.is_dir() {
-            bail!(
-                "{code}: staged path is not a plain directory: {}",
-                current.display()
-            );
-        }
-    }
-    Ok(current)
 }
 
 fn publish_staged_directory(staged: &Path, output: &Path, code: &'static str) -> Result<()> {
@@ -2146,37 +1696,6 @@ fn validate_flat_extraction_directory(
     Ok(())
 }
 
-fn validate_flat_triplet_directory(directory: &Path, name: &str) -> Result<()> {
-    let allowed = [
-        format!("{name}.utoc"),
-        format!("{name}.ucas"),
-        format!("{name}.pak"),
-    ];
-    let mut found = 0usize;
-    for entry in fs::read_dir(directory).context("ASSET_PACK_OUTPUT")? {
-        let entry = entry.context("ASSET_PACK_OUTPUT")?;
-        let metadata = fs::symlink_metadata(entry.path()).context("ASSET_PACK_OUTPUT")?;
-        let filename = entry.file_name();
-        let filename = filename
-            .to_str()
-            .context("ASSET_PACK_OUTPUT: non-UTF-8 triplet filename")?;
-        if metadata_is_reparse(&metadata)
-            || !metadata.is_file()
-            || !allowed.iter().any(|x| x == filename)
-        {
-            bail!("ASSET_PACK_OUTPUT: unexpected triplet entry {filename:?}");
-        }
-        found += 1;
-    }
-    if found != allowed.len() {
-        bail!(
-            "ASSET_PACK_OUTPUT: incomplete triplet; found {found} of {} files",
-            allowed.len()
-        );
-    }
-    Ok(())
-}
-
 fn source_file_receipt(seal: &FileSeal) -> SourceFileReceipt {
     SourceFileReceipt {
         path: seal.path.display().to_string(),
@@ -2328,20 +1847,6 @@ fn component_receipt(relative_path: &str, length: u64, sha256: &[u8; 32]) -> Rec
         length,
         sha256: encode_hex(sha256),
     }
-}
-
-fn packed_input_receipt(
-    source_path: &Path,
-    packed_relative_path: &Path,
-    length: u64,
-    sha256: &[u8; 32],
-) -> serde_json::Value {
-    json!({
-        "source_path": source_path.display().to_string(),
-        "packed_relative_path": packed_relative_path.to_string_lossy().replace('\\', "/"),
-        "length": length,
-        "sha256": encode_hex(sha256),
-    })
 }
 
 #[derive(Debug, Serialize)]
@@ -3069,10 +2574,6 @@ mod tests {
         let mount =
             validate_game_asset_path("/Game/Blueprints/Test/DA_Fixture_01", "TEST_ASSET").unwrap();
         assert_eq!(mount.leaf, "DA_Fixture_01");
-        assert_eq!(
-            mount.cooked_uasset,
-            PathBuf::from("G1R/Content/Blueprints/Test/DA_Fixture_01.uasset")
-        );
         for invalid in [
             "Game/Test/DA_X",
             "/Engine/Test/DA_X",
@@ -3085,10 +2586,6 @@ mod tests {
         ] {
             assert!(validate_game_asset_path(invalid, "TEST_ASSET").is_err());
         }
-        assert!(validate_triplet_name("zzz_MyMod_P").is_ok());
-        for invalid in ["", "../escape", "a/b", "has.dot", "CON", "LPT9"] {
-            assert!(validate_triplet_name(invalid).is_err());
-        }
         assert!(windows_reserved_name("con.txt "));
         assert!(windows_reserved_name("LpT1.anything"));
         let too_deep = format!(
@@ -3100,7 +2597,6 @@ mod tests {
         assert!(validate_game_asset_path(&too_deep, "TEST_ASSET").is_err());
         const {
             assert!(MAX_STAGING_TREE_DEPTH > MAX_GAME_ASSET_SEGMENTS + 3);
-            assert!(MAX_STAGING_TREE_ENTRIES > MAX_GAME_ASSET_SEGMENTS + 8);
         }
     }
 

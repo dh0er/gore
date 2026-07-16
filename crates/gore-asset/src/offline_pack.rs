@@ -299,12 +299,17 @@ pub fn verify_patch_receipted_offline_dataasset_package_v1(
     // non-CLI callers cannot bypass the adapter's provenance checks.
     let extract_input = extract.input();
     let chained_seal = &receipt.provenance.extract_receipt;
-    if extract_input.path().display().to_string() != chained_seal.path
-        || extract_input.length() != chained_seal.length
-        || encode_hex(extract_input.sha256()) != chained_seal.sha256
-    {
-        bail!("ASSET_PATCH_RECEIPT: supplied extract receipt differs from chained receipt seal");
-    }
+    // The normal chained reader already opened `chained_seal.path`, but this
+    // opaque type can also come from the standalone extract-receipt reader.
+    // Requiring canonical no-follow identity here protects direct API callers;
+    // comparing against the raw spelling instead would incorrectly reject
+    // equivalent Windows paths such as a drive path and its `\\?\` form.
+    verify_chained_extract_identity(
+        extract_input.path(),
+        extract_input.length(),
+        extract_input.sha256(),
+        chained_seal,
+    )?;
     let extract_receipt = extract.receipt();
     let extract_binding = extract.binding();
     if extract_receipt.asset != receipt.asset
@@ -414,6 +419,26 @@ pub fn verify_patch_receipted_offline_dataasset_package_v1(
         input_package_seal: receipt.input_package_seal.clone(),
         patched_package_seal: receipt.output_package_seal.clone(),
     })
+}
+
+fn verify_chained_extract_identity(
+    input_path: &Path,
+    input_length: u64,
+    input_sha256: &[u8; 32],
+    chained_seal: &ReceiptFileSeal,
+) -> Result<()> {
+    let chained_path = validate_existing_path_no_reparse(
+        Path::new(&chained_seal.path),
+        false,
+        "ASSET_PATCH_RECEIPT",
+    )?;
+    if input_path != chained_path
+        || input_length != chained_seal.length
+        || encode_hex(input_sha256) != chained_seal.sha256
+    {
+        bail!("ASSET_PATCH_RECEIPT: supplied extract receipt differs from chained receipt seal");
+    }
+    Ok(())
 }
 
 /// Build, structurally reopen, seal, and receipt one offline package under an
@@ -2095,6 +2120,55 @@ mod tests {
         .unwrap_err();
         assert!(format!("{error:#}").contains("ASSET_PACK_OUTPUT"));
         assert_eq!(fs::read(output.join("sentinel")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn chained_extract_identity_is_canonical_and_path_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let receipt = temp.path().join("gore-asset-extract.json");
+        let bytes = b"sealed extract receipt";
+        fs::write(&receipt, bytes).unwrap();
+        let canonical = validate_existing_path_no_reparse(&receipt, false, "TEST").unwrap();
+        let sha256: [u8; 32] = Sha256::digest(bytes).into();
+
+        let equivalent_spelling = receipt
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(receipt.file_name().unwrap());
+        let equivalent = ReceiptFileSeal {
+            path: equivalent_spelling.display().to_string(),
+            length: bytes.len() as u64,
+            sha256: encode_hex(&sha256),
+        };
+        verify_chained_extract_identity(&canonical, bytes.len() as u64, &sha256, &equivalent)
+            .unwrap();
+
+        let foreign = temp.path().join("foreign-extract.json");
+        fs::write(&foreign, bytes).unwrap();
+        let foreign_seal = ReceiptFileSeal {
+            path: foreign.display().to_string(),
+            length: bytes.len() as u64,
+            sha256: encode_hex(&sha256),
+        };
+        let error =
+            verify_chained_extract_identity(&canonical, bytes.len() as u64, &sha256, &foreign_seal)
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("supplied extract receipt differs"));
+
+        let missing_seal = ReceiptFileSeal {
+            path: temp
+                .path()
+                .join("missing-extract.json")
+                .display()
+                .to_string(),
+            length: bytes.len() as u64,
+            sha256: encode_hex(&sha256),
+        };
+        let error =
+            verify_chained_extract_identity(&canonical, bytes.len() as u64, &sha256, &missing_seal)
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("ASSET_PATCH_RECEIPT"));
     }
 
     #[test]
