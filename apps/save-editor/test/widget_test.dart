@@ -441,6 +441,26 @@ void main() {
       lessThan(20),
       reason: 'read-only container cards use the same compact title layout',
     );
+    final containerCard = find.descendant(
+      of: containerRow,
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(
+      tester.getSize(containerCard).height,
+      lessThan(110),
+      reason: 'a one-line read-only value must not reserve four text lines',
+    );
+    final containerValue = find.descendant(
+      of: containerRow,
+      matching: find.text('12 elements'),
+    );
+    expect(
+      (tester.getTopLeft(containerTitle).dy -
+              tester.getTopLeft(containerValue).dy)
+          .abs(),
+      lessThan(3),
+      reason: 'card information and its value must share the top alignment',
+    );
 
     final queryField = find.byWidgetPredicate(
       (widget) =>
