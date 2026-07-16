@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/loc/game_lang.dart';
 import 'package:goresave/loc/loc_catalog_provider.dart';
@@ -230,6 +231,7 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
     final l10n = AppLocalizations.of(context);
     final locCatalog = ref.watch(locCatalogProvider).value ?? const {};
     final lang = ref.watch(currentGameLangProvider);
+    final showObjectIds = ref.watch(showObjectIdsProvider);
     final values = _visibleValues(locCatalog, lang);
     final pendingById = {
       for (final edit in widget.notifier.allStoryStateEdits())
@@ -430,6 +432,7 @@ class _StoryStateDetailState extends ConsumerState<StoryStateDetail> {
                         onChanged: () => setState(() {}),
                         locCatalog: locCatalog,
                         lang: lang,
+                        showObjectIds: showObjectIds,
                         theme: widget.theme,
                       ),
                     ),
@@ -452,6 +455,7 @@ class _StoryValueTile extends StatelessWidget {
     required this.onChanged,
     required this.locCatalog,
     required this.lang,
+    required this.showObjectIds,
     required this.theme,
   });
 
@@ -464,6 +468,7 @@ class _StoryValueTile extends StatelessWidget {
   final VoidCallback onChanged;
   final Map<String, Map<String, String>> locCatalog;
   final GameLang lang;
+  final bool showObjectIds;
   final ThemeData theme;
 
   Future<void> _editValue(BuildContext context) async {
@@ -521,14 +526,16 @@ class _StoryValueTile extends StatelessWidget {
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SelectableText(
-            value.id,
-            style: theme.textTheme.bodySmall?.copyWith(
-              color: theme.colorScheme.onSurfaceVariant,
-              fontFamily: 'Consolas',
+          if (showObjectIds) ...[
+            SelectableText(
+              value.id,
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+                fontFamily: 'Consolas',
+              ),
             ),
-          ),
-          const SizedBox(height: 3),
+            const SizedBox(height: 3),
+          ],
           Wrap(
             spacing: 6,
             runSpacing: 4,

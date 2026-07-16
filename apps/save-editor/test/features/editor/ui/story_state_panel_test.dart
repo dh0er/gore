@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:goresave/features/app/domain/ui_settings.dart';
 import 'package:goresave/features/editor/domain/core_service.dart';
 import 'package:goresave/features/editor/domain/editor_models.dart';
 import 'package:goresave/features/editor/domain/editor_notifier.dart';
@@ -16,6 +17,46 @@ import 'package:goresave/loc/loc_catalog_provider.dart';
 import '../../../support/l10n_test_app.dart';
 
 void main() {
+  testWidgets('gates collapsed story IDs behind the object-ID setting', (
+    tester,
+  ) async {
+    final notifier = EditorNotifier(_BenignCore(), saveDir: r'C:\tmp\saves');
+    addTearDown(notifier.dispose);
+    const page = StoryStatePage(
+      values: [
+        StoryStateValue(
+          id: 'Stone_OreArmor',
+          value: 1,
+          stored: true,
+          catalogKnown: true,
+          path: [],
+          semanticType: StorySemanticType.integer,
+          declaredType: 'int32',
+        ),
+      ],
+      total: 1,
+      storedTotal: 1,
+      catalogTotal: 1,
+      writable: true,
+    );
+
+    await _pumpEditableStoryPanel(tester, notifier: notifier, page: page);
+
+    expect(find.text('Stone Ore Armor'), findsOneWidget);
+    expect(find.text('Stone_OreArmor'), findsNothing);
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(StoryStateDetail)),
+    );
+    container.read(showObjectIdsProvider.notifier).set(true);
+    await tester.pump();
+    expect(find.text('Stone_OreArmor'), findsOneWidget);
+
+    container.read(showObjectIdsProvider.notifier).set(false);
+    await tester.pump();
+    expect(find.text('Stone_OreArmor'), findsNothing);
+  });
+
   testWidgets('keeps catalog guidance hidden behind the info button', (
     tester,
   ) async {
@@ -153,7 +194,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Stone — Ore Armor'), findsOneWidget);
-    expect(find.text('Stone_OreArmor'), findsOneWidget);
+    expect(find.text('Stone_OreArmor'), findsNothing);
     expect(find.text('Day 20, 10:50:47'), findsOneWidget);
     expect(find.text('1 of 2 story values'), findsOneWidget);
 
@@ -165,7 +206,7 @@ void main() {
 
     await tester.tap(find.text('Not set (1)'));
     await tester.pumpAndSettle();
-    expect(find.text('AfterCinematic_Nyras'), findsOneWidget);
+    expect(find.text('AfterCinematic_Nyras'), findsNothing);
     expect(find.text('Stone_OreArmor'), findsNothing);
     await tester.tap(find.text('After Cinematic Nyras'));
     await tester.pumpAndSettle();
