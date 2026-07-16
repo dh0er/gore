@@ -1831,4 +1831,158 @@ class AppLocalizationsDe extends AppLocalizations {
   String managedProblemsDataAssetOfflineDescription(String targetPath) {
     return 'Die gespeicherte Änderung für $targetPath kann unter DataAsset-Änderungen geprüft werden, aber noch nicht durch einen verwalteten Projekt-Build ausgegeben oder als im Spiel funktionsfähig bezeichnet werden.';
   }
+
+  @override
+  String get projectExportActionTitle => 'Projektkopie exportieren…';
+
+  @override
+  String get projectExportActionDescription =>
+      'Eine exakte portable Kopie des aktuell gespeicherten Projektstands schreiben.';
+
+  @override
+  String get projectExportActionDirtyBlocked =>
+      'Speichere oder verwirf die offenen Lokalisierungsänderungen, bevor du eine Projektkopie exportierst.';
+
+  @override
+  String get projectExportDialogTitle => 'Projektkopie exportieren';
+
+  @override
+  String get projectExportPortableCopyTitle => 'Portable Projektkopie';
+
+  @override
+  String get projectExportPortableCopyDescription =>
+      'Dies schreibt den exakten aktuell gespeicherten Projektstand in eine neue .goremod-Datei. Das offene Projekt bleibt aktuell und unverändert.';
+
+  @override
+  String get projectExportCapabilityBoundary =>
+      'Diese Kopie ist kein spielbarer Mod, Build, Deployment oder wiederherstellbares Backup. Spiel und Spielstände werden weder gelesen noch verändert.';
+
+  @override
+  String get projectExportKeepOriginal =>
+      'Der Import dieser verwalteten Kopie ist noch nicht verfügbar. Bewahre den ursprünglichen Projektordner auf.';
+
+  @override
+  String get projectExportFileNameLabel => 'Neue Projektkopie-Datei';
+
+  @override
+  String get projectExportFileNameHelper =>
+      'Verwende einen neuen portablen Dateinamen mit der Endung .goremod.';
+
+  @override
+  String get projectExportChooseDestination => 'Zielordner auswählen';
+
+  @override
+  String get projectExportNoDestination => 'Kein Zielordner ausgewählt';
+
+  @override
+  String get projectExportNewFile => 'Neue Datei';
+
+  @override
+  String get projectExportCancel => 'Abbrechen';
+
+  @override
+  String get projectExportClose => 'Schließen';
+
+  @override
+  String get projectExportSubmit => 'Kopie exportieren';
+
+  @override
+  String get projectExportExporting => 'Export wird erstellt…';
+
+  @override
+  String get projectExportParentRequired =>
+      'Wähle einen vorhandenen Zielordner aus.';
+
+  @override
+  String get projectExportParentAbsolute =>
+      'Wähle einen absoluten vorhandenen Zielordner aus.';
+
+  @override
+  String get projectExportParentLink =>
+      'Das ausgewählte Ziel ist ein Link. Wähle einen echten vorhandenen Ordner.';
+
+  @override
+  String get projectExportParentInspectFailed =>
+      'Der Zielordner konnte nicht sicher geprüft werden. Nichts wurde erstellt.';
+
+  @override
+  String get projectExportFileNameRequired =>
+      'Gib einen neuen Dateinamen für die Projektkopie ein.';
+
+  @override
+  String get projectExportFileNameTooLong =>
+      'Der Dateiname darf höchstens 128 ASCII-Zeichen lang sein.';
+
+  @override
+  String get projectExportFileNameInvalid =>
+      'Beginne mit einem Buchstaben oder einer Ziffer, verwende nur ASCII-Buchstaben, Ziffern, Punkte, Unterstriche oder Bindestriche und ende mit .goremod.';
+
+  @override
+  String get projectExportFileNameReserved =>
+      'Dieser Dateiname ist unter Windows reserviert.';
+
+  @override
+  String get projectExportOutputExists =>
+      'Diese Datei existiert bereits. Wähle einen neuen Dateinamen; vorhandene Dateien werden niemals überschrieben.';
+
+  @override
+  String get projectExportOutputLink =>
+      'Der neue Dateipfad ist ein Link. Wähle einen anderen Dateinamen.';
+
+  @override
+  String get projectExportOutputRejected =>
+      'Das Ziel wurde abgelehnt, bevor die neue lokale Datei erstellt wurde. Nichts wurde erstellt. Wähle einen anderen Dateinamen oder Zielordner.';
+
+  @override
+  String get projectExportStale =>
+      'Das Projekt wurde vor dem Export geändert. Es wurde keine Ausgabe erstellt. Schließe dieses Fenster und öffne Projektkopie exportieren erneut.';
+
+  @override
+  String get projectExportRequiresReopen =>
+      'Dieses Projekt kann nicht mehr als aktuell verifiziert werden. Es wurde keine Ausgabe erstellt. Schließe dieses Fenster und stelle das Projekt wieder her oder öffne es erneut.';
+
+  @override
+  String get projectExportUnsupported =>
+      'Diese verwaltete Projektsitzung kann keine exakten portablen Kopien exportieren. Nichts wurde erstellt.';
+
+  @override
+  String get projectExportFailedBeforeStart =>
+      'Die Projektkopie konnte nicht exakt vorbereitet werden. Nichts wurde erstellt.';
+
+  @override
+  String get projectExportPrepublicationFailed =>
+      'Der Export wurde sicher beendet, bevor die neue lokale Datei erstellt wurde. Nichts wurde erstellt. Schließe dieses Fenster und prüfe Projekt und Ziel, bevor du es erneut versuchst.';
+
+  @override
+  String projectExportMayExist(String output) {
+    return 'Der Export hat keinen verifizierten Beleg geliefert. Nicht erneut versuchen. Schließe dieses Fenster und prüfe das Ziel: $output';
+  }
+
+  @override
+  String projectExportResultMismatch(String output) {
+    return 'Der abgeschlossene Export stimmt nicht mit diesem Projektstand oder Ziel überein. Nicht erneut versuchen; prüfe das Ziel: $output';
+  }
+
+  @override
+  String get projectExportPublished =>
+      'Die exakte portable Projektkopie wurde als neue lokale Datei erstellt.';
+
+  @override
+  String get projectExportPublishedCleanupWarning =>
+      'Die exakte Projektkopie wurde als lokale Datei erstellt, aber die interne temporäre Bereinigung blieb unvollständig. Die erstellte Datei ist gültig; nicht erneut versuchen.';
+
+  @override
+  String projectExportPublicationUncertain(String output) {
+    return 'Die lokale Datei könnte erstellt worden sein. Nicht erneut versuchen. Prüfe, ob dieses Ziel existiert: $output';
+  }
+
+  @override
+  String get projectExportArchiveBytes => 'Archivgröße in Bytes';
+
+  @override
+  String get projectExportArchiveSha256 => 'Archiv-SHA-256';
+
+  @override
+  String get projectExportCurrentProjectUnchanged =>
+      'Das aktuelle Projekt bleibt offen und unverändert. Spiel und Spielstände wurden nicht berührt.';
 }

@@ -385,6 +385,18 @@ proof. It does not widen that evidence to adjacent use cases.
 | Templates/clone/batch/CSV | **First Empty/NPC Draft/Quest Draft starters integrated; reusable templates and batch tools missing** | New-project creation now offers **Empty**, **NPC Draft**, and **Quest Draft** before metadata entry. Every choice first creates and adopts the same canonical empty revision-0 project through absent-head CAS; an NPC or Quest choice then opens the existing guided exact-head wizard and may publish a separate revision 1. Cancel before publication leaves the exact empty project. If publication outcome cannot be verified, Studio requires reopening instead of claiming that the project stayed empty. Copy states this two-stage boundary before creation and never calls it one atomic template transaction. Multi-domain/playable-slice templates still require a native compound prepare/publication transaction. Dependency-aware templates, clone modes, transactional bulk editing, and CSV round trip remain missing. |
 | Expert escape hatch | **Partial** | The CLI and script-source editor expose powerful low-level paths. Studio lacks a unified generated-source/raw-property/BuildSpec inspector and source override contract. |
 
+The managed project core also exposes **Export project copy** from the Project
+menu and Home's first project-tool action. It serializes the exact current R3
+head and its recursive historical Quest-basis closure into a deterministic,
+strictly reopened, no-clobber `.goremod`. The three sealed terminals distinguish
+published, published-with-cleanup-warning, and publication-uncertain outcomes;
+the latter is never retried automatically. This operation needs no configured
+game, writes neither game nor save data, and does not adopt a new working path.
+Because no importer exists yet, the UI explicitly calls the artifact a portable
+review copy rather than a restorable backup or playable mod and tells authors to
+keep the original managed directory. See
+[Managed project snapshot export](managed-project-export.md).
+
 ## 4. Complete authoring surfaces
 
 ### 4.1 Project dashboard
@@ -1315,14 +1327,15 @@ reuse plus direct full-text/locale editing and full reopen are now landed
 bounded slices, not vanilla adoption. The card-only Story destination has also
 been replaced by a direct exact-current NPC/Quest search/filter/list plus the
 existing Workbench; this improves access but does not make the underlying Drafts
-buildable or runtime-qualified. The next reviewed non-World backend candidate is
-(1) build, reopen, and verify one exact selected reviewed managed DataAsset
-stage into a new receipt-owned offline output. Then (2) complete semantic
-line/slot relationships and the remaining localization/Voice production tools;
-(3) finish project deletion, undo/history, export, and recovery, with Close
-already landed; (4) deepen the existing NPC and Quest journeys beyond their
-direct workspace; and (5) complete honest managed build/release and qualified
-test paths. Broad World or level authoring remains frozen
+buildable or runtime-qualified. One reviewed managed DataAsset stage can now be
+built, reopened, and re-inspected in a receipt-owned offline output, and one
+exact R3 checkpoint can be exported as a deterministic project copy without an
+import or restore claim. Next, (1) complete semantic line/slot relationships and
+the remaining localization/Voice production tools; (2) finish semantic/project
+deletion, shared undo/history, and broader recovery, with Close and bounded
+same-lock recovery already landed; (3) deepen the existing NPC and Quest
+journeys beyond their direct workspace; and (4) complete honest managed
+build/release and qualified test paths. Broad World or level authoring remains frozen
 until these workflows are usable end to end. World may stay visible as an
 unavailable destination, but research or a placeholder must not displace this
 queue.

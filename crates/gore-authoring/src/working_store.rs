@@ -26,6 +26,16 @@ use crate::{
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
 };
 
+mod revision3_export;
+
+pub use revision3_export::{
+    Revision3ExactSnapshotClosureV1, Revision3ExactSnapshotExportErrorV1,
+    Revision3ExactSnapshotExportPublicationV1, Revision3ExactSnapshotExportV1,
+    Revision3ExactSnapshotExportWarningV1, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1,
+    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1,
+    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1,
+};
+
 const HEAD_FILE_NAME: &str = "gore-project.json";
 const STORE_FORMAT: u32 = 1;
 const MAX_HEAD_BYTES_HARD: usize = 64 * 1024;
@@ -226,6 +236,7 @@ pub(crate) struct Revision3DataAssetBasisPreflight {
     pub(crate) project_id: ProjectId,
     pub(crate) target: GameGenerationAnchor,
     pub(crate) revision: u64,
+    pub(crate) manifest: Revision3SnapshotManifest,
     pub(crate) verification_objects: u64,
     pub(crate) verification_bytes: u64,
 }
@@ -1687,8 +1698,9 @@ impl WorkingProjectStore {
                 snapshot: snapshot.clone(),
             },
             project_id: manifest.project_id,
-            target: manifest.target,
+            target: manifest.target.clone(),
             revision: manifest.revision,
+            manifest,
             verification_objects,
             verification_bytes,
         })

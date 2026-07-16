@@ -319,6 +319,11 @@ pub use working_store::{
     AssetVerification, CheckpointPreparation, ImportedOgg, ImportedQuestCollisionArtifactV1,
     ImportedQuestCollisionArtifactV2, OggImportError, OggImportFailureContext, OpenedCheckpoint,
     OpenedDocumentCheckpoint, OpenedRevision3Checkpoint, PreparedOggImport,
-    Revision3CheckpointPreparation, Revision3SnapshotManifest, WorkingHead, WorkingProjectStore,
-    WorkingStoreError, WorkingStoreFormat, WorkingStoreLimits,
+    Revision3CheckpointPreparation, Revision3ExactSnapshotClosureV1,
+    Revision3ExactSnapshotExportErrorV1, Revision3ExactSnapshotExportPublicationV1,
+    Revision3ExactSnapshotExportV1, Revision3ExactSnapshotExportWarningV1,
+    Revision3SnapshotManifest, WorkingHead, WorkingProjectStore, WorkingStoreError,
+    WorkingStoreFormat, WorkingStoreLimits, REVISION3_EXACT_SNAPSHOT_ARTIFACT_KIND_V1,
+    REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1,
+    REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1,
 };

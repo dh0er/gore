@@ -133,6 +133,64 @@ final class Revision3RecoveryNotRequiredException
     : super('the current managed project does not require recovery');
 }
 
+final class Revision3ProjectExportStaleCheckpointException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectExportStaleCheckpointException()
+    : super('the managed project changed before export could start');
+}
+
+final class Revision3ProjectExportRequiresReopenException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectExportRequiresReopenException({
+    this.publicationMayExist = false,
+    this.code,
+    this.cause,
+  }) : super('the managed project must be recovered or reopened before export');
+
+  final bool publicationMayExist;
+  final String? code;
+  final Object? cause;
+}
+
+final class Revision3ProjectExportUnsupportedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectExportUnsupportedException()
+    : super('this current project cannot export an exact managed project copy');
+}
+
+final class Revision3ProjectExportFailedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectExportFailedException({
+    this.cause,
+    this.code,
+    this.publicationMayExist = true,
+    this.retryWithNewDestination = false,
+  }) : assert(!retryWithNewDestination || !publicationMayExist),
+       super('the exact managed project copy could not be exported safely');
+
+  final Object? cause;
+  final String? code;
+  final bool publicationMayExist;
+  final bool retryWithNewDestination;
+}
+
+const _revision3ProjectExportSafePrepublicationCodes = <String>{
+  'AUTHORING_REVISION3_EXPORT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_EXPORT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_EXPORT_CLOSURE_LIMIT',
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+  'AUTHORING_REVISION3_EXPORT_ARCHIVE_FAILED',
+  'AUTHORING_REVISION3_EXPORT_VERIFY_FAILED',
+  'AUTHORING_REVISION3_EXPORT_CLEANUP_FAILED',
+  'AUTHORING_REVISION3_EXPORT_PUBLICATION_FAILED',
+};
+
+const _revision3ProjectExportDestinationRetryCodes = <String>{
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+};
+
 final class ManagedRevision3ProjectCreationException
     extends CurrentProjectCoordinatorException {
   const ManagedRevision3ProjectCreationException(super.message);
@@ -435,6 +493,21 @@ abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
   });
 }
 
+/// Optional exact-snapshot export authority. Keeping it separate ensures that
+/// test leases and alternate managed sessions do not accidentally claim
+/// portable-copy support merely by implementing ordinary project editing.
+abstract interface class ManagedRevision3ProjectExportLease {
+  bool get supportsExactSnapshotExport;
+
+  /// Permanently remove mutation/export authority after a post-call result
+  /// cannot be bound to the requested checkpoint or publication terminal.
+  void markRequiresReopenAfterPublicationUncertainty();
+
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String output,
+  });
+}
+
 typedef ManagedRevision3CurrentProjectOpener =
     Future<ManagedRevision3CurrentProjectLease> Function(Directory root);
 
@@ -545,7 +618,8 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3RecoveryLease,
-        ManagedRevision3ReviewedDataAssetBuildLease {
+        ManagedRevision3ReviewedDataAssetBuildLease,
+        ManagedRevision3ProjectExportLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -581,6 +655,14 @@ final class _ManagedRevision3SessionLease
   @override
   bool get supportsReviewedDataAssetBuild =>
       _session.supportsReviewedDataAssetBuild;
+
+  @override
+  bool get supportsExactSnapshotExport => _session.supportsExactSnapshotExport;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String output,
+  }) => _session.exportExactSnapshotV1(output: output);
 
   @override
   Directory get root => _session.root;
@@ -3144,6 +3226,142 @@ final class CurrentProjectCoordinator
         );
       }
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Export one immutable portable copy from the exact visible managed
+  /// checkpoint. The current project remains open and unchanged; publication
+  /// uncertainty is a sealed terminal result and must not be retried.
+  Future<AuthoringRevision3ExactSnapshotExportResult>
+  exportCurrentRevision3ExactSnapshot({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectExportRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ProjectExportStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ProjectExportLease) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    final exportLease = lease as ManagedRevision3ProjectExportLease;
+    if (!exportLease.supportsExactSnapshotExport) {
+      throw const Revision3ProjectExportUnsupportedException();
+    }
+    try {
+      final result = await exportLease.exportExactSnapshotV1(output: output);
+      if (result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectId != lease.projectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.projectRevision != lease.projectRevision ||
+          result.output != output ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        exportLease.markRequiresReopenAfterPublicationUncertainty();
+        throw const Revision3ProjectExportRequiresReopenException(
+          publicationMayExist: true,
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (error is Revision3ProjectExportRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          exportLease.markRequiresReopenAfterPublicationUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (error is Revision3ProjectExportFailedException) {
+        if (!error.publicationMayExist) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+        if (!lease.requiresReopen) {
+          exportLease.markRequiresReopenAfterPublicationUncertainty();
+        }
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: true,
+            code: error.code,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ManagedProjectHeadConflictException) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: false,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ManagedRevision3ExactSnapshotExportPrepublicationException) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: false,
+            code: error.code,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3ProjectExportSafePrepublicationCodes.contains(error.code)) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportFailedException(
+            cause: error,
+            code: error.code,
+            publicationMayExist: false,
+            retryWithNewDestination:
+                _revision3ProjectExportDestinationRetryCodes.contains(
+                  error.code,
+                ),
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ArgumentError) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportFailedException(
+            cause: error,
+            publicationMayExist: false,
+          ),
+          stackTrace,
+        );
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          Revision3ProjectExportRequiresReopenException(
+            publicationMayExist: true,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      exportLease.markRequiresReopenAfterPublicationUncertainty();
+      Error.throwWithStackTrace(
+        Revision3ProjectExportRequiresReopenException(
+          publicationMayExist: true,
+          cause: error,
+        ),
+        stackTrace,
+      );
     } finally {
       _refreshCurrentIfUnchanged(current);
     }

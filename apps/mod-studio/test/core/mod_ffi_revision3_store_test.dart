@@ -260,6 +260,7 @@ void main() {
         'authoring_store_build_revision3_voice_v1',
         'authoring_store_check_revision3_npc_compiler_v1',
         'authoring_store_check_revision3_quest_compiler_v1',
+        'authoring_store_export_revision3_exact_snapshot_v1',
         'authoring_store_inspect_revision3_installed_dataasset_v1',
         'authoring_store_inspect_revision3_npc_source_v1',
         'authoring_store_inspect_revision3_quest_source_v1',

@@ -4046,6 +4046,513 @@ void main() {
   );
 
   test(
+    'exact project export is tuple-bound, game-independent, and leaves the current checkpoint unchanged',
+    () async {
+      const output = r'C:\Exports\project-copy-r7.goremod';
+      final managed = _FakeExportManagedLease(
+        root: Directory('managed-project-export'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (lease, receivedOutput) {
+          expect(receivedOutput, output);
+          return _projectExportResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            output: receivedOutput,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final result = await coordinator.exportCurrentRevision3ExactSnapshot(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        output: output,
+      );
+
+      expect(result.output, output);
+      expect(result.publicationIsUncertain, isFalse);
+      expect(managed.exportCalls, 1);
+      expect(managed.exportOutputs, [output]);
+      final after = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(after.root.path, visible.root.path);
+      expect(after.projectId, visible.projectId);
+      expect(after.projectRevision, visible.projectRevision);
+      expect(after.head.canonicalJson, visible.head.canonicalJson);
+      expect(after.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'exact project export rejects stale and unsupported sessions before lease access',
+    () async {
+      final managed = _FakeExportManagedLease(
+        root: Directory('managed-project-export-stale'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (lease, output) => _projectExportResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          output: output,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 6,
+          expectedHead: _head(6),
+          output: r'C:\Exports\stale.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportStaleCheckpointException>()),
+      );
+      expect(managed.exportCalls, 0);
+
+      final unsupported = _FakeManagedLease(
+        root: Directory('managed-project-export-unsupported'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final unsupportedCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => unsupported,
+      );
+      addTearDown(() async {
+        await unsupportedCoordinator.shutdown();
+        unsupportedCoordinator.dispose();
+      });
+      final unsupportedVisible = await unsupportedCoordinator
+          .openManagedRevision3(unsupported.root);
+
+      await expectLater(
+        unsupportedCoordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: unsupportedVisible.root.path,
+          expectedProjectId: unsupportedVisible.projectId,
+          expectedProjectRevision: unsupportedVisible.projectRevision,
+          expectedHead: unsupportedVisible.head,
+          output: r'C:\Exports\unsupported.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportUnsupportedException>()),
+      );
+      expect(unsupported.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'exact project export honors a false optional capability and requires-reopen latch',
+    () async {
+      final managed = _FakeExportManagedLease(
+        root: Directory('managed-project-export-capability'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        supportsExport: false,
+        onExport: (lease, output) => _projectExportResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          output: output,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          output: r'C:\Exports\disabled.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportUnsupportedException>()),
+      );
+      expect(managed.exportCalls, 0);
+
+      managed.requiresReopenValue = true;
+      await expectLater(
+        coordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          output: r'C:\Exports\reopen.goremod',
+        ),
+        throwsA(isA<Revision3ProjectExportRequiresReopenException>()),
+      );
+      expect(managed.exportCalls, 0);
+    },
+  );
+
+  test(
+    'exact project export preserves every known safe native prepublication code',
+    () async {
+      const safeCodes = <String>{
+        'AUTHORING_REVISION3_EXPORT_REQUEST_INVALID',
+        'AUTHORING_REVISION3_EXPORT_INPUT_LIMIT',
+        'AUTHORING_REVISION3_EXPORT_CLOSURE_LIMIT',
+        'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+        'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+        'AUTHORING_REVISION3_EXPORT_ARCHIVE_FAILED',
+        'AUTHORING_REVISION3_EXPORT_VERIFY_FAILED',
+        'AUTHORING_REVISION3_EXPORT_CLEANUP_FAILED',
+        'AUTHORING_REVISION3_EXPORT_PUBLICATION_FAILED',
+      };
+      const destinationCodes = <String>{
+        'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+        'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+      };
+
+      for (final code in safeCodes) {
+        final nativeError = ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v1',
+          code: code,
+          message: 'safe prepublication failure',
+        );
+        final managed = _FakeExportManagedLease(
+          root: Directory('managed-project-export-safe-$code'),
+          projectIdValue: revision3VoiceFixtureProjectId,
+          projectRevision: 7,
+          head: _head(7),
+          onExport: (_, _) => throw nativeError,
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        final visible = await coordinator.openManagedRevision3(managed.root);
+
+        await expectLater(
+          coordinator.exportCurrentRevision3ExactSnapshot(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            output: 'C:\\Exports\\safe-$code.goremod',
+          ),
+          throwsA(
+            isA<Revision3ProjectExportFailedException>()
+                .having(
+                  (error) => error.publicationMayExist,
+                  'publicationMayExist',
+                  isFalse,
+                )
+                .having((error) => error.code, 'code', code)
+                .having(
+                  (error) => error.retryWithNewDestination,
+                  'retryWithNewDestination',
+                  destinationCodes.contains(code),
+                )
+                .having((error) => error.cause, 'cause', same(nativeError)),
+          ),
+        );
+        expect(managed.exportCalls, 1);
+        expect(managed.requiresReopen, isFalse);
+      }
+    },
+  );
+
+  test(
+    'exact project export keeps head drift and poisoned known prepublication failures output-absent',
+    () async {
+      late _FakeExportManagedLease headConflictLease;
+      headConflictLease = _FakeExportManagedLease(
+        root: Directory('managed-project-export-head-conflict'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (_, _) {
+          headConflictLease.requiresReopenValue = true;
+          throw const ManagedProjectHeadConflictException(
+            'head drift before export publication',
+          );
+        },
+      );
+      final headCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => headConflictLease,
+      );
+      addTearDown(() async {
+        await headCoordinator.shutdown();
+        headCoordinator.dispose();
+      });
+      final headVisible = await headCoordinator.openManagedRevision3(
+        headConflictLease.root,
+      );
+
+      await expectLater(
+        headCoordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: headVisible.root.path,
+          expectedProjectId: headVisible.projectId,
+          expectedProjectRevision: headVisible.projectRevision,
+          expectedHead: headVisible.head,
+          output: r'C:\Exports\head-conflict.goremod',
+        ),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>()
+              .having(
+                (error) => error.publicationMayExist,
+                'publicationMayExist',
+                isFalse,
+              )
+              .having(
+                (error) => error.cause,
+                'cause',
+                isA<ManagedProjectHeadConflictException>(),
+              ),
+        ),
+      );
+      expect(
+        (headCoordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+
+      const code = 'AUTHORING_REVISION3_EXPORT_STORE_CHANGED';
+      late _FakeExportManagedLease prepublicationLease;
+      prepublicationLease = _FakeExportManagedLease(
+        root: Directory('managed-project-export-prepublication-poison'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (_, _) {
+          prepublicationLease.requiresReopenValue = true;
+          throw const ManagedRevision3ExactSnapshotExportPrepublicationException(
+            code: code,
+            message: 'Store changed before publication',
+          );
+        },
+      );
+      final prepublicationCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => prepublicationLease,
+      );
+      addTearDown(() async {
+        await prepublicationCoordinator.shutdown();
+        prepublicationCoordinator.dispose();
+      });
+      final prepublicationVisible = await prepublicationCoordinator
+          .openManagedRevision3(prepublicationLease.root);
+
+      await expectLater(
+        prepublicationCoordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: prepublicationVisible.root.path,
+          expectedProjectId: prepublicationVisible.projectId,
+          expectedProjectRevision: prepublicationVisible.projectRevision,
+          expectedHead: prepublicationVisible.head,
+          output: r'C:\Exports\prepublication-poison.goremod',
+        ),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>()
+              .having(
+                (error) => error.publicationMayExist,
+                'publicationMayExist',
+                isFalse,
+              )
+              .having((error) => error.code, 'code', code),
+        ),
+      );
+      expect(
+        (prepublicationCoordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'exact project export latches malformed post-call failures before another export',
+    () async {
+      final managed = _FakeExportManagedLease(
+        root: Directory('managed-project-export-unknown-failure'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (_, _) => throw const ModFfiException(
+          command: 'authoring_store_export_revision3_exact_snapshot_v1',
+          code: ModFfiException.malformedNativeResponseCode,
+          message: 'malformed native response',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> export(String output) => coordinator
+          .exportCurrentRevision3ExactSnapshot(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            output: output,
+          )
+          .then<void>((_) {});
+
+      await expectLater(
+        export(r'C:\Exports\malformed.goremod'),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>()
+              .having(
+                (error) => error.publicationMayExist,
+                'publicationMayExist',
+                isTrue,
+              )
+              .having((error) => error.cause, 'cause', isA<ModFfiException>()),
+        ),
+      );
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.publicationUncertaintyLatchCalls, 1);
+      await expectLater(
+        export(r'C:\Exports\blocked-after-malformed.goremod'),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>().having(
+            (error) => error.publicationMayExist,
+            'publicationMayExist',
+            isFalse,
+          ),
+        ),
+      );
+      expect(managed.exportCalls, 1);
+    },
+  );
+
+  test(
+    'exact project export latches mismatched and thrown post-call results',
+    () async {
+      final mismatchLease = _FakeExportManagedLease(
+        root: Directory('managed-project-export-failure'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (lease, output) {
+          return _projectExportResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision + 1,
+            output: output,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => mismatchLease,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(
+        mismatchLease.root,
+      );
+
+      Future<void> export(String output) => coordinator
+          .exportCurrentRevision3ExactSnapshot(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            output: output,
+          )
+          .then<void>((_) {});
+
+      await expectLater(
+        export(r'C:\Exports\mismatch.goremod'),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>().having(
+            (error) => error.publicationMayExist,
+            'publicationMayExist',
+            isTrue,
+          ),
+        ),
+      );
+      expect(mismatchLease.requiresReopen, isTrue);
+      expect(mismatchLease.publicationUncertaintyLatchCalls, 1);
+      await expectLater(
+        export(r'C:\Exports\blocked-after-mismatch.goremod'),
+        throwsA(isA<Revision3ProjectExportRequiresReopenException>()),
+      );
+      expect(mismatchLease.exportCalls, 1);
+      final refreshed =
+          coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(refreshed.projectRevision, visible.projectRevision);
+      expect(refreshed.head.canonicalJson, visible.head.canonicalJson);
+      expect(refreshed.requiresReopen, isTrue);
+
+      final thrownLease = _FakeExportManagedLease(
+        root: Directory('managed-project-export-thrown-failure'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onExport: (_, _) => throw StateError('injected export failure'),
+      );
+      final thrownCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => thrownLease,
+      );
+      addTearDown(() async {
+        await thrownCoordinator.shutdown();
+        thrownCoordinator.dispose();
+      });
+      final thrownVisible = await thrownCoordinator.openManagedRevision3(
+        thrownLease.root,
+      );
+      await expectLater(
+        thrownCoordinator.exportCurrentRevision3ExactSnapshot(
+          expectedRoot: thrownVisible.root.path,
+          expectedProjectId: thrownVisible.projectId,
+          expectedProjectRevision: thrownVisible.projectRevision,
+          expectedHead: thrownVisible.head,
+          output: r'C:\Exports\failure.goremod',
+        ),
+        throwsA(
+          isA<Revision3ProjectExportRequiresReopenException>()
+              .having((error) => error.cause, 'cause', isA<StateError>())
+              .having(
+                (error) => error.publicationMayExist,
+                'publicationMayExist',
+                isTrue,
+              ),
+        ),
+      );
+      expect(thrownLease.requiresReopen, isTrue);
+      expect(thrownLease.publicationUncertaintyLatchCalls, 1);
+      expect(thrownLease.exportCalls, 1);
+    },
+  );
+
+  test(
     'reviewed DataAsset build rejects a stale lease before access and accepts an exact uncertain receipt',
     () async {
       const targetPath = '/Game/Blueprints/Items/FootstepPreset';
@@ -5339,6 +5846,11 @@ typedef _RecoveryHook =
     FutureOr<ManagedRevision3RecoveryCheckpoint> Function(
       _FakeRecoveryManagedLease lease,
     );
+typedef _ProjectExportHook =
+    FutureOr<AuthoringRevision3ExactSnapshotExportResult> Function(
+      _FakeExportManagedLease lease,
+      String output,
+    );
 
 class _FakeManagedLease
     implements
@@ -5482,9 +5994,11 @@ class _FakeManagedLease
   int dataAssetPackageIndexReadCalls = 0;
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
   int installedDataAssetInspectionCalls = 0;
+  int publicationUncertaintyLatchCalls = 0;
 
   @override
   void markRequiresReopenAfterPublicationUncertainty() {
+    publicationUncertaintyLatchCalls++;
     requiresReopenValue = true;
   }
 
@@ -5965,6 +6479,35 @@ class _FakeManagedLease
   }
 }
 
+final class _FakeExportManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectExportLease {
+  _FakeExportManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required this.onExport,
+    this.supportsExport = true,
+  });
+
+  final _ProjectExportHook onExport;
+  final bool supportsExport;
+  int exportCalls = 0;
+  final List<String> exportOutputs = <String>[];
+
+  @override
+  bool get supportsExactSnapshotExport => supportsExport;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String output,
+  }) async {
+    exportCalls++;
+    exportOutputs.add(output);
+    return onExport(this, output);
+  }
+}
+
 final class _FakeRecoveryManagedLease extends _FakeManagedLease
     implements ManagedRevision3RecoveryLease {
   _FakeRecoveryManagedLease({
@@ -6100,6 +6643,80 @@ AuthoringRevision3VoiceBuildResult _voiceBuildResult({
   ),
   expectedOutput: output,
 );
+
+AuthoringRevision3ExactSnapshotExportResult _projectExportResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+  AuthoringRevision3ExactSnapshotExportOutcome outcome =
+      AuthoringRevision3ExactSnapshotExportOutcome.exported,
+}) {
+  final (outcomeName, publicationStatus, warning) = switch (outcome) {
+    AuthoringRevision3ExactSnapshotExportOutcome.exported => (
+      'exported',
+      'published',
+      null,
+    ),
+    AuthoringRevision3ExactSnapshotExportOutcome.exportedWithCleanupWarning => (
+      'exported_with_cleanup_warning',
+      'published_with_cleanup_warning',
+      <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_CLEANUP_WARNING',
+        'message':
+            'the verified snapshot was published, but private staging cleanup was incomplete',
+      },
+    ),
+    AuthoringRevision3ExactSnapshotExportOutcome.publicationUncertain => (
+      'publication_uncertain',
+      'publication_uncertain',
+      <String, Object?>{
+        'code': 'AUTHORING_REVISION3_EXPORT_PUBLICATION_UNCERTAIN',
+        'message': 'publication may have completed; do not retry automatically',
+      },
+    ),
+  };
+  return AuthoringRevision3ExactSnapshotExportResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': outcomeName,
+      'format': 'managed_revision3_exact_snapshot_v1',
+      'artifact_kind': 'portable_snapshot_review_copy',
+      'restore_status': 'not_supported',
+      'basis_head_json': head.canonicalJson,
+      'project_id': projectId,
+      'project_revision': projectRevision,
+      'output': output,
+      'archive': <String, Object?>{
+        'byte_len': 300,
+        'sha256': List<String>.filled(64, 'a').join(),
+      },
+      'manifest': <String, Object?>{
+        'relative_name': 'gore-export.json',
+        'byte_len': 100,
+        'sha256': List<String>.filled(64, 'b').join(),
+      },
+      'closure': <String, Object?>{
+        'snapshot_objects': 1,
+        'entity_objects': 0,
+        'asset_objects': 0,
+        'archive_entries': 4,
+        'uncompressed_bytes': 200,
+      },
+      'publication_status': publicationStatus,
+      'retry_safe': false,
+      'warning': warning,
+      'project_mutation': 'not_performed',
+      'game_mutation': 'not_performed',
+      'save_mutation': 'not_performed',
+      'build_status': 'not_performed',
+      'deployment_status': 'not_performed',
+      'runtime_status': 'runtime_unqualified',
+    },
+    expectedHead: head,
+    expectedOutput: output,
+  );
+}
 
 AuthoringRevision3ReviewedDataAssetBuildResult _reviewedDataAssetBuildResult({
   required AuthoringWorkingHead head,

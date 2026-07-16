@@ -577,6 +577,18 @@ void main() {
 
       await _pumpApp(tester, container);
       expect(find.text('Build / Deploy'), findsOneWidget);
+      final legacyMenuFinder = find.byKey(const Key('project-menu'));
+      expect(
+        tester
+            .widget<PopupMenuButton<String>>(legacyMenuFinder)
+            .itemBuilder(tester.element(legacyMenuFinder))
+            .whereType<PopupMenuItem<String>>()
+            .where(
+              (item) =>
+                  item.key == const Key('project-export-managed-revision3'),
+            ),
+        isEmpty,
+      );
       expect(
         find.byKey(const Key('legacy-compatibility-banner')),
         findsOneWidget,
@@ -665,6 +677,161 @@ void main() {
   );
 
   testWidgets(
+    'managed project copy is available without a game from menu and first tool card, with one global busy lane',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final parent = Directory.systemTemp.createTempSync('gore_home_export_');
+      addTearDown(() => parent.deleteSync(recursive: true));
+      final completion =
+          Completer<AuthoringRevision3ExactSnapshotExportResult>();
+      late String pendingOutput;
+      final managed = _FakeExportManagedLease(
+        root: Directory(r'C:\mods\managed-project-export'),
+        projectId: 'abababababababababababababababab',
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onExport: (lease, output) {
+          pendingOutput = output;
+          return completion.future;
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      var pickerLabel = '';
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (label) async {
+          pickerLabel = label;
+          return parent.path;
+        },
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      final card = find.byKey(const Key('managed-export-project-copy'));
+      expect(card, findsOneWidget);
+      expect(tester.widget<InkWell>(card).onTap, isNotNull);
+
+      final menuFinder = find.byKey(const Key('project-menu'));
+      List<PopupMenuItem<String>> menuItems() => tester
+          .widget<PopupMenuButton<String>>(menuFinder)
+          .itemBuilder(tester.element(menuFinder))
+          .whereType<PopupMenuItem<String>>()
+          .toList();
+      PopupMenuItem<String> exportItem() => menuItems().singleWhere(
+        (item) => item.key == const Key('project-export-managed-revision3'),
+      );
+      expect(exportItem().enabled, isTrue);
+      final managedActionOrder = menuItems()
+          .where(
+            (item) => {
+              Key('project-save'),
+              Key('project-export-managed-revision3'),
+              Key('project-close'),
+            }.contains(item.key),
+          )
+          .map((item) => item.key)
+          .toList();
+      expect(managedActionOrder, const <Key>[
+        Key('project-save'),
+        Key('project-export-managed-revision3'),
+        Key('project-close'),
+      ]);
+
+      await tester.ensureVisible(card);
+      await tester.pumpAndSettle();
+      await tester.tap(card);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-export-dialog')),
+        findsOneWidget,
+      );
+      expect(exportItem().enabled, isFalse);
+      expect(
+        tester
+            .widget<InkWell>(
+              find.byKey(
+                const Key('managed-export-project-copy'),
+                skipOffstage: false,
+              ),
+            )
+            .onTap,
+        isNull,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-project-export-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      expect(pickerLabel, 'Choose destination folder');
+      await tester.tap(
+        find.byKey(const Key('revision3-project-export-submit')),
+      );
+      await tester.pump();
+      expect(managed.exportCalls, 1);
+      expect(
+        find.byKey(const Key('revision3-project-export-progress')),
+        findsOneWidget,
+      );
+
+      completion.complete(
+        _homeProjectExportResult(
+          head: managed.head,
+          projectId: managed.projectId,
+          projectRevision: managed.projectRevision,
+          output: pendingOutput,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-export-published')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-project-export-close')));
+      await tester.pumpAndSettle();
+      expect(exportItem().enabled, isTrue);
+
+      await tester.tap(menuFinder);
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('project-export-managed-revision3')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-project-export-dialog')),
+        findsOneWidget,
+      );
+      managed.projectRevision = 8;
+      managed.head = _head(8);
+      await tester.tap(
+        find.byKey(const Key('revision3-project-export-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-export-submit')),
+      );
+      await tester.pumpAndSettle();
+      expect(managed.exportCalls, 1);
+      expect(find.textContaining('No output was created'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-project-export-submit')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
     'dirty managed project text guards Open and Close without losing the draft',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -724,6 +891,32 @@ void main() {
       final l10n = AppLocalizations.of(tester.element(textField));
       await tester.enterText(textField, draft);
       await tester.pump();
+      await tester.pump();
+
+      final projectMenu = find.byKey(const Key('project-menu'));
+      final exportItem = tester
+          .widget<PopupMenuButton<String>>(projectMenu)
+          .itemBuilder(tester.element(projectMenu))
+          .whereType<PopupMenuItem<String>>()
+          .singleWhere(
+            (item) => item.key == const Key('project-export-managed-revision3'),
+          );
+      expect(exportItem.enabled, isFalse);
+      expect(
+        tester
+            .widget<InkWell>(
+              find.byKey(
+                const Key('managed-export-project-copy'),
+                skipOffstage: false,
+              ),
+            )
+            .onTap,
+        isNull,
+      );
+      expect(
+        find.text(l10n.projectExportActionDirtyBlocked, skipOffstage: false),
+        findsOneWidget,
+      );
 
       tester
           .widget<PopupMenuButton<String>>(
@@ -766,6 +959,78 @@ void main() {
         find.byKey(const Key('managed-revision3-project-view')),
         findsNothing,
       );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'dirty listener stays lifecycle-safe across managed project replacement and teardown',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const firstProjectId = '81818181818181818181818181818181';
+      const localizationId = '82828282828282828282828282828282';
+      const localizationRevision = 3;
+      const locId = 'GORE_DIRTY_REPLACEMENT';
+      final first = _FakeManagedLease(
+        root: Directory(r'C:\mods\managed-dirty-replacement-first'),
+        projectId: firstProjectId,
+        projectRevision: 5,
+        head: _head(5),
+        contentIndexBuilder: (lease) => _dialogLocalizationEditIndex(
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+          localizationId: localizationId,
+          localizationRevision: localizationRevision,
+          locId: locId,
+        ),
+        onDialogLocalizationEditSeed:
+            (lease, requestedId, requestedRevision, requestedLocId) =>
+                _dialogLocalizationEditSeed(
+                  lease: lease,
+                  localizationId: requestedId,
+                  localizationRevision: requestedRevision,
+                  locId: requestedLocId,
+                ),
+      );
+      final second = _FakeManagedLease(
+        root: Directory(r'C:\mods\managed-dirty-replacement-second'),
+        projectId: '83838383838383838383838383838383',
+        projectRevision: 1,
+        head: _head(1),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async =>
+            root.path == second.root.path ? second : first,
+      );
+      await coordinator.openManagedRevision3(first.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => second.root.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedLocalizationVoice(tester);
+      final textField = find.byKey(const Key('revision3-localization-text-de'));
+      await tester.enterText(textField, 'Dirty before direct replacement');
+      await tester.pump();
+      await tester.pump();
+
+      await coordinator.openManagedRevision3(second.root);
+      await tester.pumpAndSettle();
+      final visible = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(visible.projectId, second.projectId);
+      expect(first.closeCalls, 1);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump();
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -4581,6 +4846,13 @@ void main() {
           .whereType<PopupMenuItem<String>>()
           .singleWhere((item) => item.key == const Key('project-save'));
       expect(verifyItem.enabled, isFalse);
+      final exportItem = menu
+          .itemBuilder(tester.element(menuFinder))
+          .whereType<PopupMenuItem<String>>()
+          .singleWhere(
+            (item) => item.key == const Key('project-export-managed-revision3'),
+          );
+      expect(exportItem.enabled, isFalse);
 
       menu.onSelected!('save');
       for (var i = 0; i < 5; i++) {
@@ -5380,6 +5652,11 @@ typedef _RecoveryCallback =
     FutureOr<ManagedRevision3RecoveryCheckpoint> Function(
       _FakeRecoverableManagedLease lease,
     );
+typedef _ProjectExportCallback =
+    FutureOr<AuthoringRevision3ExactSnapshotExportResult> Function(
+      _FakeExportManagedLease lease,
+      String output,
+    );
 
 class _FakeManagedLease
     implements
@@ -6003,6 +6280,32 @@ class _FakeManagedLease
   }
 }
 
+final class _FakeExportManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectExportLease {
+  _FakeExportManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required super.contentIndexBuilder,
+    required this.onExport,
+  });
+
+  final _ProjectExportCallback onExport;
+  int exportCalls = 0;
+
+  @override
+  bool get supportsExactSnapshotExport => true;
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String output,
+  }) async {
+    exportCalls++;
+    return onExport(this, output);
+  }
+}
+
 final class _FakeRecoverableManagedLease extends _FakeManagedLease
     implements ManagedRevision3RecoveryLease {
   _FakeRecoverableManagedLease({
@@ -6095,6 +6398,49 @@ AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
       'sha256': value.toRadixString(16).padLeft(64, '0'),
     },
   }),
+);
+
+AuthoringRevision3ExactSnapshotExportResult _homeProjectExportResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String output,
+}) => AuthoringRevision3ExactSnapshotExportResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'exported',
+    'format': 'managed_revision3_exact_snapshot_v1',
+    'artifact_kind': 'portable_snapshot_review_copy',
+    'restore_status': 'not_supported',
+    'basis_head_json': head.canonicalJson,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'output': output,
+    'archive': <String, Object?>{'byte_len': 300, 'sha256': 'a' * 64},
+    'manifest': <String, Object?>{
+      'relative_name': 'gore-export.json',
+      'byte_len': 100,
+      'sha256': 'b' * 64,
+    },
+    'closure': <String, Object?>{
+      'snapshot_objects': 1,
+      'entity_objects': 0,
+      'asset_objects': 0,
+      'archive_entries': 4,
+      'uncompressed_bytes': 200,
+    },
+    'publication_status': 'published',
+    'retry_safe': false,
+    'warning': null,
+    'project_mutation': 'not_performed',
+    'game_mutation': 'not_performed',
+    'save_mutation': 'not_performed',
+    'build_status': 'not_performed',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+  },
+  expectedHead: head,
+  expectedOutput: output,
 );
 
 ({String projectJson, AuthoringWorkingHead head}) _recoverySnapshot({

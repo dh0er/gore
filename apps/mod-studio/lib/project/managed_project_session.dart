@@ -48,6 +48,24 @@ class ManagedProjectVerificationException
   String toString() => 'ManagedProjectVerificationException: $message';
 }
 
+/// Native proved that exact-snapshot export failed before its no-clobber
+/// publication boundary, but the failure also invalidated this session's Store
+/// authority. The chosen output is known to be absent while the project still
+/// requires a verified reopen before further authoring.
+final class ManagedRevision3ExactSnapshotExportPrepublicationException
+    extends ManagedProjectVerificationException {
+  const ManagedRevision3ExactSnapshotExportPrepublicationException({
+    required this.code,
+    required String message,
+  }) : super(message);
+
+  final String code;
+
+  @override
+  String toString() =>
+      'ManagedRevision3ExactSnapshotExportPrepublicationException($code): $message';
+}
+
 class ManagedProjectSessionClosedException
     extends ManagedProjectSessionException {
   const ManagedProjectSessionClosedException(super.message);
@@ -853,10 +871,22 @@ abstract interface class ManagedRevision3ReviewedDataAssetBuildStore {
   });
 }
 
+/// Narrow capability for exporting an immutable, exact-basis revision-3
+/// project snapshot. Keeping it separate lets checkpoint-only stores remain
+/// honest about the operations they implement.
+abstract interface class ManagedRevision3ExactSnapshotExportStore {
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
-        ManagedRevision3ReviewedDataAssetBuildStore {
+        ManagedRevision3ReviewedDataAssetBuildStore,
+        ManagedRevision3ExactSnapshotExportStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1189,6 +1219,17 @@ final class ModFfiManagedRevision3AuthoringStore
     root: root,
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
+    expectedHead: expectedHead,
+    output: output,
+  );
+
+  @override
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) => ffi.authoringStoreExportRevision3ExactSnapshotV1(
+    root: root,
     expectedHead: expectedHead,
     output: output,
   );
@@ -1570,6 +1611,8 @@ class ManagedRevision3AuthoringProjectSession {
   bool get requiresReopen => _core.requiresReopen;
   bool get supportsReviewedDataAssetBuild =>
       _core.supportsReviewedDataAssetBuild;
+  bool get supportsExactSnapshotExport =>
+      _store is ManagedRevision3ExactSnapshotExportStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -2785,6 +2828,51 @@ class ManagedRevision3AuthoringProjectSession {
     operation: 'buildVoiceV1',
     handleReadError: _core._throwRevision3VoiceBuildError,
   );
+
+  /// Export the exact captured revision-3 basis as an immutable portable
+  /// review snapshot. This operation is serialized with edits but does not
+  /// publish a project checkpoint or mutate session state.
+  Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
+    required String output,
+  }) {
+    final exportStore = _store;
+    if (exportStore is! ManagedRevision3ExactSnapshotExportStore) {
+      return Future<AuthoringRevision3ExactSnapshotExportResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store cannot export exact snapshots',
+        ),
+      );
+    }
+    final exactExportStore =
+        exportStore as ManagedRevision3ExactSnapshotExportStore;
+    return _core.readBasisSnapshot<AuthoringRevision3ExactSnapshotExportResult>(
+      (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 exact snapshot export has no exact project identity',
+          );
+        }
+        final result = await exactExportStore.exportExactSnapshotV1(
+          root: root.path,
+          expectedHead: basis.head,
+          output: output,
+        );
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.projectRevision != projectRevision ||
+            result.output != output) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 exact snapshot export disagrees with its exact session basis or output',
+          );
+        }
+        return result;
+      },
+      operation: 'exportExactSnapshotV1',
+      handleReadError: _core._throwRevision3ExactSnapshotExportError,
+    );
+  }
 
   /// Build one exact-basis, reviewed DataAsset stage into a new immutable
   /// offline triplet. Publication uncertainty is retained as a successful,
@@ -4896,6 +4984,54 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3ExactSnapshotExportError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_EXPORT_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ExactSnapshotExportErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      if (_revision3ExactSnapshotExportErrorIsKnownPrepublication(error.code)) {
+        Error.throwWithStackTrace(
+          ManagedRevision3ExactSnapshotExportPrepublicationException(
+            code: error.code,
+            message: error.message,
+          ),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    // ArgumentError is produced by local request preflight before the Store
+    // capability is invoked. A raw FormatException is not granted that
+    // authority: an alternate capability could throw it after publication.
+    if (error is ArgumentError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 exact snapshot export could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3ReviewedDataAssetBuildError(
     Object error,
     StackTrace stackTrace,
@@ -5696,6 +5832,27 @@ bool _revision3VoiceBuildErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_BUILD_STORE_GAME_ALIAS',
   'AUTHORING_REVISION3_VOICE_BUILD_VERIFY_FAILED',
 }.contains(code);
+
+bool _revision3ExactSnapshotExportErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_EXPORT_REQUEST_INVALID',
+  'AUTHORING_REVISION3_EXPORT_INPUT_LIMIT',
+  'AUTHORING_REVISION3_EXPORT_CLOSURE_LIMIT',
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_EXISTS',
+  'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
+  'AUTHORING_REVISION3_EXPORT_ARCHIVE_FAILED',
+  'AUTHORING_REVISION3_EXPORT_VERIFY_FAILED',
+  'AUTHORING_REVISION3_EXPORT_CLEANUP_FAILED',
+  'AUTHORING_REVISION3_EXPORT_PUBLICATION_FAILED',
+}.contains(code);
+
+bool _revision3ExactSnapshotExportErrorIsKnownPrepublication(String code) =>
+    const {
+      'AUTHORING_REVISION3_EXPORT_HEAD_INVALID',
+      'AUTHORING_REVISION3_EXPORT_ROOT_UNAVAILABLE',
+      'AUTHORING_REVISION3_EXPORT_STORE_CHANGED',
+      'AUTHORING_REVISION3_EXPORT_CLOSURE_INVALID',
+      'AUTHORING_REVISION3_EXPORT_INVARIANT',
+    }.contains(code);
 
 bool _revision3ReviewedDataAssetBuildErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_DATAASSET_BUILD_INPUT_INVALID',

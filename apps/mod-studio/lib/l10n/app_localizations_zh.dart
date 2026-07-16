@@ -1747,6 +1747,160 @@ class AppLocalizationsZh extends AppLocalizations {
   String managedProblemsDataAssetOfflineDescription(String targetPath) {
     return 'The saved edit for $targetPath can be reviewed in DataAsset edits, but it cannot be emitted by a managed project build or claimed as working in-game yet.';
   }
+
+  @override
+  String get projectExportActionTitle => 'Export project copy…';
+
+  @override
+  String get projectExportActionDescription =>
+      'Write an exact portable copy of the current saved project checkpoint.';
+
+  @override
+  String get projectExportActionDirtyBlocked =>
+      'Save or discard the open localization edits before exporting a project copy.';
+
+  @override
+  String get projectExportDialogTitle => 'Export project copy';
+
+  @override
+  String get projectExportPortableCopyTitle => 'Portable project copy';
+
+  @override
+  String get projectExportPortableCopyDescription =>
+      'This writes the exact current saved project checkpoint to a new .goremod file. The open project stays current and unchanged.';
+
+  @override
+  String get projectExportCapabilityBoundary =>
+      'This copy is not a playable mod, build, deployment, or restorable backup. It does not read or change the game or any save.';
+
+  @override
+  String get projectExportKeepOriginal =>
+      'Importing this managed copy is not available yet. Keep the original project folder.';
+
+  @override
+  String get projectExportFileNameLabel => 'New project-copy file';
+
+  @override
+  String get projectExportFileNameHelper =>
+      'Use a new portable file name ending in .goremod.';
+
+  @override
+  String get projectExportChooseDestination => 'Choose destination folder';
+
+  @override
+  String get projectExportNoDestination => 'No destination folder selected';
+
+  @override
+  String get projectExportNewFile => 'New file';
+
+  @override
+  String get projectExportCancel => 'Cancel';
+
+  @override
+  String get projectExportClose => 'Close';
+
+  @override
+  String get projectExportSubmit => 'Export copy';
+
+  @override
+  String get projectExportExporting => 'Exporting…';
+
+  @override
+  String get projectExportParentRequired =>
+      'Choose an existing destination folder.';
+
+  @override
+  String get projectExportParentAbsolute =>
+      'Choose an absolute existing destination folder.';
+
+  @override
+  String get projectExportParentLink =>
+      'The selected destination is a link. Choose a real existing folder.';
+
+  @override
+  String get projectExportParentInspectFailed =>
+      'The destination folder could not be inspected safely. Nothing was created.';
+
+  @override
+  String get projectExportFileNameRequired =>
+      'Enter a new project-copy file name.';
+
+  @override
+  String get projectExportFileNameTooLong =>
+      'The file name must be at most 128 ASCII characters.';
+
+  @override
+  String get projectExportFileNameInvalid =>
+      'Start with a letter or digit, use only ASCII letters, digits, dots, underscores, or hyphens, and end with .goremod.';
+
+  @override
+  String get projectExportFileNameReserved =>
+      'That file name is reserved by Windows.';
+
+  @override
+  String get projectExportOutputExists =>
+      'That file already exists. Choose a new file name; existing files are never overwritten.';
+
+  @override
+  String get projectExportOutputLink =>
+      'The new file path is a link. Choose a different file name.';
+
+  @override
+  String get projectExportOutputRejected =>
+      'The destination was rejected before the new local file was created. Nothing was created. Choose a different file name or destination folder.';
+
+  @override
+  String get projectExportStale =>
+      'The project changed before export started. No output was created. Close this window and open Export project copy again.';
+
+  @override
+  String get projectExportRequiresReopen =>
+      'This project can no longer be verified as current. No output was created. Close this window and recover or reopen the project.';
+
+  @override
+  String get projectExportUnsupported =>
+      'This managed project session cannot export exact portable copies. Nothing was created.';
+
+  @override
+  String get projectExportFailedBeforeStart =>
+      'The project copy could not be prepared exactly. Nothing was created.';
+
+  @override
+  String get projectExportPrepublicationFailed =>
+      'Export stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.';
+
+  @override
+  String projectExportMayExist(String output) {
+    return 'The export did not return a verified receipt. Do not retry. Close this window and check the destination: $output';
+  }
+
+  @override
+  String projectExportResultMismatch(String output) {
+    return 'The completed export does not match this checkpoint or destination. Do not retry; inspect the destination: $output';
+  }
+
+  @override
+  String get projectExportPublished =>
+      'The exact portable project copy was created as a new local file.';
+
+  @override
+  String get projectExportPublishedCleanupWarning =>
+      'The exact project copy was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.';
+
+  @override
+  String projectExportPublicationUncertain(String output) {
+    return 'The local file may have been created. Do not retry. Check whether this destination exists: $output';
+  }
+
+  @override
+  String get projectExportArchiveBytes => 'Archive bytes';
+
+  @override
+  String get projectExportArchiveSha256 => 'Archive SHA-256';
+
+  @override
+  String get projectExportCurrentProjectUnchanged =>
+      'The current project remains open and unchanged. The game and saves were not touched.';
 }
 
 /// The translations for Chinese, using the Han script (`zh_Hans`).

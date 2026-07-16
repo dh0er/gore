@@ -31,6 +31,7 @@ part '../project/revision3_quest_outline.dart';
 part '../project/revision3_quest_outline_v2.dart';
 part '../project/revision3_quest_source_inspection.dart';
 part '../project/revision3_quest_transitions.dart';
+part '../project/revision3_project_export.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
 part '../project/revision3_voice_take_selection.dart';
@@ -1656,6 +1657,37 @@ class ModFfi {
         response,
         expectedHead: expectedHead,
         expectedProjectJson: currentProjectJson,
+        expectedOutput: output,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Export the exact current managed revision-3 checkpoint as a portable,
+  /// immutable review snapshot.
+  ///
+  /// The native Store binds the archive to [expectedHead], never mutates the
+  /// project or game, and returns publication uncertainty as a sealed terminal
+  /// result so callers cannot accidentally retry an already-completed rename.
+  Future<AuthoringRevision3ExactSnapshotExportResult>
+  authoringStoreExportRevision3ExactSnapshotV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required String output,
+  }) async {
+    const command = 'authoring_store_export_revision3_exact_snapshot_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(output, 'output');
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'output': output,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3ExactSnapshotExportResult.fromJson(
+        response,
+        expectedHead: expectedHead,
         expectedOutput: output,
       );
     } on FormatException catch (error) {

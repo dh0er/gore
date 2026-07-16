@@ -395,7 +395,7 @@ These nouns describe different artifacts and must remain visibly distinct:
 | **Managed working project** | The live editable source of truth | A Studio-owned directory with canonical V2 shards, immutable AssetStore blobs, session/current-path ownership, a serialized operation lane, and one transaction history |
 | **Autosave/recovery** | Recover unsaved work after a crash | A bounded journal/recovery snapshot tied to the exact base revision; it is automatic and is not a portable project export or release |
 | **Save / checkpoint** | Durably acknowledge the current revision | Target contract: `Ctrl+S` flushes current transaction state and creates/advances a recoverable checkpoint; **Save As** creates a separately validated identity/path. Current R3 shell: semantic transactions publish independently, `Ctrl+S` only fully verifies the exact head, and managed Save As stays disabled until native clone/fork exists. |
-| **Export** | Portable backup, interchange, or review copy | A deterministic `.goremod` archive produced from an immutable snapshot; exporting does not silently change the current working path, and opening it imports to a managed working directory |
+| **Export** | Portable snapshot or review copy | Managed R3 V1 writes a deterministic `.goremod` from one exact immutable snapshot without changing the current working path, project head, game, or saves. Its importer is not implemented, so Studio calls it a **project copy**, explicitly says it is not a restorable backup or playable mod, and tells the author to keep the original working directory. A future separately reviewed importer may create a new managed working directory; it must never edit ZIP members in place. See [Managed project snapshot export](managed-project-export.md). |
 | **Build** | Produce an inspectable mod artifact | Derived from an immutable project revision and named build root/profile; it does not deploy and cannot become editable source state |
 | **Test deployment** | Install one build into an isolated test profile | Receipt-owned, game-closed preflight, explicit disposable save choice, bounded logs/observations, and verified cleanup |
 | **Release** | Publish a reproducible user-facing package | References an immutable closed-world validated revision/build plus compatibility, dependency, license, changelog, hashes, and provenance |
@@ -769,9 +769,11 @@ editing and the direct NPC/Quest Story workspace now replace two former
 card/modal detours without changing their authority boundaries. The first
 reviewed non-World offline build is now integrated for one selected reviewed
 managed DataAsset stage: it derives from the exact-current project, creates only
-a new receipt-owned output, then reopens and re-inspects that output. Next,
-complete the remaining line/localization/Voice production journey, safe project
-fundamentals such as deletion, undo/history, export, and recovery, and deeper
+a new receipt-owned output, then reopens and re-inspects that output. The first
+managed project-copy export is also integrated as a deterministic exact-snapshot
+review artifact with no importer or restore claim. Next, complete the remaining
+line/localization/Voice production journey, safe project fundamentals such as
+semantic/project deletion, undo/history, and broader recovery, and deeper
 NPC/Quest semantics before general managed build/release and qualified test
 paths. Broad World or level authoring does not
 start while these primary workflows still strand authors or lack an honest
@@ -780,10 +782,10 @@ unavailable surface.
 
 1. **Finish the managed phase-one substrate:** the owned R3 working directory,
    serialized session, strict bounded open/import, Ogg AssetStore I/O, exact
-   revision/head publication, repair, full reopen, and first Voice transaction
-   are integrated. Complete general recovery/history, cross-domain undo,
-   deterministic export, and production lowering without creating a parallel
-   project state.
+   revision/head publication, repair, full reopen, first Voice transaction, and
+   deterministic exact-snapshot export are integrated. Complete general
+   recovery/history, cross-domain undo, and production lowering without
+   creating a parallel project state.
 2. **Complete the first non-technical Voice slice:** extend the landed import,
    retained-take review status, Approved-take selection/clear,
    generation-bound target resolution, and

@@ -61,6 +61,7 @@ import 'project/revision3_quest_transitions_dialog.dart';
 import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_project_dashboard.dart';
+import 'project/revision3_project_export_dialog.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
 import 'project/revision3_project_section_page.dart';
@@ -267,14 +268,24 @@ class _HomePageState extends ConsumerState<HomePage>
     with WidgetsBindingObserver {
   bool _projectActionBusy = false;
   bool _managedWorkspaceDirty = false;
+  bool _managedDirtyRebuildScheduled = false;
+  late final ValueChanged<bool> _managedWorkspaceDirtyListener;
 
   void _onManagedWorkspaceDirtyChanged(bool dirty) {
+    if (_managedWorkspaceDirty == dirty) return;
     _managedWorkspaceDirty = dirty;
+    if (!mounted || _managedDirtyRebuildScheduled) return;
+    _managedDirtyRebuildScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _managedDirtyRebuildScheduled = false;
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   void initState() {
     super.initState();
+    _managedWorkspaceDirtyListener = _onManagedWorkspaceDirtyChanged;
     WidgetsBinding.instance.addObserver(this);
     // First-run, optional: after the first frame, if no localized text has
     // been extracted yet and the user hasn't been prompted before, offer to
@@ -721,6 +732,48 @@ class _HomePageState extends ConsumerState<HomePage>
     }
   });
 
+  Future<void> _exportManagedRevision3Project(
+    ManagedRevision3CurrentProjectState expected,
+  ) => _runProjectAction(() async {
+    final l10n = AppLocalizations.of(context);
+    if (_managedWorkspaceDirty) {
+      _snack(l10n.projectExportActionDirtyBlocked);
+      return;
+    }
+    final current = ref.read(currentProjectCoordinatorProvider);
+    if (current is! ManagedRevision3CurrentProjectState ||
+        current.root.path != expected.root.path ||
+        current.projectId != expected.projectId ||
+        current.projectRevision != expected.projectRevision ||
+        current.head.canonicalJson != expected.head.canonicalJson) {
+      _snack(l10n.projectExportStale);
+      return;
+    }
+    if (current.requiresReopen) {
+      _snack(l10n.projectExportRequiresReopen);
+      return;
+    }
+    await showDialog<AuthoringRevision3ExactSnapshotExportResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Revision3ProjectExportDialog(
+        projectRevision: current.projectRevision,
+        pickExistingParentDirectory: () => ref.read(
+          managedRevision3DirectoryPickerProvider,
+        )(l10n.projectExportChooseDestination),
+        export: (output) => ref
+            .read(currentProjectCoordinatorProvider.notifier)
+            .exportCurrentRevision3ExactSnapshot(
+              expectedRoot: current.root.path,
+              expectedProjectId: current.projectId,
+              expectedProjectRevision: current.projectRevision,
+              expectedHead: current.head,
+              output: output,
+            ),
+      ),
+    );
+  });
+
   bool _showTransitionCleanupWarningIfAdded(
     CurrentProjectCoordinator coordinator,
     int failuresBefore,
@@ -849,6 +902,11 @@ class _HomePageState extends ConsumerState<HomePage>
                   await _openManagedRevision3Project();
                 case 'save':
                   await _saveProject();
+                case 'exportManagedRevision3':
+                  if (currentProject
+                      case final ManagedRevision3CurrentProjectState project) {
+                    await _exportManagedRevision3Project(project);
+                  }
                 case 'saveAs':
                   await _saveProjectAs();
                 case 'close':
@@ -897,6 +955,16 @@ class _HomePageState extends ConsumerState<HomePage>
                       : 'Save project',
                 ),
               ),
+              if (managedCurrent)
+                PopupMenuItem(
+                  key: const Key('project-export-managed-revision3'),
+                  value: 'exportManagedRevision3',
+                  enabled:
+                      !_projectActionBusy &&
+                      !managedVerificationBlocked &&
+                      !_managedWorkspaceDirty,
+                  child: Text(l10n.projectExportActionTitle),
+                ),
               PopupMenuItem(
                 key: const Key('project-close'),
                 value: 'close',
@@ -969,8 +1037,17 @@ class _HomePageState extends ConsumerState<HomePage>
           project: currentProject,
           gameRoot: gameRoot,
           recoveryBusy: _projectActionBusy,
+          exportProjectCopy:
+              !_projectActionBusy &&
+                  !currentProject.requiresReopen &&
+                  !_managedWorkspaceDirty
+              ? () => unawaited(_exportManagedRevision3Project(currentProject))
+              : null,
+          exportProjectCopyDisabledReason: _managedWorkspaceDirty
+              ? l10n.projectExportActionDirtyBlocked
+              : null,
           recoverProject: () => _recoverManagedRevision3Project(currentProject),
-          onDialogLocalizationDirtyChanged: _onManagedWorkspaceDirtyChanged,
+          onDialogLocalizationDirtyChanged: _managedWorkspaceDirtyListener,
           verifyCurrentHead: _saveProject,
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
@@ -1638,6 +1715,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.project,
     required this.gameRoot,
     required this.recoveryBusy,
+    required this.exportProjectCopy,
+    required this.exportProjectCopyDisabledReason,
     required this.recoverProject,
     required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
@@ -1687,6 +1766,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
   final bool recoveryBusy;
+  final VoidCallback? exportProjectCopy;
+  final String? exportProjectCopyDisabledReason;
   final ManagedRevision3RecoveryAction recoverProject;
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
@@ -2872,6 +2953,15 @@ class _ManagedRevision3ProjectViewState
         ),
       ],
       toolActions: [
+        Revision3ProjectDashboardAction(
+          id: 'export-project-copy',
+          controlKey: const Key('managed-export-project-copy'),
+          icon: Icons.archive_outlined,
+          title: l10n.projectExportActionTitle,
+          description: l10n.projectExportActionDescription,
+          disabledReason: widget.exportProjectCopyDisabledReason,
+          onPressed: widget.exportProjectCopy,
+        ),
         Revision3ProjectDashboardAction(
           id: 'review-problems',
           controlKey: const Key('managed-review-problems'),

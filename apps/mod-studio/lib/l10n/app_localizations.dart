@@ -3205,6 +3205,252 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The saved edit for {targetPath} can be reviewed in DataAsset edits, but it cannot be emitted by a managed project build or claimed as working in-game yet.'**
   String managedProblemsDataAssetOfflineDescription(String targetPath);
+
+  /// No description provided for @projectExportActionTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Export project copy…'**
+  String get projectExportActionTitle;
+
+  /// No description provided for @projectExportActionDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Write an exact portable copy of the current saved project checkpoint.'**
+  String get projectExportActionDescription;
+
+  /// No description provided for @projectExportActionDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Save or discard the open localization edits before exporting a project copy.'**
+  String get projectExportActionDirtyBlocked;
+
+  /// No description provided for @projectExportDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Export project copy'**
+  String get projectExportDialogTitle;
+
+  /// No description provided for @projectExportPortableCopyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Portable project copy'**
+  String get projectExportPortableCopyTitle;
+
+  /// No description provided for @projectExportPortableCopyDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'This writes the exact current saved project checkpoint to a new .goremod file. The open project stays current and unchanged.'**
+  String get projectExportPortableCopyDescription;
+
+  /// No description provided for @projectExportCapabilityBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'This copy is not a playable mod, build, deployment, or restorable backup. It does not read or change the game or any save.'**
+  String get projectExportCapabilityBoundary;
+
+  /// No description provided for @projectExportKeepOriginal.
+  ///
+  /// In en, this message translates to:
+  /// **'Importing this managed copy is not available yet. Keep the original project folder.'**
+  String get projectExportKeepOriginal;
+
+  /// No description provided for @projectExportFileNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'New project-copy file'**
+  String get projectExportFileNameLabel;
+
+  /// No description provided for @projectExportFileNameHelper.
+  ///
+  /// In en, this message translates to:
+  /// **'Use a new portable file name ending in .goremod.'**
+  String get projectExportFileNameHelper;
+
+  /// No description provided for @projectExportChooseDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose destination folder'**
+  String get projectExportChooseDestination;
+
+  /// No description provided for @projectExportNoDestination.
+  ///
+  /// In en, this message translates to:
+  /// **'No destination folder selected'**
+  String get projectExportNoDestination;
+
+  /// No description provided for @projectExportNewFile.
+  ///
+  /// In en, this message translates to:
+  /// **'New file'**
+  String get projectExportNewFile;
+
+  /// No description provided for @projectExportCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get projectExportCancel;
+
+  /// No description provided for @projectExportClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get projectExportClose;
+
+  /// No description provided for @projectExportSubmit.
+  ///
+  /// In en, this message translates to:
+  /// **'Export copy'**
+  String get projectExportSubmit;
+
+  /// No description provided for @projectExportExporting.
+  ///
+  /// In en, this message translates to:
+  /// **'Exporting…'**
+  String get projectExportExporting;
+
+  /// No description provided for @projectExportParentRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an existing destination folder.'**
+  String get projectExportParentRequired;
+
+  /// No description provided for @projectExportParentAbsolute.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an absolute existing destination folder.'**
+  String get projectExportParentAbsolute;
+
+  /// No description provided for @projectExportParentLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected destination is a link. Choose a real existing folder.'**
+  String get projectExportParentLink;
+
+  /// No description provided for @projectExportParentInspectFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination folder could not be inspected safely. Nothing was created.'**
+  String get projectExportParentInspectFailed;
+
+  /// No description provided for @projectExportFileNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new project-copy file name.'**
+  String get projectExportFileNameRequired;
+
+  /// No description provided for @projectExportFileNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The file name must be at most 128 ASCII characters.'**
+  String get projectExportFileNameTooLong;
+
+  /// No description provided for @projectExportFileNameInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'Start with a letter or digit, use only ASCII letters, digits, dots, underscores, or hyphens, and end with .goremod.'**
+  String get projectExportFileNameInvalid;
+
+  /// No description provided for @projectExportFileNameReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That file name is reserved by Windows.'**
+  String get projectExportFileNameReserved;
+
+  /// No description provided for @projectExportOutputExists.
+  ///
+  /// In en, this message translates to:
+  /// **'That file already exists. Choose a new file name; existing files are never overwritten.'**
+  String get projectExportOutputExists;
+
+  /// No description provided for @projectExportOutputLink.
+  ///
+  /// In en, this message translates to:
+  /// **'The new file path is a link. Choose a different file name.'**
+  String get projectExportOutputLink;
+
+  /// No description provided for @projectExportOutputRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'The destination was rejected before the new local file was created. Nothing was created. Choose a different file name or destination folder.'**
+  String get projectExportOutputRejected;
+
+  /// No description provided for @projectExportStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before export started. No output was created. Close this window and open Export project copy again.'**
+  String get projectExportStale;
+
+  /// No description provided for @projectExportRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project can no longer be verified as current. No output was created. Close this window and recover or reopen the project.'**
+  String get projectExportRequiresReopen;
+
+  /// No description provided for @projectExportUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'This managed project session cannot export exact portable copies. Nothing was created.'**
+  String get projectExportUnsupported;
+
+  /// No description provided for @projectExportFailedBeforeStart.
+  ///
+  /// In en, this message translates to:
+  /// **'The project copy could not be prepared exactly. Nothing was created.'**
+  String get projectExportFailedBeforeStart;
+
+  /// No description provided for @projectExportPrepublicationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Export stopped safely before the new local file was created. Nothing was created. Close this window and check the project and destination before trying again.'**
+  String get projectExportPrepublicationFailed;
+
+  /// No description provided for @projectExportMayExist.
+  ///
+  /// In en, this message translates to:
+  /// **'The export did not return a verified receipt. Do not retry. Close this window and check the destination: {output}'**
+  String projectExportMayExist(String output);
+
+  /// No description provided for @projectExportResultMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The completed export does not match this checkpoint or destination. Do not retry; inspect the destination: {output}'**
+  String projectExportResultMismatch(String output);
+
+  /// No description provided for @projectExportPublished.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact portable project copy was created as a new local file.'**
+  String get projectExportPublished;
+
+  /// No description provided for @projectExportPublishedCleanupWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact project copy was created as a local file, but internal temporary-file cleanup was incomplete. The created file is valid; do not retry.'**
+  String get projectExportPublishedCleanupWarning;
+
+  /// No description provided for @projectExportPublicationUncertain.
+  ///
+  /// In en, this message translates to:
+  /// **'The local file may have been created. Do not retry. Check whether this destination exists: {output}'**
+  String projectExportPublicationUncertain(String output);
+
+  /// No description provided for @projectExportArchiveBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive bytes'**
+  String get projectExportArchiveBytes;
+
+  /// No description provided for @projectExportArchiveSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive SHA-256'**
+  String get projectExportArchiveSha256;
+
+  /// No description provided for @projectExportCurrentProjectUnchanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The current project remains open and unchanged. The game and saves were not touched.'**
+  String get projectExportCurrentProjectUnchanged;
 }
 
 class _AppLocalizationsDelegate

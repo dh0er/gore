@@ -177,6 +177,10 @@
 //!   proof, re-inspects the server-selected candidate, applies one typed fixed-leaf edit wholly
 //!   in memory, and returns an unpublished revision-3 stage candidate. It never accepts raw
 //!   package bytes, receipt paths, output paths, or publication/deployment authority.
+//! - `authoring_store_export_revision3_exact_snapshot_v1` derives the exact current Store closure,
+//!   strictly reopens one deterministic no-compression ZIP, and publishes it no-clobber outside
+//!   the Store. The result is a review copy, not a restore format, and never mutates project,
+//!   game, save, build, deployment, or runtime state.
 
 mod authoring;
 mod authoring_content_revision3;
@@ -189,6 +193,7 @@ mod authoring_dialog_revision3;
 mod authoring_drafts;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
+mod authoring_project_export_revision3;
 mod authoring_store;
 mod authoring_story;
 mod authoring_story_build;
@@ -248,6 +253,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_build_revision3_voice_v1",
     "authoring_store_check_revision3_npc_compiler_v1",
     "authoring_store_check_revision3_quest_compiler_v1",
+    authoring_project_export_revision3::COMMAND,
     "authoring_store_import_ogg",
     "authoring_store_inspect_revision3_installed_dataasset_v1",
     "authoring_store_inspect_revision3_npc_source_v1",
@@ -549,6 +555,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_check_revision3_quest_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_quest_compiler_v1_raw,
+        ),
+        authoring_project_export_revision3::COMMAND => Some(
+            authoring_project_export_revision3::export_revision3_exact_snapshot_v1_raw,
         ),
         "authoring_store_inspect_revision3_installed_dataasset_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::inspect_revision3_installed_dataasset_v1_raw,
@@ -1679,6 +1688,7 @@ mod tests {
                     "authoring_store_build_revision3_voice_v1",
                     "authoring_store_check_revision3_npc_compiler_v1",
                     "authoring_store_check_revision3_quest_compiler_v1",
+                    "authoring_store_export_revision3_exact_snapshot_v1",
                     "authoring_store_import_ogg",
                     "authoring_store_inspect_revision3_installed_dataasset_v1",
                     "authoring_store_inspect_revision3_npc_source_v1",
