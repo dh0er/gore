@@ -417,6 +417,30 @@ void main() {
     expect(find.text('nativeStruct'), findsOneWidget);
     expect(find.text('12 children'), findsOneWidget);
     expect(find.widgetWithText(TextFormField, 'X'), findsOneWidget);
+    final titleBottom = tester
+        .getBottomLeft(find.text('Transform › Location'))
+        .dy;
+    final badgeTop = tester.getTopLeft(find.text('nativeStruct')).dy;
+    expect(
+      badgeTop - titleBottom,
+      lessThan(20),
+      reason: 'single-line titles must not reserve three lines above badges',
+    );
+    final containerRow = find.byKey(const ValueKey('private:2'));
+    final containerTitle = find.descendant(
+      of: containerRow,
+      matching: find.text('Events'),
+    );
+    final containerBadge = find.descendant(
+      of: containerRow,
+      matching: find.text('array'),
+    );
+    expect(
+      tester.getTopLeft(containerBadge).dy -
+          tester.getBottomLeft(containerTitle).dy,
+      lessThan(20),
+      reason: 'read-only container cards use the same compact title layout',
+    );
 
     final queryField = find.byWidgetPredicate(
       (widget) =>

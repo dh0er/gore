@@ -2788,7 +2788,13 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SelectableText(hit.display, maxLines: 3),
+              SelectionArea(
+                child: Text(
+                  hit.display,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               const SizedBox(height: 4),
               Wrap(
                 spacing: 5,
