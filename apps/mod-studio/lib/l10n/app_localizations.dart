@@ -3701,6 +3701,186 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The saved removal was confirmed from the latest project.'**
   String get managedVoiceTakeRemoveReloadConfirmed;
+
+  /// No description provided for @managedStoryWorkbenchEditNpcProfile.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & archetype'**
+  String get managedStoryWorkbenchEditNpcProfile;
+
+  /// No description provided for @managedStoryWorkbenchNpcDisplayNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Character name'**
+  String get managedStoryWorkbenchNpcDisplayNameLabel;
+
+  /// No description provided for @managedNpcProfileEditTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit name & archetype'**
+  String get managedNpcProfileEditTitle;
+
+  /// No description provided for @managedNpcProfileEditDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Change the friendly character name or choose another verified structural starting point.'**
+  String get managedNpcProfileEditDescription;
+
+  /// No description provided for @managedNpcProfileEditNameLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Character name'**
+  String get managedNpcProfileEditNameLabel;
+
+  /// No description provided for @managedNpcProfileEditNameHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Shown to authors in this project.'**
+  String get managedNpcProfileEditNameHint;
+
+  /// No description provided for @managedNpcProfileEditArchetypeLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Archetype / base character'**
+  String get managedNpcProfileEditArchetypeLabel;
+
+  /// No description provided for @managedNpcProfileEditArchetypeHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'This does not edit appearance, stats, faction, routine, inventory, dialog, or spawn.'**
+  String get managedNpcProfileEditArchetypeHelp;
+
+  /// No description provided for @managedNpcProfileEditBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the offline project draft changes. The game installation and save games remain unchanged.'**
+  String get managedNpcProfileEditBoundary;
+
+  /// No description provided for @managedNpcProfileEditLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading current NPC details…'**
+  String get managedNpcProfileEditLoading;
+
+  /// No description provided for @managedNpcProfileEditCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedNpcProfileEditCancel;
+
+  /// No description provided for @managedNpcProfileEditClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedNpcProfileEditClose;
+
+  /// No description provided for @managedNpcProfileEditSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save changes'**
+  String get managedNpcProfileEditSave;
+
+  /// No description provided for @managedNpcProfileEditSaving.
+  ///
+  /// In en, this message translates to:
+  /// **'Saving…'**
+  String get managedNpcProfileEditSaving;
+
+  /// No description provided for @managedNpcProfileEditRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get managedNpcProfileEditRetry;
+
+  /// No description provided for @managedNpcProfileEditLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC details and verified archetypes could not be loaded. No files were changed.'**
+  String get managedNpcProfileEditLoadFailed;
+
+  /// No description provided for @managedNpcProfileEditCatalogChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The verified archetypes changed while this editor was open. Review and choose the archetype again before saving.'**
+  String get managedNpcProfileEditCatalogChanged;
+
+  /// No description provided for @managedNpcProfileEditCurrentArchetypeUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The current NPC archetype is no longer represented exactly by this game catalog. No replacement was guessed.'**
+  String get managedNpcProfileEditCurrentArchetypeUnavailable;
+
+  /// No description provided for @managedNpcProfileEditStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while this editor was open. Close it and reopen the NPC from the refreshed Story view.'**
+  String get managedNpcProfileEditStale;
+
+  /// No description provided for @managedNpcProfileEditRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The save result cannot be verified. Do not retry. Close this editor and reopen or recover the managed project.'**
+  String get managedNpcProfileEditRequiresReopen;
+
+  /// No description provided for @managedNpcProfileEditSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The NPC changes could not be saved safely. Nothing was built, deployed, or written into the game.'**
+  String get managedNpcProfileEditSaveFailed;
+
+  /// No description provided for @managedNpcProfileEditNameRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a character name.'**
+  String get managedNpcProfileEditNameRequired;
+
+  /// No description provided for @managedNpcProfileEditNameTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The character name must be at most 256 UTF-8 bytes.'**
+  String get managedNpcProfileEditNameTooLong;
+
+  /// No description provided for @managedNpcProfileEditNameControl.
+  ///
+  /// In en, this message translates to:
+  /// **'The character name contains an unsupported control character.'**
+  String get managedNpcProfileEditNameControl;
+
+  /// No description provided for @managedNpcProfileEditReviewSelection.
+  ///
+  /// In en, this message translates to:
+  /// **'Review and choose an archetype before saving.'**
+  String get managedNpcProfileEditReviewSelection;
+
+  /// No description provided for @managedNpcProfileEditDiscardTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard NPC changes?'**
+  String get managedNpcProfileEditDiscardTitle;
+
+  /// No description provided for @managedNpcProfileEditDiscardBody.
+  ///
+  /// In en, this message translates to:
+  /// **'Your unsaved name and archetype choice will be lost.'**
+  String get managedNpcProfileEditDiscardBody;
+
+  /// No description provided for @managedNpcProfileEditKeepEditing.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep editing'**
+  String get managedNpcProfileEditKeepEditing;
+
+  /// No description provided for @managedNpcProfileEditDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard'**
+  String get managedNpcProfileEditDiscard;
+
+  /// No description provided for @managedNpcProfileEditSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'{name} was saved in project revision {revision}. It remains an offline, build-blocked draft.'**
+  String managedNpcProfileEditSaved(String name, int revision);
 }
 
 class _AppLocalizationsDelegate

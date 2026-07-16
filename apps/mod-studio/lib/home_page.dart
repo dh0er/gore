@@ -47,6 +47,8 @@ import 'project/revision3_dialog_localization_authoring.dart';
 import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
+import 'project/revision3_npc_profile_edit_authoring.dart';
+import 'project/revision3_npc_profile_edit_dialog.dart';
 import 'project/revision3_npc_profile_dialog.dart';
 import 'project/revision3_managed_compiler_check_panel.dart';
 import 'project/revision3_npc_wizard.dart';
@@ -1524,6 +1526,46 @@ class _HomePageState extends ConsumerState<HomePage>
                 gameRoot: gameRoot,
                 input: input,
               ),
+          loadNpcProfileEditSeed:
+              ({
+                required npcId,
+                required expectedNpcRevision,
+                required expectedScriptModuleId,
+                required expectedScriptModuleRevision,
+                required expectedUniqueName,
+                required expectedModuleNamespace,
+                required expectedParentCharacterDefinition,
+                required expectedParentAiAgentConfig,
+                required expectedParentSpawnDefinition,
+              }) => ref
+                  .read(currentProjectCoordinatorProvider.notifier)
+                  .readCurrentRevision3NpcProfileEditSeed(
+                    expectedRoot: currentProject.root.path,
+                    expectedProjectId: currentProject.projectId,
+                    expectedProjectRevision: currentProject.projectRevision,
+                    expectedHead: currentProject.head,
+                    npcId: npcId,
+                    expectedNpcRevision: expectedNpcRevision,
+                    expectedScriptModuleId: expectedScriptModuleId,
+                    expectedScriptModuleRevision: expectedScriptModuleRevision,
+                    expectedUniqueName: expectedUniqueName,
+                    expectedModuleNamespace: expectedModuleNamespace,
+                    expectedParentCharacterDefinition:
+                        expectedParentCharacterDefinition,
+                    expectedParentAiAgentConfig: expectedParentAiAgentConfig,
+                    expectedParentSpawnDefinition:
+                        expectedParentSpawnDefinition,
+                  ),
+          publishNpcProfileEdit: ({required gameRoot, required plan}) => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .editCurrentRevision3NpcProfile(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+                gameRoot: gameRoot,
+                plan: plan,
+              ),
           loadQuestCatalog: ref.read(revision3QuestCatalogLoaderProvider),
           publishQuestDraft: ({required gameRoot, required input}) => ref
               .read(currentProjectCoordinatorProvider.notifier)
@@ -1833,6 +1875,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.loadNpcCatalog,
     required this.chooseNpcArchetype,
     required this.publishNpcDraft,
+    required this.loadNpcProfileEditSeed,
+    required this.publishNpcProfileEdit,
     required this.loadQuestCatalog,
     required this.publishQuestDraft,
     required this.editQuestOutline,
@@ -1891,6 +1935,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3NpcCatalogLoader loadNpcCatalog;
   final Revision3NpcArchetypeChooser? chooseNpcArchetype;
   final Revision3NpcDraftPublisher publishNpcDraft;
+  final Revision3NpcProfileEditSeedLoader loadNpcProfileEditSeed;
+  final Revision3NpcProfileEditTechnicalPublisher publishNpcProfileEdit;
   final Revision3QuestCatalogLoader loadQuestCatalog;
   final Revision3QuestDraftPublisher publishQuestDraft;
   final Revision3QuestOutlineEditPublisher editQuestOutline;
@@ -1984,6 +2030,10 @@ class _ManagedRevision3ProjectViewState
   Revision3NpcArchetypeChooser? get chooseNpcArchetype =>
       widget.chooseNpcArchetype;
   Revision3NpcDraftPublisher get publishNpcDraft => widget.publishNpcDraft;
+  Revision3NpcProfileEditSeedLoader get loadNpcProfileEditSeed =>
+      widget.loadNpcProfileEditSeed;
+  Revision3NpcProfileEditTechnicalPublisher get publishNpcProfileEdit =>
+      widget.publishNpcProfileEdit;
   Revision3QuestCatalogLoader get loadQuestCatalog => widget.loadQuestCatalog;
   Revision3QuestDraftPublisher get publishQuestDraft =>
       widget.publishQuestDraft;
@@ -2522,12 +2572,18 @@ class _ManagedRevision3ProjectViewState
                         _openQuestContextEditor(context, index, quest),
               editQuestTransitions: (index, quest) =>
                   _openQuestTransitionsEditor(context, index, quest),
+              editNpcProfile: gameRoot == null
+                  ? null
+                  : (index, npc) => _openNpcProfileEditor(context, index, npc),
               inspectQuestSource: gameRoot == null
                   ? null
                   : (index, quest) =>
                         _openQuestSourceInspection(context, index, quest),
               inspectNpcSource: (index, npc) =>
                   _openNpcProfile(context, index, npc),
+              editNpcProfileDisabledReason: gameRoot == null
+                  ? l10n.managedDashboardMissingGameDescription
+                  : null,
               editQuestContextDisabledReason: gameRoot == null
                   ? l10n.managedDashboardMissingGameDescription
                   : null,
@@ -2790,6 +2846,10 @@ class _ManagedRevision3ProjectViewState
           : gameRequiredReason,
       editQuestTransitions: (index, quest) =>
           _openQuestTransitionsEditor(context, index, quest),
+      editNpcProfile: gameConfigured
+          ? (index, npc) => _openNpcProfileEditor(context, index, npc)
+          : null,
+      editNpcProfileDisabledReason: gameConfigured ? null : gameRequiredReason,
       inspectQuestSource: gameConfigured
           ? (index, quest) => _openQuestSourceInspection(context, index, quest)
           : null,
@@ -3455,7 +3515,9 @@ class _ManagedRevision3ProjectViewState
       context: context,
       barrierDismissible: false,
       builder: (context) => Revision3NpcProfileDialog(
-        npcTitle: npc.summary.primaryIdentity,
+        npcTitle: npc.displayName.isEmpty
+            ? npc.summary.primaryIdentity
+            : npc.displayName,
         npcId: npc.id,
         inspect: inspectNpcSource,
         gameRoot: configuredGameRoot,
@@ -3470,6 +3532,42 @@ class _ManagedRevision3ProjectViewState
                 expectedModuleRevision: compilerSelection.moduleRevision,
                 gameRoot: configuredGameRoot,
               ),
+      ),
+    );
+  }
+
+  Future<void> _openNpcProfileEditor(
+    BuildContext context,
+    Revision3ContentIndex index,
+    Revision3ContentEntity npc,
+  ) async {
+    final configuredGameRoot = gameRoot;
+    if (configuredGameRoot == null || project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final publication = await showDialog<Revision3NpcProfileEditPublication>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Revision3NpcProfileEditDialog(
+        index: index,
+        npc: npc,
+        gameRoot: configuredGameRoot,
+        service: Revision3NpcProfileEditAuthoringService(
+          loadSeed: loadNpcProfileEditSeed,
+          loadCatalog: loadNpcCatalog,
+          publishTechnicalPlan: publishNpcProfileEdit,
+        ),
+        copy: _npcProfileEditDialogCopy(l10n),
+      ),
+    );
+    if (!context.mounted || publication == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          l10n.managedNpcProfileEditSaved(
+            publication.displayName,
+            publication.projectRevision,
+          ),
+        ),
       ),
     );
   }
@@ -3684,6 +3782,7 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   referencesTab: l10n.managedStoryWorkbenchReferencesTab,
   problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
   editOverview: l10n.managedStoryWorkbenchEditOverview,
+  editNpcProfile: l10n.managedStoryWorkbenchEditNpcProfile,
   editStory: l10n.managedStoryWorkbenchEditStory,
   editLogic: l10n.managedStoryWorkbenchEditLogic,
   inspectQuest: l10n.managedStoryWorkbenchInspectQuest,
@@ -3707,6 +3806,7 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   questKindLabel: l10n.managedStoryWorkbenchQuestKindLabel,
   npcKindLabel: l10n.managedStoryWorkbenchNpcKindLabel,
   questTitleLabel: l10n.managedStoryWorkbenchQuestTitleLabel,
+  npcDisplayNameLabel: l10n.managedStoryWorkbenchNpcDisplayNameLabel,
   technicalIdLabel: l10n.managedStoryWorkbenchTechnicalIdLabel,
   objectivesLabel: l10n.managedStoryWorkbenchObjectivesLabel,
   uniqueNameLabel: l10n.managedStoryWorkbenchUniqueNameLabel,
@@ -3724,6 +3824,39 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   stableIdLabel: l10n.managedStoryWorkbenchStableIdLabel,
   referenceResolvedLabel: l10n.managedStoryWorkbenchReferenceResolvedLabel,
   referenceUnresolvedLabel: l10n.managedStoryWorkbenchReferenceUnresolvedLabel,
+);
+
+Revision3NpcProfileEditDialogCopy _npcProfileEditDialogCopy(
+  AppLocalizations l10n,
+) => Revision3NpcProfileEditDialogCopy(
+  title: l10n.managedNpcProfileEditTitle,
+  description: l10n.managedNpcProfileEditDescription,
+  nameLabel: l10n.managedNpcProfileEditNameLabel,
+  nameHint: l10n.managedNpcProfileEditNameHint,
+  archetypeLabel: l10n.managedNpcProfileEditArchetypeLabel,
+  archetypeHelp: l10n.managedNpcProfileEditArchetypeHelp,
+  boundary: l10n.managedNpcProfileEditBoundary,
+  loading: l10n.managedNpcProfileEditLoading,
+  cancel: l10n.managedNpcProfileEditCancel,
+  close: l10n.managedNpcProfileEditClose,
+  save: l10n.managedNpcProfileEditSave,
+  saving: l10n.managedNpcProfileEditSaving,
+  retry: l10n.managedNpcProfileEditRetry,
+  loadFailed: l10n.managedNpcProfileEditLoadFailed,
+  catalogChanged: l10n.managedNpcProfileEditCatalogChanged,
+  currentArchetypeUnavailable:
+      l10n.managedNpcProfileEditCurrentArchetypeUnavailable,
+  stale: l10n.managedNpcProfileEditStale,
+  requiresReopen: l10n.managedNpcProfileEditRequiresReopen,
+  saveFailed: l10n.managedNpcProfileEditSaveFailed,
+  nameRequired: l10n.managedNpcProfileEditNameRequired,
+  nameTooLong: l10n.managedNpcProfileEditNameTooLong,
+  nameControl: l10n.managedNpcProfileEditNameControl,
+  reviewSelection: l10n.managedNpcProfileEditReviewSelection,
+  discardTitle: l10n.managedNpcProfileEditDiscardTitle,
+  discardBody: l10n.managedNpcProfileEditDiscardBody,
+  keepEditing: l10n.managedNpcProfileEditKeepEditing,
+  discard: l10n.managedNpcProfileEditDiscard,
 );
 
 Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>

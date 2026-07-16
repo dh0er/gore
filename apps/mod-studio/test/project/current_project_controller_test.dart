@@ -15,6 +15,7 @@ import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_localization_authoring.dart';
 import 'package:gore_mod/project/revision3_dialog_line_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
+import 'package:gore_mod/project/revision3_npc_profile_edit_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
@@ -26,6 +27,7 @@ import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
+import '../support/revision3_npc_profile_edit_fixture.dart';
 import '../support/revision3_voice_content_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
@@ -3379,6 +3381,182 @@ void main() {
   );
 
   test(
+    'NPC profile seed and exact publication refresh the managed checkpoint',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final plan = await _npcProfileEditPlan(profile);
+      final managed = _FakeNpcProfileManagedLease(
+        root: Directory('managed-npc-profile'),
+        projectIdValue: profile.seed.projectId,
+        projectRevision: profile.seed.projectRevision,
+        head: profile.head,
+        seed: profile.seed,
+        onPublish: (lease, gameRoot, received) {
+          expect(gameRoot, r'C:\Games\Gothic Remake');
+          expect(received, same(plan));
+          lease.projectRevision = plan.projectRevision + 1;
+          lease.head = _head(lease.projectRevision);
+          return _npcProfilePublication(plan);
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      final seed = await coordinator.readCurrentRevision3NpcProfileEditSeed(
+        expectedRoot: managed.root.path,
+        expectedProjectId: profile.seed.projectId,
+        expectedProjectRevision: profile.seed.projectRevision,
+        expectedHead: profile.head,
+        npcId: profile.seed.npcId,
+        expectedNpcRevision: profile.seed.npcRevision,
+        expectedScriptModuleId: profile.seed.scriptModuleId,
+        expectedScriptModuleRevision: profile.seed.scriptModuleRevision,
+        expectedUniqueName: profile.seed.uniqueName,
+        expectedModuleNamespace: profile.seed.moduleNamespace,
+        expectedParentCharacterDefinition:
+            profile.seed.parentCharacterDefinition.runtimeClass,
+        expectedParentAiAgentConfig:
+            profile.seed.parentAiAgentConfig.runtimeClass,
+        expectedParentSpawnDefinition:
+            profile.seed.parentSpawnDefinition.runtimeClass,
+      );
+      expect(seed, same(profile.seed));
+      expect(managed.seedCalls, 1);
+
+      final publication = await coordinator.editCurrentRevision3NpcProfile(
+        expectedRoot: managed.root.path,
+        expectedProjectId: profile.seed.projectId,
+        expectedProjectRevision: profile.seed.projectRevision,
+        expectedHead: profile.head,
+        gameRoot: r'C:\Games\Gothic Remake',
+        plan: plan,
+      );
+
+      expect(publication.displayName, plan.displayName);
+      expect(managed.publishCalls, 1);
+      expect(managed.latchCalls, 0);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, profile.seed.projectRevision + 1);
+      expect(state.head.canonicalJson, _head(2).canonicalJson);
+    },
+  );
+
+  test(
+    'NPC profile correctable failure is stale without retry or poison',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final plan = await _npcProfileEditPlan(profile);
+      final managed = _FakeNpcProfileManagedLease(
+        root: Directory('managed-npc-profile-stale'),
+        projectIdValue: profile.seed.projectId,
+        projectRevision: profile.seed.projectRevision,
+        head: profile.head,
+        seed: profile.seed,
+        onPublish: (_, _, _) => throw const ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+          code: 'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+          message: 'fake fresh catalog conflict',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.editCurrentRevision3NpcProfile(
+          expectedRoot: managed.root.path,
+          expectedProjectId: profile.seed.projectId,
+          expectedProjectRevision: profile.seed.projectRevision,
+          expectedHead: profile.head,
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        ),
+        throwsA(isA<Revision3NpcProfileEditStaleCheckpointException>()),
+      );
+      expect(managed.publishCalls, 1);
+      expect(managed.latchCalls, 0);
+      expect(managed.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'NPC profile receipt mismatch latches reopen and blocks retry',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final plan = await _npcProfileEditPlan(profile);
+      final managed = _FakeNpcProfileManagedLease(
+        root: Directory('managed-npc-profile-poison'),
+        projectIdValue: profile.seed.projectId,
+        projectRevision: profile.seed.projectRevision,
+        head: profile.head,
+        seed: profile.seed,
+        onPublish: (lease, _, plan) {
+          lease.projectRevision = plan.projectRevision + 1;
+          lease.head = _head(lease.projectRevision);
+          final publication = _npcProfilePublication(plan);
+          return Revision3NpcProfileEditPublication(
+            projectId: publication.projectId,
+            projectRevision: publication.projectRevision,
+            npcId: publication.npcId,
+            npcRevision: publication.npcRevision,
+            scriptModuleId: publication.scriptModuleId,
+            scriptModuleRevision: publication.scriptModuleRevision,
+            displayName: 'Forged receipt name',
+            previousParentCatalogId: publication.previousParentCatalogId,
+            parentCatalogId: publication.parentCatalogId,
+            nameChanged: publication.nameChanged,
+            archetypeChanged: publication.archetypeChanged,
+            moduleRegenerated: publication.moduleRegenerated,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.editCurrentRevision3NpcProfile(
+          expectedRoot: managed.root.path,
+          expectedProjectId: profile.seed.projectId,
+          expectedProjectRevision: profile.seed.projectRevision,
+          expectedHead: profile.head,
+          gameRoot: r'C:\Games\Gothic Remake',
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3NpcProfileEditRequiresReopenException>()),
+      );
+      expect(managed.publishCalls, 1);
+      expect(managed.latchCalls, 1);
+      expect(managed.requiresReopen, isTrue);
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3NpcProfileEditRequiresReopenException>()),
+      );
+      expect(managed.publishCalls, 1);
+    },
+  );
+
+  test(
     'DialogLine publication rejects stale checkpoints and refreshes managed state without a game root',
     () async {
       const projectId = '22222222222222222222222222222222';
@@ -6251,6 +6429,62 @@ AuthoringDraftContentSeal _controllerSeal(int bytes, String digit) =>
       'sha256': List<String>.filled(64, digit).join(),
     });
 
+Future<Revision3NpcProfileEditTechnicalPlan> _npcProfileEditPlan(
+  Revision3NpcProfileTestFixture fixture,
+) async {
+  final catalog = fixture.catalog();
+  Revision3NpcProfileEditTechnicalPlan? result;
+  final service = Revision3NpcProfileEditAuthoringService(
+    loadSeed:
+        ({
+          required npcId,
+          required expectedNpcRevision,
+          required expectedScriptModuleId,
+          required expectedScriptModuleRevision,
+          required expectedUniqueName,
+          required expectedModuleNamespace,
+          required expectedParentCharacterDefinition,
+          required expectedParentAiAgentConfig,
+          required expectedParentSpawnDefinition,
+        }) async => fixture.seed,
+    loadCatalog: (_) async => catalog,
+    publishTechnicalPlan: ({required gameRoot, required plan}) async {
+      result = plan;
+      return _npcProfilePublication(plan);
+    },
+  );
+  final checkpoint = await service.load(
+    index: fixture.index,
+    npc: fixture.npc,
+    gameRoot: r'C:\Games\Gothic Remake',
+  );
+  await service.publish(
+    checkpoint: checkpoint,
+    gameRoot: r'C:\Games\Gothic Remake',
+    displayName: 'Renamed Managed Guard',
+    archetype: catalog.choice(revision3NpcProfileAsghanId)!,
+  );
+  return result!;
+}
+
+Revision3NpcProfileEditPublication _npcProfilePublication(
+  Revision3NpcProfileEditTechnicalPlan plan,
+) => Revision3NpcProfileEditPublication(
+  projectId: plan.projectId,
+  projectRevision: plan.projectRevision + 1,
+  npcId: plan.npcId,
+  npcRevision: plan.expectedNpcRevision + 1,
+  scriptModuleId: plan.scriptModuleId,
+  scriptModuleRevision:
+      plan.expectedScriptModuleRevision + (plan.moduleRegenerated ? 1 : 0),
+  displayName: plan.displayName,
+  previousParentCatalogId: plan.expectedParentCatalogId,
+  parentCatalogId: plan.parentCatalogId,
+  nameChanged: plan.nameChanged,
+  archetypeChanged: plan.archetypeChanged,
+  moduleRegenerated: plan.moduleRegenerated,
+);
+
 typedef _VerifyHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _ContentReadHook = FutureOr<void> Function(_FakeManagedLease lease);
 typedef _QuestInspectionHook =
@@ -7053,6 +7287,63 @@ class _FakeManagedLease
       closeFailuresRemaining--;
       throw StateError('injected close failure');
     }
+  }
+}
+
+final class _FakeNpcProfileManagedLease extends _FakeManagedLease
+    implements ManagedRevision3NpcProfileEditLease {
+  _FakeNpcProfileManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required this.seed,
+    required this.onPublish,
+  });
+
+  final AuthoringRevision3NpcProfileEditSeed seed;
+  final FutureOr<Revision3NpcProfileEditPublication> Function(
+    _FakeNpcProfileManagedLease lease,
+    String gameRoot,
+    Revision3NpcProfileEditTechnicalPlan plan,
+  )
+  onPublish;
+  int seedCalls = 0;
+  int publishCalls = 0;
+  int latchCalls = 0;
+
+  @override
+  bool get supportsNpcProfileEdit => true;
+
+  @override
+  void markRequiresReopenAfterNpcProfileEditUncertainty() {
+    latchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<AuthoringRevision3NpcProfileEditSeed> readNpcProfileEditSeedV1({
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedScriptModuleId,
+    required int expectedScriptModuleRevision,
+    required String expectedUniqueName,
+    required String expectedModuleNamespace,
+    required String expectedParentCharacterDefinition,
+    required String expectedParentAiAgentConfig,
+    required String expectedParentSpawnDefinition,
+  }) async {
+    seedCalls++;
+    return seed;
+  }
+
+  @override
+  Future<Revision3NpcProfileEditPublication> prepareAndPublishNpcProfileEditV1({
+    required String gameRoot,
+    required Revision3NpcProfileEditTechnicalPlan plan,
+  }) async {
+    publishCalls++;
+    return onPublish(this, gameRoot, plan);
   }
 }
 

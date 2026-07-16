@@ -50,7 +50,13 @@ void main() {
       find.byKey(const Key('revision3-content-entity-details')),
       findsOneWidget,
     );
-    expect(find.text('GORE_GATE_GUARD'), findsWidgets);
+    expect(find.text('Gate Guard'), findsWidgets);
+    expect(find.text('GORE_GATE_GUARD'), findsNothing);
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-technical-$_npcId')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('GORE_GATE_GUARD'), findsOneWidget);
   });
 
   testWidgets(
@@ -231,7 +237,7 @@ void main() {
     );
   });
 
-  testWidgets('NPC Profile & checks routes the exact NPC without a game root', (
+  testWidgets('NPC checks route the exact NPC without a game root', (
     tester,
   ) async {
     await _setSurfaceSize(tester, const Size(1200, 800));
@@ -246,8 +252,14 @@ void main() {
       },
     );
 
+    final checksTab = find.byKey(
+      Key('revision3-story-workbench-tab-problemsChecks-$_npcId'),
+    );
+    await tester.ensureVisible(checksTab);
+    await tester.tap(checksTab);
+    await tester.pumpAndSettle();
     final action = find.byKey(
-      Key('revision3-story-workbench-action-inspect-npc-$_npcId'),
+      Key('revision3-story-workbench-action-inspect-npc_draft-$_npcId'),
     );
     expect(action, findsOneWidget);
     expect(
@@ -263,6 +275,40 @@ void main() {
 
     expect(inspectionCalls, 1);
     expect(inspectedNpc, _npcId);
+  });
+
+  testWidgets('NPC profile edit routes the exact NPC from Profile', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var editCalls = 0;
+    String? editedNpc;
+    await _pumpLoadedLibrary(
+      tester,
+      editNpcProfile: (index, npc) async {
+        editCalls++;
+        expect(index.projectId, _projectId);
+        editedNpc = npc.id;
+      },
+    );
+
+    final action = find.byKey(
+      Key('revision3-story-workbench-action-edit-npc-profile-$_npcId'),
+    );
+    expect(action, findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: action, matching: find.byType(ListTile)),
+          )
+          .enabled,
+      isTrue,
+    );
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    expect(editCalls, 1);
+    expect(editedNpc, _npcId);
   });
 
   testWidgets(
@@ -667,9 +713,7 @@ void main() {
     expect(sheetWasVisibleAtCallback, isFalse);
   });
 
-  testWidgets('compact NPC sheet closes before routing Profile & checks', (
-    tester,
-  ) async {
+  testWidgets('compact NPC sheet closes before routing checks', (tester) async {
     await _setSurfaceSize(tester, const Size(560, 760));
     var inspectionCalls = 0;
     var sheetWasVisibleAtCallback = false;
@@ -692,8 +736,14 @@ void main() {
       find.byKey(const Key('revision3-content-entity-details')),
       findsOneWidget,
     );
+    final checksTab = find.byKey(
+      Key('revision3-story-workbench-tab-problemsChecks-$_npcId'),
+    );
+    await tester.ensureVisible(checksTab);
+    await tester.tap(checksTab);
+    await tester.pumpAndSettle();
     final action = find.byKey(
-      Key('revision3-story-workbench-action-inspect-npc-$_npcId'),
+      Key('revision3-story-workbench-action-inspect-npc_draft-$_npcId'),
     );
     await tester.ensureVisible(action);
     await tester.tap(action);
@@ -701,6 +751,42 @@ void main() {
 
     expect(inspectionCalls, 1);
     expect(inspectedNpc, _npcId);
+    expect(sheetWasVisibleAtCallback, isFalse);
+    expect(
+      find.byKey(const Key('revision3-content-entity-details')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('compact NPC sheet closes before profile editing', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(560, 760));
+    var editCalls = 0;
+    var sheetWasVisibleAtCallback = false;
+    await _pumpLoadedLibrary(
+      tester,
+      editNpcProfile: (index, npc) async {
+        editCalls++;
+        expect(index.projectId, _projectId);
+        expect(npc.id, _npcId);
+        sheetWasVisibleAtCallback = find
+            .byKey(const Key('revision3-content-entity-details'))
+            .evaluate()
+            .isNotEmpty;
+      },
+    );
+
+    await tester.tap(find.byKey(Key('revision3-content-entity-$_npcId')));
+    await tester.pumpAndSettle();
+    final action = find.byKey(
+      Key('revision3-story-workbench-action-edit-npc-profile-$_npcId'),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    expect(editCalls, 1);
     expect(sheetWasVisibleAtCallback, isFalse);
     expect(
       find.byKey(const Key('revision3-content-entity-details')),
@@ -1763,6 +1849,7 @@ Future<void> _pumpLoadedLibrary(
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
+  Revision3NpcProfileEditor? editNpcProfile,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
   String? editQuestContextDisabledReason,
@@ -1778,6 +1865,7 @@ Future<void> _pumpLoadedLibrary(
     editQuestOutline: editQuestOutline,
     editQuestContext: editQuestContext,
     editQuestTransitions: editQuestTransitions,
+    editNpcProfile: editNpcProfile,
     inspectQuestSource: inspectQuestSource,
     inspectNpcSource: inspectNpcSource,
     editQuestContextDisabledReason: editQuestContextDisabledReason,
@@ -1794,6 +1882,7 @@ Future<void> _pumpLibrary(
   Revision3QuestOutlineEditor? editQuestOutline,
   Revision3QuestContextEditor? editQuestContext,
   Revision3QuestTransitionsEditor? editQuestTransitions,
+  Revision3NpcProfileEditor? editNpcProfile,
   Revision3QuestSourceInspector? inspectQuestSource,
   Revision3NpcSourceInspector? inspectNpcSource,
   String? editQuestContextDisabledReason,
@@ -1811,6 +1900,7 @@ Future<void> _pumpLibrary(
         editQuestOutline: editQuestOutline,
         editQuestContext: editQuestContext,
         editQuestTransitions: editQuestTransitions,
+        editNpcProfile: editNpcProfile,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
         editQuestContextDisabledReason: editQuestContextDisabledReason,

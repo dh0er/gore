@@ -189,6 +189,137 @@ void main() {
     },
   );
 
+  testWidgets(
+    'NPC Profile edits the friendly name directly and keeps checks separate',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      var editCalls = 0;
+      var inspectCalls = 0;
+      Revision3ContentIndex? editedIndex;
+      Revision3ContentEntity? editedNpc;
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        editNpcProfile: (index, npc) async {
+          editCalls++;
+          editedIndex = index;
+          editedNpc = npc;
+        },
+        inspectNpcSource: (_, _) async => inspectCalls++,
+      );
+      await tester.pumpAndSettle();
+
+      final edit = find.byKey(
+        Key('revision3-story-workbench-action-edit-npc-profile-$_npcId'),
+      );
+      expect(edit, findsOneWidget);
+      expect(find.text('Edit name & archetype'), findsOneWidget);
+      expect(find.text('Character name'), findsOneWidget);
+      expect(find.text('Gate Guard'), findsWidgets);
+      expect(
+        find.byKey(Key('revision3-story-workbench-action-inspect-npc-$_npcId')),
+        findsNothing,
+      );
+      expect(find.text('GORE_GATE_GUARD'), findsNothing);
+      expect(find.text('PROJECT.NPCS.GATEGUARD'), findsNothing);
+
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+      expect(editCalls, 1);
+      expect(editedIndex?.projectId, _projectA);
+      expect(editedIndex?.projectRevision, 7);
+      expect(editedNpc?.id, _npcId);
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-technical-$_npcId')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('GORE_GATE_GUARD'), findsOneWidget);
+      expect(find.text('PROJECT.NPCS.GATEGUARD'), findsOneWidget);
+
+      final checksTab = find.byKey(
+        Key('revision3-story-workbench-tab-problemsChecks-$_npcId'),
+      );
+      await tester.ensureVisible(checksTab);
+      await tester.tap(checksTab);
+      await tester.pumpAndSettle();
+      final inspect = find.byKey(
+        Key('revision3-story-workbench-action-inspect-npc_draft-$_npcId'),
+      );
+      expect(inspect, findsOneWidget);
+      await tester.tap(inspect);
+      await tester.pumpAndSettle();
+      expect(inspectCalls, 1);
+    },
+  );
+
+  testWidgets('NPC Profile exposes a concrete disabled edit reason', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(),
+      editNpcProfileDisabledReason: 'Configure the game before editing.',
+    );
+    await tester.pumpAndSettle();
+
+    final edit = find.byKey(
+      Key('revision3-story-workbench-action-edit-npc-profile-$_npcId'),
+    );
+    expect(edit, findsOneWidget);
+    expect(find.text('Configure the game before editing.'), findsOneWidget);
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(of: edit, matching: find.byType(ListTile)),
+          )
+          .enabled,
+      isFalse,
+    );
+  });
+
+  testWidgets(
+    'compact NPC Profile closes its sheet through the same edit path',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(640, 600));
+      var editCalls = 0;
+      String? editedId;
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        editNpcProfile: (_, npc) async {
+          editCalls++;
+          editedId = npc.id;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workspace-entity-$_npcId')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-story-workspace-details-sheet')),
+        findsOneWidget,
+      );
+
+      final edit = find.byKey(
+        Key('revision3-story-workbench-action-edit-npc-profile-$_npcId'),
+      );
+      await tester.ensureVisible(edit);
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+
+      expect(editCalls, 1);
+      expect(editedId, _npcId);
+      expect(
+        find.byKey(const Key('revision3-story-workspace-details-sheet')),
+        findsNothing,
+      );
+    },
+  );
+
   testWidgets('enabled create callbacks remain direct and visible', (
     tester,
   ) async {
@@ -570,6 +701,7 @@ void main() {
       var editStoryCalls = 0;
       var editLogicCalls = 0;
       var inspectQuestCalls = 0;
+      var editNpcProfileCalls = 0;
       var inspectNpcCalls = 0;
       var externalEntityCalls = 0;
       var externalAssetCalls = 0;
@@ -591,6 +723,7 @@ void main() {
                   editQuestContext: (_, _) async => editStoryCalls++,
                   editQuestTransitions: (_, _) async => editLogicCalls++,
                   inspectQuestSource: (_, _) async => inspectQuestCalls++,
+                  editNpcProfile: (_, _) async => editNpcProfileCalls++,
                   inspectNpcSource: (_, _) async => inspectNpcCalls++,
                   onOpenExternalEntity: (_) => externalEntityCalls++,
                   onOpenExternalAsset: (_) => externalAssetCalls++,
@@ -647,6 +780,7 @@ void main() {
       final npcWorkbench = tester.widget<Revision3StoryEntityWorkbench>(
         find.byType(Revision3StoryEntityWorkbench),
       );
+      final staleNpcEdit = npcWorkbench.actions.editNpcProfile!;
       final staleNpcInspect = npcWorkbench.actions.inspectNpc!;
 
       rebuild(() {
@@ -655,6 +789,7 @@ void main() {
         index = _fixture(projectId: _projectB, revision: 8);
       });
       await tester.pump();
+      await staleNpcEdit();
       await staleNpcInspect();
       await tester.pumpAndSettle();
 
@@ -662,6 +797,7 @@ void main() {
         find.byKey(const Key('revision3-story-workspace-details-sheet')),
         findsNothing,
       );
+      expect(editNpcProfileCalls, 0);
       expect(inspectNpcCalls, 0);
       expect(tester.takeException(), isNull);
     },
@@ -1378,12 +1514,14 @@ Future<void> _pumpWorkspace(
   ValueChanged<String>? onOpenExternalEntity,
   ValueChanged<String>? onOpenExternalAsset,
   Revision3StoryWorkspaceEntityAction? editQuestOutline,
+  Revision3StoryWorkspaceEntityAction? editNpcProfile,
   Revision3StoryWorkspaceEntityAction? editQuestContext,
   Revision3StoryWorkspaceEntityAction? editQuestTransitions,
   Revision3StoryWorkspaceEntityAction? inspectQuestSource,
   Revision3StoryWorkspaceEntityAction? inspectNpcSource,
   Revision3StoryWorkspaceRemoveDraftAction? removeDraft,
   String? removeDraftDisabledReason,
+  String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -1400,12 +1538,14 @@ Future<void> _pumpWorkspace(
         onOpenExternalEntity: onOpenExternalEntity,
         onOpenExternalAsset: onOpenExternalAsset,
         editQuestOutline: editQuestOutline,
+        editNpcProfile: editNpcProfile,
         editQuestContext: editQuestContext,
         editQuestTransitions: editQuestTransitions,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
         removeDraft: removeDraft,
         removeDraftDisabledReason: removeDraftDisabledReason,
+        editNpcProfileDisabledReason: editNpcProfileDisabledReason,
         copy: copy,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
@@ -1426,12 +1566,14 @@ Revision3StoryWorkspace _workspace({
   ValueChanged<String>? onOpenExternalEntity,
   ValueChanged<String>? onOpenExternalAsset,
   Revision3StoryWorkspaceEntityAction? editQuestOutline,
+  Revision3StoryWorkspaceEntityAction? editNpcProfile,
   Revision3StoryWorkspaceEntityAction? editQuestContext,
   Revision3StoryWorkspaceEntityAction? editQuestTransitions,
   Revision3StoryWorkspaceEntityAction? inspectQuestSource,
   Revision3StoryWorkspaceEntityAction? inspectNpcSource,
   Revision3StoryWorkspaceRemoveDraftAction? removeDraft,
   String? removeDraftDisabledReason,
+  String? editNpcProfileDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -1454,12 +1596,14 @@ Revision3StoryWorkspace _workspace({
   onOpenExternalEntity: onOpenExternalEntity ?? (_) {},
   onOpenExternalAsset: onOpenExternalAsset ?? (_) {},
   editQuestOutline: editQuestOutline,
+  editNpcProfile: editNpcProfile,
   editQuestContext: editQuestContext,
   editQuestTransitions: editQuestTransitions,
   inspectQuestSource: inspectQuestSource,
   inspectNpcSource: inspectNpcSource,
   removeDraft: removeDraft,
   removeDraftDisabledReason: removeDraftDisabledReason,
+  editNpcProfileDisabledReason: editNpcProfileDisabledReason,
 );
 
 Revision3ContentIndex _fixture({

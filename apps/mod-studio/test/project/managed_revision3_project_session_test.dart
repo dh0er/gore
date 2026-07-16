@@ -19,6 +19,7 @@ import 'package:path/path.dart' as p;
 import '../dataasset/dataasset_test_fixtures.dart';
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
+import '../support/revision3_npc_profile_edit_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
 import '../support/revision3_quest_outline_fixture.dart';
 import '../support/revision3_voice_fixture.dart';
@@ -2709,6 +2710,169 @@ void main() {
       expect(provenanceSession.requiresReopen, isTrue);
       expect(provenanceSession.projectRevision, context.projectRevision);
       await provenanceSession.close();
+    },
+  );
+
+  test(
+    'NPC profile edit derives locally then publishes one fixed-head candidate',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final root = await _projectRoot(fixture, suffix: 'npc_profile_happy');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: profile.projectJson,
+      );
+
+      final seed = await session.readNpcProfileEditSeedV1(
+        npcId: profile.seed.npcId,
+        expectedNpcRevision: profile.seed.npcRevision,
+        expectedScriptModuleId: profile.seed.scriptModuleId,
+        expectedScriptModuleRevision: profile.seed.scriptModuleRevision,
+        expectedUniqueName: profile.seed.uniqueName,
+        expectedModuleNamespace: profile.seed.moduleNamespace,
+        expectedParentCharacterDefinition:
+            profile.seed.parentCharacterDefinition.runtimeClass,
+        expectedParentAiAgentConfig:
+            profile.seed.parentAiAgentConfig.runtimeClass,
+        expectedParentSpawnDefinition:
+            profile.seed.parentSpawnDefinition.runtimeClass,
+      );
+      expect(seed.head.canonicalJson, session.head.canonicalJson);
+      expect(store.npcProfilePrepareCalls, 0);
+
+      final published = await _publishNpcProfile(
+        session,
+        profile,
+        seed: seed,
+        displayName: 'Renamed Managed Guard',
+      );
+
+      expect(store.npcProfilePrepareCalls, 1);
+      expect(store.npcProfileRequests.single.expectsArchetypeChanged, isFalse);
+      expect(published.projectRevision, profile.seed.projectRevision + 1);
+      expect(published.npcRevision, profile.seed.npcRevision + 1);
+      expect(published.scriptModuleRevision, profile.seed.scriptModuleRevision);
+      expect(session.projectJson, published.projectJson);
+      expect(session.head.canonicalJson, published.head.canonicalJson);
+      expect(
+        store.openedCheckpointHeads,
+        contains(published.head.canonicalJson),
+      );
+      expect(store.openedPublishedHeads.last, published.head.canonicalJson);
+      await session.close();
+    },
+  );
+
+  test(
+    'NPC profile correctable rejection does not retry while unknown failure poisons',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create();
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextNpcProfileError = const ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+          code: 'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+          message: 'fake fresh catalog conflict',
+        );
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: profile.projectJson,
+      );
+      await expectLater(
+        _publishNpcProfile(retrySession, profile),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+          ),
+        ),
+      );
+      expect(retryStore.npcProfilePrepareCalls, 1);
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_poison',
+      );
+      final poisonStore = _FakeRevision3Store(sealRegisteredHeads: true)
+        ..nextNpcProfileError = const ModFfiException(
+          command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+          code: 'AUTHORING_REVISION3_NPC_PROFILE_FUTURE_UNKNOWN',
+          message: 'fake unknown integrity failure',
+        );
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: profile.projectJson,
+          );
+      await expectLater(
+        _publishNpcProfile(poisonSession, profile),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      final calls = poisonStore.npcProfilePrepareCalls;
+      await expectLater(
+        _publishNpcProfile(poisonSession, profile),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.npcProfilePrepareCalls, calls);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'NPC profile signed-max Module is name-only safe and structural edit is preflight-rejected',
+    () async {
+      final profile = Revision3NpcProfileTestFixture.create(
+        moduleRevision: 0x7fffffffffffffff,
+      );
+      final nameRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_signed_max_name',
+      );
+      final nameStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final nameSession = await ManagedRevision3AuthoringProjectSession.create(
+        root: nameRoot,
+        store: nameStore,
+        projectJson: profile.projectJson,
+      );
+      final renamed = await _publishNpcProfile(nameSession, profile);
+      expect(renamed.scriptModuleRevision, 0x7fffffffffffffff);
+      expect(nameStore.npcProfilePrepareCalls, 1);
+      await nameSession.close();
+
+      final structuralRoot = await _projectRoot(
+        fixture,
+        suffix: 'npc_profile_signed_max_structural',
+      );
+      final structuralStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final structuralSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: structuralRoot,
+            store: structuralStore,
+            projectJson: profile.projectJson,
+          );
+      await expectLater(
+        _publishNpcProfile(
+          structuralSession,
+          profile,
+          displayName: profile.seed.displayName,
+          archetypeChanged: true,
+        ),
+        throwsFormatException,
+      );
+      expect(structuralStore.npcProfilePrepareCalls, 0);
+      expect(structuralSession.requiresReopen, isFalse);
+      await structuralSession.close();
     },
   );
 
@@ -6987,7 +7151,134 @@ Future<ManagedRevision3VoiceTakeRemovalCheckpoint> _removeVoiceTake(
   );
 }
 
-class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
+Future<ManagedRevision3NpcProfileEditCheckpoint> _publishNpcProfile(
+  ManagedRevision3AuthoringProjectSession session,
+  Revision3NpcProfileTestFixture profile, {
+  AuthoringRevision3NpcProfileEditSeed? seed,
+  String displayName = 'Renamed Managed Guard',
+  bool archetypeChanged = false,
+}) => session.prepareAndPublishNpcProfileEditV1(
+  gameRoot: r'D:\Games\Gothic Remake',
+  seed: seed ?? profile.seed,
+  expectedStoryCatalogSeal: profile.catalog().storyCatalogSeal!,
+  expectedNpcCatalogSeal: profile.catalog().npcCatalogSeal!,
+  expectedParentCatalogId: revision3NpcProfileAsghanId,
+  expectedCurrentParentTriple: revision3NpcProfileExpectation(
+    profile.asghanTriple,
+  ),
+  displayName: displayName,
+  parentCatalogId: archetypeChanged
+      ? revision3NpcProfileViperId
+      : revision3NpcProfileAsghanId,
+  expectedParentTriple: revision3NpcProfileExpectation(
+    archetypeChanged ? profile.viperTriple : profile.asghanTriple,
+  ),
+  expectedArchetypeChanged: archetypeChanged,
+  expectedModuleRegenerated: archetypeChanged,
+);
+
+String _npcProfileCandidate({
+  required String currentProjectJson,
+  required AuthoringRevision3NpcProfileEditRequestV1 request,
+}) {
+  final project = (jsonDecode(currentProjectJson) as Map)
+      .cast<String, Object?>();
+  project['revision'] = request.expectedRevision + 1;
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final npc = (entities[request.npcId]! as Map).cast<String, Object?>();
+  npc['display_name'] = request.displayName;
+  npc['revision'] = request.expectedNpcRevision + 1;
+  if (request.expectsArchetypeChanged) {
+    final npcPayload = (npc['payload']! as Map).cast<String, Object?>();
+    final npcData = (npcPayload['data']! as Map).cast<String, Object?>();
+    final input = (npcData['input']! as Map).cast<String, Object?>();
+    final target = (project['target']! as Map).cast<String, Object?>();
+    input['parent_character_definition'] = _npcProfileParentJson(
+      request.expectedParentTriple.characterDefinition,
+      target,
+    );
+    input['parent_ai_agent_config'] = _npcProfileParentJson(
+      request.expectedParentTriple.aiAgentConfig,
+      target,
+    );
+    input['parent_spawn_definition'] = _npcProfileParentJson(
+      request.expectedParentTriple.spawnDefinition,
+      target,
+    );
+    final module = (entities[request.scriptModuleId]! as Map)
+        .cast<String, Object?>();
+    module['revision'] = request.expectedScriptModuleRevision + 1;
+    final modulePayload = (module['payload']! as Map).cast<String, Object?>();
+    final moduleData = (modulePayload['data']! as Map).cast<String, Object?>();
+    final source = revision3NpcFixtureSource(input);
+    moduleData['source'] = source;
+    moduleData['source_sha256'] = crypto.sha256
+        .convert(utf8.encode(source))
+        .toString();
+    moduleData['input_fingerprint'] = revision3NpcFixtureInputFingerprint(
+      input,
+    );
+  }
+  return jsonEncode(project);
+}
+
+Map<String, Object?> _npcProfileParentJson(
+  AuthoringRevision3NpcProfileParentExpectation parent,
+  Map<String, Object?> target,
+) => <String, Object?>{
+  'generation': target,
+  'source_seal': <String, Object?>{
+    'byte_len': parent.sourceSeal.byteLength,
+    'sha256': parent.sourceSeal.sha256,
+  },
+  'catalog_layer': parent.catalogLayer,
+  'canonical_selector': parent.authoringSelector,
+  'runtime_class': parent.runtimeClass,
+};
+
+Map<String, Object?> _npcProfilePreparedResponse({
+  required AuthoringRevision3NpcProfileEditRequestV1 request,
+  required AuthoringWorkingHead candidateHead,
+  required String candidateProjectJson,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': 'prepared_unpublished',
+  'basis_head_json': request.expectedHead.canonicalJson,
+  'head_json': candidateHead.canonicalJson,
+  'project_json': candidateProjectJson,
+  'project_id': request.expectedProjectId,
+  'revision': request.expectedRevision + 1,
+  'npc_id': request.npcId,
+  'npc_revision': request.expectedNpcRevision + 1,
+  'script_module_id': request.scriptModuleId,
+  'script_module_revision':
+      request.expectedScriptModuleRevision +
+      (request.expectsModuleRegenerated ? 1 : 0),
+  'display_name': request.displayName,
+  'previous_parent_catalog_id': request.expectedParentCatalogId,
+  'parent_catalog_id': request.parentCatalogId,
+  'story_catalog_seal': <String, Object?>{
+    'byte_len': request.expectedStoryCatalogSeal.byteLength,
+    'sha256': request.expectedStoryCatalogSeal.sha256,
+  },
+  'npc_catalog_seal': <String, Object?>{
+    'byte_len': request.expectedNpcCatalogSeal.byteLength,
+    'sha256': request.expectedNpcCatalogSeal.sha256,
+  },
+  'name_changed': request.expectsNameChanged,
+  'archetype_changed': request.expectsArchetypeChanged,
+  'module_regenerated': request.expectsModuleRegenerated,
+  'build_status': 'blocked',
+  'runtime_status': 'runtime_unqualified',
+  'catalog_authority': 'not_granted',
+  'collision_authority': 'not_granted',
+  'publication_status': 'not_supported',
+};
+
+class _FakeRevision3Store
+    implements
+        ManagedRevision3AuthoringStore,
+        ManagedRevision3NpcProfileEditStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
 
   final bool sealRegisteredHeads;
@@ -7006,6 +7297,7 @@ class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int questTransitionsPrepareCalls = 0;
   int questContextPrepareCalls = 0;
   int npcPrepareCalls = 0;
+  int npcProfilePrepareCalls = 0;
   int dialogLinePrepareCalls = 0;
   int voicePrepareCalls = 0;
   int voiceSelectionPrepareCalls = 0;
@@ -7053,6 +7345,8 @@ class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   final List<String> npcCurrentProjects = <String>[];
   final List<AuthoringRevision3NpcDraftRequestV1> npcRequests =
       <AuthoringRevision3NpcDraftRequestV1>[];
+  final List<AuthoringRevision3NpcProfileEditRequestV1> npcProfileRequests =
+      <AuthoringRevision3NpcProfileEditRequestV1>[];
   final List<String> dialogLineCurrentProjects = <String>[];
   final List<AuthoringRevision3DialogLineEntryRequestV1> dialogLineRequests =
       <AuthoringRevision3DialogLineEntryRequestV1>[];
@@ -7076,6 +7370,8 @@ class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   ModFfiException? nextQuestContextError;
   String? nextQuestContextProvenanceMismatch;
   Object? nextNpcError;
+  Object? nextNpcProfileError;
+  String? nextNpcProfileResponseMismatch;
   Object? nextVoiceError;
   Object? nextVoiceSelectionError;
   Object? nextVoiceTakeStatusError;
@@ -7670,6 +7966,52 @@ class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
     );
     return AuthoringRevision3NpcDraftPreparation.fromJson(
       fixture.response(),
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3NpcProfileEditPreparation> prepareNpcProfileEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcProfileEditRequestV1 request,
+  }) async {
+    npcProfilePrepareCalls++;
+    npcProfileRequests.add(request);
+    final injected = nextNpcProfileError;
+    nextNpcProfileError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_npc_profile_edit_v1',
+        code: 'AUTHORING_REVISION3_NPC_PROFILE_HEAD_CONFLICT',
+        message: 'fake native NPC profile basis CAS rejected',
+      );
+    }
+    final candidate = _npcProfileCandidate(
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+    final candidateHead = register(candidate);
+    final response = _npcProfilePreparedResponse(
+      request: request,
+      candidateHead: candidateHead,
+      candidateProjectJson: candidate,
+    );
+    final mismatch = nextNpcProfileResponseMismatch;
+    nextNpcProfileResponseMismatch = null;
+    if (mismatch == 'npc-revision') {
+      response['npc_revision'] = request.expectedNpcRevision + 2;
+    } else if (mismatch == 'module-regenerated') {
+      response['module_regenerated'] = !request.expectsModuleRegenerated;
+    }
+    return AuthoringRevision3NpcProfileEditPreparation.fromJson(
+      response,
       currentProjectJson: currentProjectJson,
       request: request,
     );

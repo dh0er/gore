@@ -23,6 +23,60 @@ typedef Revision3NpcDraftPublisher =
       required Revision3NpcDraftAuthoringInput input,
     });
 
+/// One exact parent-class provenance retained for transaction review only.
+/// Normal picker surfaces continue to render only the friendly choice label.
+final class Revision3NpcCatalogParentBinding {
+  Revision3NpcCatalogParentBinding({
+    required String catalogLayer,
+    required String authoringSelector,
+    required String runtimeClass,
+    required this.sourceSeal,
+  }) : catalogLayer = _boundedCatalogText(
+         catalogLayer,
+         1024,
+         'NPC parent catalog layer',
+       ),
+       authoringSelector = _boundedCatalogText(
+         authoringSelector,
+         1024,
+         'NPC parent authoring selector',
+       ),
+       runtimeClass = _boundedCatalogText(
+         runtimeClass,
+         1024,
+         'NPC parent runtime class',
+       );
+
+  final String catalogLayer;
+  final String authoringSelector;
+  final String runtimeClass;
+  final AuthoringDraftContentSeal sourceSeal;
+
+  bool sameBinding(Revision3NpcCatalogParentBinding other) =>
+      catalogLayer == other.catalogLayer &&
+      authoringSelector == other.authoringSelector &&
+      runtimeClass == other.runtimeClass &&
+      _sameNpcCatalogSeal(sourceSeal, other.sourceSeal);
+}
+
+/// The indivisible CharacterDefinition/AIAgentConfig/SpawnDefinition chain.
+final class Revision3NpcCatalogParentTriple {
+  const Revision3NpcCatalogParentTriple({
+    required this.characterDefinition,
+    required this.aiAgentConfig,
+    required this.spawnDefinition,
+  });
+
+  final Revision3NpcCatalogParentBinding characterDefinition;
+  final Revision3NpcCatalogParentBinding aiAgentConfig;
+  final Revision3NpcCatalogParentBinding spawnDefinition;
+
+  bool sameBinding(Revision3NpcCatalogParentTriple other) =>
+      characterDefinition.sameBinding(other.characterDefinition) &&
+      aiAgentConfig.sameBinding(other.aiAgentConfig) &&
+      spawnDefinition.sameBinding(other.spawnDefinition);
+}
+
 /// One selectable, offline-qualified NPC archetype projected for normal UI.
 ///
 /// The native catalog identity remains an opaque selector. Runtime class names,
@@ -32,6 +86,7 @@ final class Revision3NpcCatalogChoice {
   Revision3NpcCatalogChoice({
     required String catalogId,
     required String displayName,
+    this.parentTriple,
   }) : catalogId = _boundedCatalogText(
          catalogId,
          _maxCatalogIdBytes,
@@ -45,6 +100,14 @@ final class Revision3NpcCatalogChoice {
 
   final String catalogId;
   final String displayName;
+  final Revision3NpcCatalogParentTriple? parentTriple;
+
+  bool sameBinding(Revision3NpcCatalogChoice other) =>
+      catalogId == other.catalogId &&
+      displayName == other.displayName &&
+      parentTriple != null &&
+      other.parentTriple != null &&
+      parentTriple!.sameBinding(other.parentTriple!);
 }
 
 /// Closed picker projection joined from one exact Story and broad archetype
@@ -53,6 +116,9 @@ final class Revision3NpcCatalog {
   Revision3NpcCatalog({
     required Iterable<Revision3NpcCatalogChoice> choices,
     this.archetypeIndex,
+    this.generationExecutableSeal,
+    this.storyCatalogSeal,
+    this.npcCatalogSeal,
   }) : choices = _closedChoices(choices) {
     final index = archetypeIndex;
     if (index != null) {
@@ -84,8 +150,57 @@ final class Revision3NpcCatalog {
     );
   }
 
+  /// Closed projection retaining the exact native catalog seals and the three
+  /// parent provenances used by profile-edit transactions.
+  factory Revision3NpcCatalog.fromNativeCatalogs({
+    required AuthoringStoryCatalogSelections story,
+    required AuthoringNpcArchetypeCatalogBuildResult archetypes,
+  }) {
+    final adapter = StoryCatalogAdapter.fromSelectionsAndArchetypes(
+      story,
+      archetypes,
+    );
+    final index = adapter.npcArchetypeIndex;
+    if (index == null) {
+      throw const FormatException(
+        'The broad NPC archetype catalog is unavailable.',
+      );
+    }
+    final selections = <String, AuthoringStoryCatalogNpcSelection>{
+      for (final selection in story.npcs) selection.catalogId: selection,
+    };
+    return Revision3NpcCatalog(
+      choices: adapter.npcChoices.map((choice) {
+        final selection = selections[choice.catalogId];
+        if (selection == null) {
+          throw const FormatException(
+            'An NPC archetype choice lacks exact Story linkage.',
+          );
+        }
+        return Revision3NpcCatalogChoice(
+          catalogId: choice.catalogId,
+          displayName: choice.displayName,
+          parentTriple: Revision3NpcCatalogParentTriple(
+            characterDefinition: _npcCatalogParent(
+              selection.characterDefinition,
+            ),
+            aiAgentConfig: _npcCatalogParent(selection.aiAgentConfig),
+            spawnDefinition: _npcCatalogParent(selection.spawnDefinition),
+          ),
+        );
+      }),
+      archetypeIndex: index,
+      generationExecutableSeal: story.generation.executable,
+      storyCatalogSeal: story.catalogSeal,
+      npcCatalogSeal: archetypes.catalogSeal,
+    );
+  }
+
   final List<Revision3NpcCatalogChoice> choices;
   final StoryNpcArchetypeIndex? archetypeIndex;
+  final AuthoringDraftContentSeal? generationExecutableSeal;
+  final AuthoringDraftContentSeal? storyCatalogSeal;
+  final AuthoringDraftContentSeal? npcCatalogSeal;
 
   bool contains(String catalogId) =>
       choices.any((choice) => choice.catalogId == catalogId);
@@ -95,6 +210,24 @@ final class Revision3NpcCatalog {
       if (choice.catalogId == catalogId) return choice;
     }
     return null;
+  }
+
+  bool sameSeal(Revision3NpcCatalog other) {
+    final generation = generationExecutableSeal;
+    final otherGeneration = other.generationExecutableSeal;
+    final story = storyCatalogSeal;
+    final otherStory = other.storyCatalogSeal;
+    final npc = npcCatalogSeal;
+    final otherNpc = other.npcCatalogSeal;
+    return generation != null &&
+        otherGeneration != null &&
+        story != null &&
+        otherStory != null &&
+        npc != null &&
+        otherNpc != null &&
+        _sameNpcCatalogSeal(generation, otherGeneration) &&
+        _sameNpcCatalogSeal(story, otherStory) &&
+        _sameNpcCatalogSeal(npc, otherNpc);
   }
 }
 
@@ -123,8 +256,9 @@ final class Revision3NpcCatalogService {
     ], eagerError: false);
     final story = results[0] as AuthoringStoryCatalogSelections;
     final archetypes = results[1] as AuthoringNpcArchetypeCatalogBuildResult;
-    return Revision3NpcCatalog.fromStoryCatalog(
-      StoryCatalogAdapter.fromSelectionsAndArchetypes(story, archetypes),
+    return Revision3NpcCatalog.fromNativeCatalogs(
+      story: story,
+      archetypes: archetypes,
     );
   }
 }
@@ -360,3 +494,17 @@ String _requiredEntityId(String value, String context) {
   }
   return value;
 }
+
+Revision3NpcCatalogParentBinding _npcCatalogParent(
+  AuthoringStoryCatalogClassSelection selection,
+) => Revision3NpcCatalogParentBinding(
+  catalogLayer: selection.catalogLayer,
+  authoringSelector: selection.authoringSelector,
+  runtimeClass: selection.runtimeClass,
+  sourceSeal: selection.sourceSeal,
+);
+
+bool _sameNpcCatalogSeal(
+  AuthoringDraftContentSeal left,
+  AuthoringDraftContentSeal right,
+) => left.byteLength == right.byteLength && left.sha256 == right.sha256;

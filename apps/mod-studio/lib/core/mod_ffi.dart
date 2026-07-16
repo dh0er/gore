@@ -25,6 +25,7 @@ part '../project/revision3_dialog_localization_edit.dart';
 part '../project/revision3_dialog_line_entry.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
+part '../project/revision3_npc_profile_edit.dart';
 part '../project/revision3_npc_source_inspection.dart';
 part '../project/revision3_quest_context.dart';
 part '../project/revision3_quest_outline.dart';
@@ -1352,6 +1353,57 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3NpcDraftPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare one exact existing NPC display-name/archetype edit without
+  /// publishing the fixed head or writing game/save files.
+  Future<AuthoringRevision3NpcProfileEditPreparation>
+  authoringStorePrepareRevision3NpcProfileEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcProfileEditRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_npc_profile_edit_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    if (request.expectedProjectId != current.projectId ||
+        request.expectedRevision != current.revision ||
+        request.expectedTargetCanonicalJson !=
+            jsonEncode(current.project['target'])) {
+      throw const FormatException(
+        'revision-3 NPC profile request is not bound to the current project',
+      );
+    }
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('currentProjectJson', currentProjectJson),
+      ('gameRoot', gameRoot),
+      ('npcProfileRequestJson', request.canonicalJson),
+      ('root', root),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'game_root': gameRoot,
+      'npc_profile_request_json': request.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3NpcProfileEditPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

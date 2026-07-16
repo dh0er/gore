@@ -331,6 +331,42 @@ final class ManagedRevision3NpcDraftCheckpoint {
   final String parentCatalogId;
 }
 
+/// One existing NPC profile edit returned only after native preparation, full
+/// candidate reopen, fixed-head CAS publication, and full published reopen.
+final class ManagedRevision3NpcProfileEditCheckpoint {
+  const ManagedRevision3NpcProfileEditCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.npcId,
+    required this.npcRevision,
+    required this.scriptModuleId,
+    required this.scriptModuleRevision,
+    required this.displayName,
+    required this.previousParentCatalogId,
+    required this.parentCatalogId,
+    required this.nameChanged,
+    required this.archetypeChanged,
+    required this.moduleRegenerated,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String npcId;
+  final int npcRevision;
+  final String scriptModuleId;
+  final int scriptModuleRevision;
+  final String displayName;
+  final String previousParentCatalogId;
+  final String parentCatalogId;
+  final bool nameChanged;
+  final bool archetypeChanged;
+  final bool moduleRegenerated;
+}
+
 /// One project-local DialogLine prerequisite returned only after native
 /// preparation, full candidate reopen, guarded fixed-head publication, and a
 /// full published reopen. It grants no topic, build, runtime, game, or save
@@ -976,13 +1012,25 @@ abstract interface class ManagedRevision3VoiceTakeRemovalStore {
   });
 }
 
+/// Narrow capability for preparing one existing NPC name/archetype edit.
+/// Checkpoint-only alternate stores do not gain this mutation authority.
+abstract interface class ManagedRevision3NpcProfileEditStore {
+  Future<AuthoringRevision3NpcProfileEditPreparation> prepareNpcProfileEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcProfileEditRequestV1 request,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
         ManagedRevision3ReviewedDataAssetBuildStore,
         ManagedRevision3ExactSnapshotExportStore,
         ManagedRevision3StoryDraftRemovalStore,
-        ManagedRevision3VoiceTakeRemovalStore {
+        ManagedRevision3VoiceTakeRemovalStore,
+        ManagedRevision3NpcProfileEditStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1036,6 +1084,19 @@ final class ModFfiManagedRevision3AuthoringStore
     required AuthoringRevision3QuestOutlineEditRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3QuestOutlineEditV1(
     root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3NpcProfileEditPreparation> prepareNpcProfileEditV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringRevision3NpcProfileEditRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3NpcProfileEditV1(
+    root: root,
+    gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     request: request,
   );
@@ -1737,6 +1798,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3StoryDraftRemovalStore;
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
+  bool get supportsNpcProfileEdit =>
+      _store is ManagedRevision3NpcProfileEditStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -2323,6 +2386,142 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Derive one exact NPC profile seed locally from the serialized canonical
+  /// project basis. No native command, object preparation, or publication is
+  /// performed.
+  Future<AuthoringRevision3NpcProfileEditSeed> readNpcProfileEditSeedV1({
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedScriptModuleId,
+    required int expectedScriptModuleRevision,
+    required String expectedUniqueName,
+    required String expectedModuleNamespace,
+    required String expectedParentCharacterDefinition,
+    required String expectedParentAiAgentConfig,
+    required String expectedParentSpawnDefinition,
+  }) => _core.readExact<AuthoringRevision3NpcProfileEditSeed>(
+    (basis) async => AuthoringRevision3NpcProfileEditSeed.forProject(
+      head: basis.head,
+      currentProjectJson: basis.projectJson,
+      npcId: npcId,
+      expectedNpcRevision: expectedNpcRevision,
+      expectedScriptModuleId: expectedScriptModuleId,
+      expectedScriptModuleRevision: expectedScriptModuleRevision,
+      expectedUniqueName: expectedUniqueName,
+      expectedModuleNamespace: expectedModuleNamespace,
+      expectedParentCharacterDefinition: expectedParentCharacterDefinition,
+      expectedParentAiAgentConfig: expectedParentAiAgentConfig,
+      expectedParentSpawnDefinition: expectedParentSpawnDefinition,
+    ),
+    operation: 'readNpcProfileEditSeedV1',
+    handleReadError: _core._throwRevision3NpcProfileEditSeedError,
+  );
+
+  /// Prepare and publish one bounded existing-NPC display-name/archetype edit.
+  Future<ManagedRevision3NpcProfileEditCheckpoint>
+  prepareAndPublishNpcProfileEditV1({
+    required String gameRoot,
+    required AuthoringRevision3NpcProfileEditSeed seed,
+    required AuthoringDraftContentSeal expectedStoryCatalogSeal,
+    required AuthoringDraftContentSeal expectedNpcCatalogSeal,
+    required String expectedParentCatalogId,
+    required AuthoringRevision3NpcProfileParentTripleExpectation
+    expectedCurrentParentTriple,
+    required String displayName,
+    required String parentCatalogId,
+    required AuthoringRevision3NpcProfileParentTripleExpectation
+    expectedParentTriple,
+    required bool expectedArchetypeChanged,
+    required bool expectedModuleRegenerated,
+  }) {
+    final editStore = _store;
+    if (editStore is! ManagedRevision3NpcProfileEditStore) {
+      return Future<ManagedRevision3NpcProfileEditCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no NPC profile edit capability',
+        ),
+      );
+    }
+    final capability = editStore as ManagedRevision3NpcProfileEditStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3NpcProfileEditCheckpoint
+    >(
+      operation: 'prepareAndPublishNpcProfileEditV1',
+      handlePrepareError: _core._throwRevision3NpcProfileEditPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 NPC profile edit has no exact project identity',
+          );
+        }
+        final request = AuthoringRevision3NpcProfileEditRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          seed: seed,
+          expectedStoryCatalogSeal: expectedStoryCatalogSeal,
+          expectedNpcCatalogSeal: expectedNpcCatalogSeal,
+          expectedParentCatalogId: expectedParentCatalogId,
+          expectedCurrentParentTriple: expectedCurrentParentTriple,
+          displayName: displayName,
+          parentCatalogId: parentCatalogId,
+          expectedParentTriple: expectedParentTriple,
+          expectedArchetypeChanged: expectedArchetypeChanged,
+          expectedModuleRegenerated: expectedModuleRegenerated,
+        );
+        final prepared = await capability.prepareNpcProfileEditV1(
+          root: root.path,
+          gameRoot: gameRoot,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.npcId != request.npcId ||
+            prepared.npcRevision != request.expectedNpcRevision + 1 ||
+            prepared.scriptModuleId != request.scriptModuleId ||
+            prepared.scriptModuleRevision !=
+                request.expectedScriptModuleRevision +
+                    (request.expectsModuleRegenerated ? 1 : 0) ||
+            prepared.displayName != request.displayName ||
+            prepared.previousParentCatalogId !=
+                request.expectedParentCatalogId ||
+            prepared.parentCatalogId != request.parentCatalogId ||
+            prepared.nameChanged != request.expectsNameChanged ||
+            prepared.archetypeChanged != request.expectsArchetypeChanged ||
+            prepared.moduleRegenerated != request.expectsModuleRegenerated) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 NPC profile preparation disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3NpcProfileEditCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3NpcProfileEditCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            npcId: prepared.npcId,
+            npcRevision: prepared.npcRevision,
+            scriptModuleId: prepared.scriptModuleId,
+            scriptModuleRevision: prepared.scriptModuleRevision,
+            displayName: prepared.displayName,
+            previousParentCatalogId: prepared.previousParentCatalogId,
+            parentCatalogId: prepared.parentCatalogId,
+            nameChanged: prepared.nameChanged,
+            archetypeChanged: prepared.archetypeChanged,
+            moduleRegenerated: prepared.moduleRegenerated,
+          ),
+        );
+      },
+    );
+  }
 
   /// Create and publish one project-local DialogLine prerequisite without
   /// reading or writing a game installation or save. The exact native request
@@ -4989,6 +5188,61 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3NpcProfileEditSeedError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 NPC profile seed could not be derived exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3NpcProfileEditPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_NPC_PROFILE_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3NpcProfileEditPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 NPC profile edit could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DialogLinePrepareError(
     Object error,
     StackTrace stackTrace,
@@ -6101,6 +6355,27 @@ bool _revision3NpcPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_NPC_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_NPC_STORE_GAME_ALIAS',
   'AUTHORING_REVISION3_NPC_UNSUPPORTED_GENERATION',
+}.contains(code);
+
+bool _revision3NpcProfileEditPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_FAILED',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_SELECTION_INVALID',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_CHANGED',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_MISSING',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_NPC_PROFILE_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_MODULE_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_NO_CHANGES',
+  'AUTHORING_REVISION3_NPC_PROFILE_NPC_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_NPC_PROFILE_REQUEST_INVALID',
+  'AUTHORING_REVISION3_NPC_PROFILE_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_UNSUPPORTED_GENERATION',
 }.contains(code);
 
 bool _revision3DialogLinePrepareErrorIsRetryable(String code) => const {

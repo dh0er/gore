@@ -31,6 +31,11 @@ typedef Revision3NpcSourceInspector =
       Revision3ContentIndex index,
       Revision3ContentEntity npc,
     );
+typedef Revision3NpcProfileEditor =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity npc,
+    );
 
 /// Exact identity of a managed project that may host a content library.
 @immutable
@@ -251,7 +256,8 @@ enum _EntityToolAction {
   questContext,
   questTransitions,
   questSourceInspection,
-  npcProfile,
+  npcProfileEdit,
+  npcProfileInspection,
 }
 
 const _stableSlotQuestGeneratorVersion = 4;
@@ -272,11 +278,13 @@ class Revision3ContentLibrary extends StatefulWidget {
     this.editQuestOutline,
     this.editQuestContext,
     this.editQuestTransitions,
+    this.editNpcProfile,
     this.inspectQuestSource,
     this.inspectNpcSource,
     this.editQuestOutlineDisabledReason,
     this.editQuestContextDisabledReason,
     this.editQuestTransitionsDisabledReason,
+    this.editNpcProfileDisabledReason,
     this.inspectQuestSourceDisabledReason,
     this.inspectNpcSourceDisabledReason,
     this.storyWorkbenchCopy = const Revision3StoryEntityWorkbenchCopy.english(),
@@ -292,11 +300,13 @@ class Revision3ContentLibrary extends StatefulWidget {
   final Revision3QuestOutlineEditor? editQuestOutline;
   final Revision3QuestContextEditor? editQuestContext;
   final Revision3QuestTransitionsEditor? editQuestTransitions;
+  final Revision3NpcProfileEditor? editNpcProfile;
   final Revision3QuestSourceInspector? inspectQuestSource;
   final Revision3NpcSourceInspector? inspectNpcSource;
   final String? editQuestOutlineDisabledReason;
   final String? editQuestContextDisabledReason;
   final String? editQuestTransitionsDisabledReason;
+  final String? editNpcProfileDisabledReason;
   final String? inspectQuestSourceDisabledReason;
   final String? inspectNpcSourceDisabledReason;
   final Revision3StoryEntityWorkbenchCopy storyWorkbenchCopy;
@@ -700,6 +710,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
                           widget.editQuestTransitions == null
                           ? null
                           : () => widget.editQuestTransitions!(index, selected),
+                      onEditNpcProfile: widget.editNpcProfile == null
+                          ? null
+                          : () => widget.editNpcProfile!(index, selected),
                       onInspectQuestSource: widget.inspectQuestSource == null
                           ? null
                           : () => widget.inspectQuestSource!(index, selected),
@@ -745,6 +758,10 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
             ? null
             : () async =>
                   Navigator.of(context).pop(_EntityToolAction.questTransitions),
+        onEditNpcProfile: widget.editNpcProfile == null
+            ? null
+            : () async =>
+                  Navigator.of(context).pop(_EntityToolAction.npcProfileEdit),
         onInspectQuestSource: widget.inspectQuestSource == null
             ? null
             : () async => Navigator.of(
@@ -752,8 +769,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
               ).pop(_EntityToolAction.questSourceInspection),
         onInspectNpcSource: widget.inspectNpcSource == null
             ? null
-            : () async =>
-                  Navigator.of(context).pop(_EntityToolAction.npcProfile),
+            : () async => Navigator.of(
+                context,
+              ).pop(_EntityToolAction.npcProfileInspection),
       ),
     );
     if (!mounted || !identical(_index, index) || editAction == null) return;
@@ -766,7 +784,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
         await widget.editQuestTransitions?.call(index, entity);
       case _EntityToolAction.questSourceInspection:
         await widget.inspectQuestSource?.call(index, entity);
-      case _EntityToolAction.npcProfile:
+      case _EntityToolAction.npcProfileEdit:
+        await widget.editNpcProfile?.call(index, entity);
+      case _EntityToolAction.npcProfileInspection:
         await widget.inspectNpcSource?.call(index, entity);
     }
   }
@@ -779,6 +799,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
     required Future<void> Function()? onEditQuestOutline,
     required Future<void> Function()? onEditQuestContext,
     required Future<void> Function()? onEditQuestTransitions,
+    required Future<void> Function()? onEditNpcProfile,
     required Future<void> Function()? onInspectQuestSource,
     required Future<void> Function()? onInspectNpcSource,
   }) {
@@ -810,6 +831,9 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           editLogic: entity.kind == Revision3ContentEntityKind.questDraft
               ? onEditQuestTransitions
               : null,
+          editNpcProfile: entity.kind == Revision3ContentEntityKind.npcDraft
+              ? onEditNpcProfile
+              : null,
           inspectQuest: entity.kind == Revision3ContentEntityKind.questDraft
               ? onInspectQuestSource
               : null,
@@ -819,6 +843,7 @@ class _Revision3ContentLibraryState extends State<Revision3ContentLibrary> {
           editOverviewDisabledReason: widget.editQuestOutlineDisabledReason,
           editStoryDisabledReason: widget.editQuestContextDisabledReason,
           editLogicDisabledReason: widget.editQuestTransitionsDisabledReason,
+          editNpcProfileDisabledReason: widget.editNpcProfileDisabledReason,
           inspectQuestDisabledReason: widget.inspectQuestSourceDisabledReason,
           inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
         ),
@@ -1304,7 +1329,9 @@ class _EntityDetails extends StatelessWidget {
                       await onEditQuestTransitions?.call();
                     case _EntityToolAction.questSourceInspection:
                       await onInspectQuestSource?.call();
-                    case _EntityToolAction.npcProfile:
+                    case _EntityToolAction.npcProfileEdit:
+                    case _EntityToolAction.npcProfileInspection:
+                      break;
                   }
                 },
                 itemBuilder: (context) => [
@@ -1401,7 +1428,7 @@ class _EntityDetails extends StatelessWidget {
                 enabled: onInspectNpcSource != null,
                 tooltip: 'NPC tools',
                 onSelected: (action) async {
-                  if (action == _EntityToolAction.npcProfile) {
+                  if (action == _EntityToolAction.npcProfileInspection) {
                     await onInspectNpcSource?.call();
                   }
                 },
@@ -1410,7 +1437,7 @@ class _EntityDetails extends StatelessWidget {
                     key: Key(
                       'revision3-content-inspect-npc-source-${entity.id}',
                     ),
-                    value: _EntityToolAction.npcProfile,
+                    value: _EntityToolAction.npcProfileInspection,
                     enabled: onInspectNpcSource != null,
                     child: const ListTile(
                       contentPadding: EdgeInsets.zero,

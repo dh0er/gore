@@ -27,6 +27,7 @@ mod story_transaction_revision3;
 mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
 mod story_transaction_revision3_npc;
+mod story_transaction_revision3_npc_profile;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transitions;
@@ -239,6 +240,16 @@ pub use story_transaction_revision3_npc::{
     Revision3NpcStoryIdentityKindV1, MAX_REVISION3_NPC_CATALOG_ID_BYTES_V1,
     MAX_REVISION3_NPC_DRAFT_DISPLAY_NAME_BYTES_V1, MAX_REVISION3_NPC_DRAFT_REQUEST_JSON_BYTES_V1,
     REVISION3_NPC_EXACT_COLLISION_LAYER_V1,
+};
+pub use story_transaction_revision3_npc_profile::{
+    apply_revision3_npc_profile_edit_transaction_v1, Revision3NpcProfileCatalogContextV1,
+    Revision3NpcProfileEditBuildStatusV1, Revision3NpcProfileEditCatalogAuthorityV1,
+    Revision3NpcProfileEditCollisionAuthorityV1, Revision3NpcProfileEditConflictV1,
+    Revision3NpcProfileEditErrorV1, Revision3NpcProfileEditEvaluationV1,
+    Revision3NpcProfileEditOutcomeV1, Revision3NpcProfileEditPublicationStatusV1,
+    Revision3NpcProfileEditRejectionV1, Revision3NpcProfileEditRequestJsonErrorV1,
+    Revision3NpcProfileEditRequestV1, Revision3NpcProfileEditRuntimeStatusV1,
+    MAX_REVISION3_NPC_PROFILE_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_quest_outline::{
     apply_revision3_quest_outline_edit_transaction_v1, Revision3QuestOutlineEditBuildStatusV1,

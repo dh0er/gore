@@ -699,6 +699,26 @@ final class Revision3ContentQuestDraftSummary {
   final String giverRuntimeUniqueName;
 }
 
+/// Exact display-safe projection of the persisted NPC Draft input.
+///
+/// Parent order is semantic and is retained explicitly so profile authoring
+/// never reconstructs the three-class chain from presentation/search text.
+final class Revision3ContentNpcDraftSummary {
+  const Revision3ContentNpcDraftSummary({
+    required this.uniqueName,
+    required this.moduleNamespace,
+    required this.parentCharacterDefinition,
+    required this.parentAiAgentConfig,
+    required this.parentSpawnDefinition,
+  });
+
+  final String uniqueName;
+  final String moduleNamespace;
+  final String parentCharacterDefinition;
+  final String parentAiAgentConfig;
+  final String parentSpawnDefinition;
+}
+
 final class Revision3ContentSummary {
   const Revision3ContentSummary._({
     required this.primaryIdentity,
@@ -708,6 +728,7 @@ final class Revision3ContentSummary {
     required this.dialogLine,
     required this.voiceSlot,
     required this.voiceTake,
+    required this.npcDraft,
     required this.questDraft,
   });
 
@@ -718,6 +739,7 @@ final class Revision3ContentSummary {
   final Revision3ContentDialogLineSummary? dialogLine;
   final Revision3ContentVoiceSlotSummary? voiceSlot;
   final Revision3ContentVoiceTakeSummary? voiceTake;
+  final Revision3ContentNpcDraftSummary? npcDraft;
   final Revision3ContentQuestDraftSummary? questDraft;
 
   factory Revision3ContentSummary._fromJson(
@@ -738,6 +760,7 @@ final class Revision3ContentSummary {
     Revision3ContentDialogLineSummary? dialogLine;
     Revision3ContentVoiceSlotSummary? voiceSlot;
     Revision3ContentVoiceTakeSummary? voiceTake;
+    Revision3ContentNpcDraftSummary? npcDraft;
     Revision3ContentQuestDraftSummary? questDraft;
     switch (entityKind) {
       case Revision3ContentEntityKind.localizationEntry:
@@ -858,20 +881,30 @@ final class Revision3ContentSummary {
           data['module_namespace'],
           '$context module_namespace',
         );
+        final parentCharacterDefinition = _string(
+          data['parent_character_definition'],
+          '$context parent_character_definition',
+        );
+        final parentAiAgentConfig = _string(
+          data['parent_ai_agent_config'],
+          '$context parent_ai_agent_config',
+        );
+        final parentSpawnDefinition = _string(
+          data['parent_spawn_definition'],
+          '$context parent_spawn_definition',
+        );
         final parents = <String>[
-          _string(
-            data['parent_character_definition'],
-            '$context parent_character_definition',
-          ),
-          _string(
-            data['parent_ai_agent_config'],
-            '$context parent_ai_agent_config',
-          ),
-          _string(
-            data['parent_spawn_definition'],
-            '$context parent_spawn_definition',
-          ),
+          parentCharacterDefinition,
+          parentAiAgentConfig,
+          parentSpawnDefinition,
         ];
+        npcDraft = Revision3ContentNpcDraftSummary(
+          uniqueName: primary,
+          moduleNamespace: namespace,
+          parentCharacterDefinition: parentCharacterDefinition,
+          parentAiAgentConfig: parentAiAgentConfig,
+          parentSpawnDefinition: parentSpawnDefinition,
+        );
         secondary = namespace;
         terms.addAll([namespace, ...parents]);
       case Revision3ContentEntityKind.questDraft:
@@ -987,6 +1020,7 @@ final class Revision3ContentSummary {
       dialogLine: dialogLine,
       voiceSlot: voiceSlot,
       voiceTake: voiceTake,
+      npcDraft: npcDraft,
       questDraft: questDraft,
     );
   }

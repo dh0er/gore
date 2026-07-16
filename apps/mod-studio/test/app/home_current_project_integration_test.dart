@@ -2419,7 +2419,7 @@ void main() {
   );
 
   testWidgets(
-    'selected Library NPC Profile & checks reaches the exact lease without a game root',
+    'selected Library NPC checks reach the exact lease without a game root',
     (tester) async {
       await _setDesktopTestSurface(tester);
       const revision = 7;
@@ -2459,9 +2459,17 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+      final problemsTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-problemsChecks-$revision3NpcInspectionNpcId',
+        ),
+      );
+      await tester.ensureVisible(problemsTab);
+      await tester.tap(problemsTab);
+      await tester.pumpAndSettle();
       final inspectNpc = _storyWorkbenchAction(
         const Key(
-          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+          'revision3-story-workbench-action-inspect-npc_draft-$revision3NpcInspectionNpcId',
         ),
       );
       await _revealWorkbenchAction(tester, inspectNpc);
@@ -2540,9 +2548,34 @@ void main() {
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
 
+      const missingGameReason =
+          'Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.';
+      final editNpc = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-npc-profile-$revision3NpcInspectionNpcId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, editNpc);
+      expect(_workbenchActionTileWidget(tester, editNpc).enabled, isFalse);
+      expect(
+        find.descendant(
+          of: editNpc,
+          matching: find.text(missingGameReason, skipOffstage: false),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      final npcProblemsTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-problemsChecks-$revision3NpcInspectionNpcId',
+        ),
+      );
+      await tester.ensureVisible(npcProblemsTab);
+      await tester.tap(npcProblemsTab);
+      await tester.pumpAndSettle();
       final inspectNpc = _storyWorkbenchAction(
         const Key(
-          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+          'revision3-story-workbench-action-inspect-npc_draft-$revision3NpcInspectionNpcId',
         ),
       );
       await _revealWorkbenchAction(tester, inspectNpc);
@@ -2579,8 +2612,6 @@ void main() {
       );
       await _revealWorkbenchAction(tester, editStory);
       expect(_workbenchActionTileWidget(tester, editStory).enabled, isFalse);
-      const missingGameReason =
-          'Configure the Gothic 1 Remake installation in Settings before using actions that need installed-game evidence.';
       expect(
         find.descendant(
           of: editStory,
@@ -2692,9 +2723,17 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedContent(tester);
       await _openStoryWorkbenchEntity(tester, revision3NpcInspectionNpcId);
+      final problemsTab = find.byKey(
+        const Key(
+          'revision3-story-workbench-tab-problemsChecks-$revision3NpcInspectionNpcId',
+        ),
+      );
+      await tester.ensureVisible(problemsTab);
+      await tester.tap(problemsTab);
+      await tester.pumpAndSettle();
       final inspectNpc = _storyWorkbenchAction(
         const Key(
-          'revision3-story-workbench-action-inspect-npc-$revision3NpcInspectionNpcId',
+          'revision3-story-workbench-action-inspect-npc_draft-$revision3NpcInspectionNpcId',
         ),
       );
       await _revealWorkbenchAction(tester, inspectNpc);

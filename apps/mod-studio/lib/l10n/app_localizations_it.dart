@@ -2159,4 +2159,111 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get managedVoiceTakeRemoveReloadConfirmed =>
       'The saved removal was confirmed from the latest project.';
+
+  @override
+  String get managedStoryWorkbenchEditNpcProfile => 'Edit name & archetype';
+
+  @override
+  String get managedStoryWorkbenchNpcDisplayNameLabel => 'Character name';
+
+  @override
+  String get managedNpcProfileEditTitle => 'Edit name & archetype';
+
+  @override
+  String get managedNpcProfileEditDescription =>
+      'Change the friendly character name or choose another verified structural starting point.';
+
+  @override
+  String get managedNpcProfileEditNameLabel => 'Character name';
+
+  @override
+  String get managedNpcProfileEditNameHint =>
+      'Shown to authors in this project.';
+
+  @override
+  String get managedNpcProfileEditArchetypeLabel =>
+      'Archetype / base character';
+
+  @override
+  String get managedNpcProfileEditArchetypeHelp =>
+      'This does not edit appearance, stats, faction, routine, inventory, dialog, or spawn.';
+
+  @override
+  String get managedNpcProfileEditBoundary =>
+      'Only the offline project draft changes. The game installation and save games remain unchanged.';
+
+  @override
+  String get managedNpcProfileEditLoading => 'Loading current NPC details…';
+
+  @override
+  String get managedNpcProfileEditCancel => 'Cancel';
+
+  @override
+  String get managedNpcProfileEditClose => 'Close';
+
+  @override
+  String get managedNpcProfileEditSave => 'Save changes';
+
+  @override
+  String get managedNpcProfileEditSaving => 'Saving…';
+
+  @override
+  String get managedNpcProfileEditRetry => 'Retry';
+
+  @override
+  String get managedNpcProfileEditLoadFailed =>
+      'NPC details and verified archetypes could not be loaded. No files were changed.';
+
+  @override
+  String get managedNpcProfileEditCatalogChanged =>
+      'The verified archetypes changed while this editor was open. Review and choose the archetype again before saving.';
+
+  @override
+  String get managedNpcProfileEditCurrentArchetypeUnavailable =>
+      'The current NPC archetype is no longer represented exactly by this game catalog. No replacement was guessed.';
+
+  @override
+  String get managedNpcProfileEditStale =>
+      'The project changed while this editor was open. Close it and reopen the NPC from the refreshed Story view.';
+
+  @override
+  String get managedNpcProfileEditRequiresReopen =>
+      'The save result cannot be verified. Do not retry. Close this editor and reopen or recover the managed project.';
+
+  @override
+  String get managedNpcProfileEditSaveFailed =>
+      'The NPC changes could not be saved safely. Nothing was built, deployed, or written into the game.';
+
+  @override
+  String get managedNpcProfileEditNameRequired => 'Enter a character name.';
+
+  @override
+  String get managedNpcProfileEditNameTooLong =>
+      'The character name must be at most 256 UTF-8 bytes.';
+
+  @override
+  String get managedNpcProfileEditNameControl =>
+      'The character name contains an unsupported control character.';
+
+  @override
+  String get managedNpcProfileEditReviewSelection =>
+      'Review and choose an archetype before saving.';
+
+  @override
+  String get managedNpcProfileEditDiscardTitle => 'Discard NPC changes?';
+
+  @override
+  String get managedNpcProfileEditDiscardBody =>
+      'Your unsaved name and archetype choice will be lost.';
+
+  @override
+  String get managedNpcProfileEditKeepEditing => 'Keep editing';
+
+  @override
+  String get managedNpcProfileEditDiscard => 'Discard';
+
+  @override
+  String managedNpcProfileEditSaved(String name, int revision) {
+    return '$name was saved in project revision $revision. It remains an offline, build-blocked draft.';
+  }
 }

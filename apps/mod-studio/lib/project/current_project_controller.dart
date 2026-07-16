@@ -17,6 +17,7 @@ import 'revision3_dataasset_authoring.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
 import 'revision3_npc_authoring.dart';
+import 'revision3_npc_profile_edit_authoring.dart';
 import 'revision3_quest_authoring.dart';
 import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
@@ -295,6 +296,27 @@ const _revision3VoiceTakeRemovalCorrectableCodes = <String>{
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
 };
 
+const _revision3NpcProfileEditCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_FAILED',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_CATALOG_SELECTION_INVALID',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_CHANGED',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_MISSING',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_UNAVAILABLE',
+  'AUTHORING_REVISION3_NPC_PROFILE_INPUT_UNSAFE',
+  'AUTHORING_REVISION3_NPC_PROFILE_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_MODULE_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_NO_CHANGES',
+  'AUTHORING_REVISION3_NPC_PROFILE_NPC_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_NPC_PROFILE_RECOVERY_REQUIRED',
+  'AUTHORING_REVISION3_NPC_PROFILE_REQUEST_INVALID',
+  'AUTHORING_REVISION3_NPC_PROFILE_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_NPC_PROFILE_UNSUPPORTED_GENERATION',
+};
+
 final class ManagedRevision3ProjectCreationException
     extends CurrentProjectCoordinatorException {
   const ManagedRevision3ProjectCreationException(super.message);
@@ -558,6 +580,28 @@ abstract interface class ManagedRevision3DialogLocalizationEditLease {
   });
 }
 
+abstract interface class ManagedRevision3NpcProfileEditLease {
+  bool get supportsNpcProfileEdit;
+  void markRequiresReopenAfterNpcProfileEditUncertainty();
+
+  Future<AuthoringRevision3NpcProfileEditSeed> readNpcProfileEditSeedV1({
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedScriptModuleId,
+    required int expectedScriptModuleRevision,
+    required String expectedUniqueName,
+    required String expectedModuleNamespace,
+    required String expectedParentCharacterDefinition,
+    required String expectedParentAiAgentConfig,
+    required String expectedParentSpawnDefinition,
+  });
+
+  Future<Revision3NpcProfileEditPublication> prepareAndPublishNpcProfileEditV1({
+    required String gameRoot,
+    required Revision3NpcProfileEditTechnicalPlan plan,
+  });
+}
+
 /// Optional exact-current capability for changing one retained VoiceTake's
 /// author-managed review status. Keeping it separate avoids widening unrelated
 /// current-project lease fakes with mutation authority.
@@ -752,6 +796,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3NpcProfileEditLease,
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3RecoveryLease,
@@ -804,11 +849,18 @@ final class _ManagedRevision3SessionLease
   bool get supportsVoiceTakeRemoval => _session.supportsVoiceTakeRemoval;
 
   @override
+  bool get supportsNpcProfileEdit => _session.supportsNpcProfileEdit;
+
+  @override
   void markRequiresReopenAfterStoryDraftRemovalUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
   void markRequiresReopenAfterVoiceTakeRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterNpcProfileEditUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -836,6 +888,29 @@ final class _ManagedRevision3SessionLease
   Future<AuthoringRevision3NpcSourceInspectionResult> inspectNpcSourceV1({
     required String npcId,
   }) => _session.inspectNpcSourceV1(npcId: npcId);
+
+  @override
+  Future<AuthoringRevision3NpcProfileEditSeed> readNpcProfileEditSeedV1({
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedScriptModuleId,
+    required int expectedScriptModuleRevision,
+    required String expectedUniqueName,
+    required String expectedModuleNamespace,
+    required String expectedParentCharacterDefinition,
+    required String expectedParentAiAgentConfig,
+    required String expectedParentSpawnDefinition,
+  }) => _session.readNpcProfileEditSeedV1(
+    npcId: npcId,
+    expectedNpcRevision: expectedNpcRevision,
+    expectedScriptModuleId: expectedScriptModuleId,
+    expectedScriptModuleRevision: expectedScriptModuleRevision,
+    expectedUniqueName: expectedUniqueName,
+    expectedModuleNamespace: expectedModuleNamespace,
+    expectedParentCharacterDefinition: expectedParentCharacterDefinition,
+    expectedParentAiAgentConfig: expectedParentAiAgentConfig,
+    expectedParentSpawnDefinition: expectedParentSpawnDefinition,
+  );
 
   @override
   Future<AuthoringRevision3DialogLocalizationReadResult>
@@ -1069,6 +1144,40 @@ final class _ManagedRevision3SessionLease
       projectRevision: checkpoint.projectRevision,
       npcId: checkpoint.npcId,
       scriptModuleId: checkpoint.scriptModuleId,
+    );
+  }
+
+  @override
+  Future<Revision3NpcProfileEditPublication> prepareAndPublishNpcProfileEditV1({
+    required String gameRoot,
+    required Revision3NpcProfileEditTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishNpcProfileEditV1(
+      gameRoot: gameRoot,
+      seed: plan.seed,
+      expectedStoryCatalogSeal: plan.expectedStoryCatalogSeal,
+      expectedNpcCatalogSeal: plan.expectedNpcCatalogSeal,
+      expectedParentCatalogId: plan.expectedParentCatalogId,
+      expectedCurrentParentTriple: plan.expectedCurrentParentTriple,
+      displayName: plan.displayName,
+      parentCatalogId: plan.parentCatalogId,
+      expectedParentTriple: plan.expectedParentTriple,
+      expectedArchetypeChanged: plan.archetypeChanged,
+      expectedModuleRegenerated: plan.moduleRegenerated,
+    );
+    return Revision3NpcProfileEditPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      npcId: checkpoint.npcId,
+      npcRevision: checkpoint.npcRevision,
+      scriptModuleId: checkpoint.scriptModuleId,
+      scriptModuleRevision: checkpoint.scriptModuleRevision,
+      displayName: checkpoint.displayName,
+      previousParentCatalogId: checkpoint.previousParentCatalogId,
+      parentCatalogId: checkpoint.parentCatalogId,
+      nameChanged: checkpoint.nameChanged,
+      archetypeChanged: checkpoint.archetypeChanged,
+      moduleRegenerated: checkpoint.moduleRegenerated,
     );
   }
 
@@ -3062,6 +3171,195 @@ final class CurrentProjectCoordinator
         );
       }
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Derive the private exact-basis seed for one visible existing NPC. The
+  /// canonical project stays inside the managed lease and this read grants no
+  /// catalog, build, runtime, deployment, or publication authority.
+  Future<AuthoringRevision3NpcProfileEditSeed>
+  readCurrentRevision3NpcProfileEditSeed({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String npcId,
+    required int expectedNpcRevision,
+    required String expectedScriptModuleId,
+    required int expectedScriptModuleRevision,
+    required String expectedUniqueName,
+    required String expectedModuleNamespace,
+    required String expectedParentCharacterDefinition,
+    required String expectedParentAiAgentConfig,
+    required String expectedParentSpawnDefinition,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'NPC profile editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3NpcProfileEditRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3NpcProfileEditStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3NpcProfileEditLease) {
+      throw const Revision3NpcProfileEditUnavailableException();
+    }
+    final editor = lease as ManagedRevision3NpcProfileEditLease;
+    if (!editor.supportsNpcProfileEdit) {
+      throw const Revision3NpcProfileEditUnavailableException();
+    }
+    try {
+      final seed = await editor.readNpcProfileEditSeedV1(
+        npcId: npcId,
+        expectedNpcRevision: expectedNpcRevision,
+        expectedScriptModuleId: expectedScriptModuleId,
+        expectedScriptModuleRevision: expectedScriptModuleRevision,
+        expectedUniqueName: expectedUniqueName,
+        expectedModuleNamespace: expectedModuleNamespace,
+        expectedParentCharacterDefinition: expectedParentCharacterDefinition,
+        expectedParentAiAgentConfig: expectedParentAiAgentConfig,
+        expectedParentSpawnDefinition: expectedParentSpawnDefinition,
+      );
+      if (seed.head.canonicalJson != expectedHead.canonicalJson ||
+          seed.projectId != expectedProjectId ||
+          seed.projectRevision != expectedProjectRevision ||
+          seed.npcId != npcId ||
+          seed.npcRevision != expectedNpcRevision ||
+          seed.scriptModuleId != expectedScriptModuleId ||
+          seed.scriptModuleRevision != expectedScriptModuleRevision ||
+          seed.uniqueName != expectedUniqueName ||
+          seed.moduleNamespace != expectedModuleNamespace ||
+          seed.parentCharacterDefinition.runtimeClass !=
+              expectedParentCharacterDefinition ||
+          seed.parentAiAgentConfig.runtimeClass !=
+              expectedParentAiAgentConfig ||
+          seed.parentSpawnDefinition.runtimeClass !=
+              expectedParentSpawnDefinition) {
+        throw const Revision3NpcProfileEditStaleCheckpointException();
+      }
+      return seed;
+    } on FormatException catch (_, stackTrace) {
+      Error.throwWithStackTrace(
+        const Revision3NpcProfileEditStaleCheckpointException(),
+        stackTrace,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3NpcProfileEditRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Publish one separately reviewed existing-NPC name/archetype edit against
+  /// the exact visible managed checkpoint. Any ambiguous post-call result
+  /// permanently removes mutation authority until recovery or reopen.
+  Future<Revision3NpcProfileEditPublication> editCurrentRevision3NpcProfile({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required Revision3NpcProfileEditTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'NPC profile editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3NpcProfileEditRequiresReopenException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const Revision3NpcProfileEditUnavailableException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        plan.projectId != expectedProjectId ||
+        plan.projectRevision != expectedProjectRevision ||
+        plan.seed.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3NpcProfileEditStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3NpcProfileEditLease) {
+      throw const Revision3NpcProfileEditUnavailableException();
+    }
+    final editor = lease as ManagedRevision3NpcProfileEditLease;
+    if (!editor.supportsNpcProfileEdit) {
+      throw const Revision3NpcProfileEditUnavailableException();
+    }
+    try {
+      final publication = await editor.prepareAndPublishNpcProfileEditV1(
+        gameRoot: gameRoot,
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.npcId != plan.npcId ||
+          publication.npcRevision != plan.expectedNpcRevision + 1 ||
+          publication.scriptModuleId != plan.scriptModuleId ||
+          publication.scriptModuleRevision !=
+              plan.expectedScriptModuleRevision +
+                  (plan.moduleRegenerated ? 1 : 0) ||
+          publication.displayName != plan.displayName ||
+          publication.previousParentCatalogId != plan.expectedParentCatalogId ||
+          publication.parentCatalogId != plan.parentCatalogId ||
+          publication.nameChanged != plan.nameChanged ||
+          publication.archetypeChanged != plan.archetypeChanged ||
+          publication.moduleRegenerated != plan.moduleRegenerated) {
+        editor.markRequiresReopenAfterNpcProfileEditUncertainty();
+        throw const Revision3NpcProfileEditRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3NpcProfileEditRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          editor.markRequiresReopenAfterNpcProfileEditUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3NpcProfileEditRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if ((error is ModFfiException &&
+              _revision3NpcProfileEditCorrectableCodes.contains(error.code)) ||
+          error is FormatException ||
+          error is Revision3NpcProfileEditStaleCheckpointException) {
+        Error.throwWithStackTrace(
+          const Revision3NpcProfileEditStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      editor.markRequiresReopenAfterNpcProfileEditUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3NpcProfileEditRequiresReopenException(),
+        stackTrace,
+      );
     } finally {
       _refreshCurrentIfUnchanged(current);
     }

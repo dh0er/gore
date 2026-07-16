@@ -90,6 +90,11 @@
 //!   archetype linkage, and complete base-game-plus-exact-current script collision inventory, then
 //!   prepares one exact-current NPC/ScriptModule checkpoint. It never publishes the fixed head or
 //!   grants build, spawn, runtime, deployment, save, or reusable catalog authority.
+//! - `authoring_store_prepare_revision3_npc_profile_edit_v1` edits one exact-current managed NPC's
+//!   friendly name and/or complete catalog-resolved archetype triple. It rebuilds fresh Story/NPC
+//!   catalogs without creating collision authority, fully reopens only an unpublished immutable
+//!   candidate, and never writes a game/save or grants build, spawn, runtime, or publication
+//!   authority.
 //! - `authoring_store_prepare_revision3_dialog_line_v1` creates one new authored dialog line and
 //!   either creates or exactly reuses its managed localization, then fully reopens an immutable
 //!   unpublished revision-3 checkpoint. It accepts no game root and grants no topic, build,
@@ -212,6 +217,7 @@ mod authoring_story_compiler_revision3;
 mod authoring_story_draft_remove_revision3;
 mod authoring_story_inventory;
 mod authoring_story_npc_inspection_revision3;
+mod authoring_story_npc_profile_revision3;
 mod authoring_story_npc_revision3;
 mod authoring_story_quest;
 mod authoring_story_quest_context_revision3;
@@ -288,6 +294,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
+    authoring_story_npc_profile_revision3::COMMAND,
     "authoring_store_prepare_revision3_quest_context_edit_v1",
     "authoring_store_prepare_revision3_quest_draft_v3",
     "authoring_store_prepare_revision3_quest_outline_edit_v1",
@@ -613,6 +620,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_revision3_npc_draft_v1" => {
             Some(authoring_story_npc_revision3::prepare_revision3_npc_draft_v1_raw)
         }
+        authoring_story_npc_profile_revision3::COMMAND => Some(
+            authoring_story_npc_profile_revision3::prepare_revision3_npc_profile_edit_v1_raw,
+        ),
         "authoring_store_prepare_revision3_quest_context_edit_v1" => Some(
             authoring_story_quest_context_revision3::prepare_revision3_quest_context_edit_v1_raw,
         ),
@@ -1731,6 +1741,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
+                    "authoring_store_prepare_revision3_npc_profile_edit_v1",
                     "authoring_store_prepare_revision3_quest_context_edit_v1",
                     "authoring_store_prepare_revision3_quest_draft_v3",
                     "authoring_store_prepare_revision3_quest_outline_edit_v1",
@@ -1854,6 +1865,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_npc_draft_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_npc_profile_edit_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_quest_context_edit_v1"));

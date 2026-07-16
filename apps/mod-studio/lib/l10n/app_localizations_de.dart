@@ -2159,4 +2159,112 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedVoiceTakeRemoveReloadConfirmed =>
       'Die gespeicherte Entfernung wurde im aktuellen Projektstand bestätigt.';
+
+  @override
+  String get managedStoryWorkbenchEditNpcProfile =>
+      'Name & Archetyp bearbeiten';
+
+  @override
+  String get managedStoryWorkbenchNpcDisplayNameLabel => 'NPC-Name';
+
+  @override
+  String get managedNpcProfileEditTitle => 'Name & Archetyp bearbeiten';
+
+  @override
+  String get managedNpcProfileEditDescription =>
+      'Ändere den sichtbaren NPC-Namen oder wähle einen anderen verifizierten strukturellen Ausgangspunkt.';
+
+  @override
+  String get managedNpcProfileEditNameLabel => 'NPC-Name';
+
+  @override
+  String get managedNpcProfileEditNameHint =>
+      'Wird Mod-Autoren in diesem Projekt angezeigt.';
+
+  @override
+  String get managedNpcProfileEditArchetypeLabel => 'Archetyp / Ausgangsfigur';
+
+  @override
+  String get managedNpcProfileEditArchetypeHelp =>
+      'Aussehen, Werte, Fraktion, Routine, Inventar, Dialog und Spawn werden hier nicht bearbeitet.';
+
+  @override
+  String get managedNpcProfileEditBoundary =>
+      'Nur der Offline-Projektentwurf wird geändert. Spielinstallation und Spielstände bleiben unverändert.';
+
+  @override
+  String get managedNpcProfileEditLoading =>
+      'Aktuelle NPC-Daten werden geladen…';
+
+  @override
+  String get managedNpcProfileEditCancel => 'Abbrechen';
+
+  @override
+  String get managedNpcProfileEditClose => 'Schließen';
+
+  @override
+  String get managedNpcProfileEditSave => 'Änderungen speichern';
+
+  @override
+  String get managedNpcProfileEditSaving => 'Wird gespeichert…';
+
+  @override
+  String get managedNpcProfileEditRetry => 'Erneut versuchen';
+
+  @override
+  String get managedNpcProfileEditLoadFailed =>
+      'NPC-Daten und verifizierte Archetypen konnten nicht geladen werden. Es wurden keine Dateien geändert.';
+
+  @override
+  String get managedNpcProfileEditCatalogChanged =>
+      'Die verifizierten Archetypen haben sich geändert. Prüfe und wähle den Archetyp vor dem Speichern erneut.';
+
+  @override
+  String get managedNpcProfileEditCurrentArchetypeUnavailable =>
+      'Der aktuelle NPC-Archetyp ist in diesem Spielkatalog nicht mehr exakt abbildbar. Es wurde kein Ersatz geraten.';
+
+  @override
+  String get managedNpcProfileEditStale =>
+      'Das Projekt wurde geändert. Schließe den Editor und öffne den NPC aus der aktualisierten Story-Ansicht erneut.';
+
+  @override
+  String get managedNpcProfileEditRequiresReopen =>
+      'Das Speicherergebnis kann nicht verifiziert werden. Nicht erneut versuchen. Schließe den Editor und öffne das verwaltete Projekt erneut oder stelle es wieder her.';
+
+  @override
+  String get managedNpcProfileEditSaveFailed =>
+      'Die NPC-Änderungen konnten nicht sicher gespeichert werden. Es wurde nichts gebaut, installiert oder in das Spiel geschrieben.';
+
+  @override
+  String get managedNpcProfileEditNameRequired => 'Gib einen NPC-Namen ein.';
+
+  @override
+  String get managedNpcProfileEditNameTooLong =>
+      'Der NPC-Name darf höchstens 256 UTF-8-Bytes lang sein.';
+
+  @override
+  String get managedNpcProfileEditNameControl =>
+      'Der NPC-Name enthält ein nicht unterstütztes Steuerzeichen.';
+
+  @override
+  String get managedNpcProfileEditReviewSelection =>
+      'Prüfe und wähle vor dem Speichern einen Archetyp.';
+
+  @override
+  String get managedNpcProfileEditDiscardTitle => 'NPC-Änderungen verwerfen?';
+
+  @override
+  String get managedNpcProfileEditDiscardBody =>
+      'Der ungespeicherte Name und die Archetyp-Auswahl gehen verloren.';
+
+  @override
+  String get managedNpcProfileEditKeepEditing => 'Weiter bearbeiten';
+
+  @override
+  String get managedNpcProfileEditDiscard => 'Verwerfen';
+
+  @override
+  String managedNpcProfileEditSaved(String name, int revision) {
+    return '$name wurde in Projektrevision $revision gespeichert. Der NPC bleibt ein build-blockierter Offline-Entwurf.';
+  }
 }

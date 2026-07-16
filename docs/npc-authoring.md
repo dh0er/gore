@@ -227,21 +227,71 @@ sheet. Its tabs are **Profile**, **Story**, **Routine**, **Inventory**, **Dialog
 & Voice**,
 **References**, and **Problems & Checks**.
 
-Only authority that already exists is connected. **Profile** and **Problems &
-Checks** can open the exact-current profile/source inspection described below.
-The Story, Routine, Inventory, and Dialog & Voice tabs explicitly say that
-those relationships are not yet modeled for NPC Drafts; they do not stage
-placeholder data or generate source. References shows current-index outgoing
-entity/asset links and derived same-project incoming links. Its problem count
-means unresolved projected references only, not build, spawn, runtime, or save
-readiness. The workbench therefore shows **Draft only**, **Build blocked**, and
-**Runtime not verified** as three separate states.
+Only authority that already exists is connected. **Profile** shows the friendly
+display name and exposes the bounded **Edit name & archetype** action described
+below; **Problems & Checks** owns the separate exact-current profile/source
+inspection. The Story, Routine, Inventory, and Dialog & Voice tabs explicitly
+say that those relationships are not yet modeled for NPC Drafts; they do not
+stage placeholder data or generate source. References shows current-index
+outgoing entity/asset links and derived same-project incoming links. Its problem
+count means unresolved projected references only, not build, spawn, runtime, or
+save readiness. The workbench therefore shows **Draft only**, **Build blocked**,
+and **Runtime not verified** as three separate states.
 
 The selected NPC and its last supported tab survive an exact same-project
 revision refresh only while the entity still exists. Switching projects clears
 them, and removal of the entity removes its remembered tab state. The workbench
-adds no new project mutation, game/save access, build, deployment, spawn, or
-runtime authority.
+itself adds no authority beyond the explicitly bounded actions below.
+
+## Managed revision-3 existing-NPC profile edit V1
+
+The direct **Edit name & archetype** dialog edits exactly two author-facing
+concepts for one exact-current managed `NpcDraft`:
+
+- `Entity.display_name`, shown as the friendly character name; and
+- one curated archetype selection whose meaning is the complete persisted
+  parent-provenance triple for `CharacterDefinition`, `AIAgentConfig`, and
+  `SpawnAIAgentDefinition`.
+
+The normal form never exposes or edits the NPC/entity ID, ScriptModule ID,
+`UniqueName`, module namespace/path, generator/owner/origin identities, or raw
+parent class names. Visuals, stats, faction, inventory, routine, AI, dialog,
+Quest links, localization/voice, placement, and spawn remain separate unmodeled
+fields. Closing or navigating back with unsaved changes requires an explicit
+discard decision.
+
+Studio loads an exact NPC/module seed and a fresh sealed Story+NPC catalog when
+the dialog opens, and refreshes that catalog immediately before save. Native
+`authoring_store_prepare_revision3_npc_profile_edit_v1` then reopens the exact
+Store basis and independently rebuilds the fresh catalogs. It resolves both the
+current catalog witness chosen by matching the persisted triple and the
+requested catalog ID, then verifies every parent binding's generation, source
+seal, catalog layer, canonical selector, and runtime class. Catalog IDs are not
+treated as archetype identity: two records with the same complete triple are
+structural aliases. Drift, an unavailable current triple, a stale entity/module/
+checkpoint, a changed fixed head, or publication uncertainty fails closed;
+uncertainty requires reopen and is never automatically retried.
+
+The pure
+`apply_revision3_npc_profile_edit_transaction_v1` transaction always preserves
+technical identity, unrelated entities, and the complete AssetStore. Every real
+edit advances the project and selected NPC revisions exactly once. A name-only
+edit preserves the entire owned ScriptModule byte-for-byte, including its
+revision, even when the selected catalog ID is merely an alias of the current
+full triple. When and only when the full parent triple differs, the transaction
+atomically replaces all three provenances, deterministically regenerates the
+owned ScriptModule, and advances that module revision exactly once. The route
+fully reopens the immutable candidate and returns only
+`build_status: blocked`, `runtime_status: runtime_unqualified`, catalog and
+collision authority `not_granted`, and native publication `not_supported`.
+
+Only the serialized managed session may publish the candidate through guarded
+fixed-head byte CAS, repair journaling, and a full published reopen. The game
+installation supplies read-only catalog evidence; the editor writes only the
+managed project. It performs no compiler or production build, deploy/undeploy,
+game or save mutation, class residence/discovery, spawn, runtime behavior, or
+qualification. A successful project edit therefore needs no game test and does
+not make the NPC playable.
 
 ## Managed revision-3 NPC Draft removal V1
 

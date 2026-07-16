@@ -28,6 +28,7 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.referencesTab,
     required this.problemsChecksTab,
     required this.editOverview,
+    this.editNpcProfile = 'Edit name & archetype',
     required this.editStory,
     required this.editLogic,
     required this.inspectQuest,
@@ -49,6 +50,7 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.questKindLabel,
     required this.npcKindLabel,
     required this.questTitleLabel,
+    this.npcDisplayNameLabel = 'Character name',
     required this.technicalIdLabel,
     required this.objectivesLabel,
     required this.uniqueNameLabel,
@@ -82,6 +84,7 @@ final class Revision3StoryEntityWorkbenchCopy {
       referencesTab = 'References',
       problemsChecksTab = 'Problems & Checks',
       editOverview = 'Edit name & objectives',
+      editNpcProfile = 'Edit name & archetype',
       editStory = 'Edit description & connections',
       editLogic = 'Edit states & transitions',
       inspectQuest = 'Open source & compiler checks',
@@ -109,6 +112,7 @@ final class Revision3StoryEntityWorkbenchCopy {
       questKindLabel = 'Quest draft',
       npcKindLabel = 'NPC draft',
       questTitleLabel = 'Quest title',
+      npcDisplayNameLabel = 'Character name',
       technicalIdLabel = 'Technical ID',
       objectivesLabel = 'Objectives',
       uniqueNameLabel = 'Unique name',
@@ -141,6 +145,7 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String referencesTab;
   final String problemsChecksTab;
   final String editOverview;
+  final String editNpcProfile;
   final String editStory;
   final String editLogic;
   final String inspectQuest;
@@ -162,6 +167,7 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String questKindLabel;
   final String npcKindLabel;
   final String questTitleLabel;
+  final String npcDisplayNameLabel;
   final String technicalIdLabel;
   final String objectivesLabel;
   final String uniqueNameLabel;
@@ -192,11 +198,13 @@ final class Revision3StoryEntityWorkbenchActions {
     required this.openEntity,
     required this.openAsset,
     this.editOverview,
+    this.editNpcProfile,
     this.editStory,
     this.editLogic,
     this.inspectQuest,
     this.inspectNpc,
     this.editOverviewDisabledReason,
+    this.editNpcProfileDisabledReason,
     this.editStoryDisabledReason,
     this.editLogicDisabledReason,
     this.inspectQuestDisabledReason,
@@ -210,11 +218,13 @@ final class Revision3StoryEntityWorkbenchActions {
   final ValueChanged<String> openEntity;
   final ValueChanged<String> openAsset;
   final Revision3StoryWorkbenchAction? editOverview;
+  final Revision3StoryWorkbenchAction? editNpcProfile;
   final Revision3StoryWorkbenchAction? editStory;
   final Revision3StoryWorkbenchAction? editLogic;
   final Revision3StoryWorkbenchAction? inspectQuest;
   final Revision3StoryWorkbenchAction? inspectNpc;
   final String? editOverviewDisabledReason;
+  final String? editNpcProfileDisabledReason;
   final String? editStoryDisabledReason;
   final String? editLogicDisabledReason;
   final String? inspectQuestDisabledReason;
@@ -580,23 +590,18 @@ class _Revision3StoryEntityWorkbenchState
     return <Widget>[
       _SectionHeading(widget.copy.profileTab),
       _AtomicActionCard(
-        key: Key('revision3-story-workbench-action-inspect-npc-${entity.id}'),
-        icon: Icons.person_search_outlined,
-        title: widget.copy.inspectNpc,
+        key: Key(
+          'revision3-story-workbench-action-edit-npc-profile-${entity.id}',
+        ),
+        icon: Icons.edit_outlined,
+        title: widget.copy.editNpcProfile,
         unavailable:
-            widget.actions.inspectNpcDisabledReason ??
+            widget.actions.editNpcProfileDisabledReason ??
             widget.copy.capabilityUnavailable,
-        onPressed: widget.actions.inspectNpc,
+        onPressed: widget.actions.editNpcProfile,
       ),
       const SizedBox(height: 12),
-      _Fact(
-        label: widget.copy.uniqueNameLabel,
-        value: entity.summary.primaryIdentity,
-      ),
-      _Fact(
-        label: widget.copy.moduleNamespaceLabel,
-        value: entity.summary.secondaryText,
-      ),
+      _Fact(label: widget.copy.npcDisplayNameLabel, value: entity.displayName),
       const SizedBox(height: 4),
       _TechnicalDetails(entity: entity, copy: widget.copy),
     ];
@@ -945,10 +950,20 @@ class _TechnicalDetails extends StatelessWidget {
     tilePadding: EdgeInsets.zero,
     title: Text(copy.technicalDetails),
     children: [
-      _Fact(
-        label: copy.semanticIdentityLabel,
-        value: entity.summary.primaryIdentity,
-      ),
+      if (entity.kind == Revision3ContentEntityKind.npcDraft) ...[
+        _Fact(
+          label: copy.uniqueNameLabel,
+          value: entity.summary.primaryIdentity,
+        ),
+        _Fact(
+          label: copy.moduleNamespaceLabel,
+          value: entity.summary.secondaryText,
+        ),
+      ] else
+        _Fact(
+          label: copy.semanticIdentityLabel,
+          value: entity.summary.primaryIdentity,
+        ),
       _Fact(
         label: copy.originLabel,
         value: '${entity.origin.type}: ${entity.origin.label}',

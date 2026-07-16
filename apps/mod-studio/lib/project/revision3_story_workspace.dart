@@ -386,11 +386,13 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     this.createNpcDraftDisabledReason,
     this.createQuestDraftDisabledReason,
     this.editQuestOutline,
+    this.editNpcProfile,
     this.editQuestContext,
     this.editQuestTransitions,
     this.inspectQuestSource,
     this.inspectNpcSource,
     this.editQuestOutlineDisabledReason,
+    this.editNpcProfileDisabledReason,
     this.editQuestContextDisabledReason,
     this.editQuestTransitionsDisabledReason,
     this.inspectQuestSourceDisabledReason,
@@ -427,11 +429,13 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   final String? createNpcDraftDisabledReason;
   final String? createQuestDraftDisabledReason;
   final Revision3StoryWorkspaceEntityAction? editQuestOutline;
+  final Revision3StoryWorkspaceEntityAction? editNpcProfile;
   final Revision3StoryWorkspaceEntityAction? editQuestContext;
   final Revision3StoryWorkspaceEntityAction? editQuestTransitions;
   final Revision3StoryWorkspaceEntityAction? inspectQuestSource;
   final Revision3StoryWorkspaceEntityAction? inspectNpcSource;
   final String? editQuestOutlineDisabledReason;
+  final String? editNpcProfileDisabledReason;
   final String? editQuestContextDisabledReason;
   final String? editQuestTransitionsDisabledReason;
   final String? inspectQuestSourceDisabledReason;
@@ -1189,6 +1193,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
                 widget.editQuestOutline != null
             ? () => run(widget.editQuestOutline!)
             : null,
+        editNpcProfile:
+            entity.kind == Revision3ContentEntityKind.npcDraft &&
+                widget.editNpcProfile != null
+            ? () => run(widget.editNpcProfile!)
+            : null,
         editStory:
             entity.kind == Revision3ContentEntityKind.questDraft &&
                 widget.editQuestContext != null
@@ -1210,6 +1219,7 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
             ? () => run(widget.inspectNpcSource!)
             : null,
         editOverviewDisabledReason: widget.editQuestOutlineDisabledReason,
+        editNpcProfileDisabledReason: widget.editNpcProfileDisabledReason,
         editStoryDisabledReason: widget.editQuestContextDisabledReason,
         editLogicDisabledReason: widget.editQuestTransitionsDisabledReason,
         inspectQuestDisabledReason: widget.inspectQuestSourceDisabledReason,
