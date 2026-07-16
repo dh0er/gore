@@ -18,6 +18,8 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+#[path = "managed_offline_pack.rs"]
+pub(crate) mod managed_offline_pack;
 #[path = "staged_pack_core.rs"]
 pub(crate) mod staged_pack_core;
 
@@ -635,6 +637,7 @@ impl StagedOfflineDataAssetPackV1 {
                 }
                 Ok(())
             },
+            |_| Ok(()),
             |request| {
                 let current = probe_current_generation_receipt(
                     &request.game_root,

@@ -12,7 +12,7 @@ use gore_asset::dataasset_workflow::{
 use gore_asset::{
     prepare_reviewed_footstep_preset_size_v1, reviewed_footstep_preset_target_from_ids_v1,
     FixedLeafSelector, PackagePairSeal, ReviewedFootstepPresetSizeV1,
-    VerifiedReviewedFootstepPresetPostPackV1, FIXED_LEAF_SELECTOR_FORMAT,
+    VerifiedManagedReviewedTripletPostPackV1, FIXED_LEAF_SELECTOR_FORMAT,
     FIXED_LEAF_SELECTOR_PROFILE, REVIEWED_DATAASSET_FORMAT_V1, REVIEWED_FEET_TEXTURE_SIZE_FIELD_ID,
     REVIEWED_FOOTSTEP_PRESET_SCHEMA_ID, REVIEWED_FOOTSTEP_PRESET_SCHEMA_REVISION,
 };
@@ -226,6 +226,231 @@ struct ManagedBuildOutputProjectionV1 {
     files: Vec<ManagedDataAssetTripletFileSealV1>,
 }
 
+/// Path-free authoring basis for one exact-current reviewed revision-3 DataAsset build.
+///
+/// Construction consumes the Store-backed stage source. Only the small, already-verified
+/// basis/stage/review projections survive; the source's package and USMAP byte buffers are dropped
+/// before this value is returned. The value has no `Clone`, serialization, public fields, raw-parts
+/// constructor, publication authority, or filesystem-path API.
+#[derive(Debug)]
+pub struct VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 {
+    basis: ManagedBuildBasisProjectionV1,
+    stage: ManagedStageProjectionV1,
+    reviewed: ReviewedIntentProjectionV1,
+}
+
+impl VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 {
+    pub fn from_current_source(
+        source: VerifiedCurrentReviewedDataAssetStageSourceV1,
+    ) -> Result<Self, ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
+        let value = {
+            let stage = source.stage();
+            let manifest = stage.manifest();
+            if !manifest.sidecars().is_empty() {
+                return Err(invalid(
+                    "reviewed managed build receipts refuse staged sidecars",
+                ));
+            }
+            let reviewed = source.reviewed();
+            let selector = SelectorProjectionV1::capture(reviewed.selector())?;
+
+            Self {
+                basis: ManagedBuildBasisProjectionV1 {
+                    current_head: source.current_head().clone(),
+                    project_id: source.project_id(),
+                    project_revision: source.project_revision(),
+                    executable: source.project_target().executable.clone(),
+                },
+                stage: ManagedStageProjectionV1 {
+                    manifest_asset: stage.manifest_asset().clone(),
+                    project_id: manifest.project_id(),
+                    project_target: manifest.project_target().clone(),
+                    basis_head: manifest.basis_head().clone(),
+                    basis_project_revision: manifest.basis_project_revision(),
+                    staged_project_revision: manifest.staged_project_revision(),
+                    target_path: manifest.target_path().to_owned(),
+                    generation: manifest.generation().clone(),
+                    selector: selector.clone(),
+                    replacement_hex: manifest.replacement_hex().to_owned(),
+                    patched_uasset: manifest.patched_uasset().clone(),
+                    patched_uexp: manifest.patched_uexp().clone(),
+                    usmap: manifest.usmap().clone(),
+                },
+                reviewed: ReviewedIntentProjectionV1 {
+                    format: reviewed.format(),
+                    schema_id: reviewed.schema_id().to_owned(),
+                    schema_revision: reviewed.schema_revision(),
+                    field_id: reviewed.field_id().to_owned(),
+                    target_id: reviewed.target().id().to_owned(),
+                    target_path: reviewed.target().target_path().to_owned(),
+                    requested: RequestedSizeProjectionV1::capture(reviewed.requested()),
+                    selector_sha256: selector.sha256,
+                    replacement_hex: encode_hex(reviewed.replacement_bytes()),
+                    binding_sha256: encode_hex(reviewed.binding_sha256()),
+                },
+            }
+        };
+
+        // Make the lifetime boundary explicit: none of the large CAS buffers survives in `value`.
+        drop(source);
+        Ok(value)
+    }
+}
+
+#[derive(Debug)]
+struct ManagedVerifiedTripletPostPackProjectionV1 {
+    target_path: String,
+    generation: AssetGenerationReceipt,
+    executable_length: u64,
+    executable_sha256: [u8; 32],
+    replay_seal: PackagePairSeal,
+    post_pack: ReviewedPostPackProjectionV1,
+    output: ManagedBuildOutputProjectionV1,
+}
+
+impl ManagedVerifiedTripletPostPackProjectionV1 {
+    fn capture(
+        proof: &VerifiedManagedReviewedTripletPostPackV1,
+    ) -> Result<Self, ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
+        let post_pack = proof.post_pack();
+        let mut source_seals = Vec::with_capacity(post_pack.source_seals().len());
+        for seal in post_pack.source_seals() {
+            source_seals.push(ReadbackSourceSealProjectionV1 {
+                role: project_source_role(seal.role())?,
+                utoc_blake3: encode_hex(seal.utoc_blake3()),
+            });
+        }
+        source_seals.sort();
+
+        let mut chunk_seals = Vec::with_capacity(post_pack.chunk_seals().len());
+        for seal in post_pack.chunk_seals() {
+            chunk_seals.push(ReadbackChunkSealProjectionV1 {
+                source_role: project_source_role(seal.source_role())?,
+                source_utoc_blake3: encode_hex(seal.source_utoc_blake3()),
+                chunk_id: encode_hex(seal.chunk_id()),
+                chunk_type: seal.chunk_type().to_owned(),
+                length: seal.length(),
+                blake3: encode_hex(seal.blake3()),
+                toc_hash: encode_hex(seal.toc_hash()),
+            });
+        }
+        chunk_seals.sort();
+
+        let files = proof
+            .triplet_files()
+            .iter()
+            .map(|file| {
+                ManagedDataAssetTripletFileSealV1::try_new(
+                    file.relative_name(),
+                    file.byte_len(),
+                    Sha256Digest::from_bytes(*file.sha256()),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            target_path: proof.target_path().to_owned(),
+            generation: proof.generation().clone(),
+            executable_length: proof.executable_length(),
+            executable_sha256: *proof.executable_sha256(),
+            replay_seal: proof.replay_seal().clone(),
+            post_pack: ReviewedPostPackProjectionV1 {
+                target_id: post_pack.target().id().to_owned(),
+                requested: RequestedSizeProjectionV1::capture(post_pack.requested()),
+                replacement_hex: encode_hex(post_pack.replacement_bytes()),
+                reviewed_binding_sha256: encode_hex(post_pack.reviewed_binding_sha256()),
+                package: PackagePairProjectionV1::capture(post_pack.package_seal()),
+                usmap_sha256: encode_hex(post_pack.usmap_sha256()),
+                fresh_selector: SelectorProjectionV1::capture(post_pack.fresh_selector())?,
+                source_seals,
+                chunk_seals,
+            },
+            output: ManagedBuildOutputProjectionV1 {
+                pack_name: proof.pack_name().to_owned(),
+                files,
+            },
+        })
+    }
+}
+
+fn verify_proof_binding(
+    basis: &VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1,
+    proof: &ManagedVerifiedTripletPostPackProjectionV1,
+) -> Result<(), ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
+    if proof.target_path != basis.stage.target_path
+        || proof.target_path != basis.reviewed.target_path
+        || proof.generation != basis.stage.generation
+    {
+        return Err(invalid(
+            "managed build proof target or generation differs from the authoring basis",
+        ));
+    }
+    if proof.executable_length != basis.basis.executable.byte_len
+        || proof.executable_sha256 != *basis.basis.executable.sha256.as_bytes()
+    {
+        return Err(invalid(
+            "managed build proof executable differs from the authoring basis",
+        ));
+    }
+
+    let expected_package = PackagePairSeal {
+        uasset_sha256: *basis.stage.patched_uasset.sha256.as_bytes(),
+        uexp_sha256: *basis.stage.patched_uexp.sha256.as_bytes(),
+    };
+    if proof.replay_seal != expected_package {
+        return Err(invalid(
+            "managed build proof replay differs from the staged package",
+        ));
+    }
+
+    if proof.post_pack.target_id != basis.reviewed.target_id
+        || proof.post_pack.requested != basis.reviewed.requested
+        || proof.post_pack.replacement_hex != basis.reviewed.replacement_hex
+        || proof.post_pack.reviewed_binding_sha256 != basis.reviewed.binding_sha256
+    {
+        return Err(invalid(
+            "managed post-pack review facts differ from the authoring basis",
+        ));
+    }
+    if proof.post_pack.package.to_package_pair()? != proof.replay_seal
+        || proof.replay_seal != expected_package
+    {
+        return Err(invalid(
+            "managed post-pack package differs from the verified replay",
+        ));
+    }
+    if proof.post_pack.usmap_sha256 != basis.stage.usmap.sha256.to_string()
+        || basis.stage.usmap.byte_len != basis.stage.generation.usmap.length
+        || basis.stage.usmap.sha256.to_string() != basis.stage.generation.usmap.sha256
+    {
+        return Err(invalid(
+            "managed post-pack USMAP differs from the authoring basis",
+        ));
+    }
+
+    let original = basis.stage.selector.open()?;
+    let fresh = proof.post_pack.fresh_selector.open()?;
+    if fresh.package_seal != expected_package
+        || fresh.usmap_sha256 != basis.stage.usmap.sha256.to_string()
+        || fresh.object_name != original.object_name
+        || fresh.class_path != original.class_path
+        || fresh.export_index != original.export_index
+        || fresh.component != original.component
+        || fresh.role != original.role
+        || fresh.kind != original.kind
+        || fresh.path != original.path
+        || fresh.expected_hex != basis.reviewed.replacement_hex
+    {
+        return Err(invalid(
+            "managed post-pack selector differs from the reviewed authoring basis",
+        ));
+    }
+
+    validate_pack_name(&proof.output.pack_name)?;
+    validate_output_triplet(&proof.output.pack_name, &proof.output.files)?;
+    Ok(())
+}
+
 /// Canonical evidence for exactly one reviewed revision-3 DataAsset package triplet.
 ///
 /// The private fields and closed enums prevent callers from widening the claim. `from_json`
@@ -263,104 +488,25 @@ struct ManagedRevision3ReviewedDataAssetBuildReceiptWireV1 {
 }
 
 impl ManagedRevision3ReviewedDataAssetBuildReceiptV1 {
-    /// Internal construction seam for the eventual managed build orchestration.
+    /// Seal one reviewed build receipt from the exact authoring basis and gore-asset's opaque
+    /// triplet/post-pack proof.
     ///
-    /// This must not become a public constructor until gore-asset exposes an opaque managed
-    /// triplet/post-pack proof that binds the complete staging and publication boundary.
-    #[allow(dead_code)] // Reserved for that deliberately not-yet-public orchestration boundary.
-    pub(crate) fn from_verified(
-        source: &VerifiedCurrentReviewedDataAssetStageSourceV1,
-        pack_name: &str,
-        output_files: [ManagedDataAssetTripletFileSealV1; 3],
-        post_pack: &VerifiedReviewedFootstepPresetPostPackV1,
+    /// The output seals and post-pack evidence cannot be supplied independently. Consuming the
+    /// basis also prevents it from being reused to bless more than one build proof.
+    pub fn from_verified(
+        basis: VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1,
+        proof: &VerifiedManagedReviewedTripletPostPackV1,
     ) -> Result<Self, ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
-        validate_pack_name(pack_name)?;
-        let stage = source.stage();
-        let manifest = stage.manifest();
-        if !manifest.sidecars().is_empty() {
-            return Err(invalid(
-                "reviewed managed build receipts refuse staged sidecars",
-            ));
-        }
-        let reviewed = source.reviewed();
-        let requested = RequestedSizeProjectionV1::capture(reviewed.requested());
-        let selector = SelectorProjectionV1::capture(reviewed.selector())?;
-        let mut files = output_files.into_iter().collect::<Vec<_>>();
-        files.sort_by(|left, right| left.relative_name.cmp(&right.relative_name));
-
-        let mut source_seals = Vec::with_capacity(post_pack.source_seals().len());
-        for seal in post_pack.source_seals() {
-            source_seals.push(ReadbackSourceSealProjectionV1 {
-                role: project_source_role(seal.role())?,
-                utoc_blake3: encode_hex(seal.utoc_blake3()),
-            });
-        }
-        source_seals.sort();
-
-        let mut chunk_seals = Vec::with_capacity(post_pack.chunk_seals().len());
-        for seal in post_pack.chunk_seals() {
-            chunk_seals.push(ReadbackChunkSealProjectionV1 {
-                source_role: project_source_role(seal.source_role())?,
-                source_utoc_blake3: encode_hex(seal.source_utoc_blake3()),
-                chunk_id: encode_hex(seal.chunk_id()),
-                chunk_type: seal.chunk_type().to_owned(),
-                length: seal.length(),
-                blake3: encode_hex(seal.blake3()),
-                toc_hash: encode_hex(seal.toc_hash()),
-            });
-        }
-        chunk_seals.sort();
+        let proof = ManagedVerifiedTripletPostPackProjectionV1::capture(proof)?;
+        verify_proof_binding(&basis, &proof)?;
 
         let receipt = Self {
             format: MANAGED_REVISION3_REVIEWED_DATAASSET_BUILD_RECEIPT_FORMAT_V1.to_owned(),
-            basis: ManagedBuildBasisProjectionV1 {
-                current_head: source.current_head().clone(),
-                project_id: source.project_id(),
-                project_revision: source.project_revision(),
-                executable: source.project_target().executable.clone(),
-            },
-            stage: ManagedStageProjectionV1 {
-                manifest_asset: stage.manifest_asset().clone(),
-                project_id: manifest.project_id(),
-                project_target: manifest.project_target().clone(),
-                basis_head: manifest.basis_head().clone(),
-                basis_project_revision: manifest.basis_project_revision(),
-                staged_project_revision: manifest.staged_project_revision(),
-                target_path: manifest.target_path().to_owned(),
-                generation: manifest.generation().clone(),
-                selector,
-                replacement_hex: manifest.replacement_hex().to_owned(),
-                patched_uasset: manifest.patched_uasset().clone(),
-                patched_uexp: manifest.patched_uexp().clone(),
-                usmap: manifest.usmap().clone(),
-            },
-            reviewed: ReviewedIntentProjectionV1 {
-                format: reviewed.format(),
-                schema_id: reviewed.schema_id().to_owned(),
-                schema_revision: reviewed.schema_revision(),
-                field_id: reviewed.field_id().to_owned(),
-                target_id: reviewed.target().id().to_owned(),
-                target_path: reviewed.target().target_path().to_owned(),
-                requested: requested.clone(),
-                selector_sha256: selector_sha256(reviewed.selector())?,
-                replacement_hex: encode_hex(reviewed.replacement_bytes()),
-                binding_sha256: encode_hex(reviewed.binding_sha256()),
-            },
-            post_pack: ReviewedPostPackProjectionV1 {
-                target_id: post_pack.target().id().to_owned(),
-                requested: RequestedSizeProjectionV1::capture(post_pack.requested()),
-                replacement_hex: encode_hex(post_pack.replacement_bytes()),
-                reviewed_binding_sha256: encode_hex(post_pack.reviewed_binding_sha256()),
-                package: PackagePairProjectionV1::capture(post_pack.package_seal()),
-                usmap_sha256: encode_hex(post_pack.usmap_sha256()),
-                fresh_selector: SelectorProjectionV1::capture(post_pack.fresh_selector())?,
-                source_seals,
-                chunk_seals,
-            },
-            output: ManagedBuildOutputProjectionV1 {
-                pack_name: pack_name.to_owned(),
-                files,
-            },
+            basis: basis.basis,
+            stage: basis.stage,
+            reviewed: basis.reviewed,
+            post_pack: proof.post_pack,
+            output: proof.output,
             build_authority:
                 ManagedDataAssetBuildAuthorityV1::ReviewedFixedLeafSinglePackageTriplet,
             publication_authority: ManagedDataAssetPublicationAuthorityV1::NotGranted,
@@ -693,7 +839,6 @@ impl SelectorProjectionV1 {
 }
 
 impl PackagePairProjectionV1 {
-    #[allow(dead_code)] // Used only by the reserved managed constructor above.
     fn capture(value: &PackagePairSeal) -> Self {
         Self {
             uasset_sha256: encode_hex(&value.uasset_sha256),
@@ -1029,7 +1174,6 @@ fn validate_readback_evidence(
     Ok(())
 }
 
-#[allow(dead_code)] // Used only by the reserved managed constructor above.
 fn project_source_role<T: Serialize>(
     role: T,
 ) -> Result<ReadbackSourceRoleProjectionV1, ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
@@ -1041,15 +1185,6 @@ fn project_source_role<T: Serialize>(
         "\"fallback\"" => Ok(ReadbackSourceRoleProjectionV1::Fallback),
         _ => Err(invalid("unsupported readback source role")),
     }
-}
-
-#[allow(dead_code)] // Used only by the reserved managed constructor above.
-fn selector_sha256(
-    selector: &FixedLeafSelector,
-) -> Result<String, ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1> {
-    let json = serde_json::to_vec(selector)
-        .map_err(ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1::Serialize)?;
-    Ok(sha256_hex(&json))
 }
 
 fn validate_hex(
@@ -1338,6 +1473,37 @@ mod tests {
         receipt
     }
 
+    fn basis_and_proof_projection_fixture() -> (
+        VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1,
+        ManagedVerifiedTripletPostPackProjectionV1,
+    ) {
+        let receipt = fixture();
+        let basis = VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 {
+            basis: receipt.basis.clone(),
+            stage: receipt.stage.clone(),
+            reviewed: receipt.reviewed.clone(),
+        };
+        let proof = ManagedVerifiedTripletPostPackProjectionV1 {
+            target_path: receipt.stage.target_path.clone(),
+            generation: receipt.stage.generation.clone(),
+            executable_length: receipt.basis.executable.byte_len,
+            executable_sha256: *receipt.basis.executable.sha256.as_bytes(),
+            replay_seal: receipt.post_pack.package.to_package_pair().unwrap(),
+            post_pack: receipt.post_pack,
+            output: receipt.output,
+        };
+        verify_proof_binding(&basis, &proof).unwrap();
+        (basis, proof)
+    }
+
+    fn reject_proof_projection_mutation(
+        mutate: impl FnOnce(&mut ManagedVerifiedTripletPostPackProjectionV1),
+    ) {
+        let (basis, mut proof) = basis_and_proof_projection_fixture();
+        mutate(&mut proof);
+        assert!(verify_proof_binding(&basis, &proof).is_err());
+    }
+
     fn raw_json(receipt: &ManagedRevision3ReviewedDataAssetBuildReceiptV1) -> String {
         serde_json::to_string(receipt).unwrap()
     }
@@ -1376,6 +1542,79 @@ mod tests {
         let _ =
             <ManagedRevision3ReviewedDataAssetBuildReceiptV1 as AmbiguousIfDeserialize<_>>::marker
                 as fn();
+    }
+
+    #[test]
+    fn source_and_managed_basis_are_nonclone_and_nonserde_authority() {
+        trait AmbiguousIfClone<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+        impl<T: ?Sized + Clone> AmbiguousIfClone<u8> for T {}
+
+        trait AmbiguousIfSerialize<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+        impl<T: ?Sized + serde::Serialize> AmbiguousIfSerialize<u8> for T {}
+
+        trait AmbiguousIfDeserialize<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfDeserialize<()> for T {}
+        impl<T> AmbiguousIfDeserialize<u8> for T where T: for<'de> serde::Deserialize<'de> {}
+
+        let _ = <VerifiedCurrentReviewedDataAssetStageSourceV1 as AmbiguousIfClone<_>>::marker
+            as fn();
+        let _ = <VerifiedCurrentReviewedDataAssetStageSourceV1 as AmbiguousIfSerialize<_>>::marker
+            as fn();
+        let _ = <VerifiedCurrentReviewedDataAssetStageSourceV1 as AmbiguousIfDeserialize<_>>::marker
+            as fn();
+        let _ =
+            <VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 as AmbiguousIfClone<_>>::marker
+                as fn();
+        let _ =
+            <VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 as AmbiguousIfSerialize<_>>::marker
+                as fn();
+        let _ = <VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1 as AmbiguousIfDeserialize<
+            _,
+        >>::marker as fn();
+    }
+
+    #[test]
+    fn genuine_constructor_requires_basis_and_opaque_asset_proof() {
+        let _: fn(
+            VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1,
+            &VerifiedManagedReviewedTripletPostPackV1,
+        ) -> Result<
+            ManagedRevision3ReviewedDataAssetBuildReceiptV1,
+            ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1,
+        > = ManagedRevision3ReviewedDataAssetBuildReceiptV1::from_verified;
+    }
+
+    #[test]
+    fn proof_binding_refuses_mismatched_authority_facts() {
+        reject_proof_projection_mutation(|proof| proof.target_path = "/Game/Other".to_owned());
+        reject_proof_projection_mutation(|proof| proof.generation.asset = "/Game/Other".to_owned());
+        reject_proof_projection_mutation(|proof| proof.executable_length += 1);
+        reject_proof_projection_mutation(|proof| proof.executable_sha256[0] ^= 0xff);
+        reject_proof_projection_mutation(|proof| proof.replay_seal.uasset_sha256[0] ^= 0xff);
+        reject_proof_projection_mutation(|proof| proof.post_pack.target_id.push_str(":other"));
+        reject_proof_projection_mutation(|proof| proof.post_pack.requested.x_f64_bits ^= 1);
+        reject_proof_projection_mutation(|proof| proof.post_pack.replacement_hex = "ab".repeat(32));
+        reject_proof_projection_mutation(|proof| {
+            proof.post_pack.reviewed_binding_sha256 = "ab".repeat(32)
+        });
+        reject_proof_projection_mutation(|proof| {
+            proof.post_pack.package.uexp_sha256 = "ab".repeat(32)
+        });
+        reject_proof_projection_mutation(|proof| proof.post_pack.usmap_sha256 = "ab".repeat(32));
+        reject_proof_projection_mutation(|proof| {
+            let mut fresh = proof.post_pack.fresh_selector.open().unwrap();
+            fresh.expected_hex = "ab".repeat(32);
+            proof.post_pack.fresh_selector = SelectorProjectionV1::capture(&fresh).unwrap();
+        });
+        reject_proof_projection_mutation(|proof| proof.output.pack_name = "Other".to_owned());
     }
 
     #[test]

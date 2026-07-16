@@ -25,6 +25,14 @@ pub use envelope::{
     EnvelopeError, ExportBoundary, ExportEnvelope, ExportSchemaError, ExportSegments,
     LegacyPackageEnvelope, PrimitiveExportEnvelope,
 };
+pub use legacy_offline_pack::managed_offline_pack::{
+    prepare_managed_reviewed_dataasset_pack_v1, stage_prepared_managed_reviewed_dataasset_pack_v1,
+    ManagedReviewedDataAssetPackPublicationUncertainV1, ManagedReviewedDataAssetPackPublicationV1,
+    ManagedReviewedDataAssetPackPublishedWithCleanupWarningV1, ManagedReviewedTripletFileSealV1,
+    PreparedManagedReviewedDataAssetPackV1, PublishedManagedReviewedDataAssetPackV1,
+    PublishedManagedReviewedReceiptSealV1, StagedManagedReviewedDataAssetPackV1,
+    VerifiedManagedReviewedTripletPostPackV1,
+};
 pub use legacy_preflight::{LegacyHeaderLimits, LegacyHeaderPreflightError};
 pub use package::{
     ComponentDigest, PackageCarrier, PackageComponent, PackageError, PackageLimits, PackagePaths,

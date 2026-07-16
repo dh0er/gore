@@ -425,10 +425,13 @@ fn validate_receipt_bound(max_bytes: u64) -> Result<u64> {
 
 impl<R> MechanicalStagedPack<R> {
     /// Reverify core-held sources and staged output, invoke the caller's external source proof,
-    /// then run its final live gate immediately before the exact mount check and atomic rename.
+    /// then close the publication races around a potentially long final source gate. The final
+    /// live gate is deliberately separate and remains the last non-core check before the exact
+    /// mount inventory check and atomic rename.
     pub(crate) fn publish_with_hooks(
         mut self,
         verify_external_sources: impl FnOnce() -> Result<()>,
+        final_source_gate: impl FnOnce(&OfflineDataAssetPackRequestV1) -> Result<()>,
         final_live_gate: impl FnOnce(&OfflineDataAssetPackRequestV1) -> Result<()>,
     ) -> Result<MechanicalPublication<R>> {
         self.request
@@ -474,7 +477,33 @@ impl<R> MechanicalStagedPack<R> {
         self.request.reverify_output_parent_and_disjoint()?;
         self.build_identity.reverify("ASSET_PACK_OUTPUT")?;
 
-        run_final_gate_and_promote(
+        run_publication_tail(
+            || final_source_gate(&self.request),
+            || {
+                // The caller's final source gate may perform arbitrarily slow Store/CAS work.
+                // Re-pin every publication-side authority after it returns rather than trusting
+                // any check that preceded the gate.
+                self.request.reverify_output_parent_and_disjoint()?;
+                ensure_path_absent(&self.request.output, "ASSET_PACK_OUTPUT")?;
+                self.staging.verify_owned("ASSET_PACK_OUTPUT")?;
+                self.build_identity.reverify("ASSET_PACK_OUTPUT")?;
+                validate_tree_no_reparse(
+                    &self.staging.path,
+                    MAX_STAGING_TREE_DEPTH,
+                    MAX_STAGING_TREE_ENTRIES,
+                    "ASSET_PACK_OUTPUT",
+                )?;
+                validate_flat_build_directory(
+                    &self.build_root,
+                    &self.request.name,
+                    &self.receipt_name,
+                )?;
+                for seal in &self.output_seals {
+                    reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
+                }
+                reverify_file_seal(&self.receipt_seal, receipt_max_bytes, "ASSET_PACK_RECEIPT")?;
+                Ok(())
+            },
             || final_live_gate(&self.request),
             || {
                 self.request
@@ -556,11 +585,15 @@ fn retarget_published_seal(output: &Path, staged: &FileSeal) -> Result<FileSeal>
     })
 }
 
-fn run_final_gate_and_promote(
+fn run_publication_tail(
+    final_source_gate: impl FnOnce() -> Result<()>,
+    reverify_after_source_gate: impl FnOnce() -> Result<()>,
     final_live_gate: impl FnOnce() -> Result<()>,
     verify_mount_inventory: impl FnOnce() -> Result<()>,
     promote_noclobber: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    final_source_gate()?;
+    reverify_after_source_gate()?;
     final_live_gate()?;
     verify_mount_inventory()?;
     promote_noclobber()?;
@@ -603,7 +636,7 @@ mod tests {
         create_staging_directory, promote_directory_noclobber, reverify_file_seal, FileSeal,
     };
     use super::{
-        classify_post_publication, retarget_published_seal, run_final_gate_and_promote,
+        classify_post_publication, retarget_published_seal, run_publication_tail,
         write_borrowed_component_new, write_bounded_receipt_new, MechanicalReceipt,
         PostPublicationFinalization,
     };
@@ -694,9 +727,17 @@ mod tests {
     }
 
     #[test]
-    fn final_gate_order_is_live_mount_then_promote() {
+    fn publication_tail_order_closes_source_races_before_final_live() {
         let events = RefCell::new(Vec::new());
-        run_final_gate_and_promote(
+        run_publication_tail(
+            || {
+                events.borrow_mut().push("source");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("mechanical");
+                Ok(())
+            },
             || {
                 events.borrow_mut().push("live");
                 Ok(())
@@ -711,13 +752,18 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(*events.borrow(), ["live", "mount", "promote"]);
+        assert_eq!(
+            *events.borrow(),
+            ["source", "mechanical", "live", "mount", "promote"]
+        );
     }
 
     #[test]
     fn failed_gate_never_reaches_promotion() {
         let promoted = RefCell::new(false);
-        let result = run_final_gate_and_promote(
+        let result = run_publication_tail(
+            || Ok(()),
+            || Ok(()),
             || -> Result<()> { bail!("drift") },
             || Ok(()),
             || {
@@ -727,6 +773,40 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!*promoted.borrow());
+    }
+
+    #[test]
+    fn output_created_during_source_gate_fails_before_final_live_or_promotion() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("output");
+        let events = RefCell::new(Vec::new());
+        let result = run_publication_tail(
+            || {
+                fs::create_dir(&output).unwrap();
+                fs::write(output.join("racer"), b"winner").unwrap();
+                Ok(())
+            },
+            || {
+                super::super::ensure_path_absent(&output, "CORE_TEST_OUTPUT")?;
+                events.borrow_mut().push("mechanical");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("live");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("mount");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("promote");
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(events.borrow().is_empty());
+        assert_eq!(fs::read(output.join("racer")).unwrap(), b"winner");
     }
 
     #[test]

@@ -716,6 +716,55 @@ pub struct VerifiedManagedOfflineDataAssetPackageV1<'a> {
     executable: VerifiedGameExecutableAnchor,
 }
 
+/// Lifetime-free transfer capsule for the managed offline pack implementation.
+///
+/// This stays crate-private: consuming a verified package must not become a public way to split
+/// or recombine its authority. Only the small reviewed facts are cloned from the managed Store
+/// views; the potentially large package/USMAP buffers, private install root, and executable guard
+/// are moved.
+pub(crate) struct OwnedManagedOfflineDataAssetPackagePartsV1 {
+    target_path: String,
+    generation: AssetGenerationReceipt,
+    reviewed: ReviewedFootstepPresetReplacementV1,
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    usmap: Vec<u8>,
+    replay_seal: PackagePairSeal,
+    game_root: PathBuf,
+    executable: VerifiedGameExecutableAnchor,
+}
+
+impl OwnedManagedOfflineDataAssetPackagePartsV1 {
+    // One consuming tuple keeps the transfer capsule non-constructible outside this module while
+    // avoiding a collection of independently callable authority-splitting getters.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn into_components(
+        self,
+    ) -> (
+        String,
+        AssetGenerationReceipt,
+        ReviewedFootstepPresetReplacementV1,
+        Vec<u8>,
+        Vec<u8>,
+        Vec<u8>,
+        PackagePairSeal,
+        PathBuf,
+        VerifiedGameExecutableAnchor,
+    ) {
+        (
+            self.target_path,
+            self.generation,
+            self.reviewed,
+            self.uasset,
+            self.uexp,
+            self.usmap,
+            self.replay_seal,
+            self.game_root,
+            self.executable,
+        )
+    }
+}
+
 impl fmt::Debug for VerifiedManagedOfflineDataAssetPackageV1<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -774,6 +823,20 @@ impl<'a> VerifiedManagedOfflineDataAssetPackageV1<'a> {
             bail!("ASSET_MANAGED_OFFLINE_FINAL: live target generation changed after verification");
         }
         self.executable.reverify()
+    }
+
+    pub(crate) fn into_owned_pack_parts(self) -> OwnedManagedOfflineDataAssetPackagePartsV1 {
+        OwnedManagedOfflineDataAssetPackagePartsV1 {
+            target_path: self.target_path.to_owned(),
+            generation: self.generation.clone(),
+            reviewed: self.reviewed.clone(),
+            uasset: self.uasset,
+            uexp: self.uexp,
+            usmap: self.usmap,
+            replay_seal: self.replay_seal,
+            game_root: self.game_root,
+            executable: self.executable,
+        }
     }
 }
 

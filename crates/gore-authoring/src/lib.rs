@@ -43,6 +43,7 @@ pub use dataasset_build_receipt::{
     ManagedDataAssetRuntimeStatusV1, ManagedDataAssetTripletFileSealV1,
     ManagedRevision3ReviewedDataAssetBuildReceiptErrorV1,
     ManagedRevision3ReviewedDataAssetBuildReceiptV1,
+    VerifiedManagedRevision3ReviewedDataAssetBuildBasisV1,
     MANAGED_REVISION3_REVIEWED_DATAASSET_BUILD_RECEIPT_FORMAT_V1,
     MAX_MANAGED_REVISION3_REVIEWED_DATAASSET_BUILD_RECEIPT_BYTES_V1,
 };
