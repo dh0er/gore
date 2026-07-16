@@ -106,6 +106,166 @@ pub(crate) struct VerifiedUnpackedAssetBytes {
     pub(crate) metadata_utocs: Vec<VerifiedOpenedUtocReceipt>,
 }
 
+/// Which read-only source supplied bytes during a verified primary-IoStore-pair
+/// readback.
+///
+/// The built IoStore pair is always [`Primary`](Self::Primary). The installed game
+/// can only be [`Fallback`](Self::Fallback) for script objects and imported
+/// package dependencies; target-package chunks are never eligible for fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifiedReadbackSourceRoleV1 {
+    Primary,
+    Fallback,
+}
+
+/// Path-free identity of one UTOC opened for a verified readback.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub struct VerifiedReadbackSourceSealV1 {
+    role: VerifiedReadbackSourceRoleV1,
+    utoc_blake3: [u8; 32],
+}
+
+impl VerifiedReadbackSourceSealV1 {
+    pub fn role(&self) -> VerifiedReadbackSourceRoleV1 {
+        self.role
+    }
+
+    pub fn utoc_blake3(&self) -> &[u8; 32] {
+        &self.utoc_blake3
+    }
+}
+
+/// Path-free identity of one exact IoStore chunk verified during readback.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct VerifiedReadbackChunkSealV1 {
+    source_role: VerifiedReadbackSourceRoleV1,
+    source_utoc_blake3: [u8; 32],
+    chunk_id: [u8; 12],
+    chunk_type: String,
+    length: u64,
+    blake3: [u8; 32],
+    toc_hash: [u8; 32],
+    toc_hash_bytes: usize,
+}
+
+impl VerifiedReadbackChunkSealV1 {
+    pub fn source_role(&self) -> VerifiedReadbackSourceRoleV1 {
+        self.source_role
+    }
+
+    pub fn source_utoc_blake3(&self) -> &[u8; 32] {
+        &self.source_utoc_blake3
+    }
+
+    pub fn chunk_id(&self) -> &[u8; 12] {
+        &self.chunk_id
+    }
+
+    pub fn chunk_type(&self) -> &str {
+        &self.chunk_type
+    }
+
+    pub fn length(&self) -> u64 {
+        self.length
+    }
+
+    pub fn blake3(&self) -> &[u8; 32] {
+        &self.blake3
+    }
+
+    pub fn toc_hash(&self) -> &[u8] {
+        &self.toc_hash[..self.toc_hash_bytes]
+    }
+}
+
+/// One optional component in an in-memory legacy cooked package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerifiedReadbackSidecarKindV1 {
+    Bulk,
+    Optional,
+    MemoryMapped,
+}
+
+/// Owned, bounded bytes for one optional legacy cooked-package component.
+pub struct VerifiedReadbackSidecarV1 {
+    kind: VerifiedReadbackSidecarKindV1,
+    bytes: Vec<u8>,
+}
+
+impl VerifiedReadbackSidecarV1 {
+    pub fn kind(&self) -> VerifiedReadbackSidecarKindV1 {
+        self.kind
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// Write-free, owned legacy bytes reconstructed from one freshly built
+/// single-package IoStore pair plus read-only installed-game dependencies.
+///
+/// Source paths are deliberately absent. The source and chunk getters expose
+/// only content seals and the closed primary/fallback role. All byte vectors are
+/// bounded by the same limits as the installed-package memory conversion path.
+pub struct VerifiedPrimaryAssetReadbackV1 {
+    asset_path: String,
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    sidecars: Vec<VerifiedReadbackSidecarV1>,
+    source_seals: Vec<VerifiedReadbackSourceSealV1>,
+    chunk_seals: Vec<VerifiedReadbackChunkSealV1>,
+}
+
+impl std::fmt::Debug for VerifiedPrimaryAssetReadbackV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("VerifiedPrimaryAssetReadbackV1")
+            .field("asset_path", &self.asset_path)
+            .field("uasset_bytes", &self.uasset.len())
+            .field("uexp_bytes", &self.uexp.len())
+            .field("sidecar_count", &self.sidecars.len())
+            .field("source_seals", &self.source_seals)
+            .field("chunk_seals", &self.chunk_seals)
+            .finish()
+    }
+}
+
+impl VerifiedPrimaryAssetReadbackV1 {
+    pub fn asset_path(&self) -> &str {
+        &self.asset_path
+    }
+
+    pub fn uasset(&self) -> &[u8] {
+        &self.uasset
+    }
+
+    pub fn uexp(&self) -> &[u8] {
+        &self.uexp
+    }
+
+    pub fn sidecars(&self) -> &[VerifiedReadbackSidecarV1] {
+        &self.sidecars
+    }
+
+    pub fn sidecar(&self, kind: VerifiedReadbackSidecarKindV1) -> Option<&[u8]> {
+        self.sidecars
+            .iter()
+            .find(|sidecar| sidecar.kind == kind)
+            .map(|sidecar| sidecar.bytes.as_slice())
+    }
+
+    pub fn source_seals(&self) -> &[VerifiedReadbackSourceSealV1] {
+        &self.source_seals
+    }
+
+    pub fn chunk_seals(&self) -> &[VerifiedReadbackChunkSealV1] {
+        &self.chunk_seals
+    }
+}
+
 /// Exact, write-free generation probe for one package in a composite store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedAssetGeneration {
@@ -147,13 +307,20 @@ impl<'a> VerifiedSnapshotStore<'a> {
     }
 
     fn prime_container_metadata(&self) -> anyhow::Result<()> {
-        let header_ids: Vec<_> = self
-            .inner
-            .child_containers()
-            .flat_map(|container| container.chunks())
-            .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
-            .map(|chunk| chunk.id())
-            .collect();
+        let header_ids: Vec<_> = if self.inner.opened_utoc_identity().is_some() {
+            self.inner
+                .chunks()
+                .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
+                .map(|chunk| chunk.id())
+                .collect()
+        } else {
+            self.inner
+                .child_containers()
+                .flat_map(|container| container.chunks())
+                .filter(|chunk| chunk.id().get_chunk_type() == EIoChunkType::ContainerHeader)
+                .map(|chunk| chunk.id())
+                .collect()
+        };
         if header_ids.is_empty() {
             anyhow::bail!("composite IoStore exposes no ContainerHeader chunks");
         }
@@ -165,7 +332,7 @@ impl<'a> VerifiedSnapshotStore<'a> {
 
     fn metadata_utoc_receipts(&self) -> anyhow::Result<Vec<VerifiedOpenedUtocReceipt>> {
         let mut receipts = Vec::new();
-        for container in self.inner.child_containers() {
+        let mut push_identity = |container: &dyn iostore::IoStoreTrait| -> anyhow::Result<()> {
             let (source_utoc, parsed_blake3) = container
                 .opened_utoc_identity()
                 .ok_or_else(|| anyhow::anyhow!("opened child container has no UTOC identity"))?;
@@ -173,6 +340,14 @@ impl<'a> VerifiedSnapshotStore<'a> {
                 source_utoc: source_utoc.to_path_buf(),
                 source_utoc_blake3: encode_bytes(parsed_blake3),
             });
+            Ok(())
+        };
+        if self.inner.opened_utoc_identity().is_some() {
+            push_identity(self.inner)?;
+        } else {
+            for container in self.inner.child_containers() {
+                push_identity(container)?;
+            }
         }
         receipts.sort();
         let before_dedup = receipts.len();
@@ -313,6 +488,226 @@ impl iostore::IoStoreTrait for VerifiedSnapshotStore<'_> {
 
     fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
         self.inner.lookup_package_redirect(source_package_id)
+    }
+}
+
+/// A closed composite used only by the post-build readback API. Target package
+/// data is routed to `primary` exclusively. Every other chunk is primary-first,
+/// then falls back to the installed game for script objects/imported packages.
+struct PrimaryTargetFallbackStore<'a> {
+    primary: &'a dyn iostore::IoStoreTrait,
+    fallback: &'a dyn iostore::IoStoreTrait,
+    target_package: FPackageId,
+    container_version: EIoStoreTocVersion,
+    header_version: EIoContainerHeaderVersion,
+}
+
+impl<'a> PrimaryTargetFallbackStore<'a> {
+    fn new(
+        primary: &'a dyn iostore::IoStoreTrait,
+        fallback: &'a dyn iostore::IoStoreTrait,
+        target_package: FPackageId,
+    ) -> anyhow::Result<Self> {
+        let container_version = primary
+            .container_file_version()
+            .ok_or_else(|| anyhow::anyhow!("primary IoStore pair has no TOC version"))?;
+        let fallback_container_version = fallback
+            .container_file_version()
+            .ok_or_else(|| anyhow::anyhow!("game fallback has no TOC version"))?;
+        if fallback_container_version != container_version {
+            anyhow::bail!("primary IoStore pair and game fallback use different TOC versions");
+        }
+        let header_version = primary.container_header_version().ok_or_else(|| {
+            anyhow::anyhow!("primary IoStore pair has no container-header version")
+        })?;
+        let fallback_header_version = fallback
+            .container_header_version()
+            .ok_or_else(|| anyhow::anyhow!("game fallback has no container-header version"))?;
+        if fallback_header_version != header_version {
+            anyhow::bail!(
+                "primary IoStore pair and game fallback use different container-header versions"
+            );
+        }
+        Ok(Self {
+            primary,
+            fallback,
+            target_package,
+            container_version,
+            header_version,
+        })
+    }
+
+    fn is_target_package_chunk(&self, chunk_id: FIoChunkId) -> bool {
+        chunk_id.get_package_id() == self.target_package
+            && matches!(
+                chunk_id.get_chunk_type(),
+                EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData
+            )
+    }
+
+    fn read_routed(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
+        let chunk_id = chunk_id.with_version(self.container_version);
+        if self.is_target_package_chunk(chunk_id) {
+            if !self.primary.has_chunk_id(chunk_id) {
+                anyhow::bail!(
+                    "target package chunk {chunk_id:?} is absent from the primary IoStore pair; game fallback is forbidden"
+                );
+            }
+            return self.primary.read(chunk_id);
+        }
+        if self.primary.has_chunk_id(chunk_id) {
+            self.primary.read(chunk_id)
+        } else {
+            self.fallback.read(chunk_id)
+        }
+    }
+}
+
+impl iostore::IoStoreTrait for PrimaryTargetFallbackStore<'_> {
+    fn container_name(&self) -> &str {
+        "VERIFIED_PRIMARY_TARGET_WITH_GAME_FALLBACK"
+    }
+
+    fn container_file_version(&self) -> Option<EIoStoreTocVersion> {
+        Some(self.container_version)
+    }
+
+    fn container_header_version(&self) -> Option<EIoContainerHeaderVersion> {
+        Some(self.header_version)
+    }
+
+    fn print_info(&self, depth: usize) {
+        self.primary.print_info(depth);
+        self.fallback.print_info(depth);
+    }
+
+    fn read(&self, chunk_id: FIoChunkId) -> anyhow::Result<Vec<u8>> {
+        self.read_routed(chunk_id)
+    }
+
+    fn read_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> anyhow::Result<Vec<u8>> {
+        self.read_routed(FIoChunkId::from_raw(chunk_id_raw, self.container_version))
+    }
+
+    fn has_chunk_id(&self, chunk_id: FIoChunkId) -> bool {
+        let chunk_id = chunk_id.with_version(self.container_version);
+        if self.is_target_package_chunk(chunk_id) {
+            self.primary.has_chunk_id(chunk_id)
+        } else {
+            self.primary.has_chunk_id(chunk_id) || self.fallback.has_chunk_id(chunk_id)
+        }
+    }
+
+    fn has_chunk_id_raw(&self, chunk_id_raw: FIoChunkIdRaw) -> bool {
+        self.has_chunk_id(FIoChunkId::from_raw(chunk_id_raw, self.container_version))
+    }
+
+    fn chunks(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
+        let target = self.target_package;
+        let mut seen = std::collections::HashSet::new();
+        Box::new(
+            self.primary
+                .chunks()
+                .chain(self.fallback.chunks().filter(move |chunk| {
+                    chunk.id().get_package_id() != target
+                        || !matches!(
+                            chunk.id().get_chunk_type(),
+                            EIoChunkType::ExportBundleData
+                                | EIoChunkType::BulkData
+                                | EIoChunkType::OptionalBulkData
+                                | EIoChunkType::MemoryMappedBulkData
+                        )
+                }))
+                .filter(move |chunk| seen.insert(chunk.id().get_raw())),
+        )
+    }
+
+    fn chunks_all(&self) -> Box<dyn Iterator<Item = iostore::ChunkInfo<'_>> + Send + '_> {
+        let target = self.target_package;
+        let mut seen = std::collections::HashSet::new();
+        Box::new(
+            self.primary
+                .chunks_all()
+                .chain(self.fallback.chunks_all().filter(move |chunk| {
+                    chunk.id().get_package_id() != target
+                        || !matches!(
+                            chunk.id().get_chunk_type(),
+                            EIoChunkType::ExportBundleData
+                                | EIoChunkType::BulkData
+                                | EIoChunkType::OptionalBulkData
+                                | EIoChunkType::MemoryMappedBulkData
+                        )
+                }))
+                .filter(move |chunk| seen.insert(chunk.id().get_raw())),
+        )
+    }
+
+    fn packages(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
+        let target = self.target_package;
+        let mut seen = std::collections::HashSet::new();
+        Box::new(
+            self.primary
+                .packages()
+                .chain(
+                    self.fallback
+                        .packages()
+                        .filter(move |package| package.id() != target),
+                )
+                .filter(move |package| seen.insert(package.id())),
+        )
+    }
+
+    fn packages_all(&self) -> Box<dyn Iterator<Item = iostore::PackageInfo<'_>> + Send + '_> {
+        let target = self.target_package;
+        let mut seen = std::collections::HashSet::new();
+        Box::new(
+            self.primary
+                .packages_all()
+                .chain(
+                    self.fallback
+                        .packages_all()
+                        .filter(move |package| package.id() != target),
+                )
+                .filter(move |package| seen.insert(package.id())),
+        )
+    }
+
+    fn child_containers(&self) -> Box<dyn Iterator<Item = &dyn iostore::IoStoreTrait> + '_> {
+        Box::new(std::iter::once(self.primary).chain(self.fallback.child_containers()))
+    }
+
+    fn chunk_path(&self, chunk_id: FIoChunkId) -> Option<String> {
+        let chunk_id = chunk_id.with_version(self.container_version);
+        if self.is_target_package_chunk(chunk_id) {
+            self.primary.chunk_path(chunk_id)
+        } else {
+            self.primary
+                .chunk_path(chunk_id)
+                .or_else(|| self.fallback.chunk_path(chunk_id))
+        }
+    }
+
+    fn package_store_entry(&self, package_id: FPackageId) -> Option<StoreEntry> {
+        if package_id == self.target_package {
+            self.primary.package_store_entry(package_id)
+        } else {
+            self.primary
+                .package_store_entry(package_id)
+                .or_else(|| self.fallback.package_store_entry(package_id))
+        }
+    }
+
+    fn lookup_package_redirect(&self, source_package_id: FPackageId) -> Option<FPackageId> {
+        if source_package_id == self.target_package {
+            self.primary.lookup_package_redirect(source_package_id)
+        } else {
+            self.primary
+                .lookup_package_redirect(source_package_id)
+                .or_else(|| self.fallback.lookup_package_redirect(source_package_id))
+        }
     }
 }
 
@@ -806,6 +1201,473 @@ pub(crate) fn unpack_asset_from_open_store_verified_to_memory(
         consumed_chunks: snapshot.receipts()?,
         metadata_utocs: snapshot.metadata_utoc_receipts()?,
     })
+}
+
+#[derive(Debug)]
+struct ReadbackSourceAuthority {
+    primary: VerifiedOpenedUtocReceipt,
+    fallback: Vec<VerifiedOpenedUtocReceipt>,
+}
+
+impl ReadbackSourceAuthority {
+    fn new(
+        primary: Vec<VerifiedOpenedUtocReceipt>,
+        fallback: Vec<VerifiedOpenedUtocReceipt>,
+    ) -> anyhow::Result<Self> {
+        let [primary] = primary.as_slice() else {
+            anyhow::bail!(
+                "primary IoStore pair must expose exactly one concrete UTOC identity, got {}",
+                primary.len()
+            );
+        };
+        if fallback.is_empty() {
+            anyhow::bail!("game fallback exposes no concrete UTOC identities");
+        }
+        if fallback
+            .iter()
+            .any(|receipt| receipt.source_utoc == primary.source_utoc)
+        {
+            anyhow::bail!("primary IoStore pair is also present in the game fallback");
+        }
+        Ok(Self {
+            primary: primary.clone(),
+            fallback,
+        })
+    }
+
+    fn role_for_chunk(
+        &self,
+        chunk: &VerifiedChunkReceipt,
+    ) -> anyhow::Result<VerifiedReadbackSourceRoleV1> {
+        if chunk.source_utoc == self.primary.source_utoc {
+            if chunk.source_utoc_blake3 != self.primary.source_utoc_blake3 {
+                anyhow::bail!("primary chunk UTOC seal differs from its opened source seal");
+            }
+            return Ok(VerifiedReadbackSourceRoleV1::Primary);
+        }
+        let source = self
+            .fallback
+            .iter()
+            .find(|source| source.source_utoc == chunk.source_utoc)
+            .ok_or_else(|| anyhow::anyhow!("verified chunk came from an unauthorized source"))?;
+        if chunk.source_utoc_blake3 != source.source_utoc_blake3 {
+            anyhow::bail!("fallback chunk UTOC seal differs from its opened source seal");
+        }
+        Ok(VerifiedReadbackSourceRoleV1::Fallback)
+    }
+
+    fn path_free_seals(&self) -> anyhow::Result<Vec<VerifiedReadbackSourceSealV1>> {
+        let mut seals = Vec::with_capacity(self.fallback.len() + 1);
+        seals.push(VerifiedReadbackSourceSealV1 {
+            role: VerifiedReadbackSourceRoleV1::Primary,
+            utoc_blake3: decode_fixed_hex(&self.primary.source_utoc_blake3, "primary UTOC BLAKE3")?,
+        });
+        for source in &self.fallback {
+            seals.push(VerifiedReadbackSourceSealV1 {
+                role: VerifiedReadbackSourceRoleV1::Fallback,
+                utoc_blake3: decode_fixed_hex(&source.source_utoc_blake3, "fallback UTOC BLAKE3")?,
+            });
+        }
+        seals.sort();
+        Ok(seals)
+    }
+}
+
+/// Reopen the IoStore pair from one freshly built single-package output without
+/// writing any files, reconstructing bounded legacy cooked bytes in memory.
+///
+/// `primary_utoc` selects the built `.utoc` (its `.ucas` sibling is opened by
+/// Retoc). `game_dir` is the installation root; only its fixed
+/// `G1R/Content/Paks` directory is admitted as a read-only fallback. The target
+/// package's export and every known bulk sidecar are *primary-only*. Installed
+/// game containers may supply ScriptObjects and imported package dependencies,
+/// but can never hide a missing or malformed target chunk in the built pair.
+///
+/// Before returning, all participating UTOCs and every consumed/primary chunk
+/// are reopened and reverified. Any source or winner drift fails closed. The
+/// returned object owns bounded `.uasset`/`.uexp`/sidecar bytes and exposes only
+/// path-free source/chunk content seals. This function does not open the `.pak`
+/// sidecar and therefore does not establish complete triplet authority; callers
+/// requiring that must separately succeed with [`verify_single_package_triplet`]
+/// and bind both results to the same output.
+pub fn reopen_primary_asset_with_game_fallback_to_memory_v1(
+    primary_utoc: &Path,
+    game_dir: &Path,
+    asset_path: &str,
+) -> Result<VerifiedPrimaryAssetReadbackV1> {
+    let game_paks = game_dir.join("G1R/Content/Paks");
+    validate_plain_directory_root(&game_paks, "game Paks fallback")?;
+
+    let target_package = package_id_from_asset_path(asset_path);
+    let config = Arc::new(Config::default());
+
+    // Every cache-heavy operation is deliberately isolated in a lexical helper.
+    // At most one VerifiedSnapshotStore cache (plus the bounded converted output)
+    // can therefore be resident at once.
+    let (converted, conversion_chunks, all_chunks, source_authority) = {
+        let primary = iostore::open(primary_utoc, config.clone())?;
+        let fallback = iostore::open(&game_paks, config.clone())?;
+        validate_primary_readback_store(primary.as_ref(), asset_path, target_package)?;
+        let routed =
+            PrimaryTargetFallbackStore::new(primary.as_ref(), fallback.as_ref(), target_package)?;
+
+        let (primary_sources, primary_chunks) = snapshot_complete_store_verified(primary.as_ref())?;
+        let (fallback_sources, fallback_metadata_chunks) =
+            snapshot_store_metadata_verified(fallback.as_ref())?;
+        let source_authority = ReadbackSourceAuthority::new(primary_sources, fallback_sources)?;
+        let (converted, conversion_chunks) =
+            convert_routed_asset_to_memory_verified(&routed, asset_path)?;
+        let all_chunks = merge_readback_chunk_receipts([
+            primary_chunks.as_slice(),
+            fallback_metadata_chunks.as_slice(),
+            conversion_chunks.as_slice(),
+        ])?;
+        ensure_target_chunks_are_primary(
+            &all_chunks,
+            &source_authority,
+            target_package,
+            routed.container_version,
+        )?;
+        (converted, conversion_chunks, all_chunks, source_authority)
+    };
+
+    // Reopen both authorities after conversion, verify their metadata and the
+    // complete primary chunk surface again, then replay every conversion read
+    // through a fresh routed snapshot. This detects source/winner drift without
+    // copying global files beside the generated IoStore pair.
+    {
+        let recheck_primary = iostore::open(primary_utoc, config.clone())?;
+        let recheck_fallback = iostore::open(&game_paks, config)?;
+        validate_primary_readback_store(recheck_primary.as_ref(), asset_path, target_package)?;
+        let recheck_routed = PrimaryTargetFallbackStore::new(
+            recheck_primary.as_ref(),
+            recheck_fallback.as_ref(),
+            target_package,
+        )?;
+
+        let (recheck_primary_sources, recheck_primary_chunks) =
+            snapshot_complete_store_verified(recheck_primary.as_ref())?;
+        let (recheck_fallback_sources, recheck_fallback_metadata_chunks) =
+            snapshot_store_metadata_verified(recheck_fallback.as_ref())?;
+        if recheck_primary_sources.as_slice() != std::slice::from_ref(&source_authority.primary)
+            || recheck_fallback_sources != source_authority.fallback
+        {
+            return Err(
+                anyhow::anyhow!("IoStore source identities drifted during readback").into(),
+            );
+        }
+
+        let recheck_conversion_chunks = replay_verified_chunk_reads(
+            &recheck_routed,
+            recheck_routed.container_version,
+            &conversion_chunks,
+        )?;
+        let recheck_all_chunks = merge_readback_chunk_receipts([
+            recheck_primary_chunks.as_slice(),
+            recheck_fallback_metadata_chunks.as_slice(),
+            recheck_conversion_chunks.as_slice(),
+        ])?;
+        if recheck_all_chunks != all_chunks {
+            return Err(anyhow::anyhow!("IoStore chunk winners drifted during readback").into());
+        }
+    }
+
+    let mut sidecars = Vec::with_capacity(converted.sidecars.len());
+    for sidecar in converted.sidecars {
+        let kind = match sidecar.kind {
+            VerifiedLegacySidecarKind::Bulk => VerifiedReadbackSidecarKindV1::Bulk,
+            VerifiedLegacySidecarKind::Optional => VerifiedReadbackSidecarKindV1::Optional,
+            VerifiedLegacySidecarKind::MemoryMapped => VerifiedReadbackSidecarKindV1::MemoryMapped,
+        };
+        sidecars.push(VerifiedReadbackSidecarV1 {
+            kind,
+            bytes: sidecar.bytes,
+        });
+    }
+    sidecars.sort_by_key(|sidecar| sidecar.kind);
+
+    let source_seals = source_authority.path_free_seals()?;
+    let mut chunk_seals = Vec::with_capacity(all_chunks.len());
+    for chunk in &all_chunks {
+        chunk_seals.push(path_free_chunk_seal(chunk, &source_authority)?);
+    }
+    chunk_seals.sort_by(|left, right| {
+        left.source_role
+            .cmp(&right.source_role)
+            .then(left.source_utoc_blake3.cmp(&right.source_utoc_blake3))
+            .then(left.chunk_id.cmp(&right.chunk_id))
+    });
+
+    Ok(VerifiedPrimaryAssetReadbackV1 {
+        asset_path: asset_path.to_owned(),
+        uasset: converted.uasset,
+        uexp: converted.uexp,
+        sidecars,
+        source_seals,
+        chunk_seals,
+    })
+}
+
+fn snapshot_complete_store_verified(
+    store: &dyn iostore::IoStoreTrait,
+) -> Result<(Vec<VerifiedOpenedUtocReceipt>, Vec<VerifiedChunkReceipt>)> {
+    let snapshot = VerifiedSnapshotStore::new(store);
+    snapshot.prime_container_metadata()?;
+    for chunk_id in store.chunks_all().map(|chunk| chunk.id()) {
+        snapshot.read_verified(chunk_id)?;
+    }
+    Ok((snapshot.metadata_utoc_receipts()?, snapshot.receipts()?))
+}
+
+fn snapshot_store_metadata_verified(
+    store: &dyn iostore::IoStoreTrait,
+) -> Result<(Vec<VerifiedOpenedUtocReceipt>, Vec<VerifiedChunkReceipt>)> {
+    let snapshot = VerifiedSnapshotStore::new(store);
+    snapshot.prime_container_metadata()?;
+    Ok((snapshot.metadata_utoc_receipts()?, snapshot.receipts()?))
+}
+
+fn convert_routed_asset_to_memory_verified(
+    store: &dyn iostore::IoStoreTrait,
+    asset_path: &str,
+) -> Result<(LegacyMemoryOutput, Vec<VerifiedChunkReceipt>)> {
+    let (snapshot, package_id) = verified_package_snapshot(store, asset_path)?;
+    let leaf = asset_path.rsplit('/').next().unwrap_or(asset_path);
+    let converted = legacy_from_package_to_memory(&snapshot, package_id, leaf)?;
+    Ok((converted, snapshot.receipts()?))
+}
+
+fn replay_verified_chunk_reads(
+    store: &dyn iostore::IoStoreTrait,
+    container_version: EIoStoreTocVersion,
+    required: &[VerifiedChunkReceipt],
+) -> Result<Vec<VerifiedChunkReceipt>> {
+    let snapshot = VerifiedSnapshotStore::new(store);
+    snapshot.prime_container_metadata()?;
+    for chunk in required {
+        let raw = chunk
+            .chunk_id
+            .parse::<FIoChunkIdRaw>()
+            .with_context(|| format!("invalid internal chunk receipt {}", chunk.chunk_id))?;
+        snapshot.read_verified(FIoChunkId::from_raw(raw, container_version))?;
+    }
+    Ok(snapshot.receipts()?)
+}
+
+fn validate_primary_readback_store(
+    primary: &dyn iostore::IoStoreTrait,
+    asset_path: &str,
+    target_package: FPackageId,
+) -> Result<()> {
+    if primary.opened_utoc_identity().is_none() || primary.child_containers().next().is_some() {
+        return Err(anyhow::anyhow!(
+            "primary readback source must be one concrete UTOC, not a composite"
+        )
+        .into());
+    }
+    let packages: Vec<_> = primary.packages().map(|package| package.id()).collect();
+    if packages != [target_package] {
+        return Err(anyhow::anyhow!(
+            "primary IoStore pair package set does not match the expected single package"
+        )
+        .into());
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut container_headers = 0usize;
+    let mut export_bundles = 0usize;
+    let mut bulk = 0usize;
+    let mut optional = 0usize;
+    let mut memory_mapped = 0usize;
+    for chunk in primary.chunks_all() {
+        let chunk_id = chunk.id();
+        if !seen.insert(chunk_id.get_raw()) {
+            return Err(
+                anyhow::anyhow!("primary IoStore pair contains a duplicate chunk id").into(),
+            );
+        }
+        match chunk_id.get_chunk_type() {
+            EIoChunkType::ContainerHeader => container_headers += 1,
+            EIoChunkType::ExportBundleData => {
+                if chunk_id.get_package_id() != target_package {
+                    return Err(anyhow::anyhow!(
+                        "primary IoStore pair export belongs to a different package"
+                    )
+                    .into());
+                }
+                export_bundles += 1;
+            }
+            EIoChunkType::BulkData => {
+                if chunk_id.get_package_id() != target_package {
+                    return Err(anyhow::anyhow!(
+                        "primary IoStore pair bulk data belongs to a different package"
+                    )
+                    .into());
+                }
+                bulk += 1;
+            }
+            EIoChunkType::OptionalBulkData => {
+                if chunk_id.get_package_id() != target_package {
+                    return Err(anyhow::anyhow!(
+                        "primary IoStore pair optional bulk data belongs to a different package"
+                    )
+                    .into());
+                }
+                optional += 1;
+            }
+            EIoChunkType::MemoryMappedBulkData => {
+                if chunk_id.get_package_id() != target_package {
+                    return Err(anyhow::anyhow!(
+                        "primary IoStore pair memory-mapped data belongs to a different package"
+                    )
+                    .into());
+                }
+                memory_mapped += 1;
+            }
+            other => {
+                return Err(anyhow::anyhow!(
+                    "unexpected {other:?} chunk in primary single-package IoStore pair"
+                )
+                .into())
+            }
+        }
+    }
+    if container_headers != 1
+        || export_bundles != 1
+        || bulk > 1
+        || optional > 1
+        || memory_mapped > 1
+    {
+        return Err(anyhow::anyhow!(
+            "primary IoStore pair has an invalid single-package chunk cardinality"
+        )
+        .into());
+    }
+    if primary.package_store_entry(target_package).is_none() {
+        return Err(
+            anyhow::anyhow!("primary IoStore pair has no target package store entry").into(),
+        );
+    }
+    let export_chunk =
+        FIoChunkId::from_package_id(target_package, 0, EIoChunkType::ExportBundleData);
+    let expected_export_path = format!(
+        "../../../{}.uasset",
+        crate::paths::content_mount_rel(asset_path)
+            .ok_or_else(|| anyhow::anyhow!("unsupported package mount: {asset_path}"))?
+    );
+    if primary.chunk_path(export_chunk).as_deref() != Some(expected_export_path.as_str()) {
+        return Err(anyhow::anyhow!("primary IoStore pair target mount path mismatch").into());
+    }
+    Ok(())
+}
+
+fn merge_readback_chunk_receipts<const N: usize>(
+    groups: [&[VerifiedChunkReceipt]; N],
+) -> anyhow::Result<Vec<VerifiedChunkReceipt>> {
+    let mut merged = std::collections::BTreeMap::<(PathBuf, String), VerifiedChunkReceipt>::new();
+    for chunk in groups.into_iter().flatten() {
+        let key = (chunk.source_utoc.clone(), chunk.chunk_id.clone());
+        if let Some(existing) = merged.get(&key) {
+            if existing != chunk {
+                anyhow::bail!("conflicting seals for one IoStore source chunk");
+            }
+        } else {
+            merged.insert(key, chunk.clone());
+        }
+    }
+    Ok(merged.into_values().collect())
+}
+
+fn ensure_target_chunks_are_primary(
+    chunks: &[VerifiedChunkReceipt],
+    sources: &ReadbackSourceAuthority,
+    target_package: FPackageId,
+    container_version: EIoStoreTocVersion,
+) -> anyhow::Result<()> {
+    let mut target_exports = 0usize;
+    for chunk in chunks {
+        let raw = chunk
+            .chunk_id
+            .parse::<FIoChunkIdRaw>()
+            .with_context(|| format!("invalid internal chunk receipt {}", chunk.chunk_id))?;
+        let chunk_id = FIoChunkId::from_raw(raw, container_version);
+        if chunk_id.get_package_id() == target_package
+            && matches!(
+                chunk_id.get_chunk_type(),
+                EIoChunkType::ExportBundleData
+                    | EIoChunkType::BulkData
+                    | EIoChunkType::OptionalBulkData
+                    | EIoChunkType::MemoryMappedBulkData
+            )
+        {
+            if sources.role_for_chunk(chunk)? != VerifiedReadbackSourceRoleV1::Primary {
+                anyhow::bail!("target package chunk was supplied by the game fallback");
+            }
+            target_exports +=
+                usize::from(chunk_id.get_chunk_type() == EIoChunkType::ExportBundleData);
+        }
+    }
+    if target_exports != 1 {
+        anyhow::bail!("verified readback did not consume exactly one primary target export");
+    }
+    Ok(())
+}
+
+fn path_free_chunk_seal(
+    chunk: &VerifiedChunkReceipt,
+    sources: &ReadbackSourceAuthority,
+) -> anyhow::Result<VerifiedReadbackChunkSealV1> {
+    if !matches!(chunk.toc_hash_bytes, 20 | 32) {
+        anyhow::bail!("internal IoStore receipt has an unsupported TOC hash length");
+    }
+    let mut toc_hash = [0u8; 32];
+    let decoded_toc_hash = decode_hex(&chunk.toc_hash, "chunk TOC hash")?;
+    if decoded_toc_hash.len() != chunk.toc_hash_bytes {
+        anyhow::bail!("internal IoStore receipt TOC hash length mismatch");
+    }
+    toc_hash[..decoded_toc_hash.len()].copy_from_slice(&decoded_toc_hash);
+    Ok(VerifiedReadbackChunkSealV1 {
+        source_role: sources.role_for_chunk(chunk)?,
+        source_utoc_blake3: decode_fixed_hex(
+            &chunk.source_utoc_blake3,
+            "chunk source UTOC BLAKE3",
+        )?,
+        chunk_id: decode_fixed_hex(&chunk.chunk_id, "chunk id")?,
+        chunk_type: chunk.chunk_type.clone(),
+        length: chunk.length,
+        blake3: decode_fixed_hex(&chunk.blake3, "chunk BLAKE3")?,
+        toc_hash,
+        toc_hash_bytes: chunk.toc_hash_bytes,
+    })
+}
+
+fn decode_hex(encoded: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    if !encoded.len().is_multiple_of(2) {
+        anyhow::bail!("{label} has an odd hexadecimal length");
+    }
+    let mut decoded = Vec::with_capacity(encoded.len() / 2);
+    for pair in encoded.as_bytes().chunks_exact(2) {
+        let high = nibble(pair[0]).ok_or_else(|| anyhow::anyhow!("{label} is not hexadecimal"))?;
+        let low = nibble(pair[1]).ok_or_else(|| anyhow::anyhow!("{label} is not hexadecimal"))?;
+        decoded.push(high << 4 | low);
+    }
+    Ok(decoded)
+}
+
+fn decode_fixed_hex<const N: usize>(encoded: &str, label: &str) -> anyhow::Result<[u8; N]> {
+    let decoded = decode_hex(encoded, label)?;
+    decoded
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("{label} has the wrong byte length"))
 }
 
 fn verified_package_snapshot<'a>(
@@ -2072,6 +2934,175 @@ mod tests {
     }
 
     #[test]
+    fn primary_target_router_never_uses_fallback_target_chunks() {
+        use retoc::iostore_writer::IoStoreWriter;
+        use retoc::version::EngineVersion;
+
+        let base = unique_tmp("primary-target-router");
+        let primary_utoc = base.join("built").join("Built_P.utoc");
+        let fallback_dir = base.join("game-paks");
+        std::fs::create_dir_all(primary_utoc.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(&fallback_dir).unwrap();
+
+        let version = EngineVersion::UE5_4;
+        let target = FPackageId(0x0102_0304_0506_0708);
+        let dependency = FPackageId(0x1112_1314_1516_1718);
+        let target_export = FIoChunkId::from_package_id(target, 0, EIoChunkType::ExportBundleData);
+        let target_optional =
+            FIoChunkId::from_package_id(target, 0, EIoChunkType::OptionalBulkData);
+        let dependency_export =
+            FIoChunkId::from_package_id(dependency, 0, EIoChunkType::ExportBundleData);
+        let script_objects = FIoChunkId::create(0, 0, EIoChunkType::ScriptObjects);
+
+        let mut primary_writer = IoStoreWriter::new(
+            &primary_utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        primary_writer
+            .write_package_chunk(
+                target_export,
+                Some(UEPath::new("../../../G1R/Content/Target.uasset")),
+                b"primary-target",
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        primary_writer.finalize().unwrap();
+
+        let fallback_utoc = fallback_dir.join("global.utoc");
+        let mut fallback_writer = IoStoreWriter::new(
+            &fallback_utoc,
+            version.toc_version(),
+            Some(version.container_header_version()),
+            UEPathBuf::from("../../../"),
+        )
+        .unwrap();
+        fallback_writer
+            .write_package_chunk(
+                target_export,
+                Some(UEPath::new("../../../G1R/Content/Target.uasset")),
+                b"fallback-target",
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        fallback_writer
+            .write_chunk(target_optional, None, b"fallback-target-optional")
+            .unwrap();
+        fallback_writer
+            .write_package_chunk(
+                dependency_export,
+                Some(UEPath::new("../../../G1R/Content/Dependency.uasset")),
+                b"fallback-dependency",
+                &StoreEntry::default(),
+            )
+            .unwrap();
+        fallback_writer
+            .write_chunk(script_objects, None, b"fallback-script-objects")
+            .unwrap();
+        fallback_writer.finalize().unwrap();
+
+        let primary = iostore::open(&primary_utoc, Arc::new(Config::default())).unwrap();
+        let fallback = iostore::open(&fallback_dir, Arc::new(Config::default())).unwrap();
+        let routed =
+            PrimaryTargetFallbackStore::new(primary.as_ref(), fallback.as_ref(), target).unwrap();
+
+        assert_eq!(routed.read(target_export).unwrap(), b"primary-target");
+        assert!(
+            !routed.has_chunk_id(target_optional),
+            "fallback must not make a missing target sidecar appear present"
+        );
+        assert!(routed.read(target_optional).is_err());
+        assert_eq!(
+            routed.read(dependency_export).unwrap(),
+            b"fallback-dependency"
+        );
+        assert_eq!(
+            routed.read(script_objects).unwrap(),
+            b"fallback-script-objects"
+        );
+
+        let visible_target_chunks: Vec<_> = routed
+            .chunks()
+            .filter(|chunk| {
+                chunk.id().get_package_id() == target
+                    && matches!(
+                        chunk.id().get_chunk_type(),
+                        EIoChunkType::ExportBundleData
+                            | EIoChunkType::BulkData
+                            | EIoChunkType::OptionalBulkData
+                            | EIoChunkType::MemoryMappedBulkData
+                    )
+            })
+            .collect();
+        assert_eq!(visible_target_chunks.len(), 1);
+        assert_eq!(
+            visible_target_chunks[0].id(),
+            target_export.with_version(version.toc_version())
+        );
+        assert_eq!(visible_target_chunks[0].read().unwrap(), b"primary-target");
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn path_free_readback_seals_reject_unknown_or_drifted_sources() {
+        let primary_path = PathBuf::from("secret-primary.utoc");
+        let fallback_path = PathBuf::from("secret-fallback.utoc");
+        let primary_hash = "11".repeat(32);
+        let fallback_hash = "22".repeat(32);
+        let authority = ReadbackSourceAuthority::new(
+            vec![VerifiedOpenedUtocReceipt {
+                source_utoc: primary_path.clone(),
+                source_utoc_blake3: primary_hash.clone(),
+            }],
+            vec![VerifiedOpenedUtocReceipt {
+                source_utoc: fallback_path.clone(),
+                source_utoc_blake3: fallback_hash.clone(),
+            }],
+        )
+        .unwrap();
+
+        let source_seals = authority.path_free_seals().unwrap();
+        assert_eq!(source_seals.len(), 2);
+        assert_eq!(
+            source_seals[0].role(),
+            VerifiedReadbackSourceRoleV1::Primary
+        );
+        assert_eq!(source_seals[0].utoc_blake3(), &[0x11; 32]);
+        assert_eq!(
+            source_seals[1].role(),
+            VerifiedReadbackSourceRoleV1::Fallback
+        );
+        assert_eq!(source_seals[1].utoc_blake3(), &[0x22; 32]);
+
+        let receipt = VerifiedChunkReceipt {
+            chunk_id: "01".repeat(12),
+            chunk_type: "ExportBundleData".to_owned(),
+            source_utoc: primary_path,
+            source_utoc_blake3: primary_hash,
+            length: 3,
+            blake3: "33".repeat(32),
+            toc_hash: "44".repeat(20),
+            toc_hash_bytes: 20,
+        };
+        let seal = path_free_chunk_seal(&receipt, &authority).unwrap();
+        assert_eq!(seal.source_role(), VerifiedReadbackSourceRoleV1::Primary);
+        assert_eq!(seal.chunk_id(), &[1; 12]);
+        assert_eq!(seal.length(), 3);
+        assert_eq!(seal.blake3(), &[0x33; 32]);
+        assert_eq!(seal.toc_hash(), &[0x44; 20]);
+
+        let mut drifted = receipt.clone();
+        drifted.source_utoc_blake3 = "55".repeat(32);
+        assert!(path_free_chunk_seal(&drifted, &authority).is_err());
+        let mut unknown = receipt;
+        unknown.source_utoc = PathBuf::from("unknown.utoc");
+        assert!(path_free_chunk_seal(&unknown, &authority).is_err());
+    }
+
+    #[test]
     fn generation_probe_required_chunks_cannot_hide_live_target_optional_bulk() {
         let version = EIoStoreTocVersion::ReplaceIoChunkHashWithIoHash;
         let target = FPackageId(0x0102_0304_0506_0708);
@@ -2935,28 +3966,35 @@ mod tests {
         );
         eprintln!("OK: container_flags=8 (uncompressed), no compressed blocks");
 
-        // 3. read the asset back out of the freshly-built triplet and decode it.
-        //    Point `unpack_asset` at the produced `.utoc`: it opens the parent dir
-        //    as a composite store, but the global script objects come from the
-        //    game's `global.utoc` -- which our `out` dir lacks. So copy `global.*`
-        //    next to our triplet first, giving the composite store the table it
-        //    needs to convert zen->legacy on the way back out.
-        let game_paks = g.join("G1R/Content/Paks");
+        // 3. Read the asset back without copying `global.*` beside the generated
+        //    triplet and without writing reconstructed legacy files. The built
+        //    triplet is authoritative for every target chunk; the installed game
+        //    is a read-only fallback only for ScriptObjects/dependencies.
+        let rb_package =
+            reopen_primary_asset_with_game_fallback_to_memory_v1(&triplet[0], &g, asset).unwrap();
+        assert_eq!(rb_package.asset_path(), asset);
+        assert!(rb_package
+            .chunk_seals()
+            .iter()
+            .any(|seal| seal.chunk_type() == "ExportBundleData"
+                && seal.source_role() == VerifiedReadbackSourceRoleV1::Primary));
+        assert!(rb_package
+            .chunk_seals()
+            .iter()
+            .any(|seal| seal.chunk_type() == "ScriptObjects"
+                && seal.source_role() == VerifiedReadbackSourceRoleV1::Fallback));
         for ext in ["utoc", "ucas", "pak"] {
-            let src = game_paks.join(format!("global.{ext}"));
-            if src.exists() {
-                std::fs::copy(&src, out.join(format!("global.{ext}"))).unwrap();
-            }
+            assert!(
+                !out.join(format!("global.{ext}")).exists(),
+                "readback copied global.{ext} into the build output"
+            );
         }
-
-        let readback_dir = tmp.join("readback");
-        let _ = std::fs::remove_dir_all(&readback_dir);
-        std::fs::create_dir_all(&readback_dir).unwrap();
-        let rb_uasset = unpack_asset(&triplet[0], &usmap, asset, &readback_dir).unwrap();
         let rb = crate::decode::parse(
-            &std::fs::read(&rb_uasset).unwrap(),
-            &std::fs::read(rb_uasset.with_extension("uexp")).unwrap(),
-            &std::fs::read(rb_uasset.with_extension("ubulk")).unwrap_or_default(),
+            rb_package.uasset(),
+            rb_package.uexp(),
+            rb_package
+                .sidecar(VerifiedReadbackSidecarKindV1::Bulk)
+                .unwrap_or_default(),
             &std::fs::read(&usmap).unwrap(),
         )
         .unwrap();
