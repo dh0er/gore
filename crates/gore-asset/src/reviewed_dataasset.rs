@@ -220,6 +220,40 @@ pub enum ReviewedDataAssetErrorV1 {
     BindingSerialization,
 }
 
+/// Closed reason why one persisted fixed-leaf stage is not eligible for the reviewed path.
+///
+/// This classification grants no build, package-write, deployment, or runtime authority. It only
+/// states whether the persisted target, selector, and complete replacement re-derive one exact
+/// reviewed FootstepPreset edit.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ReviewedDataAssetStageBlockReasonV1 {
+    #[error("persisted DataAsset stage target is not a reviewed footstep preset")]
+    UnsupportedTarget,
+    #[error("persisted DataAsset stage selector does not match reviewed fact {fact}")]
+    SelectorMismatch { fact: &'static str },
+    #[error("persisted DataAsset stage replacement is not canonical full Vector4 hexadecimal")]
+    MalformedReplacement,
+    #[error("persisted DataAsset stage replacement component {component} is not finite")]
+    NonFiniteReplacementComponent { component: &'static str },
+    #[error("persisted DataAsset stage replacement component {component} is not positive")]
+    NonPositiveReplacementComponent { component: &'static str },
+    #[error("persisted DataAsset stage replacement changes preserved component {component}")]
+    PreservedComponentChanged { component: &'static str },
+    #[error("persisted DataAsset stage failed reviewed preparation: {0}")]
+    ReviewedPreparation(ReviewedDataAssetErrorV1),
+    #[error("persisted DataAsset stage replacement differs from the reviewed derived replacement")]
+    DerivedReplacementMismatch,
+}
+
+/// Closed, path-free eligibility result for one persisted DataAsset stage.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReviewedDataAssetStageEligibilityV1 {
+    /// The stage re-derived one exact reviewed FootstepPreset replacement.
+    Eligible(Box<ReviewedFootstepPresetReplacementV1>),
+    /// The stage remains generic/unreviewed and must not enter the reviewed path.
+    Blocked(ReviewedDataAssetStageBlockReasonV1),
+}
+
 /// Match and lower one reviewed FootstepTag `FeetTextureSize` edit.
 ///
 /// The target and every reviewed selector fact are exact. Snapshot seals and observed bytes remain
@@ -271,6 +305,90 @@ pub fn prepare_reviewed_footstep_preset_size_v1(
         replacement_bytes: replacement,
         binding_sha256,
     })
+}
+
+/// Re-derive reviewed eligibility from one persisted stage without performing I/O.
+///
+/// `replacement_hex` is the complete replacement persisted by the stage manifest, not a partial
+/// semantic value. It must be canonical lowercase hexadecimal for exactly one Vector4. The
+/// classifier first closes over the exact reviewed target and selector, then reconstructs the
+/// requested X/Y values, runs the existing reviewed FootstepPreset preparation, and finally
+/// requires bit-for-bit equality with that derived replacement. Z/W must therefore remain exactly
+/// unchanged, including their floating-point bit representation.
+pub fn evaluate_reviewed_dataasset_stage_v1(
+    target_path: &str,
+    selector: &FixedLeafSelector,
+    replacement_hex: &str,
+) -> ReviewedDataAssetStageEligibilityV1 {
+    match evaluate_reviewed_dataasset_stage_inner_v1(target_path, selector, replacement_hex) {
+        Ok(replacement) => ReviewedDataAssetStageEligibilityV1::Eligible(Box::new(replacement)),
+        Err(reason) => ReviewedDataAssetStageEligibilityV1::Blocked(reason),
+    }
+}
+
+fn evaluate_reviewed_dataasset_stage_inner_v1(
+    target_path: &str,
+    selector: &FixedLeafSelector,
+    replacement_hex: &str,
+) -> Result<ReviewedFootstepPresetReplacementV1, ReviewedDataAssetStageBlockReasonV1> {
+    let target = ReviewedFootstepPresetTargetV1::from_target_path(target_path)
+        .map_err(|_| ReviewedDataAssetStageBlockReasonV1::UnsupportedTarget)?;
+    validate_reviewed_selector(target, selector).map_err(|error| match error {
+        ReviewedDataAssetErrorV1::SelectorMismatch { fact } => {
+            ReviewedDataAssetStageBlockReasonV1::SelectorMismatch { fact }
+        }
+        other => ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation(other),
+    })?;
+
+    let replacement = decode_canonical_vector4_hex(replacement_hex)
+        .ok_or(ReviewedDataAssetStageBlockReasonV1::MalformedReplacement)?;
+    let expected: [u8; 32] = selector
+        .expected_bytes()
+        .map_err(|_| {
+            ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation(
+                ReviewedDataAssetErrorV1::InvalidExpectedBytes,
+            )
+        })?
+        .try_into()
+        .map_err(|_| {
+            ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation(
+                ReviewedDataAssetErrorV1::InvalidExpectedBytes,
+            )
+        })?;
+    let replacement_components = decode_vector4_f64(replacement);
+    for (component, value) in ["x", "y"]
+        .into_iter()
+        .zip(replacement_components[..2].iter().copied())
+    {
+        if !value.is_finite() {
+            return Err(
+                ReviewedDataAssetStageBlockReasonV1::NonFiniteReplacementComponent { component },
+            );
+        }
+        if value <= 0.0 {
+            return Err(
+                ReviewedDataAssetStageBlockReasonV1::NonPositiveReplacementComponent { component },
+            );
+        }
+    }
+    for (component, lane) in [("z", 2usize), ("w", 3usize)] {
+        let start = lane * 8;
+        if replacement[start..start + 8] != expected[start..start + 8] {
+            return Err(
+                ReviewedDataAssetStageBlockReasonV1::PreservedComponentChanged { component },
+            );
+        }
+    }
+
+    let requested =
+        ReviewedFootstepPresetSizeV1::try_new(replacement_components[0], replacement_components[1])
+            .map_err(ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation)?;
+    let prepared = prepare_reviewed_footstep_preset_size_v1(target_path, selector, requested)
+        .map_err(ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation)?;
+    if prepared.replacement_bytes() != &replacement {
+        return Err(ReviewedDataAssetStageBlockReasonV1::DerivedReplacementMismatch);
+    }
+    Ok(prepared)
 }
 
 fn validate_positive_finite(
@@ -404,6 +522,27 @@ fn is_canonical_sha256(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn decode_canonical_vector4_hex(value: &str) -> Option<[u8; 32]> {
+    if !is_canonical_sha256(value) {
+        return None;
+    }
+    let mut decoded = [0u8; 32];
+    for (output, pair) in decoded.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let high = canonical_hex_nibble(pair[0])?;
+        let low = canonical_hex_nibble(pair[1])?;
+        *output = (high << 4) | low;
+    }
+    Some(decoded)
+}
+
+fn canonical_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
 fn decode_vector4_f64(bytes: [u8; 32]) -> [f64; 4] {
     std::array::from_fn(|index| {
         let start = index * 8;
@@ -510,6 +649,25 @@ mod tests {
 
     fn hex(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn vector4_hex(components: [f64; 4]) -> String {
+        let mut bytes = [0u8; 32];
+        for (lane, component) in components.into_iter().enumerate() {
+            bytes[lane * 8..lane * 8 + 8].copy_from_slice(&component.to_le_bytes());
+        }
+        hex(&bytes)
+    }
+
+    fn evaluate_wolf(
+        selector: &FixedLeafSelector,
+        replacement_hex: &str,
+    ) -> ReviewedDataAssetStageEligibilityV1 {
+        evaluate_reviewed_dataasset_stage_v1(
+            ReviewedFootstepPresetTargetV1::Wolf.target_path(),
+            selector,
+            replacement_hex,
+        )
     }
 
     #[test]
@@ -622,6 +780,210 @@ mod tests {
         assert_eq!(&result.replacement_bytes()[..8], &11.0f64.to_le_bytes());
         assert_eq!(&result.replacement_bytes()[8..16], &12.0f64.to_le_bytes());
         assert_eq!(result.selector(), &wolf_selector());
+    }
+
+    #[test]
+    fn persisted_stage_eligibility_accepts_only_exact_rederived_reviewed_replacements() {
+        let replacement_hex = vector4_hex([11.0, 12.0, 0.0, 1.0]);
+        for target in ReviewedFootstepPresetTargetV1::ALL {
+            let mut selector = wolf_selector();
+            selector.object_name = target.object_name().to_owned();
+            let expected = prepare_reviewed_footstep_preset_size_v1(
+                target.target_path(),
+                &selector,
+                request(11.0, 12.0),
+            )
+            .unwrap();
+            assert_eq!(
+                evaluate_reviewed_dataasset_stage_v1(
+                    target.target_path(),
+                    &selector,
+                    &replacement_hex,
+                ),
+                ReviewedDataAssetStageEligibilityV1::Eligible(Box::new(expected)),
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_stage_eligibility_is_hotfix_independent_but_binds_canonical_seals() {
+        let replacement_hex = vector4_hex([11.0, 12.0, 0.0, 1.0]);
+        let baseline = match evaluate_wolf(&wolf_selector(), &replacement_hex) {
+            ReviewedDataAssetStageEligibilityV1::Eligible(replacement) => replacement,
+            blocked => panic!("exact Wolf stage unexpectedly blocked: {blocked:?}"),
+        };
+        let mut variants = Vec::new();
+        let mut selector = wolf_selector();
+        selector.package_seal.uasset_sha256 = [0x11; 32];
+        variants.push(selector);
+        let mut selector = wolf_selector();
+        selector.package_seal.uexp_sha256 = [0x22; 32];
+        variants.push(selector);
+        let mut selector = wolf_selector();
+        selector.usmap_sha256 = "3".repeat(64);
+        variants.push(selector);
+        let mut selector = wolf_selector();
+        selector.export_sha256 = "4".repeat(64);
+        variants.push(selector);
+
+        for selector in variants {
+            let replacement = match evaluate_wolf(&selector, &replacement_hex) {
+                ReviewedDataAssetStageEligibilityV1::Eligible(replacement) => replacement,
+                blocked => {
+                    panic!("canonical hotfix-specific seal unexpectedly blocked: {blocked:?}")
+                }
+            };
+            assert_ne!(replacement.binding_sha256(), baseline.binding_sha256());
+        }
+    }
+
+    #[test]
+    fn persisted_stage_target_selector_and_seal_near_misses_block_with_typed_reasons() {
+        let replacement_hex = vector4_hex([11.0, 12.0, 0.0, 1.0]);
+        for target_path in [
+            "/Game/TestAsset",
+            "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps_Copy",
+        ] {
+            assert_eq!(
+                evaluate_reviewed_dataasset_stage_v1(
+                    target_path,
+                    &wolf_selector(),
+                    &replacement_hex,
+                ),
+                ReviewedDataAssetStageEligibilityV1::Blocked(
+                    ReviewedDataAssetStageBlockReasonV1::UnsupportedTarget,
+                ),
+            );
+        }
+
+        let mut variants = Vec::new();
+        let mut selector = wolf_selector();
+        selector.class_path.push_str("NearMiss");
+        variants.push((selector, "class path"));
+        let mut selector = wolf_selector();
+        selector.object_name = "DA_HumanFootsteps".to_owned();
+        variants.push((selector, "object name"));
+        let mut selector = wolf_selector();
+        if let FixedLeafSelectorStep::Property { property_name, .. } = &mut selector.path[2] {
+            property_name.push_str("NearMiss");
+        }
+        variants.push((selector, "FeetTextureSize property"));
+        let mut selector = wolf_selector();
+        selector.kind = FixedWireKind::LinearColorF32x4;
+        variants.push((selector, "wire kind"));
+        let mut selector = wolf_selector();
+        selector.role = FixedLeafRole::MapKey;
+        variants.push((selector, "leaf role"));
+        let mut selector = wolf_selector();
+        selector.usmap_sha256 = "A".repeat(64);
+        variants.push((selector, "USMAP seal"));
+        let mut selector = wolf_selector();
+        selector.export_sha256 = "0".repeat(63);
+        variants.push((selector, "export seal"));
+
+        for (selector, fact) in variants {
+            assert_eq!(
+                evaluate_wolf(&selector, &replacement_hex),
+                ReviewedDataAssetStageEligibilityV1::Blocked(
+                    ReviewedDataAssetStageBlockReasonV1::SelectorMismatch { fact },
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_stage_requires_canonical_full_vector4_replacement_hex() {
+        let valid = vector4_hex([11.0, 12.0, 0.0, 1.0]);
+        for malformed in [
+            String::new(),
+            "00".repeat(31),
+            "gg".repeat(32),
+            valid.to_uppercase(),
+        ] {
+            assert_eq!(
+                evaluate_wolf(&wolf_selector(), &malformed),
+                ReviewedDataAssetStageEligibilityV1::Blocked(
+                    ReviewedDataAssetStageBlockReasonV1::MalformedReplacement,
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_stage_replacement_requires_finite_positive_x_and_y() {
+        for (components, reason) in [
+            (
+                [f64::NAN, 12.0, 0.0, 1.0],
+                ReviewedDataAssetStageBlockReasonV1::NonFiniteReplacementComponent {
+                    component: "x",
+                },
+            ),
+            (
+                [11.0, f64::INFINITY, 0.0, 1.0],
+                ReviewedDataAssetStageBlockReasonV1::NonFiniteReplacementComponent {
+                    component: "y",
+                },
+            ),
+            (
+                [0.0, 12.0, 0.0, 1.0],
+                ReviewedDataAssetStageBlockReasonV1::NonPositiveReplacementComponent {
+                    component: "x",
+                },
+            ),
+            (
+                [11.0, -1.0, 0.0, 1.0],
+                ReviewedDataAssetStageBlockReasonV1::NonPositiveReplacementComponent {
+                    component: "y",
+                },
+            ),
+        ] {
+            assert_eq!(
+                evaluate_wolf(&wolf_selector(), &vector4_hex(components)),
+                ReviewedDataAssetStageEligibilityV1::Blocked(reason),
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_stage_replacement_preserves_z_and_w_bits_and_is_not_a_noop() {
+        for (components, component) in [
+            ([11.0, 12.0, -0.0, 1.0], "z"),
+            ([11.0, 12.0, 0.0, 2.0], "w"),
+        ] {
+            assert_eq!(
+                evaluate_wolf(&wolf_selector(), &vector4_hex(components)),
+                ReviewedDataAssetStageEligibilityV1::Blocked(
+                    ReviewedDataAssetStageBlockReasonV1::PreservedComponentChanged { component },
+                ),
+            );
+        }
+        assert_eq!(
+            evaluate_wolf(&wolf_selector(), &vector4_hex([10.0, 10.0, 0.0, 1.0])),
+            ReviewedDataAssetStageEligibilityV1::Blocked(
+                ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation(
+                    ReviewedDataAssetErrorV1::NoChange,
+                ),
+            ),
+        );
+    }
+
+    #[test]
+    fn persisted_stage_reuses_current_vector_validation_from_reviewed_preparation() {
+        let mut selector = wolf_selector();
+        let mut expected: [u8; 32] = selector.expected_bytes().unwrap().try_into().unwrap();
+        expected[16..24].copy_from_slice(&f64::NAN.to_le_bytes());
+        selector.expected_hex = hex(&expected);
+        let mut replacement = expected;
+        replacement[..8].copy_from_slice(&11.0f64.to_le_bytes());
+        replacement[8..16].copy_from_slice(&12.0f64.to_le_bytes());
+        assert_eq!(
+            evaluate_wolf(&selector, &hex(&replacement)),
+            ReviewedDataAssetStageEligibilityV1::Blocked(
+                ReviewedDataAssetStageBlockReasonV1::ReviewedPreparation(
+                    ReviewedDataAssetErrorV1::NonFiniteCurrentComponent { component: "z" },
+                ),
+            ),
+        );
     }
 
     #[test]
