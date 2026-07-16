@@ -24,7 +24,8 @@ use sha2::{Digest, Sha256};
 use crate::package::BoundRegularFile;
 use crate::{
     FixedLeafPatch, FixedLeafPatchReceipt, FixedLeafSelector, FixedWireKind, LegacyPackageEnvelope,
-    PackageCarrier, PackageComponent, PackageLimits, PackagePairSeal, PropertySpanWalker, SchemaDb,
+    PackageCarrier, PackageComponent, PackageLimits, PackagePairSeal, PropertySpanWalker,
+    ReviewedDataAssetStageEligibilityV1, ReviewedFootstepPresetReplacementV1, SchemaDb,
     UsmapLimits,
 };
 
@@ -653,6 +654,332 @@ impl VerifiedFixedLeafStageInput {
         }
         Ok(())
     }
+}
+
+/// Untrusted, borrowed facts from one exact-current managed reviewed DataAsset stage.
+///
+/// This DTO deliberately owns no bytes and grants no authority. Its public fields make the FFI
+/// boundary explicit: every duplicated project, stage, review, and live-install fact is checked by
+/// [`verify_managed_offline_dataasset_package_v1`] before an opaque package is returned.
+pub struct UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'a> {
+    pub target_path: &'a str,
+    pub generation: &'a AssetGenerationReceipt,
+    pub persisted_selector: &'a FixedLeafSelector,
+    pub persisted_replacement_hex: &'a str,
+    pub patched_uasset: &'a [u8],
+    pub patched_uexp: &'a [u8],
+    pub usmap: &'a [u8],
+    pub sidecars: &'a [(SidecarRole, &'a [u8])],
+    pub expected_executable_length: u64,
+    pub expected_executable_sha256: [u8; 32],
+    pub reviewed: &'a ReviewedFootstepPresetReplacementV1,
+}
+
+impl fmt::Debug for UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sidecar_roles: Vec<_> = self.sidecars.iter().map(|(role, _)| *role).collect();
+        formatter
+            .debug_struct("UnverifiedBorrowedManagedReviewedDataAssetSourceV1")
+            .field("target_path", &self.target_path)
+            .field("generation", &self.generation)
+            .field("patched_uasset_bytes", &self.patched_uasset.len())
+            .field("patched_uexp_bytes", &self.patched_uexp.len())
+            .field("usmap_bytes", &self.usmap.len())
+            .field("sidecar_roles", &sidecar_roles)
+            .field(
+                "expected_executable_length",
+                &self.expected_executable_length,
+            )
+            .field(
+                "expected_executable_sha256",
+                &encode_hex(&self.expected_executable_sha256),
+            )
+            .field("reviewed", &self.reviewed)
+            .finish()
+    }
+}
+
+/// Exact reviewed package bytes independently replayed from the current installed generation.
+///
+/// Construction rechecks the managed Store facts against a fresh live conversion and retains
+/// private install/executable guards for a later staging boundary. The value has no `Clone`,
+/// serialization, filesystem-path, consuming-parts, build, deployment, or runtime API.
+pub struct VerifiedManagedOfflineDataAssetPackageV1<'a> {
+    target_path: &'a str,
+    generation: &'a AssetGenerationReceipt,
+    reviewed: &'a ReviewedFootstepPresetReplacementV1,
+    uasset: Vec<u8>,
+    uexp: Vec<u8>,
+    usmap: Vec<u8>,
+    replay_seal: PackagePairSeal,
+    game_root: PathBuf,
+    executable: VerifiedGameExecutableAnchor,
+}
+
+impl fmt::Debug for VerifiedManagedOfflineDataAssetPackageV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VerifiedManagedOfflineDataAssetPackageV1")
+            .field("target_path", &self.target_path)
+            .field("generation", &self.generation)
+            .field("reviewed", &self.reviewed)
+            .field("uasset_bytes", &self.uasset.len())
+            .field("uexp_bytes", &self.uexp.len())
+            .field("usmap_bytes", &self.usmap.len())
+            .field("replay_seal", &self.replay_seal)
+            .field("executable", &self.executable)
+            .finish()
+    }
+}
+
+impl<'a> VerifiedManagedOfflineDataAssetPackageV1<'a> {
+    pub fn target_path(&self) -> &str {
+        self.target_path
+    }
+
+    pub fn generation(&self) -> &AssetGenerationReceipt {
+        self.generation
+    }
+
+    pub fn reviewed(&self) -> &ReviewedFootstepPresetReplacementV1 {
+        self.reviewed
+    }
+
+    pub fn uasset_bytes(&self) -> &[u8] {
+        &self.uasset
+    }
+
+    pub fn uexp_bytes(&self) -> &[u8] {
+        &self.uexp
+    }
+
+    pub fn usmap_bytes(&self) -> &[u8] {
+        &self.usmap
+    }
+
+    pub fn replay_seal(&self) -> &PackagePairSeal {
+        &self.replay_seal
+    }
+
+    /// Recheck the retained executable and exact target generation without exposing either path.
+    pub fn reverify_live_authority(&self) -> Result<()> {
+        self.executable.reverify()?;
+        let current = probe_current_generation_receipt(
+            &self.game_root,
+            self.target_path,
+            self.generation,
+            "ASSET_MANAGED_OFFLINE_FINAL",
+        )?;
+        if &current != self.generation {
+            bail!("ASSET_MANAGED_OFFLINE_FINAL: live target generation changed after verification");
+        }
+        self.executable.reverify()
+    }
+}
+
+/// Independently replay one exact-current managed reviewed stage against the installed game.
+///
+/// `game_root` is used only as private live-verification authority. No caller-selected output path
+/// is accepted and this function never writes the game tree.
+pub fn verify_managed_offline_dataasset_package_v1<'a>(
+    game_root: &Path,
+    source: UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'a>,
+) -> Result<VerifiedManagedOfflineDataAssetPackageV1<'a>> {
+    verify_managed_offline_dataasset_package_v1_with_live_source(
+        game_root,
+        source,
+        |game_root, target_path| {
+            capture_live_converted_stage_source(
+                game_root,
+                target_path,
+                "ASSET_MANAGED_OFFLINE_GENERATION",
+            )
+        },
+        |game_root| {
+            let path = gore_tex::paths::usmap(game_root)
+                .context("ASSET_MANAGED_OFFLINE_USMAP: resolving exact live USMAP")?;
+            read_verified_file_bounded(&path, MAX_USMAP_BYTES, "ASSET_MANAGED_OFFLINE_USMAP")
+        },
+        |game_root, target_path, expected| {
+            probe_current_generation_receipt(
+                game_root,
+                target_path,
+                expected,
+                "ASSET_MANAGED_OFFLINE_FINAL",
+            )
+        },
+    )
+}
+
+fn verify_managed_offline_dataasset_package_v1_with_live_source<'a, F, U, G>(
+    game_root: &Path,
+    source: UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'a>,
+    live_source: F,
+    live_usmap_source: U,
+    final_generation_probe: G,
+) -> Result<VerifiedManagedOfflineDataAssetPackageV1<'a>>
+where
+    F: FnOnce(&Path, &str) -> Result<LiveConvertedStageSource>,
+    U: FnOnce(&Path) -> Result<VerifiedInput>,
+    G: FnOnce(&Path, &str, &AssetGenerationReceipt) -> Result<AssetGenerationReceipt>,
+{
+    validate_managed_offline_dataasset_source_v1(&source)?;
+
+    let game_root = normalize_game_install_root(game_root, "ASSET_MANAGED_OFFLINE_ROOT")?;
+    let executable = seal_game_executable(&game_root)?;
+    if executable.length() != source.expected_executable_length
+        || executable.sha256() != &source.expected_executable_sha256
+    {
+        bail!("ASSET_MANAGED_OFFLINE_EXECUTABLE: live executable differs from the managed project target");
+    }
+
+    let live = live_source(&game_root, source.target_path)
+        .context("ASSET_MANAGED_OFFLINE_GENERATION: independently converting live target")?;
+    if &live.generation != source.generation {
+        bail!("ASSET_MANAGED_OFFLINE_GENERATION: live target generation differs from the managed stage");
+    }
+    if !live.sidecars.is_empty() {
+        bail!("ASSET_MANAGED_OFFLINE_SIDECAR: reviewed package v1 does not support live sidecars");
+    }
+
+    let live_usmap = live_usmap_source(&game_root)
+        .context("ASSET_MANAGED_OFFLINE_USMAP: independently reading live USMAP")?;
+    if !live.generation.usmap.matches_verified_input(&live_usmap)
+        || live_usmap.bytes() != source.usmap
+    {
+        bail!("ASSET_MANAGED_OFFLINE_USMAP: live USMAP differs from the managed stage");
+    }
+    let schemas = SchemaDb::from_usmap_bounded(live_usmap.bytes(), UsmapLimits::default())
+        .context("ASSET_MANAGED_OFFLINE_USMAP: parsing exact live USMAP")?;
+
+    let LiveConvertedStageSource {
+        generation,
+        uasset,
+        uexp,
+        sidecars: _,
+    } = live;
+    let mut replayed = PackageCarrier::from_bytes(uasset, uexp, asset_package_limits())
+        .context("ASSET_MANAGED_OFFLINE_SOURCE_PAIR: loading freshly converted package")?;
+    if PackagePairSeal::capture(&replayed) != source.persisted_selector.package_seal {
+        bail!("ASSET_MANAGED_OFFLINE_SOURCE_PAIR: live vanilla pair differs from the reviewed selector snapshot");
+    }
+    apply_fixed_leaf_selector_patch(
+        &mut replayed,
+        &schemas,
+        source.persisted_selector,
+        source.reviewed.expected_bytes(),
+        source.reviewed.replacement_bytes(),
+    )
+    .context("ASSET_MANAGED_OFFLINE_REPLAY: replaying reviewed selector on live vanilla bytes")?;
+    if replayed.bytes(PackageComponent::Uasset) != source.patched_uasset
+        || replayed.bytes(PackageComponent::Uexp) != source.patched_uexp
+    {
+        bail!("ASSET_MANAGED_OFFLINE_PATCHED_PAIR: managed pair contains bytes outside the exact reviewed replay");
+    }
+    let replay_seal = PackagePairSeal::capture(&replayed);
+
+    verify_file_hash(
+        live_usmap.path(),
+        live_usmap.length(),
+        *live_usmap.sha256(),
+        MAX_USMAP_BYTES,
+        "ASSET_MANAGED_OFFLINE_USMAP",
+    )?;
+    let current_generation = final_generation_probe(&game_root, source.target_path, &generation)?;
+    if current_generation != generation {
+        bail!("ASSET_MANAGED_OFFLINE_FINAL: live target generation changed during verification");
+    }
+    executable.reverify()?;
+
+    let (uasset, uexp) = replayed.into_bytes();
+    Ok(VerifiedManagedOfflineDataAssetPackageV1 {
+        target_path: source.target_path,
+        generation: source.generation,
+        reviewed: source.reviewed,
+        uasset,
+        uexp,
+        usmap: live_usmap.bytes,
+        replay_seal,
+        game_root,
+        executable,
+    })
+}
+
+fn validate_managed_offline_dataasset_source_v1(
+    source: &UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'_>,
+) -> Result<()> {
+    const CODE: &str = "ASSET_MANAGED_OFFLINE_INPUT";
+    validate_game_asset_path(source.target_path, CODE)?;
+    validate_generation_receipt(source.generation, CODE)?;
+    if source.generation.asset != source.target_path {
+        bail!("{CODE}: target path differs from the managed generation");
+    }
+    if source.reviewed.target().target_path() != source.target_path {
+        bail!("{CODE}: target path differs from the reviewed intent");
+    }
+    if source.persisted_selector != source.reviewed.selector() {
+        bail!("{CODE}: persisted selector differs from the reviewed intent");
+    }
+    if source.persisted_replacement_hex != encode_hex(source.reviewed.replacement_bytes()) {
+        bail!("{CODE}: persisted replacement differs from the reviewed intent");
+    }
+    let expected = source
+        .persisted_selector
+        .expected_bytes()
+        .context("ASSET_MANAGED_OFFLINE_INPUT: decoding persisted selector expectation")?;
+    if expected.as_slice() != source.reviewed.expected_bytes() {
+        bail!("{CODE}: persisted selector expectation differs from the reviewed intent");
+    }
+    if source.persisted_selector.usmap_sha256 != source.generation.usmap.sha256 {
+        bail!("{CODE}: persisted selector USMAP differs from the managed generation");
+    }
+    match crate::evaluate_reviewed_dataasset_stage_v1(
+        source.target_path,
+        source.persisted_selector,
+        source.persisted_replacement_hex,
+    ) {
+        ReviewedDataAssetStageEligibilityV1::Eligible(rederived)
+            if rederived.as_ref() == source.reviewed => {}
+        ReviewedDataAssetStageEligibilityV1::Eligible(_) => {
+            bail!("{CODE}: supplied reviewed intent differs from exact stage re-derivation")
+        }
+        ReviewedDataAssetStageEligibilityV1::Blocked(reason) => {
+            bail!("{CODE}: managed stage is not an exact reviewed v1 edit: {reason}")
+        }
+    }
+    if !source.sidecars.is_empty() {
+        bail!("ASSET_MANAGED_OFFLINE_SIDECAR: reviewed package v1 does not support persisted sidecars");
+    }
+    validate_sidecar_generation_mapping(&[], source.generation, "ASSET_MANAGED_OFFLINE_SIDECAR")?;
+    if source.expected_executable_length == 0
+        || source.expected_executable_length > MAX_GAME_EXECUTABLE_BYTES
+    {
+        bail!("{CODE}: expected executable length is outside the supported range");
+    }
+
+    let limits = asset_package_limits();
+    let uasset_length = u64::try_from(source.patched_uasset.len())
+        .context("ASSET_MANAGED_OFFLINE_INPUT: uasset length overflowed")?;
+    let uexp_length = u64::try_from(source.patched_uexp.len())
+        .context("ASSET_MANAGED_OFFLINE_INPUT: uexp length overflowed")?;
+    let pair_length = uasset_length
+        .checked_add(uexp_length)
+        .context("ASSET_MANAGED_OFFLINE_INPUT: package pair length overflowed")?;
+    if uasset_length > limits.max_uasset_bytes
+        || uexp_length > limits.max_uexp_bytes
+        || pair_length > limits.max_total_bytes
+    {
+        bail!("{CODE}: persisted package pair exceeds managed size limits");
+    }
+    let usmap_length = u64::try_from(source.usmap.len())
+        .context("ASSET_MANAGED_OFFLINE_INPUT: USMAP length overflowed")?;
+    if usmap_length > MAX_USMAP_BYTES
+        || source.generation.usmap.length != usmap_length
+        || source.generation.usmap.sha256 != encode_hex(&Sha256::digest(source.usmap))
+    {
+        bail!("{CODE}: persisted USMAP differs from the managed generation seal");
+    }
+    Ok(())
 }
 
 /// Consume one verified PatchReceipt v2 and bind every file needed by managed staging.
@@ -1620,8 +1947,7 @@ fn capture_live_converted_stage_source(
 
     let pair = PackageCarrier::load(&unpacked.uasset, asset_package_limits())
         .with_context(|| format!("{code}: reopening freshly converted package"))?;
-    let uasset = pair.bytes(PackageComponent::Uasset).to_vec();
-    let uexp = pair.bytes(PackageComponent::Uexp).to_vec();
+    let (uasset, uexp) = pair.into_bytes();
     let mut cooked_bytes = u64::try_from(uasset.len())?
         .checked_add(u64::try_from(uexp.len())?)
         .context("ASSET_STAGE_GENERATION: converted package size overflowed")?;
@@ -1665,7 +1991,6 @@ fn capture_live_converted_stage_source(
         seal.reverify(limit, code)?;
     }
 
-    drop(pair);
     drop(unpacked);
     temp.close()
         .context("ASSET_STAGE_GENERATION: removing private conversion directory")?;
@@ -3240,7 +3565,8 @@ fn parse_chunk_id(value: &str) -> Option<[u8; 12]> {
 mod tests {
     use super::*;
     use crate::{
-        describe_fixed_leaves, FixedLeafRole, FIXED_LEAF_SELECTOR_FORMAT,
+        describe_fixed_leaves, prepare_reviewed_footstep_preset_size_v1, FixedLeafRole,
+        ReviewedFootstepPresetSizeV1, ReviewedFootstepPresetTargetV1, FIXED_LEAF_SELECTOR_FORMAT,
         FIXED_LEAF_SELECTOR_PROFILE,
     };
     use retoc::legacy_asset::{
@@ -3272,6 +3598,59 @@ mod tests {
         sidecar: Vec<u8>,
         generation: AssetGenerationReceipt,
         patch_path: PathBuf,
+    }
+
+    struct ManagedOfflineFixture {
+        _temp: tempfile::TempDir,
+        game_root: PathBuf,
+        executable_path: PathBuf,
+        usmap_path: PathBuf,
+        generation: AssetGenerationReceipt,
+        selector: FixedLeafSelector,
+        replacement_hex: String,
+        reviewed: ReviewedFootstepPresetReplacementV1,
+        original_uasset: Vec<u8>,
+        original_uexp: Vec<u8>,
+        patched_uasset: Vec<u8>,
+        patched_uexp: Vec<u8>,
+        usmap: Vec<u8>,
+        executable_sha256: [u8; 32],
+    }
+
+    impl ManagedOfflineFixture {
+        fn source(&self) -> UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'_> {
+            UnverifiedBorrowedManagedReviewedDataAssetSourceV1 {
+                target_path: ReviewedFootstepPresetTargetV1::Wolf.target_path(),
+                generation: &self.generation,
+                persisted_selector: &self.selector,
+                persisted_replacement_hex: &self.replacement_hex,
+                patched_uasset: &self.patched_uasset,
+                patched_uexp: &self.patched_uexp,
+                usmap: &self.usmap,
+                sidecars: &[],
+                expected_executable_length: fs::metadata(&self.executable_path).unwrap().len(),
+                expected_executable_sha256: self.executable_sha256,
+                reviewed: &self.reviewed,
+            }
+        }
+
+        fn live_source(&self) -> LiveConvertedStageSource {
+            LiveConvertedStageSource {
+                generation: self.generation.clone(),
+                uasset: self.original_uasset.clone(),
+                uexp: self.original_uexp.clone(),
+                sidecars: BTreeMap::new(),
+            }
+        }
+
+        fn live_usmap(&self) -> VerifiedInput {
+            read_verified_file_bounded(
+                &self.usmap_path,
+                MAX_USMAP_BYTES,
+                "TEST_MANAGED_OFFLINE_USMAP",
+            )
+            .unwrap()
+        }
     }
 
     fn sha256(bytes: &[u8]) -> [u8; 32] {
@@ -3317,6 +3696,223 @@ mod tests {
             toc_hash: "b2".repeat(20),
             toc_hash_bytes: 20,
         }
+    }
+
+    fn managed_offline_fixture() -> ManagedOfflineFixture {
+        let temp = tempfile::tempdir().unwrap();
+        let game_root = fs::canonicalize(temp.path()).unwrap();
+        let executable_path = game_root.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+        fs::create_dir_all(executable_path.parent().unwrap()).unwrap();
+        fs::write(&executable_path, b"managed offline fixture executable").unwrap();
+        let executable_sha256 = sha256(&fs::read(&executable_path).unwrap());
+
+        let usmap_path = game_root.join("G1R/Binaries/Win64/ue4ss/Mappings.usmap");
+        fs::create_dir_all(usmap_path.parent().unwrap()).unwrap();
+        crate::test_fixture::write_valid_usmap(&usmap_path).unwrap();
+        let usmap = fs::read(&usmap_path).unwrap();
+        let schemas = SchemaDb::from_usmap_bounded(&usmap, UsmapLimits::default()).unwrap();
+
+        let target = ReviewedFootstepPresetTargetV1::Wolf;
+        let mut package = FLegacyPackageHeader::default();
+        package.summary.versioning_info.package_file_version =
+            EngineVersion::UE5_4.package_file_version();
+        package.summary.versioning_info.is_unversioned = true;
+        package.summary.package_name = target.target_path().to_owned();
+        package.summary.package_flags = EPackageFlags::Cooked as u32
+            | EPackageFlags::FilterEditorOnly as u32
+            | EPackageFlags::UsesUnversionedProperties as u32;
+        let core_uobject = package.name_map.store("/Script/CoreUObject");
+        let package_class = package.name_map.store("Package");
+        let class_class = package.name_map.store("Class");
+        let module_name = package.name_map.store("/Script/G1R");
+        let class_name = package.name_map.store("FootstepTag");
+        let module_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: package_class,
+            object_name: module_name,
+            ..FObjectImport::default()
+        });
+        let class_index = package.imports.len();
+        package.imports.push(FObjectImport {
+            class_package: core_uobject,
+            class_name: class_class,
+            outer_index: FPackageIndex::create_import(module_index as u32),
+            object_name: class_name,
+            ..FObjectImport::default()
+        });
+        let object_name = package.name_map.store(target.object_name());
+        let mut original_uexp = vec![0x00, 0x00, 0x00, 0x00, 0x00, 0x05];
+        original_uexp.extend_from_slice(&[0x00, 0x09]);
+        for value in [10.0_f64, 10.0, 0.0, 1.0] {
+            original_uexp.extend_from_slice(&value.to_le_bytes());
+        }
+        original_uexp.extend_from_slice(&1_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&2_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&3_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&0_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&2_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&11_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&0_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&[0x80, 0x03, 0x01]);
+        original_uexp.extend_from_slice(&22_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&1_i32.to_le_bytes());
+        original_uexp.extend_from_slice(&[0x00, 0x03, 0x01]);
+        assert_eq!(original_uexp.len(), 82);
+        package.exports.push(FObjectExport {
+            class_index: FPackageIndex::create_import(class_index as u32),
+            object_name,
+            serial_offset: 0,
+            serial_size: original_uexp.len() as i64,
+            ..FObjectExport::default()
+        });
+        let mut serialized_header = Cursor::new(Vec::new());
+        package
+            .serialize(&mut serialized_header, None, &Log::no_log())
+            .unwrap();
+        let original_uasset = serialized_header.into_inner();
+        original_uexp.extend_from_slice(&[0_u8; 4]);
+        original_uexp.extend_from_slice(&FLegacyPackageFileSummary::PACKAGE_FILE_TAG.to_le_bytes());
+
+        let original = PackageCarrier::from_bytes(
+            original_uasset.clone(),
+            original_uexp.clone(),
+            asset_package_limits(),
+        )
+        .unwrap();
+        let selector = {
+            let envelope = LegacyPackageEnvelope::parse_g1r_ue5_4(&original).unwrap();
+            let export = envelope.export(0).unwrap();
+            describe_fixed_leaves(&original, &export, &schemas)
+                .unwrap()
+                .into_iter()
+                .find(|leaf| {
+                    leaf.editable
+                        && leaf.selector.kind == FixedWireKind::Vector4F64x4
+                        && leaf.selector.object_name == target.object_name()
+                })
+                .unwrap()
+                .selector
+        };
+        let reviewed = prepare_reviewed_footstep_preset_size_v1(
+            target.target_path(),
+            &selector,
+            ReviewedFootstepPresetSizeV1::try_new(11.0, 12.0).unwrap(),
+        )
+        .unwrap();
+        let replacement_hex = encode_hex(reviewed.replacement_bytes());
+        let mut patched = original;
+        apply_fixed_leaf_selector_patch(
+            &mut patched,
+            &schemas,
+            &selector,
+            reviewed.expected_bytes(),
+            reviewed.replacement_bytes(),
+        )
+        .unwrap();
+        let (patched_uasset, patched_uexp) = patched.into_bytes();
+
+        let main_anchor = GenerationFileAnchor {
+            file_name: "G1R-Windows.utoc".to_owned(),
+            length: 64,
+            sha256: "11".repeat(32),
+        };
+        let global_utoc_anchor = GenerationFileAnchor {
+            file_name: "global.utoc".to_owned(),
+            length: 32,
+            sha256: "22".repeat(32),
+        };
+        let global_ucas_anchor = GenerationFileAnchor {
+            file_name: "global.ucas".to_owned(),
+            length: 96,
+            sha256: "33".repeat(32),
+        };
+        let usmap_anchor = GenerationFileAnchor {
+            file_name: "Mappings.usmap".to_owned(),
+            length: usmap.len() as u64,
+            sha256: encode_hex(&sha256(&usmap)),
+        };
+        let mut container_set = vec![main_anchor.clone(), global_utoc_anchor.clone()];
+        container_set.sort_by(|left, right| {
+            left.file_name
+                .cmp(&right.file_name)
+                .then(left.sha256.cmp(&right.sha256))
+        });
+        let mut target_chunks = vec![
+            generation_chunk(target.target_path(), 1, "ContainerHeader", &main_anchor),
+            generation_chunk(target.target_path(), 2, "ExportBundleData", &main_anchor),
+        ];
+        target_chunks.sort_by(|left, right| {
+            left.chunk_id
+                .cmp(&right.chunk_id)
+                .then(left.chunk_type.cmp(&right.chunk_type))
+                .then(left.winner_utoc.file_name.cmp(&right.winner_utoc.file_name))
+        });
+        let generation = AssetGenerationReceipt {
+            format: "gore.asset.generation.v1".to_owned(),
+            asset: target.target_path().to_owned(),
+            usmap: usmap_anchor,
+            main_utoc: main_anchor,
+            global_utoc: global_utoc_anchor,
+            global_ucas: global_ucas_anchor,
+            container_set,
+            target_chunks,
+        };
+        validate_generation_receipt(&generation, "TEST_MANAGED_OFFLINE_GENERATION").unwrap();
+
+        ManagedOfflineFixture {
+            _temp: temp,
+            game_root,
+            executable_path,
+            usmap_path,
+            generation,
+            selector,
+            replacement_hex,
+            reviewed,
+            original_uasset,
+            original_uexp,
+            patched_uasset,
+            patched_uexp,
+            usmap,
+            executable_sha256,
+        }
+    }
+
+    fn snapshot_tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        fn visit(root: &Path, current: &Path, output: &mut BTreeMap<PathBuf, Vec<u8>>) {
+            for entry in fs::read_dir(current).unwrap() {
+                let entry = entry.unwrap();
+                let path = entry.path();
+                if entry.file_type().unwrap().is_dir() {
+                    visit(root, &path, output);
+                } else {
+                    output.insert(
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        fs::read(path).unwrap(),
+                    );
+                }
+            }
+        }
+
+        let mut output = BTreeMap::new();
+        visit(root, root, &mut output);
+        output
+    }
+
+    fn managed_offline_preflight_error(
+        source: UnverifiedBorrowedManagedReviewedDataAssetSourceV1<'_>,
+    ) -> String {
+        verify_managed_offline_dataasset_package_v1_with_live_source(
+            Path::new("managed offline invalid input must not touch disk"),
+            source,
+            |_root, _target| panic!("invalid source must fail before live conversion"),
+            |_root| panic!("invalid source must fail before reading live USMAP"),
+            |_root, _target, _expected| {
+                panic!("invalid source must fail before final generation probe")
+            },
+        )
+        .unwrap_err()
+        .to_string()
     }
 
     fn verified_chunk(chunk: &GenerationChunkAnchor, source_utoc: &Path) -> ReceiptVerifiedChunk {
@@ -4721,6 +5317,249 @@ mod tests {
                 || error.contains("outside the reproduced fixed-leaf edit"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn managed_offline_reviewed_stage_replays_exact_live_bytes_without_game_writes_or_pair_clones()
+    {
+        let fixture = managed_offline_fixture();
+        let before = snapshot_tree(&fixture.game_root);
+        let live = fixture.live_source();
+        let live_uasset_ptr = live.uasset.as_ptr();
+        let live_uexp_ptr = live.uexp.as_ptr();
+        let live_usmap = fixture.live_usmap();
+        let live_usmap_ptr = live_usmap.bytes.as_ptr();
+        let verified = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            move |_root, _target| Ok(live),
+            move |_root| Ok(live_usmap),
+            |_root, _target, expected| Ok(expected.clone()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            verified.target_path(),
+            ReviewedFootstepPresetTargetV1::Wolf.target_path()
+        );
+        assert_eq!(verified.generation(), &fixture.generation);
+        assert_eq!(verified.reviewed(), &fixture.reviewed);
+        assert_eq!(verified.uasset_bytes(), fixture.patched_uasset);
+        assert_eq!(verified.uexp_bytes(), fixture.patched_uexp);
+        assert_eq!(verified.usmap_bytes(), fixture.usmap);
+        assert_eq!(
+            verified.replay_seal(),
+            &PackagePairSeal {
+                uasset_sha256: sha256(&fixture.patched_uasset),
+                uexp_sha256: sha256(&fixture.patched_uexp),
+            }
+        );
+        assert_eq!(verified.uasset.as_ptr(), live_uasset_ptr);
+        assert_eq!(verified.uexp.as_ptr(), live_uexp_ptr);
+        assert_eq!(verified.usmap.as_ptr(), live_usmap_ptr);
+        assert_eq!(snapshot_tree(&fixture.game_root), before);
+        assert!(!format!("{verified:?}").contains(&fixture.game_root.display().to_string()));
+    }
+
+    #[test]
+    fn managed_offline_reviewed_stage_rejects_wrong_target_selector_replacement_and_review() {
+        let fixture = managed_offline_fixture();
+
+        let mut source = fixture.source();
+        source.target_path = ReviewedFootstepPresetTargetV1::Human.target_path();
+        assert!(managed_offline_preflight_error(source).contains("ASSET_MANAGED_OFFLINE_INPUT"));
+
+        let mut wrong_selector = fixture.selector.clone();
+        wrong_selector.export_index += 1;
+        let mut source = fixture.source();
+        source.persisted_selector = &wrong_selector;
+        assert!(managed_offline_preflight_error(source).contains("persisted selector"));
+
+        let wrong_replacement = "00".repeat(32);
+        let mut source = fixture.source();
+        source.persisted_replacement_hex = &wrong_replacement;
+        assert!(managed_offline_preflight_error(source).contains("persisted replacement"));
+
+        let wrong_review = prepare_reviewed_footstep_preset_size_v1(
+            ReviewedFootstepPresetTargetV1::Wolf.target_path(),
+            &fixture.selector,
+            ReviewedFootstepPresetSizeV1::try_new(13.0, 14.0).unwrap(),
+        )
+        .unwrap();
+        let mut source = fixture.source();
+        source.reviewed = &wrong_review;
+        assert!(managed_offline_preflight_error(source).contains("reviewed intent"));
+    }
+
+    #[test]
+    fn managed_offline_reviewed_stage_rejects_pair_usmap_sidecar_executable_and_generation_drift() {
+        let fixture = managed_offline_fixture();
+        let mut wrong_live = fixture.live_source();
+        wrong_live.uexp[8] ^= 0x01;
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            move |_root, _target| Ok(wrong_live),
+            |_root| Ok(fixture.live_usmap()),
+            |_root, _target, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ASSET_MANAGED_OFFLINE_SOURCE_PAIR"),
+            "{error}"
+        );
+
+        let fixture = managed_offline_fixture();
+        let wrong_usmap_path = fixture.game_root.join("wrong.usmap");
+        let mut wrong_usmap = fixture.usmap.clone();
+        *wrong_usmap.last_mut().unwrap() ^= 0x01;
+        fs::write(&wrong_usmap_path, wrong_usmap).unwrap();
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            |_root, _target| Ok(fixture.live_source()),
+            |_root| {
+                read_verified_file_bounded(&wrong_usmap_path, MAX_USMAP_BYTES, "TEST_WRONG_USMAP")
+            },
+            |_root, _target, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ASSET_MANAGED_OFFLINE_USMAP"), "{error}");
+
+        let fixture = managed_offline_fixture();
+        let mut wrong_live = fixture.live_source();
+        wrong_live.sidecars.insert(SidecarRole::Bulk, vec![0x01]);
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            move |_root, _target| Ok(wrong_live),
+            |_root| Ok(fixture.live_usmap()),
+            |_root, _target, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ASSET_MANAGED_OFFLINE_SIDECAR"), "{error}");
+
+        let fixture = managed_offline_fixture();
+        let mut source = fixture.source();
+        source.expected_executable_sha256 = [0xff; 32];
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            source,
+            |_root, _target| panic!("executable mismatch must precede live conversion"),
+            |_root| panic!("executable mismatch must precede live USMAP read"),
+            |_root, _target, _expected| panic!("executable mismatch must precede final probe"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ASSET_MANAGED_OFFLINE_EXECUTABLE"),
+            "{error}"
+        );
+
+        let fixture = managed_offline_fixture();
+        let mut wrong_live = fixture.live_source();
+        wrong_live.generation.target_chunks[0].length += 1;
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            move |_root, _target| Ok(wrong_live),
+            |_root| panic!("generation mismatch must precede live USMAP read"),
+            |_root, _target, _expected| panic!("generation mismatch must precede final probe"),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ASSET_MANAGED_OFFLINE_GENERATION"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn managed_offline_reviewed_stage_rejects_persisted_bytes_sidecars_and_final_drift() {
+        let fixture = managed_offline_fixture();
+        let mut wrong_patched_uexp = fixture.patched_uexp.clone();
+        *wrong_patched_uexp.last_mut().unwrap() ^= 0x01;
+        let mut source = fixture.source();
+        source.patched_uexp = &wrong_patched_uexp;
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            source,
+            |_root, _target| Ok(fixture.live_source()),
+            |_root| Ok(fixture.live_usmap()),
+            |_root, _target, expected| Ok(expected.clone()),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("ASSET_MANAGED_OFFLINE_PATCHED_PAIR"),
+            "{error}"
+        );
+
+        let persisted_sidecar_bytes = [0x01];
+        let persisted_sidecars = [(SidecarRole::Bulk, persisted_sidecar_bytes.as_slice())];
+        let mut source = fixture.source();
+        source.sidecars = &persisted_sidecars;
+        assert!(managed_offline_preflight_error(source).contains("ASSET_MANAGED_OFFLINE_SIDECAR"));
+
+        let fixture = managed_offline_fixture();
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            |_root, _target| Ok(fixture.live_source()),
+            |_root| Ok(fixture.live_usmap()),
+            |_root, _target, expected| {
+                let mut drifted = expected.clone();
+                drifted.target_chunks[0].length += 1;
+                Ok(drifted)
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("ASSET_MANAGED_OFFLINE_FINAL"), "{error}");
+
+        let fixture = managed_offline_fixture();
+        let executable_path = fixture.executable_path.clone();
+        let executable_length = fs::metadata(&executable_path).unwrap().len() as usize;
+        let error = verify_managed_offline_dataasset_package_v1_with_live_source(
+            &fixture.game_root,
+            fixture.source(),
+            |_root, _target| Ok(fixture.live_source()),
+            |_root| Ok(fixture.live_usmap()),
+            move |_root, _target, expected| {
+                fs::write(&executable_path, vec![b'x'; executable_length]).unwrap();
+                Ok(expected.clone())
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("EXECUTABLE") || error.contains("hash differs"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn managed_offline_verified_package_is_not_cloneable_or_serializable() {
+        trait AmbiguousIfClone<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+        impl<T: Clone> AmbiguousIfClone<u8> for T {}
+
+        trait AmbiguousIfSerialize<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+        impl<T: serde::Serialize + ?Sized> AmbiguousIfSerialize<u8> for T {}
+
+        let _ = <VerifiedManagedOfflineDataAssetPackageV1<'static> as AmbiguousIfClone<_>>::marker
+            as fn();
+        let _ =
+            <VerifiedManagedOfflineDataAssetPackageV1<'static> as AmbiguousIfSerialize<_>>::marker
+                as fn();
     }
 
     #[test]
