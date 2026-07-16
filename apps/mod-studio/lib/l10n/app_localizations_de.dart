@@ -664,6 +664,89 @@ class AppLocalizationsDe extends AppLocalizations {
   }
 
   @override
+  String get managedStoryWorkspaceRemovePairUnavailable =>
+      'Dieser Entwurf ist kein exakt entfernbares Paar aus Entwurf und generiertem Skript.';
+
+  @override
+  String get managedStoryWorkspaceRemoveBusy =>
+      'Eine andere Story-Aktion läuft noch.';
+
+  @override
+  String get managedStoryWorkspaceRemoveRequiresReopen =>
+      'Öffne dieses verwaltete Projekt erneut, bevor du einen Entwurf entfernst.';
+
+  @override
+  String managedStoryWorkspaceRemoveBlocked(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other:
+          'Zuerst müssen $count eingehende Projektreferenzen entfernt werden.',
+      one: 'Zuerst muss 1 eingehende Projektreferenz entfernt werden.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveDialogTitle =>
+      'Entwurf aus dem Projekt entfernen?';
+
+  @override
+  String managedStoryWorkspaceRemoveDialogSummary(
+    String draftName,
+    String scriptName,
+  ) {
+    return 'Der Entwurf ‚$draftName‘ und sein eindeutig zugeordnetes generiertes Skript ‚$scriptName‘ werden gemeinsam entfernt.';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveNoUndo =>
+      'Diese Aktion kann in Version 1 nicht rückgängig gemacht werden.';
+
+  @override
+  String get managedStoryWorkspaceRemoveBoundary =>
+      'Nur die aktuelle Projektregistrierung wird geändert. Spielinstallation und Spielstände bleiben unverändert.';
+
+  @override
+  String get managedStoryWorkspaceRemoveCancel => 'Abbrechen';
+
+  @override
+  String get managedStoryWorkspaceRemoveConfirm => 'Entwurf entfernen';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedTitle =>
+      'Der Entwurf wird noch referenziert';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedDescription =>
+      'Öffne jede Quelle unten und entferne ihre Projektreferenz, bevor du es erneut versuchst.';
+
+  @override
+  String managedStoryWorkspaceRemoveBlockerLabel(
+    String sourceName,
+    String role,
+  ) {
+    return '$sourceName · $role';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveOpenBlocker =>
+      'Referenzierende Quelle öffnen';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedClose => 'Schließen';
+
+  @override
+  String managedStoryWorkspaceRemoveSucceeded(String draftName) {
+    return '‚$draftName‘ und das generierte Skript wurden aus dem Projekt entfernt. Spieldateien und Spielstände wurden nicht geändert.';
+  }
+
+  @override
+  String managedStoryWorkspaceRemoveError(String error) {
+    return 'Der Entwurf wurde nicht entfernt. Die Story-Ansicht wurde ohne automatischen Neuversuch aktualisiert: $error';
+  }
+
+  @override
   String get managedSectionWorldDescription =>
       'Weltplatzierung und zugehörige Arbeitsabläufe sind geplant.';
 
@@ -1474,6 +1557,19 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedStoryWorkbenchInspectNpc =>
       'Profil & Compilerprüfungen öffnen';
+
+  @override
+  String get managedStoryWorkbenchMoreActions => 'Weitere Aktionen';
+
+  @override
+  String get managedStoryWorkbenchRemoveDraft => 'Entwurf entfernen…';
+
+  @override
+  String get managedStoryWorkbenchRemovingDraft => 'Entwurf wird entfernt…';
+
+  @override
+  String get managedStoryWorkbenchReviewRemovalBlockers =>
+      'Blockierende Referenzen prüfen';
 
   @override
   String get managedStoryWorkbenchCapabilityUnavailable =>

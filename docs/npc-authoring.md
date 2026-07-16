@@ -243,6 +243,35 @@ them, and removal of the entity removes its remembered tab state. The workbench
 adds no new project mutation, game/save access, build, deployment, spawn, or
 runtime authority.
 
+## Managed revision-3 NPC Draft removal V1
+
+The selected exact-current `NpcDraft` now exposes **Remove Draft...** directly
+from the responsive Workbench, including its compact details sheet. Studio
+derives the bound generated `ScriptModule` from the exact current content index
+and scans every projected reference before enabling confirmation. A local
+backlink, kind mismatch, unresolved or qualified ownership edge, or second
+owner blocks removal and can navigate to the exact source entity. A foreign-
+project reference that merely reuses the same 128-bit ID is not treated as a
+local backlink.
+
+Confirmation names the NPC and generated module, states that V1 has no undo,
+and explicitly leaves the game installation and saves unchanged. The pure
+`apply_revision3_story_draft_removal_transaction_v1` independently regenerates
+the NPC module, proves its generator/origin/payload owner and exact three-edge
+closure, advances the project once, removes exactly those two entities, and
+preserves every other entity plus the complete AssetStore. The strict
+`authoring_store_prepare_remove_revision3_story_draft_v1` FFI route fully opens
+the fixed basis, prepares and fully reopens an immutable candidate, and repeats
+fixed-head guards without replacing `gore-project.json`. Only the serialized
+managed session may publish by exact-head byte CAS and full published reopen.
+
+The successful workspace refresh cannot retain the removed NPC; it selects a
+deterministic remaining Story Draft or shows the empty state. There is no
+automatic retry. This operation performs no physical CAS/blob deletion,
+compiler/build/deploy work, game or save access, spawn change, or runtime
+qualification. Shared undo/history, restore, and general project deletion are
+still separate missing project fundamentals.
+
 ## Managed source/readiness profile
 
 `build_revision3_npc_source_inspection_plan_v1` is the pure, read-only native

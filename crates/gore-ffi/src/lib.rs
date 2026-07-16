@@ -94,6 +94,11 @@
 //!   either creates or exactly reuses its managed localization, then fully reopens an immutable
 //!   unpublished revision-3 checkpoint. It accepts no game root and grants no topic, build,
 //!   runtime, deployment, save, or fixed-head publication authority.
+//! - `authoring_store_prepare_remove_revision3_story_draft_v1` removes one exact-current managed
+//!   NPC/Quest Draft and its uniquely owned generated ScriptModule from an immutable candidate.
+//!   It preserves all other entities and AssetStore metadata, fully reopens the candidate, and
+//!   accepts no game, save, build, deployment, runtime, blob-deletion, or head-publication
+//!   authority.
 //! - `authoring_store_read_revision3_dialog_localization_edit_seed_v1` fully reopens one exact
 //!   current managed LocalizationEntry twice and returns its complete bounded texts plus only the
 //!   DialogLine/VoiceSlot impact facts needed by the editor.
@@ -199,6 +204,7 @@ mod authoring_story;
 mod authoring_story_build;
 mod authoring_story_catalog;
 mod authoring_story_compiler_revision3;
+mod authoring_story_draft_remove_revision3;
 mod authoring_story_inventory;
 mod authoring_story_npc_inspection_revision3;
 mod authoring_story_npc_revision3;
@@ -268,6 +274,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
+    authoring_story_draft_remove_revision3::COMMAND,
     "authoring_store_prepare_revision3_checkpoint",
     "authoring_store_prepare_revision3_dataasset_edit_v1",
     "authoring_store_prepare_revision3_dataasset_stage_v1",
@@ -578,6 +585,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_prepare_remove_revision3_dataasset_stage_v1" => {
             Some(authoring_dataasset_revision3::prepare_remove_raw)
         }
+        authoring_story_draft_remove_revision3::COMMAND => Some(
+            authoring_story_draft_remove_revision3::prepare_revision3_story_draft_removal_v1_raw,
+        ),
         "authoring_store_prepare_revision3_dataasset_edit_v1" => {
             Some(authoring_dataasset_revision3::prepare_edit_raw)
         }
@@ -1703,6 +1713,7 @@ mod tests {
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
+                    "authoring_store_prepare_remove_revision3_story_draft_v1",
                     "authoring_store_prepare_revision3_checkpoint",
                     "authoring_store_prepare_revision3_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
@@ -1816,6 +1827,9 @@ mod tests {
         assert!(commands.iter().any(
             |command| command == "authoring_store_prepare_remove_revision3_dataasset_stage_v1"
         ));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_remove_revision3_story_draft_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_dataasset_edit_v1"));

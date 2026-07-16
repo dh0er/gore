@@ -646,6 +646,88 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get managedStoryWorkspaceRemovePairUnavailable =>
+      'This draft is not an exact removable draft and generated-script pair.';
+
+  @override
+  String get managedStoryWorkspaceRemoveBusy =>
+      'Another Story action is still in progress.';
+
+  @override
+  String get managedStoryWorkspaceRemoveRequiresReopen =>
+      'Reopen this managed project before removing a draft.';
+
+  @override
+  String managedStoryWorkspaceRemoveBlocked(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count incoming project references must be removed first.',
+      one: '1 incoming project reference must be removed first.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveDialogTitle =>
+      'Remove draft from project?';
+
+  @override
+  String managedStoryWorkspaceRemoveDialogSummary(
+    String draftName,
+    String scriptName,
+  ) {
+    return 'This removes the draft \'$draftName\' together with its uniquely owned generated script \'$scriptName\'.';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveNoUndo =>
+      'This removal cannot be undone in version 1.';
+
+  @override
+  String get managedStoryWorkspaceRemoveBoundary =>
+      'Only the current project registry is changed. The game installation and save games stay unchanged.';
+
+  @override
+  String get managedStoryWorkspaceRemoveCancel => 'Cancel';
+
+  @override
+  String get managedStoryWorkspaceRemoveConfirm => 'Remove draft';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedTitle =>
+      'Draft is still referenced';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedDescription =>
+      'Open every source below and remove its project reference before trying again.';
+
+  @override
+  String managedStoryWorkspaceRemoveBlockerLabel(
+    String sourceName,
+    String role,
+  ) {
+    return '$sourceName · $role';
+  }
+
+  @override
+  String get managedStoryWorkspaceRemoveOpenBlocker =>
+      'Open referencing source';
+
+  @override
+  String get managedStoryWorkspaceRemoveBlockedClose => 'Close';
+
+  @override
+  String managedStoryWorkspaceRemoveSucceeded(String draftName) {
+    return 'Removed \'$draftName\' and its generated script from the project. Game files and save games were not changed.';
+  }
+
+  @override
+  String managedStoryWorkspaceRemoveError(String error) {
+    return 'The draft was not removed. The Story view was refreshed without retrying automatically: $error';
+  }
+
+  @override
   String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
 
   @override
@@ -1404,6 +1486,19 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get managedStoryWorkbenchInspectNpc => '打开档案和编译器检查';
+
+  @override
+  String get managedStoryWorkbenchMoreActions => 'More actions';
+
+  @override
+  String get managedStoryWorkbenchRemoveDraft => 'Remove draft…';
+
+  @override
+  String get managedStoryWorkbenchRemovingDraft => 'Removing draft…';
+
+  @override
+  String get managedStoryWorkbenchReviewRemovalBlockers =>
+      'Review removal blockers';
 
   @override
   String get managedStoryWorkbenchCapabilityUnavailable => '尚未建模';

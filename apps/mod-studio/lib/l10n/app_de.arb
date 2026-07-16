@@ -206,6 +206,44 @@
   "@managedStoryWorkspaceDetailsSheetLabel": {
     "placeholders": {"entityName": {"type": "String"}}
   },
+  "managedStoryWorkspaceRemovePairUnavailable": "Dieser Entwurf ist kein exakt entfernbares Paar aus Entwurf und generiertem Skript.",
+  "managedStoryWorkspaceRemoveBusy": "Eine andere Story-Aktion läuft noch.",
+  "managedStoryWorkspaceRemoveRequiresReopen": "Öffne dieses verwaltete Projekt erneut, bevor du einen Entwurf entfernst.",
+  "managedStoryWorkspaceRemoveBlocked": "{count, plural, =1{Zuerst muss 1 eingehende Projektreferenz entfernt werden.} other{Zuerst müssen {count} eingehende Projektreferenzen entfernt werden.}}",
+  "@managedStoryWorkspaceRemoveBlocked": {
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "managedStoryWorkspaceRemoveDialogTitle": "Entwurf aus dem Projekt entfernen?",
+  "managedStoryWorkspaceRemoveDialogSummary": "Der Entwurf ‚{draftName}‘ und sein eindeutig zugeordnetes generiertes Skript ‚{scriptName}‘ werden gemeinsam entfernt.",
+  "@managedStoryWorkspaceRemoveDialogSummary": {
+    "placeholders": {
+      "draftName": {"type": "String"},
+      "scriptName": {"type": "String"}
+    }
+  },
+  "managedStoryWorkspaceRemoveNoUndo": "Diese Aktion kann in Version 1 nicht rückgängig gemacht werden.",
+  "managedStoryWorkspaceRemoveBoundary": "Nur die aktuelle Projektregistrierung wird geändert. Spielinstallation und Spielstände bleiben unverändert.",
+  "managedStoryWorkspaceRemoveCancel": "Abbrechen",
+  "managedStoryWorkspaceRemoveConfirm": "Entwurf entfernen",
+  "managedStoryWorkspaceRemoveBlockedTitle": "Der Entwurf wird noch referenziert",
+  "managedStoryWorkspaceRemoveBlockedDescription": "Öffne jede Quelle unten und entferne ihre Projektreferenz, bevor du es erneut versuchst.",
+  "managedStoryWorkspaceRemoveBlockerLabel": "{sourceName} · {role}",
+  "@managedStoryWorkspaceRemoveBlockerLabel": {
+    "placeholders": {
+      "sourceName": {"type": "String"},
+      "role": {"type": "String"}
+    }
+  },
+  "managedStoryWorkspaceRemoveOpenBlocker": "Referenzierende Quelle öffnen",
+  "managedStoryWorkspaceRemoveBlockedClose": "Schließen",
+  "managedStoryWorkspaceRemoveSucceeded": "‚{draftName}‘ und das generierte Skript wurden aus dem Projekt entfernt. Spieldateien und Spielstände wurden nicht geändert.",
+  "@managedStoryWorkspaceRemoveSucceeded": {
+    "placeholders": {"draftName": {"type": "String"}}
+  },
+  "managedStoryWorkspaceRemoveError": "Der Entwurf wurde nicht entfernt. Die Story-Ansicht wurde ohne automatischen Neuversuch aktualisiert: {error}",
+  "@managedStoryWorkspaceRemoveError": {
+    "placeholders": {"error": {"type": "String"}}
+  },
   "managedSectionWorldDescription": "Weltplatzierung und zugehörige Arbeitsabläufe sind geplant.",
   "managedSectionLocalizationVoiceDescription": "Schreibe und übersetze Projektdialoge an einem Ort und arbeite anschließend direkt an der Sprachausgabe weiter.",
   "managedLocalizationProjectTextsLabel": "Projekttexte",
@@ -445,6 +483,10 @@
   "managedStoryWorkbenchEditLogic": "Zustände & Übergänge bearbeiten",
   "managedStoryWorkbenchInspectQuest": "Quelltext & Compilerprüfungen öffnen",
   "managedStoryWorkbenchInspectNpc": "Profil & Compilerprüfungen öffnen",
+  "managedStoryWorkbenchMoreActions": "Weitere Aktionen",
+  "managedStoryWorkbenchRemoveDraft": "Entwurf entfernen…",
+  "managedStoryWorkbenchRemovingDraft": "Entwurf wird entfernt…",
+  "managedStoryWorkbenchReviewRemovalBlockers": "Blockierende Referenzen prüfen",
   "managedStoryWorkbenchCapabilityUnavailable": "Noch nicht modelliert",
   "managedStoryWorkbenchNpcStoryUnavailable": "Quest- und Story-Beziehungen sind für NPC-Entwürfe noch nicht modelliert.",
   "managedStoryWorkbenchNpcRoutineUnavailable": "Routine und Platzierung in der Welt sind noch nicht modelliert.",

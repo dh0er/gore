@@ -329,6 +329,36 @@ clears it, and a removed Quest cannot retain stale tab state. This UI adds no
 new mutation beyond the reused atomic callbacks and grants no game/save, build,
 deploy, runtime, or publication authority.
 
+### Managed revision-3 Quest Draft removal V1
+
+The selected exact-current `QuestDraft` now exposes **Remove Draft...** directly
+from the responsive Workbench and compact details sheet. Studio derives its
+generated `ScriptModule` from the exact current content index and scans all
+projected references before confirmation. Any local backlink, kind mismatch,
+unresolved or qualified ownership edge, or additional owner blocks the
+operation and can navigate to the exact source entity. A foreign-project
+reference that only shares the same 128-bit ID is not a local backlink.
+
+The confirmation names both the Quest and generated module, states that V1 has
+no undo, and explicitly leaves game files and saves unchanged. The shared pure
+`apply_revision3_story_draft_removal_transaction_v1` independently regenerates
+the exact Quest module, proves generator/origin/payload ownership and the exact
+three-edge closure, increments the project once, removes exactly the Draft and
+module, and preserves all other entities plus the complete AssetStore,
+including retained Quest collision-artifact metadata. The strict
+`authoring_store_prepare_remove_revision3_story_draft_v1` route fully opens the
+fixed basis, prepares and fully reopens only an immutable candidate, and repeats
+fixed-head guards without publishing `gore-project.json`. The serialized
+managed session alone may publish through exact-head byte CAS and a full
+published reopen.
+
+After success the Story workspace refreshes without retaining the removed
+Quest and selects a deterministic remaining Story Draft or its empty state.
+There is no automatic retry. Removal performs no physical CAS/blob garbage
+collection, compiler/build/deploy work, game or save access, Quest-state
+transition, or runtime qualification. Shared undo/history, restore, and
+project-wide deletion remain separate missing fundamentals.
+
 ### Managed revision-3 existing-Quest outline edit V1
 
 The managed R3 Story Workbench exposes **Edit name & objectives** from the

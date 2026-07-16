@@ -403,6 +403,44 @@
   "@managedStoryWorkspaceDetailsSheetLabel": {
     "placeholders": {"entityName": {"type": "String"}}
   },
+  "managedStoryWorkspaceRemovePairUnavailable": "This draft is not an exact removable draft and generated-script pair.",
+  "managedStoryWorkspaceRemoveBusy": "Another Story action is still in progress.",
+  "managedStoryWorkspaceRemoveRequiresReopen": "Reopen this managed project before removing a draft.",
+  "managedStoryWorkspaceRemoveBlocked": "{count, plural, =1{1 incoming project reference must be removed first.} other{{count} incoming project references must be removed first.}}",
+  "@managedStoryWorkspaceRemoveBlocked": {
+    "placeholders": {"count": {"type": "int"}}
+  },
+  "managedStoryWorkspaceRemoveDialogTitle": "Remove draft from project?",
+  "managedStoryWorkspaceRemoveDialogSummary": "This removes the draft '{draftName}' together with its uniquely owned generated script '{scriptName}'.",
+  "@managedStoryWorkspaceRemoveDialogSummary": {
+    "placeholders": {
+      "draftName": {"type": "String"},
+      "scriptName": {"type": "String"}
+    }
+  },
+  "managedStoryWorkspaceRemoveNoUndo": "This removal cannot be undone in version 1.",
+  "managedStoryWorkspaceRemoveBoundary": "Only the current project registry is changed. The game installation and save games stay unchanged.",
+  "managedStoryWorkspaceRemoveCancel": "Cancel",
+  "managedStoryWorkspaceRemoveConfirm": "Remove draft",
+  "managedStoryWorkspaceRemoveBlockedTitle": "Draft is still referenced",
+  "managedStoryWorkspaceRemoveBlockedDescription": "Open every source below and remove its project reference before trying again.",
+  "managedStoryWorkspaceRemoveBlockerLabel": "{sourceName} · {role}",
+  "@managedStoryWorkspaceRemoveBlockerLabel": {
+    "placeholders": {
+      "sourceName": {"type": "String"},
+      "role": {"type": "String"}
+    }
+  },
+  "managedStoryWorkspaceRemoveOpenBlocker": "Open referencing source",
+  "managedStoryWorkspaceRemoveBlockedClose": "Close",
+  "managedStoryWorkspaceRemoveSucceeded": "Removed '{draftName}' and its generated script from the project. Game files and save games were not changed.",
+  "@managedStoryWorkspaceRemoveSucceeded": {
+    "placeholders": {"draftName": {"type": "String"}}
+  },
+  "managedStoryWorkspaceRemoveError": "The draft was not removed. The Story view was refreshed without retrying automatically: {error}",
+  "@managedStoryWorkspaceRemoveError": {
+    "placeholders": {"error": {"type": "String"}}
+  },
   "managedSectionWorldDescription": "World placement and workflows are planned.",
   "managedSectionLocalizationVoiceDescription": "Write and translate project dialog in one place, then continue with voice work.",
   "managedLocalizationProjectTextsLabel": "Project texts",
@@ -642,6 +680,10 @@
   "managedStoryWorkbenchEditLogic": "Edit states & transitions",
   "managedStoryWorkbenchInspectQuest": "Open source & compiler checks",
   "managedStoryWorkbenchInspectNpc": "Open profile & compiler checks",
+  "managedStoryWorkbenchMoreActions": "More actions",
+  "managedStoryWorkbenchRemoveDraft": "Remove draft…",
+  "managedStoryWorkbenchRemovingDraft": "Removing draft…",
+  "managedStoryWorkbenchReviewRemovalBlockers": "Review removal blockers",
   "managedStoryWorkbenchCapabilityUnavailable": "Not modeled yet",
   "managedStoryWorkbenchNpcStoryUnavailable": "Quest and story relationships are not modeled for NPC drafts yet.",
   "managedStoryWorkbenchNpcRoutineUnavailable": "Routine and world placement are not modeled yet.",

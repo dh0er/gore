@@ -1052,6 +1052,62 @@ class _HomePageState extends ConsumerState<HomePage>
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          removeStoryDraft: _projectActionBusy || currentProject.requiresReopen
+              ? null
+              : ({
+                  required index,
+                  required draft,
+                  required scriptModule,
+                }) async {
+                  final draftKind = switch (draft.kind) {
+                    Revision3ContentEntityKind.npcDraft =>
+                      AuthoringStoryDraftKind.npcDraft,
+                    Revision3ContentEntityKind.questDraft =>
+                      AuthoringStoryDraftKind.questDraft,
+                    _ => throw const FormatException(
+                      'Story Draft removal received a non-Story entity.',
+                    ),
+                  };
+                  if (index.projectId != currentProject.projectId ||
+                      index.projectRevision != currentProject.projectRevision ||
+                      scriptModule.kind !=
+                          Revision3ContentEntityKind.scriptModule) {
+                    throw const Revision3StoryDraftRemovalStaleCheckpointException();
+                  }
+                  final publication = await ref
+                      .read(currentProjectCoordinatorProvider.notifier)
+                      .removeCurrentRevision3StoryDraft(
+                        expectedRoot: currentProject.root.path,
+                        expectedProjectId: currentProject.projectId,
+                        expectedProjectRevision: currentProject.projectRevision,
+                        expectedHead: currentProject.head,
+                        draftId: draft.id,
+                        draftKind: draftKind,
+                        expectedDraftRevision: draft.revision,
+                        scriptModuleId: scriptModule.id,
+                        expectedScriptModuleRevision: scriptModule.revision,
+                      );
+                  if (publication.projectId != currentProject.projectId ||
+                      publication.projectRevision !=
+                          currentProject.projectRevision + 1 ||
+                      publication.head.canonicalJson ==
+                          currentProject.head.canonicalJson ||
+                      publication.removedDraftId != draft.id ||
+                      publication.removedDraftKind != draftKind ||
+                      publication.removedDraftRevision != draft.revision ||
+                      publication.removedScriptModuleId != scriptModule.id ||
+                      publication.removedScriptModuleRevision !=
+                          scriptModule.revision) {
+                    throw const FormatException(
+                      'Story Draft removal publication disagrees with the confirmed pair.',
+                    );
+                  }
+                },
+          removeStoryDraftDisabledReason: currentProject.requiresReopen
+              ? l10n.managedStoryWorkspaceRemoveRequiresReopen
+              : _projectActionBusy
+              ? l10n.managedStoryWorkspaceRemoveBusy
+              : null,
           loadBaseGameCatalog: ref.read(
             revision3BaseGameContentCatalogLoaderProvider,
           ),
@@ -1721,6 +1777,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
+    required this.removeStoryDraft,
+    required this.removeStoryDraftDisabledReason,
     required this.loadBaseGameCatalog,
     required this.readDialogLocalization,
     required this.loadDialogLocalizationEditSeed,
@@ -1772,6 +1830,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3StoryWorkspaceRemoveDraftAction? removeStoryDraft;
+  final String? removeStoryDraftDisabledReason;
   final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
   final Revision3DialogLineEntryLocalizationReader readDialogLocalization;
   final Revision3DialogLocalizationEditSeedLoader
@@ -1834,6 +1894,10 @@ class _ManagedRevision3ProjectViewState
   String? get gameRoot => widget.gameRoot;
   Future<void> Function() get verifyCurrentHead => widget.verifyCurrentHead;
   Revision3ContentIndexLoader get loadContentIndex => widget.loadContentIndex;
+  Revision3StoryWorkspaceRemoveDraftAction? get removeStoryDraft =>
+      widget.removeStoryDraft;
+  String? get removeStoryDraftDisabledReason =>
+      widget.removeStoryDraftDisabledReason;
   Revision3BaseGameContentCatalogLoader get loadBaseGameCatalog =>
       widget.loadBaseGameCatalog;
   Revision3DialogLineEntryLocalizationReader get readDialogLocalization =>
@@ -2677,6 +2741,8 @@ class _ManagedRevision3ProjectViewState
       load: loadContentIndex,
       copy: _storyWorkspaceCopy(l10n),
       controller: _storyWorkspaceController,
+      removeDraft: removeStoryDraft,
+      removeDraftDisabledReason: removeStoryDraftDisabledReason,
       createNpcDraft: gameConfigured
           ? () => _openNpcWizard(context, selectPublishedInStory: true)
           : null,
@@ -3591,6 +3657,10 @@ Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
   editLogic: l10n.managedStoryWorkbenchEditLogic,
   inspectQuest: l10n.managedStoryWorkbenchInspectQuest,
   inspectNpc: l10n.managedStoryWorkbenchInspectNpc,
+  moreActions: l10n.managedStoryWorkbenchMoreActions,
+  removeDraft: l10n.managedStoryWorkbenchRemoveDraft,
+  removingDraft: l10n.managedStoryWorkbenchRemovingDraft,
+  reviewRemovalBlockers: l10n.managedStoryWorkbenchReviewRemovalBlockers,
   capabilityUnavailable: l10n.managedStoryWorkbenchCapabilityUnavailable,
   npcStoryUnavailable: l10n.managedStoryWorkbenchNpcStoryUnavailable,
   npcRoutineUnavailable: l10n.managedStoryWorkbenchNpcRoutineUnavailable,
@@ -3651,6 +3721,25 @@ Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>
       createErrorDetails: (error) =>
           l10n.managedStoryWorkspaceCreateErrorDetails('$error'),
       detailsSheetLabel: l10n.managedStoryWorkspaceDetailsSheetLabel,
+      removeDraftPairUnavailable:
+          l10n.managedStoryWorkspaceRemovePairUnavailable,
+      removeDraftBusy: l10n.managedStoryWorkspaceRemoveBusy,
+      removeDraftBlocked: l10n.managedStoryWorkspaceRemoveBlocked,
+      removeDraftDialogTitle: l10n.managedStoryWorkspaceRemoveDialogTitle,
+      removeDraftDialogSummary: l10n.managedStoryWorkspaceRemoveDialogSummary,
+      removeDraftNoUndo: l10n.managedStoryWorkspaceRemoveNoUndo,
+      removeDraftBoundary: l10n.managedStoryWorkspaceRemoveBoundary,
+      removeDraftCancel: l10n.managedStoryWorkspaceRemoveCancel,
+      removeDraftConfirm: l10n.managedStoryWorkspaceRemoveConfirm,
+      removeDraftBlockedTitle: l10n.managedStoryWorkspaceRemoveBlockedTitle,
+      removeDraftBlockedDescription:
+          l10n.managedStoryWorkspaceRemoveBlockedDescription,
+      removeDraftBlockerLabel: l10n.managedStoryWorkspaceRemoveBlockerLabel,
+      removeDraftOpenBlocker: l10n.managedStoryWorkspaceRemoveOpenBlocker,
+      removeDraftBlockedClose: l10n.managedStoryWorkspaceRemoveBlockedClose,
+      removeDraftSucceeded: l10n.managedStoryWorkspaceRemoveSucceeded,
+      removeDraftErrorDetails: (error) =>
+          l10n.managedStoryWorkspaceRemoveError('$error'),
       workbench: _storyWorkbenchCopy(l10n),
     );
 

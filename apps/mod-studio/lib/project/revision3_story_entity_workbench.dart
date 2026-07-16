@@ -32,6 +32,10 @@ final class Revision3StoryEntityWorkbenchCopy {
     required this.editLogic,
     required this.inspectQuest,
     required this.inspectNpc,
+    required this.moreActions,
+    required this.removeDraft,
+    required this.removingDraft,
+    required this.reviewRemovalBlockers,
     required this.capabilityUnavailable,
     required this.npcStoryUnavailable,
     required this.npcRoutineUnavailable,
@@ -82,6 +86,10 @@ final class Revision3StoryEntityWorkbenchCopy {
       editLogic = 'Edit states & transitions',
       inspectQuest = 'Open source & compiler checks',
       inspectNpc = 'Open profile & compiler checks',
+      moreActions = 'More actions',
+      removeDraft = 'Remove draft…',
+      removingDraft = 'Removing draft…',
+      reviewRemovalBlockers = 'Review removal blockers',
       capabilityUnavailable = 'Not modeled yet',
       npcStoryUnavailable =
           'Quest and story relationships are not modeled for NPC drafts yet.',
@@ -137,6 +145,10 @@ final class Revision3StoryEntityWorkbenchCopy {
   final String editLogic;
   final String inspectQuest;
   final String inspectNpc;
+  final String moreActions;
+  final String removeDraft;
+  final String removingDraft;
+  final String reviewRemovalBlockers;
   final String capabilityUnavailable;
   final String npcStoryUnavailable;
   final String npcRoutineUnavailable;
@@ -189,6 +201,10 @@ final class Revision3StoryEntityWorkbenchActions {
     this.editLogicDisabledReason,
     this.inspectQuestDisabledReason,
     this.inspectNpcDisabledReason,
+    this.removeDraft,
+    this.reviewRemovalBlockers,
+    this.removeDraftDisabledReason,
+    this.removingDraft = false,
   });
 
   final ValueChanged<String> openEntity;
@@ -203,7 +219,13 @@ final class Revision3StoryEntityWorkbenchActions {
   final String? editLogicDisabledReason;
   final String? inspectQuestDisabledReason;
   final String? inspectNpcDisabledReason;
+  final Revision3StoryWorkbenchAction? removeDraft;
+  final Revision3StoryWorkbenchAction? reviewRemovalBlockers;
+  final String? removeDraftDisabledReason;
+  final bool removingDraft;
 }
+
+enum _Revision3StoryWorkbenchMenuAction { removeDraft, reviewRemovalBlockers }
 
 enum Revision3StoryWorkbenchSection {
   overview,
@@ -341,6 +363,80 @@ class _Revision3StoryEntityWorkbenchState
                           ),
                         ],
                       ),
+                    ),
+                    const SizedBox(width: 8),
+                    PopupMenuButton<_Revision3StoryWorkbenchMenuAction>(
+                      key: Key('revision3-story-workbench-more-${entity.id}'),
+                      tooltip: copy.moreActions,
+                      onSelected: (action) {
+                        switch (action) {
+                          case _Revision3StoryWorkbenchMenuAction.removeDraft:
+                            widget.actions.removeDraft?.call();
+                          case _Revision3StoryWorkbenchMenuAction
+                              .reviewRemovalBlockers:
+                            widget.actions.reviewRemovalBlockers?.call();
+                        }
+                      },
+                      itemBuilder: (context) => [
+                        PopupMenuItem<_Revision3StoryWorkbenchMenuAction>(
+                          key: Key(
+                            'revision3-story-workbench-remove-${entity.id}',
+                          ),
+                          value: _Revision3StoryWorkbenchMenuAction.removeDraft,
+                          enabled: widget.actions.removeDraft != null,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(Icons.delete_outline),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      widget.actions.removingDraft
+                                          ? copy.removingDraft
+                                          : copy.removeDraft,
+                                    ),
+                                    if (widget.actions.removeDraft == null &&
+                                        widget
+                                                .actions
+                                                .removeDraftDisabledReason !=
+                                            null) ...[
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        widget
+                                            .actions
+                                            .removeDraftDisabledReason!,
+                                        style: Theme.of(
+                                          context,
+                                        ).textTheme.bodySmall,
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (widget.actions.reviewRemovalBlockers != null)
+                          PopupMenuItem<_Revision3StoryWorkbenchMenuAction>(
+                            key: Key(
+                              'revision3-story-workbench-review-remove-blockers-${entity.id}',
+                            ),
+                            value: _Revision3StoryWorkbenchMenuAction
+                                .reviewRemovalBlockers,
+                            child: Row(
+                              children: [
+                                const Icon(Icons.link_off_outlined),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(copy.reviewRemovalBlockers),
+                                ),
+                              ],
+                            ),
+                          ),
+                      ],
                     ),
                   ],
                 ),

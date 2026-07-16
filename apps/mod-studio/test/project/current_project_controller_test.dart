@@ -5434,6 +5434,334 @@ void main() {
     },
   );
 
+  for (final kind in AuthoringStoryDraftKind.values) {
+    test(
+      '${kind.wireName} removal binds the exact visible tuple and refreshes state',
+      () async {
+        final managed = _FakeStoryDraftRemovalManagedLease(
+          root: Directory('managed-story-remove-${kind.wireName}'),
+          projectIdValue: revision3VoiceFixtureProjectId,
+          projectRevision: 7,
+          head: _head(7),
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        final visible = await coordinator.openManagedRevision3(managed.root);
+        final draftId = kind == AuthoringStoryDraftKind.npcDraft
+            ? '11111111111111111111111111111111'
+            : '22222222222222222222222222222222';
+        final moduleId = kind == AuthoringStoryDraftKind.npcDraft
+            ? '33333333333333333333333333333333'
+            : '44444444444444444444444444444444';
+
+        final publication = await coordinator.removeCurrentRevision3StoryDraft(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          draftId: draftId,
+          draftKind: kind,
+          expectedDraftRevision: 3,
+          scriptModuleId: moduleId,
+          expectedScriptModuleRevision: 4,
+        );
+
+        expect(publication.head.canonicalJson, _head(8).canonicalJson);
+        expect(publication.projectRevision, 8);
+        expect(publication.removedDraftId, draftId);
+        expect(publication.removedDraftKind, kind);
+        expect(publication.removedScriptModuleId, moduleId);
+        expect(managed.storyDraftRemovalCalls, 1);
+        expect(managed.receivedDraftIds, <String>[draftId]);
+        expect(managed.receivedDraftKinds, <AuthoringStoryDraftKind>[kind]);
+        final refreshed =
+            coordinator.state as ManagedRevision3CurrentProjectState;
+        expect(refreshed.projectRevision, 8);
+        expect(refreshed.head.canonicalJson, _head(8).canonicalJson);
+        expect(refreshed.requiresReopen, isFalse);
+      },
+    );
+  }
+
+  test(
+    'Story Draft removal rejects stale, unsupported, and disabled capabilities before mutation',
+    () async {
+      final managed = _FakeStoryDraftRemovalManagedLease(
+        root: Directory('managed-story-remove-stale'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3StoryDraft(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: 6,
+          expectedHead: _head(6),
+          draftId: '11111111111111111111111111111111',
+          draftKind: AuthoringStoryDraftKind.npcDraft,
+          expectedDraftRevision: 3,
+          scriptModuleId: '33333333333333333333333333333333',
+          expectedScriptModuleRevision: 4,
+        ),
+        throwsA(isA<Revision3StoryDraftRemovalStaleCheckpointException>()),
+      );
+      expect(managed.storyDraftRemovalCalls, 0);
+
+      final unsupported = _FakeManagedLease(
+        root: Directory('managed-story-remove-unsupported'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final unsupportedCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => unsupported,
+      );
+      addTearDown(() async {
+        await unsupportedCoordinator.shutdown();
+        unsupportedCoordinator.dispose();
+      });
+      final unsupportedVisible = await unsupportedCoordinator
+          .openManagedRevision3(unsupported.root);
+      await expectLater(
+        unsupportedCoordinator.removeCurrentRevision3StoryDraft(
+          expectedRoot: unsupportedVisible.root.path,
+          expectedProjectId: unsupportedVisible.projectId,
+          expectedProjectRevision: unsupportedVisible.projectRevision,
+          expectedHead: unsupportedVisible.head,
+          draftId: '11111111111111111111111111111111',
+          draftKind: AuthoringStoryDraftKind.npcDraft,
+          expectedDraftRevision: 3,
+          scriptModuleId: '33333333333333333333333333333333',
+          expectedScriptModuleRevision: 4,
+        ),
+        throwsA(isA<Revision3StoryDraftRemovalUnsupportedException>()),
+      );
+
+      final disabled = _FakeStoryDraftRemovalManagedLease(
+        root: Directory('managed-story-remove-disabled'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        supportsRemoval: false,
+      );
+      final disabledCoordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => disabled,
+      );
+      addTearDown(() async {
+        await disabledCoordinator.shutdown();
+        disabledCoordinator.dispose();
+      });
+      final disabledVisible = await disabledCoordinator.openManagedRevision3(
+        disabled.root,
+      );
+      await expectLater(
+        disabledCoordinator.removeCurrentRevision3StoryDraft(
+          expectedRoot: disabledVisible.root.path,
+          expectedProjectId: disabledVisible.projectId,
+          expectedProjectRevision: disabledVisible.projectRevision,
+          expectedHead: disabledVisible.head,
+          draftId: '11111111111111111111111111111111',
+          draftKind: AuthoringStoryDraftKind.npcDraft,
+          expectedDraftRevision: 3,
+          scriptModuleId: '33333333333333333333333333333333',
+          expectedScriptModuleRevision: 4,
+        ),
+        throwsA(isA<Revision3StoryDraftRemovalUnsupportedException>()),
+      );
+      expect(disabled.storyDraftRemovalCalls, 0);
+    },
+  );
+
+  test(
+    'every correctable Story Draft removal code is a retryable rejection',
+    () async {
+      const codes = <String>{
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_TARGET_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_OWNERSHIP_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REFERENCE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_INVALID',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+      };
+      final managed = _FakeStoryDraftRemovalManagedLease(
+        root: Directory('managed-story-remove-retryable'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      for (final code in codes) {
+        final native = ModFfiException(
+          command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+          code: code,
+          message: 'correctable fake rejection',
+        );
+        managed.nextStoryDraftRemovalError = native;
+        await expectLater(
+          coordinator.removeCurrentRevision3StoryDraft(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            draftId: '11111111111111111111111111111111',
+            draftKind: AuthoringStoryDraftKind.npcDraft,
+            expectedDraftRevision: 3,
+            scriptModuleId: '33333333333333333333333333333333',
+            expectedScriptModuleRevision: 4,
+          ),
+          throwsA(
+            isA<Revision3StoryDraftRemovalRejectedException>()
+                .having((error) => error.code, 'code', code)
+                .having((error) => error.cause, 'cause', same(native)),
+          ),
+        );
+        expect(managed.requiresReopen, isFalse, reason: code);
+        expect(managed.storyDraftRemovalRelatchCalls, 0, reason: code);
+      }
+    },
+  );
+
+  test(
+    'uncertain Story Draft removal failures always latch requires-reopen',
+    () async {
+      const codes = <String>{
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_MISSING',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_INVALID',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INVARIANT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_STORE_IO',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_FUTURE_UNKNOWN',
+      };
+      for (final code in codes) {
+        final managed = _FakeStoryDraftRemovalManagedLease(
+          root: Directory('managed-story-remove-poison-$code'),
+          projectIdValue: revision3VoiceFixtureProjectId,
+          projectRevision: 7,
+          head: _head(7),
+          nextStoryDraftRemovalError: ModFfiException(
+            command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+            code: code,
+            message: 'uncertain fake failure',
+          ),
+        );
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        addTearDown(() async {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        });
+        final visible = await coordinator.openManagedRevision3(managed.root);
+
+        await expectLater(
+          coordinator.removeCurrentRevision3StoryDraft(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            draftId: '11111111111111111111111111111111',
+            draftKind: AuthoringStoryDraftKind.npcDraft,
+            expectedDraftRevision: 3,
+            scriptModuleId: '33333333333333333333333333333333',
+            expectedScriptModuleRevision: 4,
+          ),
+          throwsA(
+            isA<Revision3StoryDraftRemovalRequiresReopenException>().having(
+              (error) => error.cause,
+              'cause',
+              isA<ModFfiException>().having(
+                (error) => error.code,
+                'code',
+                code,
+              ),
+            ),
+          ),
+        );
+        expect(managed.requiresReopen, isTrue, reason: code);
+        expect(managed.storyDraftRemovalRelatchCalls, 1, reason: code);
+        expect(
+          (coordinator.state as ManagedRevision3CurrentProjectState)
+              .requiresReopen,
+          isTrue,
+          reason: code,
+        );
+      }
+    },
+  );
+
+  test(
+    'Story Draft removal receipt mismatch is post-publication uncertainty',
+    () async {
+      final managed = _FakeStoryDraftRemovalManagedLease(
+        root: Directory('managed-story-remove-receipt-mismatch'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        receiptMismatch: true,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3StoryDraft(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          draftId: '11111111111111111111111111111111',
+          draftKind: AuthoringStoryDraftKind.npcDraft,
+          expectedDraftRevision: 3,
+          scriptModuleId: '33333333333333333333333333333333',
+          expectedScriptModuleRevision: 4,
+        ),
+        throwsA(isA<Revision3StoryDraftRemovalRequiresReopenException>()),
+      );
+      expect(managed.projectRevision, 8);
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.storyDraftRemovalRelatchCalls, 1);
+    },
+  );
+
   test('content read rejects absent and legacy current projects', () async {
     final empty = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => throw UnimplementedError(),
@@ -6505,6 +6833,67 @@ final class _FakeExportManagedLease extends _FakeManagedLease
     exportCalls++;
     exportOutputs.add(output);
     return onExport(this, output);
+  }
+}
+
+final class _FakeStoryDraftRemovalManagedLease extends _FakeManagedLease
+    implements ManagedRevision3StoryDraftRemovalLease {
+  _FakeStoryDraftRemovalManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    this.supportsRemoval = true,
+    this.receiptMismatch = false,
+    this.nextStoryDraftRemovalError,
+  });
+
+  final bool supportsRemoval;
+  final bool receiptMismatch;
+  Object? nextStoryDraftRemovalError;
+  int storyDraftRemovalCalls = 0;
+  int storyDraftRemovalRelatchCalls = 0;
+  final List<String> receivedDraftIds = <String>[];
+  final List<AuthoringStoryDraftKind> receivedDraftKinds =
+      <AuthoringStoryDraftKind>[];
+
+  @override
+  bool get supportsStoryDraftRemoval => supportsRemoval;
+
+  @override
+  void markRequiresReopenAfterStoryDraftRemovalUncertainty() {
+    storyDraftRemovalRelatchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3StoryDraftRemovalPublication>
+  prepareAndPublishRemoveStoryDraftV1({
+    required String draftId,
+    required AuthoringStoryDraftKind draftKind,
+    required int expectedDraftRevision,
+    required String scriptModuleId,
+    required int expectedScriptModuleRevision,
+  }) async {
+    storyDraftRemovalCalls++;
+    receivedDraftIds.add(draftId);
+    receivedDraftKinds.add(draftKind);
+    final injected = nextStoryDraftRemovalError;
+    nextStoryDraftRemovalError = null;
+    if (injected != null) throw injected;
+
+    projectRevision++;
+    head = _head(projectRevision);
+    return Revision3StoryDraftRemovalPublication(
+      head: receiptMismatch ? _head(99) : head,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      removedDraftId: draftId,
+      removedDraftKind: draftKind,
+      removedDraftRevision: expectedDraftRevision,
+      removedScriptModuleId: scriptModuleId,
+      removedScriptModuleRevision: expectedScriptModuleRevision,
+    );
   }
 }
 

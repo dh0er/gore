@@ -30,6 +30,7 @@ mod story_transaction_revision3_npc;
 mod story_transaction_revision3_quest_outline;
 mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transitions;
+mod story_transaction_revision3_removal;
 mod story_transaction_revision3_voice;
 mod story_transaction_revision3_voice_selection;
 mod story_transaction_revision3_voice_take_status;
@@ -269,6 +270,16 @@ pub use story_transaction_revision3_quest_transitions::{
     Revision3QuestTransitionPlanEditRuntimeStatusV1, Revision3QuestTransitionPlanSealErrorV1,
     MAX_REVISION3_QUEST_TRANSITION_PLAN_EDIT_REQUEST_JSON_BYTES_V1,
     MAX_REVISION3_QUEST_TRANSITION_PLAN_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_removal::{
+    apply_revision3_story_draft_removal_transaction_v1,
+    Revision3StoryDraftRemovalArtifactAuthorityV1, Revision3StoryDraftRemovalBuildStatusV1,
+    Revision3StoryDraftRemovalConflictV1, Revision3StoryDraftRemovalErrorV1,
+    Revision3StoryDraftRemovalEvaluationV1, Revision3StoryDraftRemovalKindV1,
+    Revision3StoryDraftRemovalOutcomeV1, Revision3StoryDraftRemovalPublicationStatusV1,
+    Revision3StoryDraftRemovalRejectionV1, Revision3StoryDraftRemovalRequestJsonErrorV1,
+    Revision3StoryDraftRemovalRequestV1, Revision3StoryDraftRemovalRuntimeStatusV1,
+    MAX_REVISION3_STORY_DRAFT_REMOVAL_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_voice::{
     apply_revision3_voice_take_transaction_v1, preflight_revision3_voice_take_transaction_v1,

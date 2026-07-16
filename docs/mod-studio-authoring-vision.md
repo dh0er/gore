@@ -76,6 +76,21 @@ been consolidated:
   is a UI projection over the existing managed session and grants no additional
   mutation, build, deploy, runtime, game, or save authority. The useful Legacy
   tabs remain the migration baseline and are unchanged.
+- A selected exact-current managed NPC or Quest Draft now exposes one direct
+  **Remove Draft...** action in both wide and compact Story workbenches. The
+  Studio derives the complete two-entity closure from the current content
+  index, blocks local backlinks, kind mismatches, or additional ownership, and
+  routes a blocker to its exact source entity. Confirmation names both the
+  Draft and its generated ScriptModule and states that V1 has no undo while the
+  game installation and saves remain unchanged. The pure native transaction
+  independently proves the exact three-edge ownership closure, deterministic
+  module regeneration, and preservation of every other entity plus the full
+  AssetStore. Its strict FFI prepares and fully reopens only an immutable
+  unpublished candidate; the serialized managed session alone may publish by
+  fixed-head CAS and full reopen. This is semantic project deletion only: it
+  performs no blob garbage collection, build, deploy, game/save access, or
+  runtime action, and project-wide deletion plus shared undo/history remain
+  missing.
 - Managed R3 **Validate & Test** now hosts bounded **Problems & Readiness V1**.
   It derives unresolved entity and asset references from the exact-current
   content index, loads the managed DataAsset-stage registry independently, and

@@ -563,6 +563,35 @@ final class ManagedRevision3DataAssetStageRemovalCheckpoint {
   final AuthoringRevision3DataAssetStage removed;
 }
 
+/// One exact Story Draft removal returned only after native preparation, full
+/// candidate reopen, fixed-head CAS publication, and full published reopen.
+/// Its uniquely-owned generated ScriptModule is removed in the same atomic
+/// project revision; no build, runtime, artifact, or native publication
+/// authority is implied.
+final class ManagedRevision3StoryDraftRemovalCheckpoint {
+  const ManagedRevision3StoryDraftRemovalCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.removedDraftId,
+    required this.removedDraftKind,
+    required this.removedDraftRevision,
+    required this.removedScriptModuleId,
+    required this.removedScriptModuleRevision,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String removedDraftId;
+  final AuthoringStoryDraftKind removedDraftKind;
+  final int removedDraftRevision;
+  final String removedScriptModuleId;
+  final int removedScriptModuleRevision;
+}
+
 /// Narrow seam over the native managed-store document API.
 ///
 /// The interface keeps session durability and ordering independently testable;
@@ -882,11 +911,24 @@ abstract interface class ManagedRevision3ExactSnapshotExportStore {
   });
 }
 
+/// Narrow capability for preparing the exact removal of one Story Draft and
+/// its uniquely-owned generated ScriptModule. Keeping it separate avoids
+/// granting deletion authority to checkpoint-only alternate stores and fakes.
+abstract interface class ManagedRevision3StoryDraftRemovalStore {
+  Future<AuthoringRevision3StoryDraftRemovalPreparation>
+  prepareRemoveStoryDraftV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3StoryDraftRemovalRequestV1 request,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
         ManagedRevision3ReviewedDataAssetBuildStore,
-        ManagedRevision3ExactSnapshotExportStore {
+        ManagedRevision3ExactSnapshotExportStore,
+        ManagedRevision3StoryDraftRemovalStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1305,6 +1347,18 @@ final class ModFfiManagedRevision3AuthoringStore
     expectedHead: expectedHead,
     targetPath: targetPath,
   );
+
+  @override
+  Future<AuthoringRevision3StoryDraftRemovalPreparation>
+  prepareRemoveStoryDraftV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3StoryDraftRemovalRequestV1 request,
+  }) => ffi.authoringStorePrepareRemoveRevision3StoryDraftV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
 }
 
 final class _ManagedOpenedCheckpoint {
@@ -1613,6 +1667,8 @@ class ManagedRevision3AuthoringProjectSession {
       _core.supportsReviewedDataAssetBuild;
   bool get supportsExactSnapshotExport =>
       _store is ManagedRevision3ExactSnapshotExportStore;
+  bool get supportsStoryDraftRemoval =>
+      _store is ManagedRevision3StoryDraftRemovalStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -3147,6 +3203,111 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Remove one exact NPC/Quest Draft together with only its uniquely-owned
+  /// generated ScriptModule. Preparation remains unpublished until the
+  /// candidate passes the ordinary full-reopen and fixed-head CAS lane.
+  Future<ManagedRevision3StoryDraftRemovalCheckpoint>
+  prepareAndPublishRemoveStoryDraftV1({
+    required String draftId,
+    required AuthoringStoryDraftKind draftKind,
+    required int expectedDraftRevision,
+    required String scriptModuleId,
+    required int expectedScriptModuleRevision,
+  }) {
+    final removalStore = _store;
+    if (removalStore is! ManagedRevision3StoryDraftRemovalStore) {
+      return Future<ManagedRevision3StoryDraftRemovalCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Story Draft removal capability',
+        ),
+      );
+    }
+    final removalCapability =
+        removalStore as ManagedRevision3StoryDraftRemovalStore;
+    if (!_managedRevision3CompilerIdPattern.hasMatch(draftId) ||
+        draftId == _managedRevision3CompilerZeroId ||
+        !_managedRevision3CompilerIdPattern.hasMatch(scriptModuleId) ||
+        scriptModuleId == _managedRevision3CompilerZeroId ||
+        draftId == scriptModuleId ||
+        expectedDraftRevision < 0 ||
+        expectedDraftRevision > 0x7fffffffffffffff ||
+        expectedScriptModuleRevision < 0 ||
+        expectedScriptModuleRevision > 0x7fffffffffffffff) {
+      return Future<ManagedRevision3StoryDraftRemovalCheckpoint>.error(
+        ArgumentError(
+          'Story Draft removal requires distinct nonzero IDs and signed-safe revisions',
+        ),
+      );
+    }
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3StoryDraftRemovalCheckpoint
+    >(
+      operation: 'prepareAndPublishRemoveStoryDraftV1',
+      handlePrepareError: _core._throwRevision3StoryDraftRemovalError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Story Draft removal has no exact project identity',
+          );
+        }
+        if (projectRevision >= 0x7fffffffffffffff) {
+          throw const ModFfiException(
+            command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+            code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+            message:
+                'Story Draft removal cannot advance the signed wire revision',
+          );
+        }
+        final request = AuthoringRevision3StoryDraftRemovalRequestV1.forProject(
+          currentProjectJson: basis.projectJson,
+          expectedHead: basis.head,
+          draftId: draftId,
+          draftKind: draftKind,
+          expectedDraftRevision: expectedDraftRevision,
+          scriptModuleId: scriptModuleId,
+          expectedScriptModuleRevision: expectedScriptModuleRevision,
+        );
+        final prepared = await removalCapability.prepareRemoveStoryDraftV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.removedDraft.id != draftId ||
+            prepared.removedDraft.kind != draftKind ||
+            prepared.removedDraft.revision != expectedDraftRevision ||
+            prepared.removedScriptModule.id != scriptModuleId ||
+            prepared.removedScriptModule.revision !=
+                expectedScriptModuleRevision) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Story Draft removal disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3StoryDraftRemovalCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3StoryDraftRemovalCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            removedDraftId: prepared.removedDraft.id,
+            removedDraftKind: prepared.removedDraft.kind,
+            removedDraftRevision: prepared.removedDraft.revision,
+            removedScriptModuleId: prepared.removedScriptModule.id,
+            removedScriptModuleRevision: prepared.removedScriptModule.revision,
+          ),
+        );
+      },
+    );
+  }
 
   /// Derive one private effective transition-plan seed from this session's
   /// exact canonical project. Legacy plans are synthesized deterministically;
@@ -5068,6 +5229,49 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3StoryDraftRemovalError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3StoryDraftRemovalErrorIsRetryable(error.code)) {
+        // These closed semantic/capacity conflicts happen before fixed-head
+        // publication. The exact disk head was rechecked by the caller.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      // Malformed responses, Store/invariant failures, and every future
+      // unknown code are uncertain and permanently remove authoring authority
+      // until verified recovery/reopen.
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError) {
+      // Local path/envelope preflight completes before native preparation.
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Story Draft removal could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DataAssetError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT') {
@@ -5885,6 +6089,25 @@ bool _revision3ContentReadErrorRequiresReopen(String code) => const {
   'AUTHORING_REVISION3_CONTENT_STORE_PATH_UNSAFE',
   'AUTHORING_REVISION3_CONTENT_STORE_ROOT_MISSING',
   'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
+}.contains(code);
+
+bool _revision3StoryDraftRemovalErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_OWNERSHIP_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_REFERENCED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_REFERENCED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_INVALID',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
 }.contains(code);
 
 bool _revision3DataAssetErrorIsRetryable(String code) => const {

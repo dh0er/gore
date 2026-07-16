@@ -149,9 +149,24 @@ inline list/workbench split; compact or short hosts use the same workbench in a
 details sheet. Same-project revisions retain only a still-existing selection
 and supported tab, a newly published Draft is selected only at its exact
 revision, and non-Story references open their exact Content owner. This adds no
-new authoring transaction, build, deploy, runtime, game, or save authority. It
+new authority merely by projecting the workspace. It
 does not start World work, and the unchanged Legacy tabs remain the usability
 baseline until their managed replacements are comparably direct and capable.
+
+Story removal addendum (2026-07-16): a selected managed NPC or Quest Draft now
+has a direct **Remove Draft...** action in the same wide workbench and compact
+details sheet. Before confirmation, Studio derives the exact Draft/generated-
+module pair from the current index and presents any local backlink, mistyped
+reference, or second ownership claim as a navigable blocker. The confirmation
+uses both friendly names and explicitly says there is no undo in V1 while game
+files and saves stay untouched. Native code independently accepts only the
+exact current two-entity ownership closure, removes only that pair, preserves
+all other entities and the complete AssetStore, and returns an unpublished
+fully reopened candidate. The managed session performs the fixed-head publish
+and full reopen; the workspace then refreshes and selects a deterministic
+survivor or its empty state without automatic retry. This is a first safe
+semantic deletion primitive, not general undo/history, project deletion, blob
+garbage collection, build/deploy, or runtime behavior.
 
 DataAsset status addendum (updated 2026-07-16): the managed installed-package
 browser supplies a normal typed fixed-leaf route alongside the retained

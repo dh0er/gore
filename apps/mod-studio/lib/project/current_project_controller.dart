@@ -191,6 +191,88 @@ const _revision3ProjectExportDestinationRetryCodes = <String>{
   'AUTHORING_REVISION3_EXPORT_OUTPUT_INVALID',
 };
 
+/// Exact managed checkpoint returned after removing one Story Draft and its
+/// uniquely-owned generated ScriptModule. This is project-storage evidence
+/// only and grants no build, runtime, artifact, deployment, or native
+/// publication authority.
+final class Revision3StoryDraftRemovalPublication {
+  const Revision3StoryDraftRemovalPublication({
+    required this.head,
+    required this.projectId,
+    required this.projectRevision,
+    required this.removedDraftId,
+    required this.removedDraftKind,
+    required this.removedDraftRevision,
+    required this.removedScriptModuleId,
+    required this.removedScriptModuleRevision,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectId;
+  final int projectRevision;
+  final String removedDraftId;
+  final AuthoringStoryDraftKind removedDraftKind;
+  final int removedDraftRevision;
+  final String removedScriptModuleId;
+  final int removedScriptModuleRevision;
+}
+
+final class Revision3StoryDraftRemovalStaleCheckpointException
+    extends CurrentProjectCoordinatorException {
+  const Revision3StoryDraftRemovalStaleCheckpointException()
+    : super(
+        'the managed project changed before Story Draft removal could start',
+      );
+}
+
+final class Revision3StoryDraftRemovalRequiresReopenException
+    extends CurrentProjectCoordinatorException {
+  const Revision3StoryDraftRemovalRequiresReopenException({this.cause})
+    : super(
+        'the managed project must be recovered or reopened before removing a Story Draft',
+      );
+
+  final Object? cause;
+}
+
+final class Revision3StoryDraftRemovalUnsupportedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3StoryDraftRemovalUnsupportedException()
+    : super('this current project cannot remove Story Drafts safely');
+}
+
+/// A closed prepublication conflict that the author may correct and retry
+/// after refreshing the exact current content index.
+final class Revision3StoryDraftRemovalRejectedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3StoryDraftRemovalRejectedException({
+    required this.code,
+    required this.cause,
+  }) : super('the Story Draft removal request was rejected before publication');
+
+  final String? code;
+  final Object cause;
+}
+
+const _revision3StoryDraftRemovalCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_OWNERSHIP_CONFLICT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_REFERENCED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_REFERENCED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_INVALID',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+};
+
 final class ManagedRevision3ProjectCreationException
     extends CurrentProjectCoordinatorException {
   const ManagedRevision3ProjectCreationException(super.message);
@@ -508,6 +590,24 @@ abstract interface class ManagedRevision3ProjectExportLease {
   });
 }
 
+/// Optional exact-current Story Draft deletion authority. The explicit
+/// capability bit and fail-closed latch keep unrelated alternate leases and
+/// test doubles from accidentally claiming destructive authoring support.
+abstract interface class ManagedRevision3StoryDraftRemovalLease {
+  bool get supportsStoryDraftRemoval;
+
+  void markRequiresReopenAfterStoryDraftRemovalUncertainty();
+
+  Future<Revision3StoryDraftRemovalPublication>
+  prepareAndPublishRemoveStoryDraftV1({
+    required String draftId,
+    required AuthoringStoryDraftKind draftKind,
+    required int expectedDraftRevision,
+    required String scriptModuleId,
+    required int expectedScriptModuleRevision,
+  });
+}
+
 typedef ManagedRevision3CurrentProjectOpener =
     Future<ManagedRevision3CurrentProjectLease> Function(Directory root);
 
@@ -619,7 +719,8 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3RecoveryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
-        ManagedRevision3ProjectExportLease {
+        ManagedRevision3ProjectExportLease,
+        ManagedRevision3StoryDraftRemovalLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -658,6 +759,13 @@ final class _ManagedRevision3SessionLease
 
   @override
   bool get supportsExactSnapshotExport => _session.supportsExactSnapshotExport;
+
+  @override
+  bool get supportsStoryDraftRemoval => _session.supportsStoryDraftRemoval;
+
+  @override
+  void markRequiresReopenAfterStoryDraftRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
   Future<AuthoringRevision3ExactSnapshotExportResult> exportExactSnapshotV1({
@@ -1168,6 +1276,34 @@ final class _ManagedRevision3SessionLease
       projectId: checkpoint.projectId,
       projectRevision: checkpoint.projectRevision,
       removed: checkpoint.removed,
+    );
+  }
+
+  @override
+  Future<Revision3StoryDraftRemovalPublication>
+  prepareAndPublishRemoveStoryDraftV1({
+    required String draftId,
+    required AuthoringStoryDraftKind draftKind,
+    required int expectedDraftRevision,
+    required String scriptModuleId,
+    required int expectedScriptModuleRevision,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishRemoveStoryDraftV1(
+      draftId: draftId,
+      draftKind: draftKind,
+      expectedDraftRevision: expectedDraftRevision,
+      scriptModuleId: scriptModuleId,
+      expectedScriptModuleRevision: expectedScriptModuleRevision,
+    );
+    return Revision3StoryDraftRemovalPublication(
+      head: checkpoint.head,
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      removedDraftId: checkpoint.removedDraftId,
+      removedDraftKind: checkpoint.removedDraftKind,
+      removedDraftRevision: checkpoint.removedDraftRevision,
+      removedScriptModuleId: checkpoint.removedScriptModuleId,
+      removedScriptModuleRevision: checkpoint.removedScriptModuleRevision,
     );
   }
 
@@ -3826,6 +3962,122 @@ final class CurrentProjectCoordinator
         'AUTHORING_REVISION3_DATAASSET_INPUT_MISSING',
         'AUTHORING_REVISION3_DATAASSET_INPUT_UNSAFE',
       }.contains(code);
+
+  /// Remove one exact NPC/Quest Draft and only its uniquely-owned generated
+  /// ScriptModule through the managed full-reopen and fixed-head CAS lane.
+  Future<Revision3StoryDraftRemovalPublication>
+  removeCurrentRevision3StoryDraft({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String draftId,
+    required AuthoringStoryDraftKind draftKind,
+    required int expectedDraftRevision,
+    required String scriptModuleId,
+    required int expectedScriptModuleRevision,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3StoryDraftRemovalUnsupportedException();
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3StoryDraftRemovalRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3StoryDraftRemovalStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3StoryDraftRemovalLease) {
+      throw const Revision3StoryDraftRemovalUnsupportedException();
+    }
+    final removalLease = lease as ManagedRevision3StoryDraftRemovalLease;
+    if (!removalLease.supportsStoryDraftRemoval) {
+      throw const Revision3StoryDraftRemovalUnsupportedException();
+    }
+    if (!_managedRevision3RecoveryProjectIdPattern.hasMatch(draftId) ||
+        draftId == _managedRevision3RecoveryZeroProjectId ||
+        !_managedRevision3RecoveryProjectIdPattern.hasMatch(scriptModuleId) ||
+        scriptModuleId == _managedRevision3RecoveryZeroProjectId ||
+        draftId == scriptModuleId ||
+        expectedProjectRevision < 0 ||
+        expectedProjectRevision >= 0x7fffffffffffffff ||
+        expectedDraftRevision < 0 ||
+        expectedDraftRevision > 0x7fffffffffffffff ||
+        expectedScriptModuleRevision < 0 ||
+        expectedScriptModuleRevision > 0x7fffffffffffffff) {
+      final cause = ArgumentError(
+        'Story Draft removal requires distinct nonzero IDs and signed-safe revisions',
+      );
+      throw Revision3StoryDraftRemovalRejectedException(
+        code: null,
+        cause: cause,
+      );
+    }
+    try {
+      final publication = await removalLease
+          .prepareAndPublishRemoveStoryDraftV1(
+            draftId: draftId,
+            draftKind: draftKind,
+            expectedDraftRevision: expectedDraftRevision,
+            scriptModuleId: scriptModuleId,
+            expectedScriptModuleRevision: expectedScriptModuleRevision,
+          );
+      if (publication.head.canonicalJson == expectedHead.canonicalJson ||
+          publication.head.canonicalJson != lease.head.canonicalJson ||
+          publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.removedDraftId != draftId ||
+          publication.removedDraftKind != draftKind ||
+          publication.removedDraftRevision != expectedDraftRevision ||
+          publication.removedScriptModuleId != scriptModuleId ||
+          publication.removedScriptModuleRevision !=
+              expectedScriptModuleRevision) {
+        removalLease.markRequiresReopenAfterStoryDraftRemovalUncertainty();
+        throw const Revision3StoryDraftRemovalRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3StoryDraftRemovalRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          removalLease.markRequiresReopenAfterStoryDraftRemovalUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (error is ModFfiException &&
+          !lease.requiresReopen &&
+          _revision3StoryDraftRemovalCorrectableCodes.contains(error.code)) {
+        Error.throwWithStackTrace(
+          Revision3StoryDraftRemovalRejectedException(
+            code: error.code,
+            cause: error,
+          ),
+          stackTrace,
+        );
+      }
+      if (error is ArgumentError && !lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          Revision3StoryDraftRemovalRejectedException(code: null, cause: error),
+          stackTrace,
+        );
+      }
+      if (!lease.requiresReopen) {
+        removalLease.markRequiresReopenAfterStoryDraftRemovalUncertainty();
+      }
+      Error.throwWithStackTrace(
+        Revision3StoryDraftRemovalRequiresReopenException(cause: error),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
 
   /// Remove one exact listed DataAsset stage from the project registry. This
   /// neither deletes source artifacts nor writes to the game installation.

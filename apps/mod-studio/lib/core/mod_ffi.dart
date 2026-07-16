@@ -32,6 +32,7 @@ part '../project/revision3_quest_outline_v2.dart';
 part '../project/revision3_quest_source_inspection.dart';
 part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_project_export.dart';
+part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
 part '../project/revision3_voice_take_selection.dart';
@@ -1906,6 +1907,38 @@ class ModFfi {
       expectedHead: expectedHead,
       requestedTargetPath: targetPath,
     );
+  }
+
+  /// Prepare removal of one exact Story Draft and its uniquely-owned generated
+  /// ScriptModule without publishing the returned candidate head.
+  Future<AuthoringRevision3StoryDraftRemovalPreparation>
+  authoringStorePrepareRemoveRevision3StoryDraftV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3StoryDraftRemovalRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_remove_revision3_story_draft_v1';
+    _authoringRevision3Path(root, 'root');
+    request._requireMatchesProject(currentProjectJson);
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('currentProjectJson', currentProjectJson),
+      ('root', root),
+      ('storyDraftRemovalRequestJson', request.canonicalJson),
+    ]);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'story_draft_removal_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
   }
 
   /// Reopen one candidate head from its exact canonical UTF-8 JSON bytes without publishing it.

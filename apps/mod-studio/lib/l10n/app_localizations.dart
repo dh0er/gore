@@ -1232,6 +1232,114 @@ abstract class AppLocalizations {
   /// **'{entityName} Story details'**
   String managedStoryWorkspaceDetailsSheetLabel(String entityName);
 
+  /// No description provided for @managedStoryWorkspaceRemovePairUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This draft is not an exact removable draft and generated-script pair.'**
+  String get managedStoryWorkspaceRemovePairUnavailable;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Another Story action is still in progress.'**
+  String get managedStoryWorkspaceRemoveBusy;
+
+  /// No description provided for @managedStoryWorkspaceRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen this managed project before removing a draft.'**
+  String get managedStoryWorkspaceRemoveRequiresReopen;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 incoming project reference must be removed first.} other{{count} incoming project references must be removed first.}}'**
+  String managedStoryWorkspaceRemoveBlocked(int count);
+
+  /// No description provided for @managedStoryWorkspaceRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft from project?'**
+  String get managedStoryWorkspaceRemoveDialogTitle;
+
+  /// No description provided for @managedStoryWorkspaceRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'This removes the draft \'{draftName}\' together with its uniquely owned generated script \'{scriptName}\'.'**
+  String managedStoryWorkspaceRemoveDialogSummary(
+    String draftName,
+    String scriptName,
+  );
+
+  /// No description provided for @managedStoryWorkspaceRemoveNoUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'This removal cannot be undone in version 1.'**
+  String get managedStoryWorkspaceRemoveNoUndo;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the current project registry is changed. The game installation and save games stay unchanged.'**
+  String get managedStoryWorkspaceRemoveBoundary;
+
+  /// No description provided for @managedStoryWorkspaceRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedStoryWorkspaceRemoveCancel;
+
+  /// No description provided for @managedStoryWorkspaceRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft'**
+  String get managedStoryWorkspaceRemoveConfirm;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Draft is still referenced'**
+  String get managedStoryWorkspaceRemoveBlockedTitle;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Open every source below and remove its project reference before trying again.'**
+  String get managedStoryWorkspaceRemoveBlockedDescription;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockerLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{sourceName} · {role}'**
+  String managedStoryWorkspaceRemoveBlockerLabel(
+    String sourceName,
+    String role,
+  );
+
+  /// No description provided for @managedStoryWorkspaceRemoveOpenBlocker.
+  ///
+  /// In en, this message translates to:
+  /// **'Open referencing source'**
+  String get managedStoryWorkspaceRemoveOpenBlocker;
+
+  /// No description provided for @managedStoryWorkspaceRemoveBlockedClose.
+  ///
+  /// In en, this message translates to:
+  /// **'Close'**
+  String get managedStoryWorkspaceRemoveBlockedClose;
+
+  /// No description provided for @managedStoryWorkspaceRemoveSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed \'{draftName}\' and its generated script from the project. Game files and save games were not changed.'**
+  String managedStoryWorkspaceRemoveSucceeded(String draftName);
+
+  /// No description provided for @managedStoryWorkspaceRemoveError.
+  ///
+  /// In en, this message translates to:
+  /// **'The draft was not removed. The Story view was refreshed without retrying automatically: {error}'**
+  String managedStoryWorkspaceRemoveError(String error);
+
   /// No description provided for @managedSectionWorldDescription.
   ///
   /// In en, this message translates to:
@@ -2611,6 +2719,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Open profile & compiler checks'**
   String get managedStoryWorkbenchInspectNpc;
+
+  /// No description provided for @managedStoryWorkbenchMoreActions.
+  ///
+  /// In en, this message translates to:
+  /// **'More actions'**
+  String get managedStoryWorkbenchMoreActions;
+
+  /// No description provided for @managedStoryWorkbenchRemoveDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove draft…'**
+  String get managedStoryWorkbenchRemoveDraft;
+
+  /// No description provided for @managedStoryWorkbenchRemovingDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Removing draft…'**
+  String get managedStoryWorkbenchRemovingDraft;
+
+  /// No description provided for @managedStoryWorkbenchReviewRemovalBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'Review removal blockers'**
+  String get managedStoryWorkbenchReviewRemovalBlockers;
 
   /// No description provided for @managedStoryWorkbenchCapabilityUnavailable.
   ///

@@ -6205,6 +6205,279 @@ void main() {
     },
   );
 
+  for (final kind in AuthoringStoryDraftKind.values) {
+    test(
+      '${kind.wireName} removal publishes only the Draft/module pair through full reopen',
+      () async {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'story_remove_${kind.wireName}',
+        );
+        final store = _FakeRevision3StoryDraftRemovalStore();
+        final project = kind == AuthoringStoryDraftKind.npcDraft
+            ? _managedCompilerNpcProjectJson()
+            : _managedCompilerQuestProjectJson();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: project,
+        );
+        final headOpens = store.headVerifications.length;
+
+        final removed = await _removeStoryDraft(session, kind);
+
+        expect(session.supportsStoryDraftRemoval, isTrue);
+        expect(store.storyDraftRemovalCalls, 1);
+        expect(removed.projectId, session.projectId);
+        expect(removed.projectRevision, 15);
+        expect(removed.head.canonicalJson, session.head.canonicalJson);
+        expect(removed.removedDraftKind, kind);
+        final entities =
+            ((jsonDecode(session.projectJson) as Map)['entities']! as Map)
+                .cast<String, Object?>();
+        expect(entities.containsKey(removed.removedDraftId), isFalse);
+        expect(entities.containsKey(removed.removedScriptModuleId), isFalse);
+        expect(
+          store.headVerifications.skip(headOpens),
+          everyElement(AuthoringAssetVerification.full),
+        );
+        expect(session.requiresReopen, isFalse);
+        await session.close();
+      },
+    );
+  }
+
+  test(
+    'every correctable Story Draft removal code keeps the session writable',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'story_remove_retry');
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+      );
+      final exactHead = session.head.canonicalJson;
+      const codes = <String>{
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_TARGET_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_OWNERSHIP_CONFLICT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_DRAFT_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_MODULE_REFERENCED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REFERENCE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_INVALID',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
+        'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+      };
+
+      for (final code in codes) {
+        store.nextStoryDraftRemovalError = ModFfiException(
+          command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+          code: code,
+          message: 'injected correctable removal failure',
+        );
+        await expectLater(
+          _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect(session.head.canonicalJson, exactHead, reason: code);
+      }
+
+      final removed = await _removeStoryDraft(
+        session,
+        AuthoringStoryDraftKind.npcDraft,
+      );
+      expect(removed.projectRevision, 15);
+      expect(store.storyDraftRemovalCalls, codes.length + 1);
+      await session.close();
+    },
+  );
+
+  test('uncertain Story Draft removal codes poison authoring', () async {
+    final cases = <({String code, Matcher matcher})>[
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT',
+        matcher: isA<ManagedProjectHeadConflictException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_MISSING',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_PROJECT_INVALID',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INVARIANT',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_STORE_IO',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: ModFfiException.malformedNativeResponseCode,
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+      (
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_FUTURE_UNKNOWN',
+        matcher: isA<ManagedProjectVerificationException>(),
+      ),
+    ];
+    for (var index = 0; index < cases.length; index++) {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_poison_$index',
+      );
+      final testCase = cases[index];
+      final store = _FakeRevision3StoryDraftRemovalStore()
+        ..nextStoryDraftRemovalError = ModFfiException(
+          command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+          code: testCase.code,
+          message: 'injected uncertain removal failure',
+        );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerQuestProjectJson(),
+      );
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.questDraft),
+        throwsA(testCase.matcher),
+      );
+      expect(session.requiresReopen, isTrue);
+      final calls = store.storyDraftRemovalCalls;
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.questDraft),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.storyDraftRemovalCalls, calls);
+      await session.close();
+    }
+  });
+
+  test(
+    'local Story Draft revision limit remains prepublication and retry-safe',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_revision_limit',
+      );
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      final project =
+          (jsonDecode(_managedCompilerNpcProjectJson()) as Map)
+              .cast<String, Object?>()
+            ..['revision'] = 0x7fffffffffffffff;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: jsonEncode(project),
+      );
+      final exactHead = session.head.canonicalJson;
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REVISION_LIMIT',
+          ),
+        ),
+      );
+      expect(store.storyDraftRemovalCalls, 0);
+      expect(session.projectRevision, 0x7fffffffffffffff);
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.verifyCurrentHead();
+      expect(session.head.canonicalJson, exactHead);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'uncertain Story Draft removal CAS is repaired to its exact candidate',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'story_remove_repair');
+      final store = _FakeRevision3StoryDraftRemovalStore();
+      var armed = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => '79000000000000000000000000000001',
+        onPhase: (phase) {
+          if (armed && phase == AtomicSwapPhase.tempPromoted) {
+            throw const AtomicSwapException(
+              'injected Story Draft removal publication failure',
+            );
+          }
+        },
+      );
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+        replacement: replacement,
+      );
+      armed = true;
+
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.projectRevision, 14);
+      expect(session.requiresReopen, isTrue);
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(session.headFile),
+      );
+      expect(await journal.exists(), isTrue);
+      await session.close();
+
+      final reopened = await ManagedRevision3AuthoringProjectSession.open(
+        root: root,
+        store: store,
+      );
+      expect(reopened.projectRevision, 15);
+      expect(await journal.exists(), isFalse);
+      expect(reopened.requiresReopen, isFalse);
+      await reopened.close();
+    },
+  );
+
+  test(
+    'checkpoint-only revision-3 stores do not claim Story Draft removal',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'story_remove_unsupported',
+      );
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: _managedCompilerNpcProjectJson(),
+      );
+
+      expect(session.supportsStoryDraftRemoval, isFalse);
+      await expectLater(
+        _removeStoryDraft(session, AuthoringStoryDraftKind.npcDraft),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
   test('one managed root has one exclusive R3 session', () async {
     final root = await _projectRoot(fixture);
     final store = _FakeRevision3Store();
@@ -6221,6 +6494,23 @@ void main() {
     await first.close();
   });
 }
+
+Future<ManagedRevision3StoryDraftRemovalCheckpoint> _removeStoryDraft(
+  ManagedRevision3AuthoringProjectSession session,
+  AuthoringStoryDraftKind kind,
+) => session.prepareAndPublishRemoveStoryDraftV1(
+  draftId: kind == AuthoringStoryDraftKind.npcDraft
+      ? _managedCompilerNpcId
+      : _managedCompilerQuestId,
+  draftKind: kind,
+  expectedDraftRevision: kind == AuthoringStoryDraftKind.npcDraft ? 6 : 8,
+  scriptModuleId: kind == AuthoringStoryDraftKind.npcDraft
+      ? _managedCompilerNpcModuleId
+      : _managedCompilerQuestModuleId,
+  expectedScriptModuleRevision: kind == AuthoringStoryDraftKind.npcDraft
+      ? 7
+      : 9,
+);
 
 Future<ManagedRevision3QuestContextEditCheckpoint> _publishQuestContext(
   ManagedRevision3AuthoringProjectSession session,
@@ -8506,6 +8796,72 @@ class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       response,
       expectedHead: expectedHead,
       requestedTargetPath: targetPath,
+    );
+  }
+}
+
+final class _FakeRevision3StoryDraftRemovalStore extends _FakeRevision3Store
+    implements ManagedRevision3StoryDraftRemovalStore {
+  int storyDraftRemovalCalls = 0;
+  Object? nextStoryDraftRemovalError;
+
+  @override
+  Future<AuthoringRevision3StoryDraftRemovalPreparation>
+  prepareRemoveStoryDraftV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3StoryDraftRemovalRequestV1 request,
+  }) async {
+    storyDraftRemovalCalls++;
+    final injected = nextStoryDraftRemovalError;
+    nextStoryDraftRemovalError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_remove_revision3_story_draft_v1',
+        code: 'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_HEAD_CONFLICT',
+        message: 'fake native Story Draft removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    entities.remove(request.draftId);
+    entities.remove(request.scriptModuleId);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3StoryDraftRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_remove_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'removed': <String, Object?>{
+          'draft': <String, Object?>{
+            'id': request.draftId,
+            'kind': request.draftKind.wireName,
+            'revision': request.expectedDraftRevision,
+          },
+          'script_module': <String, Object?>{
+            'id': request.scriptModuleId,
+            'kind': 'script_module',
+            'revision': request.expectedScriptModuleRevision,
+          },
+        },
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'artifact_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
     );
   }
 }

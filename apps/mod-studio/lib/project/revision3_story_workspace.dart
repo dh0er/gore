@@ -13,6 +13,151 @@ typedef Revision3StoryWorkspaceEntityAction =
       Revision3ContentIndex index,
       Revision3ContentEntity entity,
     );
+typedef Revision3StoryWorkspaceRemoveDraftAction =
+    Future<void> Function({
+      required Revision3ContentIndex index,
+      required Revision3ContentEntity draft,
+      required Revision3ContentEntity scriptModule,
+    });
+
+@immutable
+final class Revision3StoryDraftRemovalBlocker {
+  const Revision3StoryDraftRemovalBlocker({
+    required this.source,
+    required this.reference,
+  });
+
+  final Revision3ContentEntity source;
+  final Revision3ContentReference reference;
+}
+
+/// Exact UI preflight for the bounded Draft + generated ScriptModule removal.
+///
+/// This is deliberately advisory. The native prepare operation repeats the
+/// ownership-closure proof against the exact current project head before any
+/// publication can occur.
+@immutable
+final class Revision3StoryDraftRemovalPreflight {
+  const Revision3StoryDraftRemovalPreflight._({
+    required this.draft,
+    required this.scriptModule,
+    required this.blockers,
+  });
+
+  final Revision3ContentEntity draft;
+  final Revision3ContentEntity? scriptModule;
+  final List<Revision3StoryDraftRemovalBlocker> blockers;
+
+  bool get hasExactPair => scriptModule != null;
+  bool get canRemove => scriptModule != null && blockers.isEmpty;
+
+  factory Revision3StoryDraftRemovalPreflight.fromIndex({
+    required Revision3ContentIndex index,
+    required Revision3ContentEntity draft,
+  }) {
+    if (draft.kind != Revision3ContentEntityKind.npcDraft &&
+        draft.kind != Revision3ContentEntityKind.questDraft) {
+      return Revision3StoryDraftRemovalPreflight._(
+        draft: draft,
+        scriptModule: null,
+        blockers: const <Revision3StoryDraftRemovalBlocker>[],
+      );
+    }
+
+    final localModuleEdges = draft.references
+        .where(
+          (reference) =>
+              reference.role == 'draft_script_module' &&
+              reference.qualifier == null &&
+              reference.target.projectId == index.projectId &&
+              reference.target.expectedKind ==
+                  Revision3ContentEntityKind.scriptModule &&
+              reference.resolution ==
+                  Revision3ContentReferenceResolution.resolved,
+        )
+        .toList(growable: false);
+    if (localModuleEdges.length != 1) {
+      return Revision3StoryDraftRemovalPreflight._(
+        draft: draft,
+        scriptModule: null,
+        blockers: const <Revision3StoryDraftRemovalBlocker>[],
+      );
+    }
+
+    final draftModuleEdge = localModuleEdges.single;
+    final module = index.entityById(draftModuleEdge.target.entityId);
+    if (module == null ||
+        module.kind != Revision3ContentEntityKind.scriptModule) {
+      return Revision3StoryDraftRemovalPreflight._(
+        draft: draft,
+        scriptModule: null,
+        blockers: const <Revision3StoryDraftRemovalBlocker>[],
+      );
+    }
+
+    bool isExactOwnerReference(
+      Revision3ContentReference reference,
+      String role,
+    ) =>
+        reference.role == role &&
+        reference.qualifier == null &&
+        reference.target.projectId == index.projectId &&
+        reference.target.entityId == draft.id &&
+        reference.target.expectedKind == draft.kind &&
+        reference.resolution == Revision3ContentReferenceResolution.resolved;
+
+    final exactOriginOwnerEdges = module.references
+        .where((reference) => isExactOwnerReference(reference, 'origin_owner'))
+        .toList(growable: false);
+    final exactScriptOwnerEdges = module.references
+        .where((reference) => isExactOwnerReference(reference, 'script_owner'))
+        .toList(growable: false);
+    final generatedOwner = module.origin.generatedOwner;
+    if (module.origin.type != 'generated' ||
+        generatedOwner == null ||
+        generatedOwner.projectId != index.projectId ||
+        generatedOwner.entityId != draft.id ||
+        generatedOwner.expectedKind != draft.kind ||
+        exactOriginOwnerEdges.length != 1 ||
+        exactScriptOwnerEdges.length != 1) {
+      return Revision3StoryDraftRemovalPreflight._(
+        draft: draft,
+        scriptModule: null,
+        blockers: const <Revision3StoryDraftRemovalBlocker>[],
+      );
+    }
+
+    final allowedEdges = <Revision3ContentReference>{
+      draftModuleEdge,
+      exactOriginOwnerEdges.single,
+      exactScriptOwnerEdges.single,
+    };
+    final pairIds = <String>{draft.id, module.id};
+    final blockers = <Revision3StoryDraftRemovalBlocker>[];
+    for (final source in index.entities) {
+      for (final reference in source.references) {
+        final sourceIsRemoved = pairIds.contains(source.id);
+        final targetIsRemoved = pairIds.contains(reference.target.entityId);
+        if (reference.target.projectId != index.projectId ||
+            (!sourceIsRemoved && !targetIsRemoved) ||
+            allowedEdges.contains(reference)) {
+          continue;
+        }
+        blockers.add(
+          Revision3StoryDraftRemovalBlocker(
+            source: source,
+            reference: reference,
+          ),
+        );
+      }
+    }
+    return Revision3StoryDraftRemovalPreflight._(
+      draft: draft,
+      scriptModule: module,
+      blockers: List<Revision3StoryDraftRemovalBlocker>.unmodifiable(blockers),
+    );
+  }
+}
 
 /// Localized, author-facing copy for the direct managed-R3 Story workspace.
 ///
@@ -43,6 +188,22 @@ final class Revision3StoryWorkspaceCopy {
     required this.loadErrorDetails,
     required this.createErrorDetails,
     required this.detailsSheetLabel,
+    required this.removeDraftPairUnavailable,
+    required this.removeDraftBusy,
+    required this.removeDraftBlocked,
+    required this.removeDraftDialogTitle,
+    required this.removeDraftDialogSummary,
+    required this.removeDraftNoUndo,
+    required this.removeDraftBoundary,
+    required this.removeDraftCancel,
+    required this.removeDraftConfirm,
+    required this.removeDraftBlockedTitle,
+    required this.removeDraftBlockedDescription,
+    required this.removeDraftBlockerLabel,
+    required this.removeDraftOpenBlocker,
+    required this.removeDraftBlockedClose,
+    required this.removeDraftSucceeded,
+    required this.removeDraftErrorDetails,
     required this.workbench,
   });
 
@@ -68,6 +229,23 @@ final class Revision3StoryWorkspaceCopy {
   final String Function(Object error) loadErrorDetails;
   final String Function(Object error) createErrorDetails;
   final String Function(String entityName) detailsSheetLabel;
+  final String removeDraftPairUnavailable;
+  final String removeDraftBusy;
+  final String Function(int count) removeDraftBlocked;
+  final String removeDraftDialogTitle;
+  final String Function(String draftName, String scriptName)
+  removeDraftDialogSummary;
+  final String removeDraftNoUndo;
+  final String removeDraftBoundary;
+  final String removeDraftCancel;
+  final String removeDraftConfirm;
+  final String removeDraftBlockedTitle;
+  final String removeDraftBlockedDescription;
+  final String Function(String sourceName, String role) removeDraftBlockerLabel;
+  final String removeDraftOpenBlocker;
+  final String removeDraftBlockedClose;
+  final String Function(String draftName) removeDraftSucceeded;
+  final String Function(Object error) removeDraftErrorDetails;
   final Revision3StoryEntityWorkbenchCopy workbench;
 }
 
@@ -217,6 +395,8 @@ final class Revision3StoryWorkspace extends StatefulWidget {
     this.editQuestTransitionsDisabledReason,
     this.inspectQuestSourceDisabledReason,
     this.inspectNpcSourceDisabledReason,
+    this.removeDraft,
+    this.removeDraftDisabledReason,
     super.key,
   }) : assert(projectRoot != ''),
        assert(projectId != ''),
@@ -256,6 +436,8 @@ final class Revision3StoryWorkspace extends StatefulWidget {
   final String? editQuestTransitionsDisabledReason;
   final String? inspectQuestSourceDisabledReason;
   final String? inspectNpcSourceDisabledReason;
+  final Revision3StoryWorkspaceRemoveDraftAction? removeDraft;
+  final String? removeDraftDisabledReason;
 
   @override
   State<Revision3StoryWorkspace> createState() =>
@@ -269,6 +451,8 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
   bool _loading = false;
   bool _creatingNpc = false;
   bool _creatingQuest = false;
+  bool _removingDraft = false;
+  bool _removalConfirmationOpen = false;
   int _loadGeneration = 0;
   int _detailsPresentationEpoch = 0;
   _StoryFilter _filter = _StoryFilter.all;
@@ -327,6 +511,8 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         _completePendingSelection(false);
       }
     }
+    _removingDraft = false;
+    _removalConfirmationOpen = false;
     unawaited(_reload(clearCurrent: true));
   }
 
@@ -537,6 +723,262 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     }
   }
 
+  Future<void> _requestRemoveDraft(
+    Revision3ContentIndex index,
+    Revision3StoryDraftRemovalPreflight preflight,
+  ) async {
+    final action = widget.removeDraft;
+    final module = preflight.scriptModule;
+    if (action == null ||
+        module == null ||
+        !preflight.canRemove ||
+        !_isExactCurrentIndex(index) ||
+        _creatingNpc ||
+        _creatingQuest ||
+        _removingDraft ||
+        _removalConfirmationOpen) {
+      return;
+    }
+
+    final confirmationCheckpoint = _checkpoint;
+    setState(() => _removalConfirmationOpen = true);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('revision3-story-remove-dialog'),
+        title: Text(widget.copy.removeDraftDialogTitle),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.copy.removeDraftDialogSummary(
+                  _entityName(preflight.draft),
+                  _entityName(module),
+                ),
+              ),
+              const SizedBox(height: 12),
+              _RemovalEntityRow(
+                key: const Key('revision3-story-remove-draft-name'),
+                icon:
+                    preflight.draft.kind == Revision3ContentEntityKind.npcDraft
+                    ? Icons.person_outline
+                    : Icons.assignment_outlined,
+                name: _entityName(preflight.draft),
+              ),
+              const SizedBox(height: 6),
+              _RemovalEntityRow(
+                key: const Key('revision3-story-remove-script-name'),
+                icon: Icons.code_outlined,
+                name: _entityName(module),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                widget.copy.removeDraftNoUndo,
+                style: TextStyle(
+                  color: Theme.of(dialogContext).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(widget.copy.removeDraftBoundary),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('revision3-story-remove-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(widget.copy.removeDraftCancel),
+          ),
+          FilledButton(
+            key: const Key('revision3-story-remove-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(widget.copy.removeDraftConfirm),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (confirmed != true) {
+      setState(() => _removalConfirmationOpen = false);
+      return;
+    }
+
+    final currentIndex = _index;
+    final currentDraft = currentIndex?.entityById(preflight.draft.id);
+    final refreshedPreflight = currentIndex == null || currentDraft == null
+        ? null
+        : Revision3StoryDraftRemovalPreflight.fromIndex(
+            index: currentIndex,
+            draft: currentDraft,
+          );
+    if (confirmationCheckpoint != _checkpoint ||
+        widget.removeDraft == null ||
+        currentIndex == null ||
+        !_isExactCurrentIndex(currentIndex) ||
+        refreshedPreflight == null ||
+        !refreshedPreflight.canRemove ||
+        refreshedPreflight.scriptModule?.id != module.id ||
+        currentDraft!.revision != preflight.draft.revision ||
+        refreshedPreflight.scriptModule!.revision != module.revision) {
+      setState(() => _removalConfirmationOpen = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(widget.copy.checkpointMismatchError)),
+      );
+      return;
+    }
+
+    setState(() {
+      _removalConfirmationOpen = false;
+      _removingDraft = true;
+    });
+    try {
+      await widget.removeDraft!(
+        index: currentIndex,
+        draft: currentDraft,
+        scriptModule: refreshedPreflight.scriptModule!,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            widget.copy.removeDraftSucceeded(_entityName(preflight.draft)),
+          ),
+        ),
+      );
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted && confirmationCheckpoint == _checkpoint) {
+        // The owner normally rebuilds this workspace with the published head.
+        // If that rebuild is delayed, leave the old exact checkpoint visible
+        // instead of pretending that the removed draft is already gone.
+        setState(() => _removingDraft = false);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      await WidgetsBinding.instance.endOfFrame;
+      if (!mounted) return;
+      final refreshed = await _refreshRemovalFailure();
+      if (!mounted) return;
+      final refreshedDraft = refreshed?.entityById(preflight.draft.id);
+      final refreshedRemoval = refreshed == null || refreshedDraft == null
+          ? null
+          : Revision3StoryDraftRemovalPreflight.fromIndex(
+              index: refreshed,
+              draft: refreshedDraft,
+            );
+      if (refreshedRemoval != null && refreshedRemoval.blockers.isNotEmpty) {
+        await _showRemovalBlockers(
+          refreshed!,
+          refreshedRemoval,
+          fromSheet: false,
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.copy.removeDraftErrorDetails(error))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _removingDraft = false);
+    }
+  }
+
+  Future<Revision3ContentIndex?> _refreshRemovalFailure() async {
+    final checkpoint = _checkpoint;
+    try {
+      final refreshed = await Future<Revision3ContentIndex>.sync(widget.load);
+      if (!mounted || checkpoint != _checkpoint) return _index;
+      if (refreshed.projectId != checkpoint.projectId ||
+          refreshed.projectRevision != checkpoint.projectRevision) {
+        return _index;
+      }
+      final story = _storyEntities(refreshed);
+      _invalidateDetailsSheet();
+      setState(() {
+        _index = refreshed;
+        final selected = _selectedEntityId;
+        _selectedEntityId =
+            selected != null && story.any((entity) => entity.id == selected)
+            ? selected
+            : story.firstOrNull?.id;
+      });
+      return refreshed;
+    } catch (_) {
+      return _index;
+    }
+  }
+
+  Future<void> _showRemovalBlockers(
+    Revision3ContentIndex index,
+    Revision3StoryDraftRemovalPreflight preflight, {
+    required bool fromSheet,
+  }) async {
+    if (!_isExactCurrentIndex(index) || preflight.blockers.isEmpty) return;
+    String? selectedSourceId;
+    final blockerListHeight = (preflight.blockers.length * 72.0)
+        .clamp(72.0, 280.0)
+        .toDouble();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('revision3-story-remove-blockers-dialog'),
+        title: Text(widget.copy.removeDraftBlockedTitle),
+        content: SizedBox(
+          width: 480,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(widget.copy.removeDraftBlockedDescription),
+              const SizedBox(height: 10),
+              SizedBox(
+                height: blockerListHeight,
+                child: ListView.builder(
+                  itemCount: preflight.blockers.length,
+                  itemBuilder: (context, blockerIndex) {
+                    final blocker = preflight.blockers[blockerIndex];
+                    return ListTile(
+                      key: Key(
+                        'revision3-story-remove-blocker-${blocker.source.id}-${blocker.reference.role}-$blockerIndex',
+                      ),
+                      leading: const Icon(Icons.link_outlined),
+                      title: Text(
+                        widget.copy.removeDraftBlockerLabel(
+                          _entityName(blocker.source),
+                          blocker.reference.role,
+                        ),
+                      ),
+                      trailing: Tooltip(
+                        message: widget.copy.removeDraftOpenBlocker,
+                        child: const Icon(Icons.open_in_new_outlined),
+                      ),
+                      onTap: () {
+                        selectedSourceId = blocker.source.id;
+                        Navigator.of(dialogContext).pop();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('revision3-story-remove-blockers-close'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(widget.copy.removeDraftBlockedClose),
+          ),
+        ],
+      ),
+    );
+    final sourceId = selectedSourceId;
+    if (!mounted || sourceId == null || !_isExactCurrentIndex(index)) return;
+    _openEntityReference(index, sourceId, fromSheet: fromSheet);
+  }
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -547,7 +989,11 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
       final scrollTightChrome =
           constraints.hasBoundedHeight && constraints.maxHeight < 520;
       final index = _index;
-      final creatingStoryDraft = _creatingNpc || _creatingQuest;
+      final storyActionBusy =
+          _creatingNpc ||
+          _creatingQuest ||
+          _removingDraft ||
+          _removalConfirmationOpen;
       final header = _StoryHeader(
         copy: widget.copy,
         index: index,
@@ -555,10 +1001,10 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         dense: denseChrome,
         creatingNpc: _creatingNpc,
         creatingQuest: _creatingQuest,
-        createNpc: widget.createNpcDraft == null || creatingStoryDraft
+        createNpc: widget.createNpcDraft == null || storyActionBusy
             ? null
             : () => _runCreate(widget.createNpcDraft!, npc: true),
-        createQuest: widget.createQuestDraft == null || creatingStoryDraft
+        createQuest: widget.createQuestDraft == null || storyActionBusy
             ? null
             : () => _runCreate(widget.createQuestDraft!, npc: false),
         createNpcDisabledReason: widget.createNpcDraft == null
@@ -685,6 +1131,26 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
     Revision3ContentEntity entity, {
     bool sheet = false,
   }) {
+    final removal = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: index,
+      draft: entity,
+    );
+    final removeBusy =
+        _creatingNpc ||
+        _creatingQuest ||
+        _removingDraft ||
+        _removalConfirmationOpen;
+    final removeDisabledReason = removeBusy
+        ? widget.copy.removeDraftBusy
+        : widget.removeDraft == null
+        ? widget.removeDraftDisabledReason ??
+              widget.copy.removeDraftPairUnavailable
+        : !removal.hasExactPair
+        ? widget.copy.removeDraftPairUnavailable
+        : removal.blockers.isNotEmpty
+        ? widget.copy.removeDraftBlocked(removal.blockers.length)
+        : null;
+
     Future<void> run(Revision3StoryWorkspaceEntityAction action) async {
       if (!_isExactCurrentIndex(index)) return;
       if (sheet && mounted && Navigator.of(context).canPop()) {
@@ -748,6 +1214,14 @@ class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
         editLogicDisabledReason: widget.editQuestTransitionsDisabledReason,
         inspectQuestDisabledReason: widget.inspectQuestSourceDisabledReason,
         inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
+        removeDraft: removeDisabledReason == null
+            ? () => _requestRemoveDraft(index, removal)
+            : null,
+        reviewRemovalBlockers: removal.blockers.isEmpty
+            ? null
+            : () => _showRemovalBlockers(index, removal, fromSheet: sheet),
+        removeDraftDisabledReason: removeDisabledReason,
+        removingDraft: _removingDraft,
       ),
       copy: widget.copy.workbench,
     );
@@ -1267,6 +1741,24 @@ class _StoryEmptyDetails extends StatelessWidget {
       padding: const EdgeInsets.all(20),
       child: Text(label, textAlign: TextAlign.center),
     ),
+  );
+}
+
+class _RemovalEntityRow extends StatelessWidget {
+  const _RemovalEntityRow({required this.icon, required this.name, super.key});
+
+  final IconData icon;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 20),
+      const SizedBox(width: 8),
+      Expanded(
+        child: Text(name, style: Theme.of(context).textTheme.titleSmall),
+      ),
+    ],
   );
 }
 

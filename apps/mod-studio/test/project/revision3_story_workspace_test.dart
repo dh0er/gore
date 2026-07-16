@@ -11,6 +11,7 @@ const _projectB = '99999999999999999999999999999999';
 const _npcId = '22222222222222222222222222222222';
 const _questId = '33333333333333333333333333333333';
 const _moduleId = '44444444444444444444444444444444';
+const _blockerId = '55555555555555555555555555555555';
 const _targetSha =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const _artifactSha =
@@ -40,6 +41,22 @@ final _copy = Revision3StoryWorkspaceCopy(
   loadErrorDetails: (error) => '$error',
   createErrorDetails: (error) => 'CREATE FAILED: $error',
   detailsSheetLabel: (name) => '$name details',
+  removeDraftPairUnavailable: 'Draft pair unavailable.',
+  removeDraftBusy: 'Another Story action is busy.',
+  removeDraftBlocked: (count) => '$count removal blockers.',
+  removeDraftDialogTitle: 'Remove draft from project?',
+  removeDraftDialogSummary: (draft, script) => 'Remove $draft and $script.',
+  removeDraftNoUndo: 'This cannot be undone in version 1.',
+  removeDraftBoundary: 'Game files and save games stay unchanged.',
+  removeDraftCancel: 'Cancel',
+  removeDraftConfirm: 'Remove draft',
+  removeDraftBlockedTitle: 'Draft is still referenced',
+  removeDraftBlockedDescription: 'Open every referencing source.',
+  removeDraftBlockerLabel: (source, role) => '$source · $role',
+  removeDraftOpenBlocker: 'Open source',
+  removeDraftBlockedClose: 'Close',
+  removeDraftSucceeded: (draft) => 'REMOVED: $draft',
+  removeDraftErrorDetails: (error) => 'REMOVE FAILED: $error',
   workbench: const Revision3StoryEntityWorkbenchCopy.english(),
 );
 
@@ -70,6 +87,22 @@ final _longGermanCopy = Revision3StoryWorkspaceCopy(
   loadErrorDetails: (error) => 'Ladefehler: $error',
   createErrorDetails: (error) => 'Erstellungsfehler: $error',
   detailsSheetLabel: (name) => 'Details für $name',
+  removeDraftPairUnavailable: 'Entwurfspaar nicht verfügbar.',
+  removeDraftBusy: 'Eine Story-Aktion läuft.',
+  removeDraftBlocked: (count) => '$count blockierende Referenzen.',
+  removeDraftDialogTitle: 'Entwurf entfernen?',
+  removeDraftDialogSummary: (draft, script) => '$draft und $script entfernen.',
+  removeDraftNoUndo: 'In Version 1 nicht rückgängig zu machen.',
+  removeDraftBoundary: 'Spiel und Spielstände bleiben unverändert.',
+  removeDraftCancel: 'Abbrechen',
+  removeDraftConfirm: 'Entwurf entfernen',
+  removeDraftBlockedTitle: 'Entwurf wird noch referenziert',
+  removeDraftBlockedDescription: 'Alle Quellen öffnen.',
+  removeDraftBlockerLabel: (source, role) => '$source · $role',
+  removeDraftOpenBlocker: 'Quelle öffnen',
+  removeDraftBlockedClose: 'Schließen',
+  removeDraftSucceeded: (draft) => '$draft entfernt',
+  removeDraftErrorDetails: (error) => 'Entfernen fehlgeschlagen: $error',
   workbench: const Revision3StoryEntityWorkbenchCopy.english(),
 );
 
@@ -899,6 +932,386 @@ void main() {
     expect(await unresolved, isFalse);
   });
 
+  test('removal preflight proves the pair and filters incoming ownership', () {
+    final exactIndex = _fixture();
+    final exact = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: exactIndex,
+      draft: exactIndex.entityById(_questId)!,
+    );
+    expect(exact.hasExactPair, isTrue);
+    expect(exact.scriptModule?.id, _moduleId);
+    expect(exact.canRemove, isTrue);
+
+    final blockedIndex = _fixture(
+      includeBlocker: true,
+      blockerExpectedKind: 'npc_draft',
+      blockerResolution: 'kind_mismatch',
+    );
+    final blocked = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: blockedIndex,
+      draft: blockedIndex.entityById(_questId)!,
+    );
+    expect(blocked.hasExactPair, isTrue);
+    expect(blocked.canRemove, isFalse);
+    expect(blocked.blockers, hasLength(1));
+    expect(blocked.blockers.single.source.id, _blockerId);
+    expect(blocked.blockers.single.reference.role, 'script_owner');
+
+    final foreignIndex = _fixture(
+      includeBlocker: true,
+      blockerProjectId: _projectB,
+      blockerResolution: 'foreign_project',
+    );
+    final foreign = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: foreignIndex,
+      draft: foreignIndex.entityById(_questId)!,
+    );
+    expect(foreign.canRemove, isTrue);
+    expect(foreign.blockers, isEmpty);
+
+    final outboundIndex = _fixture(includeOutboundBlocker: true);
+    final outbound = Revision3StoryDraftRemovalPreflight.fromIndex(
+      index: outboundIndex,
+      draft: outboundIndex.entityById(_questId)!,
+    );
+    expect(outbound.hasExactPair, isTrue);
+    expect(outbound.canRemove, isFalse);
+    expect(outbound.blockers, hasLength(1));
+    expect(outbound.blockers.single.source.id, _questId);
+    expect(outbound.blockers.single.reference.role, 'script_owner');
+  });
+
+  testWidgets(
+    'wide removal confirms both entities, cancel is inert, and pending action cannot double-call',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      final pending = Completer<void>();
+      var calls = 0;
+      await _pumpWorkspace(
+        tester,
+        load: () async => _fixture(),
+        removeDraft: ({required index, required draft, required scriptModule}) {
+          calls++;
+          expect(index.projectRevision, 7);
+          expect(draft.id, _questId);
+          expect(scriptModule.id, _moduleId);
+          return pending.future;
+        },
+      );
+      await tester.pumpAndSettle();
+
+      await _openQuestRemovalMenu(tester);
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-story-remove-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-remove-draft-name')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-story-remove-draft-name')),
+          matching: find.text('Find Homer'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-remove-script-name')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('revision3-story-remove-script-name')),
+          matching: find.text('Find Homer source'),
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('This cannot be undone in version 1.'), findsOneWidget);
+      expect(
+        find.text('Game files and save games stay unchanged.'),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-story-remove-cancel')));
+      await tester.pumpAndSettle();
+      expect(calls, 0);
+
+      await _openQuestRemovalMenu(tester);
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-story-remove-confirm')));
+      await tester.pump();
+      expect(calls, 1);
+
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-more-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      final disabled = tester.widget<PopupMenuItem<Object?>>(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+      );
+      expect(disabled.enabled, isFalse);
+      expect(find.text('Another Story action is busy.'), findsOneWidget);
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+        warnIfMissed: false,
+      );
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+        warnIfMissed: false,
+      );
+      expect(calls, 1);
+      await tester.tapAt(const Offset(10, 10));
+      await tester.pumpAndSettle();
+
+      pending.complete();
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+      expect(find.text('REMOVED: Find Homer'), findsOneWidget);
+    },
+  );
+
+  testWidgets('successful removal reloads the new checkpoint and falls back', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    var revision = 7;
+    var head = 'head-7';
+    var currentIndex = _fixture();
+    var calls = 0;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: StatefulBuilder(
+          builder: (context, setState) {
+            rebuild = setState;
+            return Scaffold(
+              body: _workspace(
+                revision: revision,
+                head: head,
+                load: () async => currentIndex,
+                removeDraft:
+                    ({
+                      required index,
+                      required draft,
+                      required scriptModule,
+                    }) async {
+                      calls++;
+                      expect(draft.id, _questId);
+                      expect(scriptModule.id, _moduleId);
+                      rebuild(() {
+                        revision = 8;
+                        head = 'head-8';
+                        currentIndex = _fixture(
+                          revision: 8,
+                          includeQuest: false,
+                        );
+                      });
+                    },
+              ),
+            );
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _openQuestRemovalMenu(tester);
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('revision3-story-remove-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(calls, 1);
+    expect(find.text('1 drafts / revision 8'), findsOneWidget);
+    expect(
+      find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(Key('revision3-story-workbench-tab-profile-$_npcId')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('compact details sheet exposes the same direct removal action', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(360, 720));
+    var calls = 0;
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(),
+      removeDraft:
+          ({required index, required draft, required scriptModule}) async {
+            calls++;
+          },
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-story-workspace-details-sheet')),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-more-$_questId')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-story-remove-dialog')),
+      findsOneWidget,
+    );
+    expect(find.text('Find Homer source'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-story-remove-cancel')));
+    await tester.pumpAndSettle();
+    expect(calls, 0);
+    expect(
+      find.byKey(const Key('revision3-story-workspace-details-sheet')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('incoming blocker is listed and opens its external source', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    String? openedEntity;
+    var removeCalls = 0;
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(includeBlocker: true),
+      removeDraft:
+          ({required index, required draft, required scriptModule}) async {
+            removeCalls++;
+          },
+      onOpenExternalEntity: (entityId) => openedEntity = entityId,
+    );
+    await tester.pumpAndSettle();
+    await _openQuestRemovalMenu(tester);
+
+    final remove = tester.widget<PopupMenuItem<Object?>>(
+      find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+    );
+    expect(remove.enabled, isFalse);
+    expect(find.text('1 removal blockers.'), findsOneWidget);
+    await tester.tap(
+      find.byKey(
+        Key('revision3-story-workbench-review-remove-blockers-$_questId'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-story-remove-blockers-dialog')),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Referencing helper source · script_owner'),
+      findsOneWidget,
+    );
+    await tester.tap(
+      find.byKey(
+        Key('revision3-story-remove-blocker-$_blockerId-script_owner-0'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(openedEntity, _blockerId);
+    expect(removeCalls, 0);
+  });
+
+  testWidgets('reopen lock disables removal with its concrete reason', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(),
+      removeDraftDisabledReason: 'Reopen this managed project first.',
+    );
+    await tester.pumpAndSettle();
+    await _openQuestRemovalMenu(tester);
+    final remove = tester.widget<PopupMenuItem<Object?>>(
+      find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+    );
+    expect(remove.enabled, isFalse);
+    expect(find.text('Reopen this managed project first.'), findsOneWidget);
+  });
+
+  testWidgets('draft without an exact generated script pair is disabled', (
+    tester,
+  ) async {
+    await _setSurfaceSize(tester, const Size(1200, 800));
+    await _pumpWorkspace(
+      tester,
+      load: () async => _fixture(),
+      removeDraft:
+          ({required index, required draft, required scriptModule}) async {},
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('revision3-story-workbench-more-$_npcId')));
+    await tester.pumpAndSettle();
+    final remove = tester.widget<PopupMenuItem<Object?>>(
+      find.byKey(Key('revision3-story-workbench-remove-$_npcId')),
+    );
+    expect(remove.enabled, isFalse);
+    expect(find.text('Draft pair unavailable.'), findsOneWidget);
+  });
+
+  testWidgets(
+    'new blocker after confirmation refreshes and never retries automatically',
+    (tester) async {
+      await _setSurfaceSize(tester, const Size(1200, 800));
+      var currentIndex = _fixture();
+      var calls = 0;
+      await _pumpWorkspace(
+        tester,
+        load: () async => currentIndex,
+        removeDraft:
+            ({required index, required draft, required scriptModule}) async {
+              calls++;
+              currentIndex = _fixture(includeBlocker: true);
+              throw StateError('new incoming reference');
+            },
+      );
+      await tester.pumpAndSettle();
+      await _openQuestRemovalMenu(tester);
+      await tester.tap(
+        find.byKey(Key('revision3-story-workbench-remove-$_questId')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-story-remove-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(calls, 1);
+      expect(
+        find.byKey(const Key('revision3-story-remove-blockers-dialog')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Referencing helper source · script_owner'),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-story-remove-blockers-close')),
+      );
+      await tester.pumpAndSettle();
+      expect(calls, 1);
+    },
+  );
+
   testWidgets('routes non-Story entities and assets to external owners', (
     tester,
   ) async {
@@ -946,6 +1359,15 @@ Future<void> _setSurfaceSize(WidgetTester tester, Size size) async {
   addTearDown(() => tester.binding.setSurfaceSize(null));
 }
 
+Future<void> _openQuestRemovalMenu(WidgetTester tester) async {
+  await tester.tap(
+    find.byKey(Key('revision3-story-workspace-entity-$_questId')),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(Key('revision3-story-workbench-more-$_questId')));
+  await tester.pumpAndSettle();
+}
+
 Future<void> _pumpWorkspace(
   WidgetTester tester, {
   required Revision3StoryWorkspaceLoader load,
@@ -960,6 +1382,8 @@ Future<void> _pumpWorkspace(
   Revision3StoryWorkspaceEntityAction? editQuestTransitions,
   Revision3StoryWorkspaceEntityAction? inspectQuestSource,
   Revision3StoryWorkspaceEntityAction? inspectNpcSource,
+  Revision3StoryWorkspaceRemoveDraftAction? removeDraft,
+  String? removeDraftDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -980,6 +1404,8 @@ Future<void> _pumpWorkspace(
         editQuestTransitions: editQuestTransitions,
         inspectQuestSource: inspectQuestSource,
         inspectNpcSource: inspectNpcSource,
+        removeDraft: removeDraft,
+        removeDraftDisabledReason: removeDraftDisabledReason,
         copy: copy,
         createNpcDraftDisabledReason: createNpcDraftDisabledReason,
         createQuestDraftDisabledReason: createQuestDraftDisabledReason,
@@ -1004,6 +1430,8 @@ Revision3StoryWorkspace _workspace({
   Revision3StoryWorkspaceEntityAction? editQuestTransitions,
   Revision3StoryWorkspaceEntityAction? inspectQuestSource,
   Revision3StoryWorkspaceEntityAction? inspectNpcSource,
+  Revision3StoryWorkspaceRemoveDraftAction? removeDraft,
+  String? removeDraftDisabledReason,
   Revision3StoryWorkspaceCopy? copy,
   String? createNpcDraftDisabledReason,
   String? createQuestDraftDisabledReason,
@@ -1030,6 +1458,8 @@ Revision3StoryWorkspace _workspace({
   editQuestTransitions: editQuestTransitions,
   inspectQuestSource: inspectQuestSource,
   inspectNpcSource: inspectNpcSource,
+  removeDraft: removeDraft,
+  removeDraftDisabledReason: removeDraftDisabledReason,
 );
 
 Revision3ContentIndex _fixture({
@@ -1038,6 +1468,11 @@ Revision3ContentIndex _fixture({
   String projectName = 'Fixture project',
   bool includeNpc = true,
   bool includeQuest = true,
+  bool includeBlocker = false,
+  String? blockerProjectId,
+  String blockerExpectedKind = 'quest_draft',
+  String blockerResolution = 'resolved',
+  bool includeOutboundBlocker = false,
 }) => Revision3ContentIndex.fromJsonObject(<String, Object?>{
   'schema_revision': 1,
   'project_id': projectId,
@@ -1052,7 +1487,7 @@ Revision3ContentIndex _fixture({
   'entity_counts': <String, Object?>{
     if (includeNpc) 'npc_draft': 1,
     if (includeQuest) 'quest_draft': 1,
-    if (includeQuest) 'script_module': 1,
+    if (includeQuest) 'script_module': includeBlocker ? 2 : 1,
   },
   'entities': <Object?>[
     if (includeNpc)
@@ -1110,6 +1545,17 @@ Revision3ContentIndex _fixture({
             },
             'resolution': 'resolved',
           },
+          if (includeOutboundBlocker)
+            <String, Object?>{
+              'role': 'script_owner',
+              'qualifier': null,
+              'target': <String, Object?>{
+                'project_id': projectId,
+                'entity_id': _npcId,
+                'expected_kind': 'npc_draft',
+              },
+              'resolution': 'resolved',
+            },
         ],
         'asset_references': <Object?>[
           <String, Object?>{
@@ -1162,6 +1608,53 @@ Revision3ContentIndex _fixture({
               'expected_kind': 'quest_draft',
             },
             'resolution': 'resolved',
+          },
+          <String, Object?>{
+            'role': 'script_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': projectId,
+              'entity_id': _questId,
+              'expected_kind': 'quest_draft',
+            },
+            'resolution': 'resolved',
+          },
+        ],
+        'asset_references': <Object?>[],
+      },
+    if (includeQuest && includeBlocker)
+      <String, Object?>{
+        'id': _blockerId,
+        'kind': 'script_module',
+        'display_name': 'Referencing helper source',
+        'revision': 3,
+        'origin': <String, Object?>{
+          'type': 'new',
+          'authored_runtime_id': 'GORE_HELPER_SOURCE',
+        },
+        'summary': <String, Object?>{
+          'kind': 'script_module',
+          'data': <String, Object?>{
+            'generator_id': 'fixture.helper',
+            'generator_version': 1,
+            'module_namespace': 'PROJECT.HELPER',
+            'module_relative_path': 'Project/Helper.as',
+            'status': <String, Object?>{
+              'authoring': 'offline_draft',
+              'runtime': 'runtime_unqualified',
+            },
+          },
+        },
+        'references': <Object?>[
+          <String, Object?>{
+            'role': 'script_owner',
+            'qualifier': null,
+            'target': <String, Object?>{
+              'project_id': blockerProjectId ?? projectId,
+              'entity_id': _questId,
+              'expected_kind': blockerExpectedKind,
+            },
+            'resolution': blockerResolution,
           },
         ],
         'asset_references': <Object?>[],
