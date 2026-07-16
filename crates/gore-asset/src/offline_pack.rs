@@ -678,7 +678,7 @@ pub fn stage_offline_dataasset_pack_v1(
             "root": request.output.display().to_string(),
             "receipt": OFFLINE_PACK_RECEIPT_NAME_V1,
             "triplet": triplet_receipts,
-            "reopened_packages": [reopened.package.clone()],
+            "reopened_packages": [reopened.package().to_owned()],
             "strict_reopen": reopened,
             "compressed": false,
         },

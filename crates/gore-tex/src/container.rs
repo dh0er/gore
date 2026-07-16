@@ -219,6 +219,15 @@ pub struct VerifiedPrimaryAssetReadbackV1 {
     chunk_seals: Vec<VerifiedReadbackChunkSealV1>,
 }
 
+pub type VerifiedPrimaryAssetReadbackPartsV1 = (
+    String,
+    Vec<u8>,
+    Vec<u8>,
+    Vec<VerifiedReadbackSidecarV1>,
+    Vec<VerifiedReadbackSourceSealV1>,
+    Vec<VerifiedReadbackChunkSealV1>,
+);
+
 impl std::fmt::Debug for VerifiedPrimaryAssetReadbackV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -263,6 +272,17 @@ impl VerifiedPrimaryAssetReadbackV1 {
 
     pub fn chunk_seals(&self) -> &[VerifiedReadbackChunkSealV1] {
         &self.chunk_seals
+    }
+
+    pub fn into_parts(self) -> VerifiedPrimaryAssetReadbackPartsV1 {
+        (
+            self.asset_path,
+            self.uasset,
+            self.uexp,
+            self.sidecars,
+            self.source_seals,
+            self.chunk_seals,
+        )
     }
 }
 
@@ -908,15 +928,149 @@ pub fn list_pak_files(pak: &Path) -> Result<Vec<String>> {
 /// package/header/path mapping, and reopens the empty V11 `.pak` sidecar.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StrictTripletVerification {
-    pub package: String,
-    pub export_path: String,
-    pub chunk_count: usize,
-    pub chunks: Vec<VerifiedChunkReceipt>,
-    pub pak_mount_point: String,
-    pub pak_files: Vec<String>,
-    pub bulk_chunks: usize,
-    pub optional_bulk_chunks: usize,
-    pub memory_mapped_bulk_chunks: usize,
+    package: String,
+    export_path: String,
+    chunk_count: usize,
+    chunks: Vec<VerifiedChunkReceipt>,
+    pak_mount_point: String,
+    pak_files: Vec<String>,
+    bulk_chunks: usize,
+    optional_bulk_chunks: usize,
+    memory_mapped_bulk_chunks: usize,
+}
+
+impl StrictTripletVerification {
+    pub fn package(&self) -> &str {
+        &self.package
+    }
+
+    pub fn export_path(&self) -> &str {
+        &self.export_path
+    }
+
+    pub fn chunk_count(&self) -> usize {
+        self.chunk_count
+    }
+
+    pub fn chunks(&self) -> &[VerifiedChunkReceipt] {
+        &self.chunks
+    }
+
+    pub fn pak_mount_point(&self) -> &str {
+        &self.pak_mount_point
+    }
+
+    pub fn pak_files(&self) -> &[String] {
+        &self.pak_files
+    }
+
+    pub fn bulk_chunks(&self) -> usize {
+        self.bulk_chunks
+    }
+
+    pub fn optional_bulk_chunks(&self) -> usize {
+        self.optional_bulk_chunks
+    }
+
+    pub fn memory_mapped_bulk_chunks(&self) -> usize {
+        self.memory_mapped_bulk_chunks
+    }
+
+    pub fn verify_primary_readback_binding_v1(
+        &self,
+        readback: &VerifiedPrimaryAssetReadbackV1,
+    ) -> Result<()> {
+        if self.package != readback.asset_path {
+            return Err(anyhow::anyhow!(
+                "strict triplet package does not match primary readback asset path"
+            )
+            .into());
+        }
+        if self.chunk_count != self.chunks.len() {
+            return Err(anyhow::anyhow!("strict triplet chunk count is inconsistent").into());
+        }
+
+        let primary_sources: Vec<_> = readback
+            .source_seals
+            .iter()
+            .filter(|source| source.role == VerifiedReadbackSourceRoleV1::Primary)
+            .collect();
+        let [primary_source] = primary_sources.as_slice() else {
+            return Err(anyhow::anyhow!(
+                "primary readback must contain exactly one primary UTOC source seal"
+            )
+            .into());
+        };
+
+        let mut strict_chunks = Vec::with_capacity(self.chunks.len());
+        let mut strict_chunk_ids = std::collections::HashSet::with_capacity(self.chunks.len());
+        for chunk in &self.chunks {
+            let chunk_id = decode_fixed_hex(&chunk.chunk_id, "strict triplet chunk id")?;
+            if !strict_chunk_ids.insert(chunk_id) {
+                return Err(anyhow::anyhow!("strict triplet contains a duplicate chunk id").into());
+            }
+            let source_utoc_blake3 = decode_fixed_hex(
+                &chunk.source_utoc_blake3,
+                "strict triplet chunk source UTOC BLAKE3",
+            )?;
+            if source_utoc_blake3 != primary_source.utoc_blake3 {
+                return Err(anyhow::anyhow!(
+                    "strict triplet chunk source does not match the primary UTOC seal"
+                )
+                .into());
+            }
+            let blake3 = decode_fixed_hex(&chunk.blake3, "strict triplet chunk BLAKE3")?;
+            let toc_hash = decode_hex(&chunk.toc_hash, "strict triplet chunk TOC hash")?;
+            if toc_hash.len() != chunk.toc_hash_bytes {
+                return Err(anyhow::anyhow!(
+                    "strict triplet chunk TOC hash length is inconsistent"
+                )
+                .into());
+            }
+            strict_chunks.push((chunk_id, blake3, toc_hash, chunk));
+        }
+        strict_chunks.sort_by_key(|(chunk_id, _, _, _)| *chunk_id);
+
+        if readback.chunk_seals.iter().any(|chunk| {
+            chunk.source_role == VerifiedReadbackSourceRoleV1::Fallback
+                && strict_chunk_ids.contains(&chunk.chunk_id)
+        }) {
+            return Err(anyhow::anyhow!(
+                "primary readback binds a strict triplet chunk to fallback"
+            )
+            .into());
+        }
+
+        let mut primary_chunks: Vec<_> = readback
+            .chunk_seals
+            .iter()
+            .filter(|chunk| chunk.source_role == VerifiedReadbackSourceRoleV1::Primary)
+            .collect();
+        primary_chunks.sort_by_key(|chunk| chunk.chunk_id);
+        if strict_chunks.len() != primary_chunks.len() {
+            return Err(
+                anyhow::anyhow!("strict triplet and primary readback chunk sets differ").into(),
+            );
+        }
+
+        for ((chunk_id, blake3, toc_hash, strict), readback) in
+            strict_chunks.iter().zip(primary_chunks)
+        {
+            if readback.source_utoc_blake3 != primary_source.utoc_blake3
+                || readback.chunk_id != *chunk_id
+                || readback.chunk_type != strict.chunk_type
+                || readback.length != strict.length
+                || readback.blake3 != *blake3
+                || readback.toc_hash() != toc_hash
+            {
+                return Err(anyhow::anyhow!(
+                    "strict triplet and primary readback chunk seals differ"
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3100,6 +3254,179 @@ mod tests {
         let mut unknown = receipt;
         unknown.source_utoc = PathBuf::from("unknown.utoc");
         assert!(path_free_chunk_seal(&unknown, &authority).is_err());
+    }
+
+    fn binding_chunk(
+        id: u8,
+        chunk_type: &str,
+        length: u64,
+        blake3: u8,
+        toc_hash: u8,
+        toc_hash_bytes: usize,
+    ) -> (VerifiedChunkReceipt, VerifiedReadbackChunkSealV1) {
+        let mut sealed_toc_hash = [0; 32];
+        sealed_toc_hash[..toc_hash_bytes].fill(toc_hash);
+        (
+            VerifiedChunkReceipt {
+                chunk_id: format!("{id:02x}").repeat(12),
+                chunk_type: chunk_type.to_owned(),
+                source_utoc: PathBuf::from("private-primary.utoc"),
+                source_utoc_blake3: "11".repeat(32),
+                length,
+                blake3: format!("{blake3:02x}").repeat(32),
+                toc_hash: format!("{toc_hash:02x}").repeat(toc_hash_bytes),
+                toc_hash_bytes,
+            },
+            VerifiedReadbackChunkSealV1 {
+                source_role: VerifiedReadbackSourceRoleV1::Primary,
+                source_utoc_blake3: [0x11; 32],
+                chunk_id: [id; 12],
+                chunk_type: chunk_type.to_owned(),
+                length,
+                blake3: [blake3; 32],
+                toc_hash: sealed_toc_hash,
+                toc_hash_bytes,
+            },
+        )
+    }
+
+    fn matching_primary_binding() -> (StrictTripletVerification, VerifiedPrimaryAssetReadbackV1) {
+        let (export_receipt, export_seal) = binding_chunk(2, "ExportBundleData", 3, 0x22, 0x33, 20);
+        let (header_receipt, header_seal) = binding_chunk(1, "ContainerHeader", 4, 0x44, 0x55, 32);
+        (
+            StrictTripletVerification {
+                package: "/Game/Test/DA_Binding".to_owned(),
+                export_path: "../../../G1R/Content/Test/DA_Binding.uasset".to_owned(),
+                chunk_count: 2,
+                chunks: vec![export_receipt, header_receipt],
+                pak_mount_point: "../../../".to_owned(),
+                pak_files: Vec::new(),
+                bulk_chunks: 0,
+                optional_bulk_chunks: 0,
+                memory_mapped_bulk_chunks: 0,
+            },
+            VerifiedPrimaryAssetReadbackV1 {
+                asset_path: "/Game/Test/DA_Binding".to_owned(),
+                uasset: vec![1, 2, 3],
+                uexp: vec![4, 5],
+                sidecars: vec![VerifiedReadbackSidecarV1 {
+                    kind: VerifiedReadbackSidecarKindV1::Bulk,
+                    bytes: vec![6, 7],
+                }],
+                source_seals: vec![
+                    VerifiedReadbackSourceSealV1 {
+                        role: VerifiedReadbackSourceRoleV1::Primary,
+                        utoc_blake3: [0x11; 32],
+                    },
+                    VerifiedReadbackSourceSealV1 {
+                        role: VerifiedReadbackSourceRoleV1::Fallback,
+                        utoc_blake3: [0x77; 32],
+                    },
+                ],
+                chunk_seals: vec![
+                    export_seal,
+                    header_seal,
+                    VerifiedReadbackChunkSealV1 {
+                        source_role: VerifiedReadbackSourceRoleV1::Fallback,
+                        source_utoc_blake3: [0x77; 32],
+                        chunk_id: [9; 12],
+                        chunk_type: "ScriptObjects".to_owned(),
+                        length: 1,
+                        blake3: [0x88; 32],
+                        toc_hash: [0x99; 32],
+                        toc_hash_bytes: 20,
+                    },
+                ],
+            },
+        )
+    }
+
+    fn assert_primary_binding_rejected(
+        mutate: impl FnOnce(&mut StrictTripletVerification, &mut VerifiedPrimaryAssetReadbackV1),
+    ) {
+        let (mut strict, mut readback) = matching_primary_binding();
+        mutate(&mut strict, &mut readback);
+        assert!(strict
+            .verify_primary_readback_binding_v1(&readback)
+            .is_err());
+    }
+
+    #[test]
+    fn strict_triplet_binding_accepts_only_the_exact_primary_chunk_set() {
+        let (strict, readback) = matching_primary_binding();
+        strict
+            .verify_primary_readback_binding_v1(&readback)
+            .unwrap();
+        assert_eq!(strict.package(), "/Game/Test/DA_Binding");
+        assert_eq!(
+            strict.export_path(),
+            "../../../G1R/Content/Test/DA_Binding.uasset"
+        );
+        assert_eq!(strict.chunk_count(), 2);
+        assert_eq!(strict.chunks().len(), 2);
+        assert_eq!(strict.pak_mount_point(), "../../../");
+        assert!(strict.pak_files().is_empty());
+        assert_eq!(strict.bulk_chunks(), 0);
+        assert_eq!(strict.optional_bulk_chunks(), 0);
+        assert_eq!(strict.memory_mapped_bulk_chunks(), 0);
+    }
+
+    #[test]
+    fn strict_triplet_binding_rejects_every_authority_or_chunk_drift() {
+        assert_primary_binding_rejected(|strict, _| strict.package.push_str("_Other"));
+        assert_primary_binding_rejected(|_, readback| readback.source_seals.clear());
+        assert_primary_binding_rejected(|_, readback| {
+            readback.source_seals.push(VerifiedReadbackSourceSealV1 {
+                role: VerifiedReadbackSourceRoleV1::Primary,
+                utoc_blake3: [0x11; 32],
+            });
+        });
+        assert_primary_binding_rejected(|strict, _| {
+            strict.chunks[0].source_utoc_blake3 = "12".repeat(32);
+        });
+        assert_primary_binding_rejected(|strict, _| strict.chunk_count += 1);
+        assert_primary_binding_rejected(|_, readback| readback.chunk_seals[0].chunk_id = [3; 12]);
+        assert_primary_binding_rejected(|_, readback| {
+            readback.chunk_seals[0].chunk_type = "BulkData".to_owned();
+        });
+        assert_primary_binding_rejected(|_, readback| readback.chunk_seals[0].length += 1);
+        assert_primary_binding_rejected(|_, readback| readback.chunk_seals[0].blake3[0] ^= 1);
+        assert_primary_binding_rejected(|_, readback| readback.chunk_seals[0].toc_hash[0] ^= 1);
+        assert_primary_binding_rejected(|_, readback| {
+            readback.chunk_seals[0].toc_hash_bytes -= 1;
+        });
+        assert_primary_binding_rejected(|_, readback| {
+            readback.chunk_seals[0].source_utoc_blake3[0] ^= 1;
+        });
+        assert_primary_binding_rejected(|_, readback| {
+            let mut fallback_target = readback.chunk_seals[0].clone();
+            fallback_target.source_role = VerifiedReadbackSourceRoleV1::Fallback;
+            fallback_target.source_utoc_blake3 = [0x77; 32];
+            readback.chunk_seals.push(fallback_target);
+        });
+    }
+
+    #[test]
+    fn primary_readback_into_parts_moves_every_owned_allocation() {
+        let (_, readback) = matching_primary_binding();
+        let asset_path_ptr = readback.asset_path.as_ptr();
+        let uasset_ptr = readback.uasset.as_ptr();
+        let uexp_ptr = readback.uexp.as_ptr();
+        let sidecars_ptr = readback.sidecars.as_ptr();
+        let source_seals_ptr = readback.source_seals.as_ptr();
+        let chunk_seals_ptr = readback.chunk_seals.as_ptr();
+
+        let (asset_path, uasset, uexp, sidecars, source_seals, chunk_seals) = readback.into_parts();
+        assert_eq!(asset_path.as_ptr(), asset_path_ptr);
+        assert_eq!(uasset.as_ptr(), uasset_ptr);
+        assert_eq!(uexp.as_ptr(), uexp_ptr);
+        assert_eq!(sidecars.as_ptr(), sidecars_ptr);
+        assert_eq!(source_seals.as_ptr(), source_seals_ptr);
+        assert_eq!(chunk_seals.as_ptr(), chunk_seals_ptr);
+        assert_eq!(asset_path, "/Game/Test/DA_Binding");
+        assert_eq!(uasset, [1, 2, 3]);
+        assert_eq!(uexp, [4, 5]);
+        assert_eq!(sidecars[0].bytes(), [6, 7]);
     }
 
     #[test]
