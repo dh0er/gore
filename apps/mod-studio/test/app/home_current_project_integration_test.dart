@@ -37,6 +37,7 @@ import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_target_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_wizard.dart';
 import 'package:path/path.dart' as p;
@@ -3724,6 +3725,153 @@ void main() {
   );
 
   testWidgets(
+    'Voice status then selection in one dialog uses the latest coordinator head',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      tester.view.physicalSize = const Size(1600, 1200);
+      const firstTakeId = '55000000000000000000000000000000';
+      const secondTakeId = '55000000000000000000000000000001';
+      var currentIndex = _voiceSelectionIndex(
+        revision: 7,
+        selectedTakeId: firstTakeId,
+        alternateStatus: 'recorded',
+      );
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-status-dynamic-head'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (_) => currentIndex,
+        onVoiceStatusPublish: (lease, plan) {
+          expect(plan.takeId, secondTakeId);
+          expect(
+            plan.expectedStatus,
+            AuthoringRevision3VoiceTakeStatus.recorded,
+          );
+          expect(
+            plan.desiredStatus,
+            AuthoringRevision3VoiceTakeStatus.approved,
+          );
+          expect(lease.projectRevision, 7);
+          expect(lease.head.canonicalJson, _head(7).canonicalJson);
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          currentIndex = _voiceSelectionIndex(
+            revision: 8,
+            selectedTakeId: firstTakeId,
+            alternateStatus: 'approved',
+            alternateRevision: 1,
+          );
+          return Revision3VoiceTakeStatusPublication(
+            projectId: lease.projectId,
+            projectRevision: 8,
+            lineId: plan.lineId,
+            localizationId: plan.localizationId,
+            slotId: plan.slotId,
+            slotRevision: plan.expectedSlotRevision,
+            locale: plan.locale,
+            locId: plan.locId,
+            takeId: plan.takeId,
+            takeRevision: plan.expectedTakeRevision + 1,
+            previousStatus: plan.expectedStatus,
+            status: plan.desiredStatus,
+          );
+        },
+        onVoiceSelectionPublish: (lease, plan) {
+          expect(
+            lease.head.canonicalJson,
+            _head(8).canonicalJson,
+            reason: 'selection must run from the status publication head',
+          );
+          expect(lease.projectRevision, 8);
+          expect(plan.expectedSelectedTakeId, firstTakeId);
+          expect(plan.selectedTakeId, secondTakeId);
+          lease.projectRevision = 9;
+          lease.head = _head(9);
+          currentIndex = _voiceSelectionIndex(
+            revision: 9,
+            selectedTakeId: secondTakeId,
+            slotRevision: plan.expectedSlotRevision + 1,
+            selectedRevision: 1,
+          );
+          return Revision3VoiceTakeSelectionPublication(
+            projectId: lease.projectId,
+            projectRevision: 9,
+            lineId: plan.lineId,
+            slotId: plan.slotId,
+            slotRevision: plan.expectedSlotRevision + 1,
+            locale: plan.locale,
+            locId: plan.locId,
+            previousSelectedTakeId: plan.expectedSelectedTakeId,
+            selectedTakeId: plan.selectedTakeId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _tapManagedDashboardAction(
+        tester,
+        const Key('managed-manage-voice-takes'),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-selection-line-0')));
+      await tester.pump();
+      await tester.ensureVisible(
+        find.byKey(const Key('voice-status-change-1')),
+      );
+      await tester.tap(find.byKey(const Key('voice-status-change-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-status-option-1-approved')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceStatusPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        8,
+      );
+      expect(
+        tester
+            .widget<RadioListTile<String>>(
+              find.byKey(const Key('voice-selection-take-1')),
+            )
+            .enabled,
+        isTrue,
+      );
+
+      await tester.tap(find.byKey(const Key('voice-selection-take-1')));
+      await tester.pump();
+      await tester.ensureVisible(find.byKey(const Key('voice-selection-save')));
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      await tester.pumpAndSettle();
+
+      expect(managed.voiceStatusPublishCalls, 1);
+      expect(managed.voiceSelectionPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .projectRevision,
+        9,
+      );
+      expect(
+        find.textContaining(
+          'Approved Voice take selected in project revision 9',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
     'managed Voice target and offline build use the exact current checkpoint',
     (tester) async {
       await _setDesktopTestSurface(tester);
@@ -4887,7 +5035,8 @@ final class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
-        ManagedRevision3DialogLocalizationEditLease {
+        ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3VoiceTakeStatusLease {
   _FakeManagedLease({
     required this.root,
     required this.projectId,
@@ -4911,6 +5060,7 @@ final class _FakeManagedLease
     this.onDialogLinePublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
+    this.onVoiceStatusPublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
     this.onDataAssetList,
@@ -5020,6 +5170,11 @@ final class _FakeManagedLease
     Revision3VoiceTakeSelectionTechnicalPlan plan,
   )?
   onVoiceSelectionPublish;
+  final Revision3VoiceTakeStatusPublication Function(
+    _FakeManagedLease lease,
+    Revision3VoiceTakeStatusTechnicalPlan plan,
+  )?
+  onVoiceStatusPublish;
   final Revision3VoiceTargetPublication Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -5080,6 +5235,7 @@ final class _FakeManagedLease
   int dialogLinePublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
+  int voiceStatusPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
@@ -5397,6 +5553,24 @@ final class _FakeManagedLease
       throw StateError('fake managed lease has no Voice selection publisher');
     }
     return publish(this, plan);
+  }
+
+  @override
+  Future<Revision3VoiceTakeStatusPublication>
+  prepareAndPublishVoiceTakeStatusV1({
+    required Revision3VoiceTakeStatusTechnicalPlan plan,
+  }) async {
+    voiceStatusPublishCalls++;
+    final publish = onVoiceStatusPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice status publisher');
+    }
+    return publish(this, plan);
+  }
+
+  @override
+  void markRequiresReopenAfterPublicationUncertainty() {
+    requiresReopenValue = true;
   }
 
   @override
@@ -6522,6 +6696,9 @@ Revision3ContentIndex _voiceSelectionIndex({
   required int revision,
   required String selectedTakeId,
   int slotRevision = 1,
+  String alternateStatus = 'approved',
+  int alternateRevision = 0,
+  int selectedRevision = 0,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
@@ -6544,9 +6721,11 @@ Revision3ContentIndex _voiceSelectionIndex({
     if (entity['kind'] == 'voice_take') {
       final summary = (entity['summary']! as Map).cast<String, Object?>();
       final data = (summary['data']! as Map).cast<String, Object?>();
-      data['status'] = 'approved';
+      final selected = entity['id'] == selectedTakeId;
+      data['status'] = selected ? 'approved' : alternateStatus;
       summary['data'] = data;
       entity['summary'] = summary;
+      entity['revision'] = selected ? selectedRevision : alternateRevision;
     }
   }
   return Revision3ContentIndex.fromJsonObject(json);

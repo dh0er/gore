@@ -22,6 +22,7 @@ import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
+import 'revision3_voice_take_status_authoring.dart';
 
 enum CurrentProjectKind { none, legacyFormat1, managedRevision3 }
 
@@ -367,6 +368,20 @@ abstract interface class ManagedRevision3DialogLocalizationEditLease {
   });
 }
 
+/// Optional exact-current capability for changing one retained VoiceTake's
+/// author-managed review status. Keeping it separate avoids widening unrelated
+/// current-project lease fakes with mutation authority.
+abstract interface class ManagedRevision3VoiceTakeStatusLease {
+  /// Permanently remove mutation authority from this lease after a publication
+  /// returned a receipt that cannot be bound to the requested checkpoint.
+  void markRequiresReopenAfterPublicationUncertainty();
+
+  Future<Revision3VoiceTakeStatusPublication>
+  prepareAndPublishVoiceTakeStatusV1({
+    required Revision3VoiceTakeStatusTechnicalPlan plan,
+  });
+}
+
 /// Optional immutable-build capability. It is separate from checkpoint editing
 /// so unrelated lease fakes do not accidentally claim artifact authority.
 abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
@@ -489,6 +504,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3ReviewedDataAssetBuildLease {
   const _ManagedRevision3SessionLease(this._session);
 
@@ -508,6 +524,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   bool get requiresReopen => _session.requiresReopen;
+
+  @override
+  void markRequiresReopenAfterPublicationUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
   bool get supportsReviewedDataAssetBuild =>
@@ -856,6 +876,39 @@ final class _ManagedRevision3SessionLease
       locId: checkpoint.locId,
       previousSelectedTakeId: checkpoint.previousSelectedTakeId,
       selectedTakeId: checkpoint.selectedTakeId,
+    );
+  }
+
+  @override
+  Future<Revision3VoiceTakeStatusPublication>
+  prepareAndPublishVoiceTakeStatusV1({
+    required Revision3VoiceTakeStatusTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishVoiceTakeStatusV1(
+      lineId: plan.lineId,
+      localizationId: plan.localizationId,
+      expectedLocId: plan.locId,
+      locale: plan.locale,
+      slotId: plan.slotId,
+      expectedSlotRevision: plan.expectedSlotRevision,
+      takeId: plan.takeId,
+      expectedTakeRevision: plan.expectedTakeRevision,
+      expectedStatus: plan.expectedStatus,
+      desiredStatus: plan.desiredStatus,
+    );
+    return Revision3VoiceTakeStatusPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      localizationId: checkpoint.localizationId,
+      slotId: checkpoint.slotId,
+      slotRevision: checkpoint.slotRevision,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      takeId: checkpoint.takeId,
+      takeRevision: checkpoint.takeRevision,
+      previousStatus: checkpoint.previousStatus,
+      status: checkpoint.status,
     );
   }
 
@@ -2715,6 +2768,75 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTakeSelectionRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Change one retained take's author-managed review status against an exact
+  /// visible Voice checkpoint. This grants no game, media, build, deployment,
+  /// or runtime authority.
+  Future<Revision3VoiceTakeStatusPublication>
+  editCurrentRevision3VoiceTakeStatus({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3VoiceTakeStatusTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice take status editing is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakeStatusRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakeStatusStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3VoiceTakeStatusLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project lease does not support Voice take status editing',
+      );
+    }
+    final editor = lease as ManagedRevision3VoiceTakeStatusLease;
+    try {
+      final publication = await editor.prepareAndPublishVoiceTakeStatusV1(
+        plan: plan,
+      );
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.localizationId != plan.localizationId ||
+          publication.slotId != plan.slotId ||
+          publication.slotRevision != plan.expectedSlotRevision ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId ||
+          publication.takeId != plan.takeId ||
+          publication.takeRevision != plan.expectedTakeRevision + 1 ||
+          publication.previousStatus != plan.expectedStatus ||
+          publication.status != plan.desiredStatus) {
+        editor.markRequiresReopenAfterPublicationUncertainty();
+        throw const Revision3VoiceTakeStatusRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeStatusRequiresReopenException(),
           stackTrace,
         );
       }

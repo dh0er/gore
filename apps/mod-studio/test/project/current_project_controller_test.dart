@@ -20,6 +20,7 @@ import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
 
 import '../support/revision3_dataasset_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
@@ -3217,6 +3218,231 @@ void main() {
   );
 
   test(
+    'Voice take status is exact-visible-tuple bound and refreshes the published checkpoint',
+    () async {
+      final plan = _voiceTakeStatusPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-take-status'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceTakeStatusPublish: (lease, received) {
+          expect(received, same(plan));
+          lease.projectRevision = 8;
+          lease.head = _head(8);
+          return Revision3VoiceTakeStatusPublication(
+            projectId: revision3VoiceContentProjectId,
+            projectRevision: 8,
+            lineId: received.lineId,
+            localizationId: received.localizationId,
+            slotId: received.slotId,
+            slotRevision: received.expectedSlotRevision,
+            locale: received.locale,
+            locId: received.locId,
+            takeId: received.takeId,
+            takeRevision: received.expectedTakeRevision + 1,
+            previousStatus: received.expectedStatus,
+            status: received.desiredStatus,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      for (final stale
+          in <
+            ({
+              String root,
+              String projectId,
+              int revision,
+              AuthoringWorkingHead head,
+            })
+          >[
+            (
+              root: Directory('another-root').path,
+              projectId: managed.projectId,
+              revision: 7,
+              head: _head(7),
+            ),
+            (
+              root: managed.root.path,
+              projectId: '99999999999999999999999999999999',
+              revision: 7,
+              head: _head(7),
+            ),
+            (
+              root: managed.root.path,
+              projectId: managed.projectId,
+              revision: 6,
+              head: _head(7),
+            ),
+            (
+              root: managed.root.path,
+              projectId: managed.projectId,
+              revision: 7,
+              head: _head(6),
+            ),
+          ]) {
+        await expectLater(
+          coordinator.editCurrentRevision3VoiceTakeStatus(
+            expectedRoot: stale.root,
+            expectedProjectId: stale.projectId,
+            expectedProjectRevision: stale.revision,
+            expectedHead: stale.head,
+            plan: plan,
+          ),
+          throwsA(isA<Revision3VoiceTakeStatusStaleCheckpointException>()),
+        );
+      }
+      expect(managed.voiceTakeStatusPublishCalls, 0);
+
+      final publication = await coordinator.editCurrentRevision3VoiceTakeStatus(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        plan: plan,
+      );
+      expect(publication.projectRevision, 8);
+      expect(publication.lineId, plan.lineId);
+      expect(publication.localizationId, plan.localizationId);
+      expect(publication.slotId, plan.slotId);
+      expect(publication.slotRevision, plan.expectedSlotRevision);
+      expect(publication.locale, plan.locale);
+      expect(publication.locId, plan.locId);
+      expect(publication.takeId, plan.takeId);
+      expect(publication.takeRevision, plan.expectedTakeRevision + 1);
+      expect(publication.previousStatus, plan.expectedStatus);
+      expect(publication.status, plan.desiredStatus);
+      expect(managed.voiceTakeStatusPublishCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+    },
+  );
+
+  test('Voice take status rejects a mismatched publication tuple', () async {
+    final plan = _voiceTakeStatusPlan();
+    final managed = _FakeManagedLease(
+      root: Directory('managed-voice-take-status-mismatch'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      onVoiceTakeStatusPublish: (lease, received) {
+        lease.projectRevision = 8;
+        lease.head = _head(8);
+        return Revision3VoiceTakeStatusPublication(
+          projectId: revision3VoiceContentProjectId,
+          projectRevision: 8,
+          lineId: received.lineId,
+          localizationId: received.localizationId,
+          slotId: received.slotId,
+          slotRevision: received.expectedSlotRevision + 1,
+          locale: received.locale,
+          locId: received.locId,
+          takeId: received.takeId,
+          takeRevision: received.expectedTakeRevision + 1,
+          previousStatus: received.expectedStatus,
+          status: received.desiredStatus,
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.editCurrentRevision3VoiceTakeStatus(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        plan: plan,
+      ),
+      throwsA(isA<Revision3VoiceTakeStatusRequiresReopenException>()),
+    );
+    expect(managed.voiceTakeStatusPublishCalls, 1);
+    expect(managed.requiresReopen, isTrue);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isTrue,
+    );
+    await expectLater(
+      coordinator.editCurrentRevision3VoiceTakeStatus(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        plan: plan,
+      ),
+      throwsA(isA<Revision3VoiceTakeStatusRequiresReopenException>()),
+    );
+    expect(managed.voiceTakeStatusPublishCalls, 1);
+  });
+
+  test(
+    'poisoned Voice take status maps to requires-reopen and locks retry',
+    () async {
+      final plan = _voiceTakeStatusPlan();
+      final managed = _FakeManagedLease(
+        root: Directory('managed-poisoned-voice-take-status'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onVoiceTakeStatusPublish: (lease, _) {
+          lease.requiresReopenValue = true;
+          throw StateError('injected Voice take status verification failure');
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> publish() async {
+        await coordinator.editCurrentRevision3VoiceTakeStatus(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 7,
+          expectedHead: _head(7),
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeStatusRequiresReopenException>()),
+      );
+      expect(managed.voiceTakeStatusPublishCalls, 1);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isTrue,
+      );
+      await expectLater(
+        publish(),
+        throwsA(isA<Revision3VoiceTakeStatusRequiresReopenException>()),
+      );
+      expect(managed.voiceTakeStatusPublishCalls, 1);
+    },
+  );
+
+  test(
     'Voice target publication advances exactly once and Voice build preserves the checkpoint',
     () async {
       final plan = _voiceTargetPlan();
@@ -4558,6 +4784,11 @@ typedef _VoiceSelectionPublishHook =
       _FakeManagedLease lease,
       Revision3VoiceTakeSelectionTechnicalPlan plan,
     );
+typedef _VoiceTakeStatusPublishHook =
+    FutureOr<Revision3VoiceTakeStatusPublication> Function(
+      _FakeManagedLease lease,
+      Revision3VoiceTakeStatusTechnicalPlan plan,
+    );
 typedef _DataAssetRemoveHook =
     FutureOr<Revision3DataAssetStageRemovalPublication> Function(
       _FakeManagedLease lease,
@@ -4600,6 +4831,7 @@ final class _FakeManagedLease
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3ReviewedDataAssetBuildLease {
   _FakeManagedLease({
     required this.root,
@@ -4624,6 +4856,7 @@ final class _FakeManagedLease
     this.onQuestContextPublish,
     this.onVoicePublish,
     this.onVoiceSelectionPublish,
+    this.onVoiceTakeStatusPublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
     this.onReviewedDataAssetBuild,
@@ -4667,6 +4900,7 @@ final class _FakeManagedLease
   final _QuestContextPublishHook? onQuestContextPublish;
   final _VoicePublishHook? onVoicePublish;
   final _VoiceSelectionPublishHook? onVoiceSelectionPublish;
+  final _VoiceTakeStatusPublishHook? onVoiceTakeStatusPublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
   final _VoiceBuildHook? onVoiceBuild;
   final _ReviewedDataAssetBuildHook? onReviewedDataAssetBuild;
@@ -4714,6 +4948,7 @@ final class _FakeManagedLease
   int questContextPublishCalls = 0;
   int voicePublishCalls = 0;
   int voiceSelectionPublishCalls = 0;
+  int voiceTakeStatusPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
   int reviewedDataAssetBuildCalls = 0;
@@ -4733,6 +4968,12 @@ final class _FakeManagedLease
   int dataAssetPackageIndexReadCalls = 0;
   final List<String> dataAssetPackageIndexGameRoots = <String>[];
   int installedDataAssetInspectionCalls = 0;
+
+  @override
+  void markRequiresReopenAfterPublicationUncertainty() {
+    requiresReopenValue = true;
+  }
+
   final List<String> installedDataAssetInspectionGameRoots = <String>[];
   final List<AuthoringRevision3DataAssetPackageIndexResult>
   installedDataAssetInspectionSnapshots =
@@ -5103,6 +5344,19 @@ final class _FakeManagedLease
   }
 
   @override
+  Future<Revision3VoiceTakeStatusPublication>
+  prepareAndPublishVoiceTakeStatusV1({
+    required Revision3VoiceTakeStatusTechnicalPlan plan,
+  }) async {
+    voiceTakeStatusPublishCalls++;
+    final publish = onVoiceTakeStatusPublish;
+    if (publish == null) {
+      throw StateError('fake managed lease has no Voice take status publisher');
+    }
+    return publish(this, plan);
+  }
+
+  @override
   Future<Revision3VoiceTargetPublication> prepareAndPublishVoiceTargetV1({
     required String gameRoot,
     required Revision3VoiceTargetTechnicalPlan plan,
@@ -5251,6 +5505,27 @@ Revision3VoiceTakeSelectionTechnicalPlan _voiceSelectionPlan() {
     lineId: revision3VoiceContentLineId,
     locale: 'de',
     selectedTakeId: null,
+  );
+}
+
+Revision3VoiceTakeStatusTechnicalPlan _voiceTakeStatusPlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(
+      existingSlotCandidateCount: 2,
+      existingSlotHasSelectedTake: true,
+    ),
+  );
+  final line = catalog.line(revision3VoiceContentLineId)!;
+  final summary = line.slotSummaryForLocale('de')!;
+  final take = summary.candidates.firstWhere(
+    (candidate) => candidate.id != summary.selectedTakeId,
+  );
+  return Revision3VoiceTakeStatusTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    lineId: revision3VoiceContentLineId,
+    locale: 'de',
+    takeId: take.id,
+    desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
   );
 }
 

@@ -1296,6 +1296,206 @@ void main() {
   );
 
   test(
+    'Voice take status publishes one exact take delta and serializes the full basis tuple',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final root = await _projectRoot(fixture, suffix: 'voice_take_status');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: voice.projectJson,
+      );
+      final basisHeadJson = session.head.canonicalJson;
+      final takeRevision = _voiceTakeRevision(
+        voice.projectJson,
+        revision3VoiceSelectionAlternateTakeId,
+      );
+
+      final published = await session.prepareAndPublishVoiceTakeStatusV1(
+        lineId: revision3VoiceFixtureLineId,
+        localizationId: revision3VoiceFixtureLocalizationId,
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        locale: 'de',
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        takeId: revision3VoiceSelectionAlternateTakeId,
+        expectedTakeRevision: takeRevision,
+        expectedStatus: AuthoringRevision3VoiceTakeStatus.approved,
+        desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
+      );
+
+      expect(store.voiceTakeStatusPrepareCalls, 1);
+      final request = store.voiceTakeStatusRequests.single;
+      expect(request.expectedHead.canonicalJson, basisHeadJson);
+      expect(request.expectedProjectId, revision3VoiceFixtureProjectId);
+      expect(request.expectedRevision, voice.projectRevision);
+      expect(request.lineId, revision3VoiceFixtureLineId);
+      expect(request.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(request.expectedLocId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+      expect(request.locale, 'de');
+      expect(request.slotId, revision3VoiceFixtureSlotId);
+      expect(request.expectedSlotRevision, voice.slotRevision);
+      expect(request.takeId, revision3VoiceSelectionAlternateTakeId);
+      expect(request.expectedTakeRevision, takeRevision);
+      expect(
+        request.expectedStatus,
+        AuthoringRevision3VoiceTakeStatus.approved,
+      );
+      expect(request.desiredStatus, AuthoringRevision3VoiceTakeStatus.reviewed);
+      final wire = (jsonDecode(request.canonicalJson) as Map)
+          .cast<String, Object?>();
+      expect(wire.keys, <String>[
+        'expected_head',
+        'expected_project_id',
+        'expected_revision',
+        'expected_target',
+        'line_id',
+        'localization_id',
+        'expected_loc_id',
+        'locale',
+        'slot_id',
+        'expected_slot_revision',
+        'take_id',
+        'expected_take_revision',
+        'expected_status',
+        'desired_status',
+      ]);
+      expect(request.canonicalJson, isNot(contains('game_root')));
+      expect(request.canonicalJson, isNot(contains('source')));
+
+      expect(published.projectId, revision3VoiceFixtureProjectId);
+      expect(published.projectRevision, voice.projectRevision + 1);
+      expect(published.lineId, revision3VoiceFixtureLineId);
+      expect(published.localizationId, revision3VoiceFixtureLocalizationId);
+      expect(published.slotId, revision3VoiceFixtureSlotId);
+      expect(published.slotRevision, voice.slotRevision);
+      expect(published.locale, 'de');
+      expect(published.locId, 'GRD_263_ASGHAN_OPEN_INFO_06_02');
+      expect(published.takeId, revision3VoiceSelectionAlternateTakeId);
+      expect(published.takeRevision, takeRevision + 1);
+      expect(
+        published.previousStatus,
+        AuthoringRevision3VoiceTakeStatus.approved,
+      );
+      expect(published.status, AuthoringRevision3VoiceTakeStatus.reviewed);
+      expect(session.projectJson, published.projectJson);
+      expect(
+        await session.headFile.readAsString(),
+        published.head.canonicalJson,
+      );
+      expect(
+        store.headVerifications,
+        everyElement(AuthoringAssetVerification.full),
+      );
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice take status selected conflict retries while head malformed and invariant failures poison',
+    () async {
+      final voice = Revision3VoiceSelectionFixture();
+      final takeRevision = _voiceTakeRevision(
+        voice.projectJson,
+        revision3VoiceSelectionAlternateTakeId,
+      );
+      Future<ManagedRevision3VoiceTakeStatusCheckpoint> publish(
+        ManagedRevision3AuthoringProjectSession session,
+      ) => session.prepareAndPublishVoiceTakeStatusV1(
+        lineId: revision3VoiceFixtureLineId,
+        localizationId: revision3VoiceFixtureLocalizationId,
+        expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+        locale: 'de',
+        slotId: revision3VoiceFixtureSlotId,
+        expectedSlotRevision: voice.slotRevision,
+        takeId: revision3VoiceSelectionAlternateTakeId,
+        expectedTakeRevision: takeRevision,
+        expectedStatus: AuthoringRevision3VoiceTakeStatus.approved,
+        desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
+      );
+
+      final retryRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_take_status_retry',
+      );
+      final retryStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: voice.projectJson,
+      );
+      final fixedHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoiceTakeStatusError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_STATUS_SELECTED_CONFLICT',
+        message: 'fake selected take status rejection',
+      );
+      await expectLater(publish(retrySession), throwsA(isA<ModFfiException>()));
+      expect(retrySession.requiresReopen, isFalse);
+      expect(await retrySession.headFile.readAsBytes(), fixedHead);
+      expect((await publish(retrySession)).projectRevision, 9);
+      await retrySession.close();
+
+      for (final code in <String>[
+        'AUTHORING_REVISION3_VOICE_TAKE_STATUS_HEAD_CONFLICT',
+        ModFfiException.malformedNativeResponseCode,
+        'AUTHORING_REVISION3_VOICE_TAKE_STATUS_INVARIANT',
+      ]) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_take_status_poison_${code.hashCode}',
+        );
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: voice.projectJson,
+        );
+        store.nextVoiceTakeStatusError = ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+          code: code,
+          message: 'fake Voice take status integrity failure',
+        );
+        await expectLater(
+          publish(session),
+          code.endsWith('HEAD_CONFLICT')
+              ? throwsA(isA<ManagedProjectHeadConflictException>())
+              : throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      }
+    },
+  );
+
+  test(
+    'higher-layer publication uncertainty permanently removes session authority',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'publication_uncertainty_latch',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: Revision3VoiceSelectionFixture().projectJson,
+      );
+
+      session.markRequiresReopenAfterPublicationUncertainty();
+
+      expect(session.requiresReopen, isTrue);
+      await expectLater(
+        session.verifyCurrentHead(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
+  test(
     'Quest outline edit publishes through full reopen CAS without a game root',
     () async {
       final outline = Revision3QuestOutlineFixture();
@@ -5595,6 +5795,13 @@ ReviewedInstalledDataAssetEditIntent _reviewedInstalledDataAssetIntent(
   );
 }
 
+int _voiceTakeRevision(String projectJson, String takeId) {
+  final project = (jsonDecode(projectJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final take = (entities[takeId]! as Map).cast<String, Object?>();
+  return take['revision']! as int;
+}
+
 final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   _FakeRevision3Store({this.sealRegisteredHeads = false});
 
@@ -5617,6 +5824,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   int dialogLinePrepareCalls = 0;
   int voicePrepareCalls = 0;
   int voiceSelectionPrepareCalls = 0;
+  int voiceTakeStatusPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
@@ -5670,6 +5878,8 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
       <AuthoringRevision3VoiceTakeRequestV1>[];
   final List<AuthoringRevision3VoiceTakeSelectionRequestV1>
   voiceSelectionRequests = <AuthoringRevision3VoiceTakeSelectionRequestV1>[];
+  final List<AuthoringRevision3VoiceTakeStatusRequestV1>
+  voiceTakeStatusRequests = <AuthoringRevision3VoiceTakeStatusRequestV1>[];
   final List<AuthoringRevision3VoiceTargetRequestV1> voiceTargetRequests =
       <AuthoringRevision3VoiceTargetRequestV1>[];
   final List<String> voiceBuildOutputs = <String>[];
@@ -5683,6 +5893,7 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
   Object? nextNpcError;
   Object? nextVoiceError;
   Object? nextVoiceSelectionError;
+  Object? nextVoiceTakeStatusError;
   Object? nextVoiceTargetError;
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
@@ -6514,6 +6725,70 @@ final class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
         'loc_id': request.expectedLocId,
         'previous_selected_take_id': request.expectedSelectedTakeId,
         'selected_take_id': request.selectedTakeId,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceTakeStatusPreparation>
+  prepareVoiceTakeStatusV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeStatusRequestV1 request,
+  }) async {
+    voiceTakeStatusPrepareCalls++;
+    voiceTakeStatusRequests.add(request);
+    final injectedError = nextVoiceTakeStatusError;
+    nextVoiceTakeStatusError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_status_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_STATUS_HEAD_CONFLICT',
+        message: 'fake native Voice take status basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final take = (entities[request.takeId]! as Map).cast<String, Object?>();
+    take['revision'] = request.expectedTakeRevision + 1;
+    final payload = (take['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    data['status'] = request.desiredStatus.name;
+    payload['data'] = data;
+    take['payload'] = payload;
+    entities[request.takeId] = take;
+    candidate['entities'] = entities;
+    final candidateProject = jsonEncode(candidate);
+    final candidateHead = register(candidateProject);
+    return AuthoringRevision3VoiceTakeStatusPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProject,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'take_id': request.takeId,
+        'take_revision': request.expectedTakeRevision + 1,
+        'previous_status': request.expectedStatus.name,
+        'status': request.desiredStatus.name,
         'build_status': 'blocked',
         'runtime_status': 'runtime_unqualified',
         'publication_status': 'not_supported',

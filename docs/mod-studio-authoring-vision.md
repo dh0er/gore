@@ -100,6 +100,15 @@ been consolidated:
   no topic, AngelScript, build, runtime, deployment, or native publication
   authority. The unsealed global localization catalog remains excluded: this is
   project-local creation/exact reuse, not vanilla adoption.
+- **Manage Voice takes** now owns review status as well as selection. An author
+  can move one retained take through Draft/Recorded/Reviewed/Approved and then
+  select a newly Approved take without re-importing it or leaving the dialog.
+  Status and selection remain separate exact-head transactions; a selected
+  take may only be changed to Approved until the selection is changed or
+  cleared. The status
+  transaction changes only project revision plus the chosen take's revision
+  and workflow label, preserves slot/selection/media and unrelated content,
+  accepts no game or source path, and grants no audio-quality or runtime proof.
 - **Project > Close** now closes the current coordinator-owned Legacy or
   managed-R3 session after the existing dirty-Legacy confirmation. It neither
   deletes project data nor supplies Save As, history, or recovery.
@@ -549,7 +558,10 @@ localization identity, limits each visible result set to 50, and requires an
 explicit line choice. It can import a validated Ogg into the managed AssetStore,
 create or extend the line's unresolved locale slot, retain multiple take
 candidates and their Draft/Recorded/Reviewed/Approved status, and select only
-an Approved take. The normal wizard deliberately does not edit dialog text: it
+an Approved take. The existing-take manager can now change that author-managed
+status and immediately expose a newly Approved take for selection; the selected
+take stays locked to Approved. Status is workflow metadata, not audible-game
+qualification. The normal wizard deliberately does not edit dialog text: it
 sends no text change and preserves the existing `LocalizationEntry` exactly.
 Publication reloads the content index, binds the exact managed checkpoint, and
 refreshes the visible project revision/head. This is the landed subset below,

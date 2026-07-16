@@ -30,10 +30,12 @@ remains a separate **Build & Release** action and needs that installation too.
    locale. The search-first wizard hides technical identities, retains
    alternate takes, supports Draft/Recorded/Reviewed/Approved status, and lets
    only an Approved take become selected.
-4. **Manage Voice takes** searches existing dialog lines and lets the author
-   select one already retained Approved candidate for an existing locale slot,
-   or explicitly clear its current selection. It imports, removes, and changes
-   no take or media asset, and it needs no game path.
+4. **Manage Voice takes** searches existing dialog lines, lets the author move
+   a retained take through Draft/Recorded/Reviewed/Approved, and selects one
+   Approved candidate for an existing locale slot or explicitly clears the
+   current selection. Status and selection are separate saved changes in the
+   same friendly dialog. It imports, removes, or rewrites no media asset, and
+   it needs no game path.
 5. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
@@ -154,6 +156,34 @@ Vorbis and Opus metadata can be retained as authored source evidence. The
 current sealed bundle lowerer is qualified only for Vorbis, so selecting an
 Opus take produces an explicit `selected_take_codec_unqualified` build blocker
 instead of guessing compatibility.
+
+## Existing take review status
+
+The status shown beside each retained take is an author-managed workflow label,
+not evidence that the audio sounds correct or works in game. **Manage Voice
+takes** can change exactly one take between Draft, Recorded, Reviewed, and
+Approved. A newly Approved take becomes selectable immediately without closing
+and reopening the dialog. A selected take may only be changed to Approved; the
+author must first save an explicit selection change or clear before assigning
+any other status. This also safely repairs historical selected takes whose
+stored status was not Approved.
+
+The status transaction binds the exact head, project/target, dialog line and
+localization identity, locale, uniquely owned slot and unchanged slot revision,
+take identity/revision, and expected old status. Only the project revision, the
+chosen `VoiceTake` revision, and that take's status may change. Candidate order,
+slot selection and revision, Ogg asset, codec facts, target evidence, dialog
+text, localization, other takes, and all unrelated entities remain identical.
+No-op, stale, selected-take demotion, malformed graph, or publication
+disagreement fails closed.
+
+The prepare-only native route performs full Store and asset verification,
+reconstructs the permitted delta independently, fully reopens the immutable
+candidate, repeats fixed-head race guards, and never publishes the head. Only
+the serialized managed session may publish through guarded fixed-head CAS,
+repair, and a full published reopen. This operation reads or writes neither a
+game installation nor a save, accepts no source path, creates no build output,
+and grants no media-quality, build, deployment, or runtime authority.
 
 ## Existing take selection
 

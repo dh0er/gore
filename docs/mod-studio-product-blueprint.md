@@ -387,9 +387,12 @@ These nouns describe different artifacts and must remain visibly distinct:
 
 The bounded line-centric Voice workflow extends the managed revision-3 session
 instead of adding another format-1 list or parallel project state. Exact-head
-transactions now import takes, select or clear an existing candidate, and
-resolve generation-bound existing archive targets through guarded session
-publication, repair, and full published reopen. Separately, the exact-current
+transactions now import takes, change one retained take's workflow status,
+select or clear an existing Approved candidate, and resolve generation-bound
+existing archive targets through guarded session publication, repair, and full
+published reopen. Status changes preserve the slot, selection, media asset, and
+all unrelated content; author approval remains distinct from audio or runtime
+qualification. Separately, the exact-current
 offline builder reads verified selected Store bytes, stages and completely
 reopens/seals a deterministic format-3 Voice tree, then atomically promotes it
 with no-replace semantics without publishing the project head. Production
@@ -767,7 +770,8 @@ unavailable surface.
    deterministic export, and production lowering without creating a parallel
    project state.
 2. **Complete the first non-technical Voice slice:** extend the landed import,
-   Approved-take selection/clear, generation-bound target resolution, and
+   retained-take review status, Approved-take selection/clear,
+   generation-bound target resolution, and
    sealed existing-member offline build with preview/remove/unlink, explicit
    ambiguity choice, recording/transcode, coverage, history, managed deploy/
    undeploy, and an isolated audible test profile without archive terminology.

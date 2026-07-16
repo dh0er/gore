@@ -281,6 +281,7 @@ void main() {
         'authoring_store_prepare_revision3_quest_transitions_edit_v1',
         'authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1',
         'authoring_store_prepare_revision3_voice_take_selection_v1',
+        'authoring_store_prepare_revision3_voice_take_status_v1',
         'authoring_store_prepare_revision3_voice_take_v1',
         'authoring_store_prepare_revision3_voice_target_v1',
         'authoring_store_read_revision3_content_index_v1',

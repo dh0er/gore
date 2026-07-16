@@ -72,6 +72,7 @@ import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
 import 'project/revision3_voice_take_selection_dialog.dart';
+import 'project/revision3_voice_take_status_authoring.dart';
 import 'project/revision3_voice_target_dialog.dart';
 import 'project/revision3_voice_wizard.dart';
 import 'scripts/domain/script_modules_provider.dart';
@@ -1038,15 +1039,45 @@ class _HomePageState extends ConsumerState<HomePage>
                 required expectedProjectId,
                 required expectedProjectRevision,
                 required plan,
-              }) => ref
-                  .read(currentProjectCoordinatorProvider.notifier)
-                  .selectCurrentRevision3VoiceTake(
-                    expectedRoot: currentProject.root.path,
-                    expectedProjectId: expectedProjectId,
-                    expectedProjectRevision: expectedProjectRevision,
-                    expectedHead: currentProject.head,
-                    plan: plan,
-                  ),
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3VoiceTakeSelectionStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .selectCurrentRevision3VoiceTake(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
+          publishVoiceTakeStatus:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3VoiceTakeStatusStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .editCurrentRevision3VoiceTakeStatus(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTarget:
               ({
                 required expectedProjectId,
@@ -1576,6 +1607,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishDialogLine,
     required this.publishVoiceTake,
     required this.publishVoiceTakeSelection,
+    required this.publishVoiceTakeStatus,
     required this.publishVoiceTarget,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
@@ -1624,6 +1656,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3DialogLineEntryTechnicalPublisher publishDialogLine;
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
+  final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
@@ -1687,6 +1720,8 @@ class _ManagedRevision3ProjectViewState
       widget.publishVoiceTake;
   Revision3VoiceTakeSelectionTechnicalPublisher get publishVoiceTakeSelection =>
       widget.publishVoiceTakeSelection;
+  Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
+      widget.publishVoiceTakeStatus;
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
@@ -2790,6 +2825,10 @@ class _ManagedRevision3ProjectViewState
             service: Revision3VoiceTakeSelectionAuthoringService(
               loadContentIndex: loadContentIndex,
               publishTechnicalPlan: publishVoiceTakeSelection,
+            ),
+            statusService: Revision3VoiceTakeStatusAuthoringService(
+              loadContentIndex: loadContentIndex,
+              publishTechnicalPlan: publishVoiceTakeStatus,
             ),
           ),
         );

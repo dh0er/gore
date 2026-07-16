@@ -34,6 +34,7 @@ part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
 part '../project/revision3_voice_take_selection.dart';
+part '../project/revision3_voice_take_status.dart';
 part '../project/revision3_voice_target.dart';
 
 const _maxNativeErrorCodeLength = 128;
@@ -1528,6 +1529,49 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakeSelectionPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Change one exact retained Voice take review status and prepare an
+  /// unpublished candidate.
+  ///
+  /// This project-only boundary carries no game root, media import, build,
+  /// runtime, deployment, or publication authority.
+  Future<AuthoringRevision3VoiceTakeStatusPreparation>
+  authoringStorePrepareRevision3VoiceTakeStatusV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeStatusRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_take_status_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRevision3RequestString(
+      request.canonicalJson,
+      'voiceTakeStatusRequestJson',
+      _maxAuthoringRevision3VoiceTakeStatusRequestBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'voice_take_status_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakeStatusPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

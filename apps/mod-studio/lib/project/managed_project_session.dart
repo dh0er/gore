@@ -407,6 +407,44 @@ final class ManagedRevision3VoiceTakeSelectionCheckpoint {
   final String? selectedTakeId;
 }
 
+/// One retained VoiceTake review-status change returned only after native
+/// preparation, full candidate reopen, fixed-head CAS publication, and a full
+/// published reopen. The VoiceSlot is unchanged; build remains blocked and
+/// runtime remains unqualified.
+final class ManagedRevision3VoiceTakeStatusCheckpoint {
+  const ManagedRevision3VoiceTakeStatusCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.localizationId,
+    required this.slotId,
+    required this.slotRevision,
+    required this.locale,
+    required this.locId,
+    required this.takeId,
+    required this.takeRevision,
+    required this.previousStatus,
+    required this.status,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String localizationId;
+  final String slotId;
+  final int slotRevision;
+  final String locale;
+  final String locId;
+  final String takeId;
+  final int takeRevision;
+  final AuthoringRevision3VoiceTakeStatus previousStatus;
+  final AuthoringRevision3VoiceTakeStatus status;
+}
+
 /// One installed-archive Voice target resolution returned only after native
 /// evidence was sealed, the candidate was fully reopened, fixed-head CAS
 /// published, and the published generation was fully reopened again.
@@ -716,6 +754,13 @@ abstract interface class ManagedRevision3AuthoringStore {
     required String root,
     required String currentProjectJson,
     required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
+  });
+
+  Future<AuthoringRevision3VoiceTakeStatusPreparation>
+  prepareVoiceTakeStatusV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeStatusRequestV1 request,
   });
 
   Future<AuthoringRevision3VoiceTargetPreparation> prepareVoiceTargetV1({
@@ -1074,6 +1119,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3VoiceTakeSelectionV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceTakeStatusPreparation>
+  prepareVoiceTakeStatusV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeStatusRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3VoiceTakeStatusV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -1484,6 +1541,12 @@ class ManagedRevision3AuthoringProjectSession {
   bool get requiresReopen => _core.requiresReopen;
   bool get supportsReviewedDataAssetBuild =>
       _core.supportsReviewedDataAssetBuild;
+
+  /// Fail closed after a higher-layer post-publication receipt mismatch. This
+  /// can only remove authoring authority; closing and reopening is required to
+  /// regain it.
+  void markRequiresReopenAfterPublicationUncertainty() =>
+      _core.markRequiresReopenAfterPublicationUncertainty();
   File get headFile => _core.headFile;
 
   static Future<ManagedRevision3AuthoringProjectSession> create({
@@ -2487,6 +2550,104 @@ class ManagedRevision3AuthoringProjectSession {
               locId: prepared.locId,
               previousSelectedTakeId: prepared.previousSelectedTakeId,
               selectedTakeId: prepared.selectedTakeId,
+            ),
+          );
+        },
+      );
+
+  /// Change one exact retained VoiceTake review status through the project-only
+  /// managed publication lane. No game root, media, build, or runtime authority
+  /// is required or accepted.
+  Future<ManagedRevision3VoiceTakeStatusCheckpoint>
+  prepareAndPublishVoiceTakeStatusV1({
+    required String lineId,
+    required String localizationId,
+    required String expectedLocId,
+    required String locale,
+    required String slotId,
+    required int expectedSlotRevision,
+    required String takeId,
+    required int expectedTakeRevision,
+    required AuthoringRevision3VoiceTakeStatus expectedStatus,
+    required AuthoringRevision3VoiceTakeStatus desiredStatus,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3VoiceTakeStatusCheckpoint
+      >(
+        operation: 'prepareAndPublishVoiceTakeStatusV1',
+        handlePrepareError: _core._throwRevision3VoiceTakeStatusPrepareError,
+        prepare: (basis) async {
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (projectId == null || projectRevision == null) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice take status has no exact project identity',
+            );
+          }
+          final request = AuthoringRevision3VoiceTakeStatusRequestV1.forProject(
+            expectedHead: basis.head,
+            currentProjectJson: basis.projectJson,
+            lineId: lineId,
+            localizationId: localizationId,
+            expectedLocId: expectedLocId,
+            locale: locale,
+            slotId: slotId,
+            expectedSlotRevision: expectedSlotRevision,
+            takeId: takeId,
+            expectedTakeRevision: expectedTakeRevision,
+            expectedStatus: expectedStatus,
+            desiredStatus: desiredStatus,
+          );
+          final prepared = await _store.prepareVoiceTakeStatusV1(
+            root: root.path,
+            currentProjectJson: basis.projectJson,
+            request: request,
+          );
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.lineId != request.lineId ||
+              prepared.localizationId != request.localizationId ||
+              prepared.slotId != request.slotId ||
+              prepared.slotRevision != request.expectedSlotRevision ||
+              prepared.locale != request.locale ||
+              prepared.locId != request.expectedLocId ||
+              prepared.takeId != request.takeId ||
+              prepared.takeRevision != request.expectedTakeRevision + 1 ||
+              prepared.previousStatus != request.expectedStatus ||
+              prepared.status != request.desiredStatus ||
+              prepared.buildStatus !=
+                  AuthoringRevision3VoiceTakeStatusBuildStatus.blocked ||
+              prepared.runtimeStatus !=
+                  AuthoringRevision3VoiceTakeStatusRuntimeStatus
+                      .runtimeUnqualified ||
+              prepared.publicationStatus !=
+                  AuthoringRevision3VoiceTakeStatusPublicationStatus
+                      .notSupported) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 Voice take status preparation disagrees with its exact session basis or request',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3VoiceTakeStatusCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3VoiceTakeStatusCheckpoint._(
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              projectRevision: prepared.revision,
+              lineId: prepared.lineId,
+              localizationId: prepared.localizationId,
+              slotId: prepared.slotId,
+              slotRevision: prepared.slotRevision,
+              locale: prepared.locale,
+              locId: prepared.locId,
+              takeId: prepared.takeId,
+              takeRevision: prepared.takeRevision,
+              previousStatus: prepared.previousStatus,
+              status: prepared.status,
             ),
           );
         },
@@ -3505,6 +3666,10 @@ class _ManagedProjectSessionCore {
   /// True after an I/O or verification failure leaves publication state
   /// uncertain. Close and reopen before attempting another edit.
   bool get requiresReopen => _requiresReopen;
+
+  void markRequiresReopenAfterPublicationUncertainty() {
+    _requiresReopen = true;
+  }
 
   File get headFile => File(p.join(root.path, 'gore-project.json'));
 
@@ -4553,6 +4718,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceTakeStatusPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_TAKE_STATUS_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceTakeStatusPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice take status preparation could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBuildError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT') {
@@ -5354,6 +5555,25 @@ bool _revision3VoiceSelectionPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_CONFLICT',
   'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_NOT_APPROVED',
   'AUTHORING_REVISION3_VOICE_SELECTION_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3VoiceTakeStatusPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_NO_CHANGES',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_REQUEST_INVALID',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_REVISION_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_SELECTED_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_SIGNED_WIRE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_STATUS_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_STATUS_TARGET_CONFLICT',
 }.contains(code);
 
 bool _revision3VoiceBuildErrorIsRetryable(String code) => const {

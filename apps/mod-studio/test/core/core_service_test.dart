@@ -56,6 +56,17 @@ void main() {
   });
 
   group('GoreCoreInfo', () {
+    test('Studio baseline includes exact Voice take status preparation', () {
+      expect(
+        requiredStudioCoreCommands,
+        contains('authoring_store_prepare_revision3_voice_take_status_v1'),
+      );
+      expect(
+        requiredStudioCoreCommands,
+        orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
+      );
+    });
+
     test('strictly parses a canonical bounded response', () {
       final info = GoreCoreInfo.parseResponse(_coreInfoResponse());
 
