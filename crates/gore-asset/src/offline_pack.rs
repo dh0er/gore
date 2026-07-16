@@ -142,9 +142,11 @@ impl OfflineDataAssetPackRequestV1 {
 
     fn reverify_output_parent_and_disjoint(&self) -> Result<()> {
         self.output_parent.reverify("ASSET_PACK_OUTPUT")?;
-        if self.output.starts_with(&self.game_root) || self.game_root.starts_with(&self.output) {
-            bail!("ASSET_PACK_OUTPUT: output and live game tree must remain disjoint");
-        }
+        require_output_disjoint_from_game_layouts(
+            &self.output,
+            &self.game_root,
+            "ASSET_PACK_OUTPUT",
+        )?;
         Ok(())
     }
 }
@@ -909,13 +911,64 @@ fn prepare_absent_output_directory(
     ensure_path_absent(&output, code)?;
     let canonical_game = fs::canonicalize(game_root)
         .with_context(|| format!("{code}: canonicalizing game root '{}'", game_root.display()))?;
-    if output.starts_with(&canonical_game) || canonical_game.starts_with(&output) {
+    require_output_disjoint_from_game_layouts(&output, &canonical_game, code)?;
+    Ok(output)
+}
+
+fn require_output_disjoint_from_game_layouts(
+    output: &Path,
+    configured_game: &Path,
+    code: &'static str,
+) -> Result<()> {
+    if output.starts_with(configured_game) || configured_game.starts_with(output) {
         bail!(
             "{code}: output and live game tree must be disjoint: {}",
             output.display()
         );
     }
-    Ok(output)
+    if has_recognizable_game_layout_ancestor(output).with_context(|| {
+        format!("{code}: inspecting ancestors for a recognizable game installation")
+    })? {
+        bail!(
+            "{code}: output inside a recognizable game installation is refused: {}",
+            output.display()
+        );
+    }
+    Ok(())
+}
+
+fn has_recognizable_game_layout_ancestor(path: &Path) -> Result<bool> {
+    let start = path.parent().unwrap_or(path);
+    for ancestor in start.ancestors() {
+        let direct_g1r = ancestor
+            .file_name()
+            .is_some_and(|name| name.as_encoded_bytes().eq_ignore_ascii_case(b"G1R"));
+        let executable = if direct_g1r {
+            ancestor
+                .join("Binaries")
+                .join("Win64")
+                .join("G1R-Win64-Shipping.exe")
+        } else {
+            ancestor
+                .join("G1R")
+                .join("Binaries")
+                .join("Win64")
+                .join("G1R-Win64-Shipping.exe")
+        };
+        match fs::symlink_metadata(executable) {
+            Ok(_) => return Ok(true),
+            Err(error) if absent_game_marker_error(&error) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(false)
+}
+
+fn absent_game_marker_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
 }
 
 fn validate_output_component(name: &str, code: &'static str) -> Result<()> {
@@ -1822,6 +1875,25 @@ fn sync_parents_after_publish(_staged: &Path, _output: &Path) -> std::io::Result
 mod tests {
     use super::*;
 
+    fn fixture_game_root(parent: &Path, name: &str) -> PathBuf {
+        let game = parent.join(name);
+        let paks = game.join("G1R/Content/Paks");
+        fs::create_dir_all(&paks).unwrap();
+        fs::write(paks.join("global.utoc"), b"fixture global utoc").unwrap();
+        fs::write(paks.join("global.ucas"), b"fixture global ucas").unwrap();
+        game
+    }
+
+    fn add_recognizable_game_executable(game: &Path) {
+        let executable = game
+            .join("G1R")
+            .join("Binaries")
+            .join("Win64")
+            .join("G1R-Win64-Shipping.exe");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(executable, b"fixture executable").unwrap();
+    }
+
     fn fixture_mechanical_published(
         output: PathBuf,
     ) -> MechanicalPublishedPack<LegacyPackReceiptPayload> {
@@ -1861,6 +1933,25 @@ mod tests {
     }
 
     #[test]
+    fn recognizable_game_marker_probe_tolerates_only_absence() {
+        for absent in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::NotADirectory,
+        ] {
+            assert!(absent_game_marker_error(&std::io::Error::from(absent)));
+        }
+        for unsafe_to_ignore in [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::Other,
+        ] {
+            assert!(!absent_game_marker_error(&std::io::Error::from(
+                unsafe_to_ignore
+            )));
+        }
+    }
+
+    #[test]
     fn prepared_request_rejects_existing_output_before_mount_reads() {
         let temp = tempfile::tempdir().unwrap();
         let game = temp.path().join("Game");
@@ -1877,6 +1968,76 @@ mod tests {
         .unwrap_err();
         assert!(format!("{error:#}").contains("ASSET_PACK_OUTPUT"));
         assert_eq!(fs::read(output.join("sentinel")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn prepared_request_rejects_output_inside_another_recognizable_game() {
+        let temp = tempfile::tempdir().unwrap();
+        let configured_game = temp.path().join("ConfiguredGame");
+        fs::create_dir_all(configured_game.join("G1R")).unwrap();
+
+        let other_game = temp.path().join("OtherGame");
+        add_recognizable_game_executable(&other_game);
+        let output = other_game.join("Mods/MustNotExist");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+
+        let error = OfflineDataAssetPackRequestV1::prepare(
+            &configured_game,
+            "/Game/Test/DA_Fixture",
+            "zzz_Test_P",
+            &output,
+        )
+        .unwrap_err();
+
+        assert!(format!("{error:#}").contains("recognizable game installation"));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn prepared_request_allows_mod_output_sibling_of_game_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let configured_game = fixture_game_root(temp.path(), "ConfiguredGame");
+        add_recognizable_game_executable(&configured_game);
+        let output_parent = temp.path().join("Mods");
+        fs::create_dir(&output_parent).unwrap();
+        let output = output_parent.join("AllowedMod");
+
+        let request = OfflineDataAssetPackRequestV1::prepare(
+            &configured_game,
+            "/Game/Test/DA_Fixture",
+            "zzz_Test_P",
+            &output,
+        )
+        .unwrap();
+
+        assert_eq!(request.output().file_name(), output.file_name());
+        assert_eq!(
+            request.output().parent().unwrap(),
+            fs::canonicalize(&output_parent).unwrap()
+        );
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn output_revalidation_detects_new_recognizable_game_layout() {
+        let temp = tempfile::tempdir().unwrap();
+        let configured_game = fixture_game_root(temp.path(), "ConfiguredGame");
+        let other_game = temp.path().join("OtherGame");
+        let output = other_game.join("G1R/Mods/MustStayAbsent");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+
+        let request = OfflineDataAssetPackRequestV1::prepare(
+            &configured_game,
+            "/Game/Test/DA_Fixture",
+            "zzz_Test_P",
+            &output,
+        )
+        .unwrap();
+        add_recognizable_game_executable(&other_game);
+
+        let error = request.reverify_output_parent_and_disjoint().unwrap_err();
+        assert!(format!("{error:#}").contains("recognizable game installation"));
+        assert!(!output.exists());
     }
 
     #[test]

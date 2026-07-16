@@ -511,6 +511,7 @@ impl<R> MechanicalStagedPack<R> {
                     .reverify_exact("ASSET_PACK_GAME")
             },
             || {
+                self.request.reverify_output_parent_and_disjoint()?;
                 promote_directory_noclobber(&self.build_root, &self.request.output).with_context(
                     || {
                         format!(
@@ -628,12 +629,13 @@ fn classify_post_publication(
 mod tests {
     use std::cell::RefCell;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use anyhow::{bail, Result};
 
     use super::super::{
         create_staging_directory, promote_directory_noclobber, reverify_file_seal, FileSeal,
+        OfflineDataAssetPackRequestV1,
     };
     use super::{
         classify_post_publication, retarget_published_seal, run_publication_tail,
@@ -641,6 +643,16 @@ mod tests {
         PostPublicationFinalization,
     };
     use crate::dataasset_workflow::MAX_RECEIPT_BYTES;
+
+    fn fixture_pack_request(parent: &Path, output: &Path) -> OfflineDataAssetPackRequestV1 {
+        let game = parent.join("ConfiguredGame");
+        let paks = game.join("G1R/Content/Paks");
+        fs::create_dir_all(&paks).unwrap();
+        fs::write(paks.join("global.utoc"), b"fixture global utoc").unwrap();
+        fs::write(paks.join("global.ucas"), b"fixture global ucas").unwrap();
+        OfflineDataAssetPackRequestV1::prepare(&game, "/Game/Test/DA_Fixture", "zzz_Test_P", output)
+            .unwrap()
+    }
 
     #[test]
     fn borrowed_component_becomes_an_independent_owned_sealed_file() {
@@ -807,6 +819,56 @@ mod tests {
         assert!(result.is_err());
         assert!(events.borrow().is_empty());
         assert_eq!(fs::read(output.join("racer")).unwrap(), b"winner");
+    }
+
+    #[test]
+    fn game_layout_created_after_mount_gate_fails_at_final_output_guard() {
+        let temp = tempfile::tempdir().unwrap();
+        let other_game = temp.path().join("OtherGame");
+        let output = other_game.join("Mods/MustStayAbsent");
+        fs::create_dir_all(output.parent().unwrap()).unwrap();
+        let request = fixture_pack_request(temp.path(), &output);
+        let staged = temp.path().join("staged");
+        fs::create_dir(&staged).unwrap();
+        fs::write(staged.join("ours"), b"ours").unwrap();
+        let events = RefCell::new(Vec::new());
+
+        let result = run_publication_tail(
+            || {
+                events.borrow_mut().push("source");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("mechanical");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("live");
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("mount");
+                let executable = other_game.join("G1R/Binaries/Win64/G1R-Win64-Shipping.exe");
+                fs::create_dir_all(executable.parent().unwrap()).unwrap();
+                fs::write(executable, b"late game marker").unwrap();
+                Ok(())
+            },
+            || {
+                events.borrow_mut().push("final-output");
+                request.reverify_output_parent_and_disjoint()?;
+                events.borrow_mut().push("promote");
+                promote_directory_noclobber(&staged, request.output())?;
+                Ok(())
+            },
+        );
+
+        assert!(format!("{:#}", result.unwrap_err()).contains("recognizable game installation"));
+        assert_eq!(
+            *events.borrow(),
+            ["source", "mechanical", "live", "mount", "final-output"]
+        );
+        assert!(!output.exists());
+        assert_eq!(fs::read(staged.join("ours")).unwrap(), b"ours");
     }
 
     #[test]
