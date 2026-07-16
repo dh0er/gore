@@ -37,6 +37,7 @@ typedef Revision3VoiceTargetTechnicalPublisher =
 final class Revision3VoiceDialogLineChoice {
   Revision3VoiceDialogLineChoice._({
     required this.lineId,
+    required this.lineRevision,
     required this.localizationId,
     required this.localizationIdentity,
     required this.displayName,
@@ -56,6 +57,7 @@ final class Revision3VoiceDialogLineChoice {
        );
 
   final String lineId;
+  final int lineRevision;
   final String localizationId;
   final String localizationIdentity;
   final String displayName;
@@ -109,6 +111,7 @@ final class Revision3VoiceDialogLineChoice {
 final class Revision3VoiceExistingSlotSummary {
   Revision3VoiceExistingSlotSummary({
     required this.slotRevision,
+    required this.isRemovableGeneratedSlot,
     required this.candidateCount,
     required this.hasSelectedTake,
     required this.targetResolution,
@@ -124,6 +127,7 @@ final class Revision3VoiceExistingSlotSummary {
   }
 
   final int slotRevision;
+  final bool isRemovableGeneratedSlot;
   final int candidateCount;
   final bool hasSelectedTake;
   final Revision3ContentVoiceTargetResolution targetResolution;
@@ -189,6 +193,9 @@ final class Revision3VoiceCatalog {
     final projectedLines = <_Revision3VoiceProjectedLine>[];
     final locales = <String>{...index.authoringLocales};
     final slotOwners = _voiceSlotOwners(index);
+    final localInboundReferenceCounts = _voiceLocalInboundReferenceCounts(
+      index,
+    );
     final candidateSlotIdsByTake = _voiceCandidateSlotUses(index);
     for (final entity in index.entities) {
       if (entity.kind != Revision3ContentEntityKind.dialogLine ||
@@ -253,6 +260,8 @@ final class Revision3VoiceCatalog {
           locale: locale,
           reference: reference,
           owners: slotOwners[reference.target.entityId] ?? const [],
+          localInboundReferenceCount:
+              localInboundReferenceCounts[reference.target.entityId] ?? 0,
         );
         if (summary == null) {
           blockedSlotLocales.add(locale);
@@ -265,6 +274,7 @@ final class Revision3VoiceCatalog {
       projectedLines.add(
         _Revision3VoiceProjectedLine(
           lineId: entity.id,
+          lineRevision: entity.revision,
           localizationId: localization.target.entityId,
           localizationIdentity: localizationIdentity,
           displayName: entity.displayName,
@@ -305,6 +315,7 @@ final class Revision3VoiceCatalog {
       lines.add(
         Revision3VoiceDialogLineChoice._(
           lineId: line.lineId,
+          lineRevision: line.lineRevision,
           localizationId: line.localizationId,
           localizationIdentity: line.localizationIdentity,
           displayName: line.displayName,
@@ -364,6 +375,7 @@ final class Revision3VoiceCatalog {
 final class _Revision3VoiceProjectedLine {
   const _Revision3VoiceProjectedLine({
     required this.lineId,
+    required this.lineRevision,
     required this.localizationId,
     required this.localizationIdentity,
     required this.displayName,
@@ -375,6 +387,7 @@ final class _Revision3VoiceProjectedLine {
   });
 
   final String lineId;
+  final int lineRevision;
   final String localizationId;
   final String localizationIdentity;
   final String displayName;
@@ -455,12 +468,30 @@ Map<String, Set<String>> _voiceCandidateSlotUses(Revision3ContentIndex index) {
   return uses;
 }
 
+Map<String, int> _voiceLocalInboundReferenceCounts(
+  Revision3ContentIndex index,
+) {
+  final counts = <String, int>{};
+  for (final entity in index.entities) {
+    for (final reference in entity.references) {
+      if (reference.target.projectId != index.projectId) continue;
+      counts.update(
+        reference.target.entityId,
+        (count) => count + 1,
+        ifAbsent: () => 1,
+      );
+    }
+  }
+  return counts;
+}
+
 Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
   required Revision3ContentIndex index,
   required String lineId,
   required String locale,
   required Revision3ContentReference reference,
   required List<_Revision3VoiceSlotOwner> owners,
+  required int localInboundReferenceCount,
 }) {
   if (reference.qualifier != locale ||
       reference.resolution != Revision3ContentReferenceResolution.resolved ||
@@ -468,7 +499,8 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
       reference.target.expectedKind != Revision3ContentEntityKind.voiceSlot ||
       owners.length != 1 ||
       owners.single.lineId != lineId ||
-      owners.single.locale != locale) {
+      owners.single.locale != locale ||
+      localInboundReferenceCount < 1) {
     return null;
   }
   final entity = index.entityById(reference.target.entityId);
@@ -480,6 +512,16 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
       details == null) {
     return null;
   }
+  final generatedOwner = entity.origin.generatedOwner;
+  final isRemovableGeneratedSlot =
+      entity.origin.type == 'generated' &&
+      entity.origin.label == 'gore-authoring.voice-slot' &&
+      entity.origin.generatorVersion == 1 &&
+      generatedOwner != null &&
+      generatedOwner.projectId == index.projectId &&
+      generatedOwner.entityId == lineId &&
+      generatedOwner.expectedKind == Revision3ContentEntityKind.dialogLine &&
+      localInboundReferenceCount == 1;
 
   final candidates = <String, Revision3ContentEntity>{};
   final orderedCandidates = <Revision3ContentEntity>[];
@@ -553,6 +595,7 @@ Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({
   }
   return Revision3VoiceExistingSlotSummary(
     slotRevision: entity.revision,
+    isRemovableGeneratedSlot: isRemovableGeneratedSlot,
     candidateCount: details.candidateCount,
     hasSelectedTake: details.hasSelectedTake,
     targetResolution: details.targetResolution,

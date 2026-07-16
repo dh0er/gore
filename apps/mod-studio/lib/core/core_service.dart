@@ -77,6 +77,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_prepare_revision3_dataasset_stage_v1',
   'authoring_store_prepare_revision3_dialog_line_v1',
   'authoring_store_prepare_revision3_dialog_localization_edit_v1',
+  'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
   'authoring_store_prepare_revision3_history_restore_v1',
   'authoring_store_prepare_revision3_installed_dataasset_edit_v1',
   'authoring_store_prepare_revision3_npc_draft_v1',

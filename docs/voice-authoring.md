@@ -325,6 +325,32 @@ deployment outside its bound tree. Cleanup removes only the exact objects the
 writer created and reports an explicit cleanup failure if absence cannot be
 confirmed.
 
+## Line-centered Studio workflow
+
+The direct **Localization & Voice** workspace now carries the author's visible
+dialog-line and language selection into **Add voice take**, **Manage takes**,
+and **Resolve target**. Shared text therefore requires an explicit line choice,
+while the receiving workflow rechecks that hidden identity against its fresh
+exact-current content catalog. Authors no longer need to repeat the same global
+line search in each dialog, and no technical entity ID or LocID is rendered.
+
+Before import, the take dialog can open the currently selected regular local
+`.ogg` file in the operating-system player. This is only an author preview of
+the still-local source path. It neither reads a managed CAS path nor changes
+review status, and it never claims codec, loudness, runtime, or in-game
+qualification. Native Ogg validation remains mandatory before the project can
+change.
+
+**Manage takes** also closes the empty-slot dead end. Once a line/language
+VoiceSlot has no candidate and no selection, a separately confirmed exact-head
+transaction can remove that line/locale edge and its uniquely owned generated
+VoiceSlot atomically. Resolved or ambiguous installed-target evidence is named
+before confirmation because it is removed with the slot; the installed archive
+itself is untouched. The LocalizationEntry, every VoiceTake, the complete
+AssetStore and physical Ogg CAS, game files, and saves are preserved. Adding a
+later take recreates the required slot through the existing bounded import
+transaction.
+
 ## Publication and failure boundaries
 
 The FFI routes do not replace the fixed project head. They return exact
@@ -352,17 +378,19 @@ The managed-R3 workflow still does not provide:
 - audible in-game qualification for the selected line, persistence, save/load,
   or clean runtime removal;
 - explicit choice among ambiguous installed archive matches;
-- Ogg preview, history/undo, recording, trimming,
-  normalization, transcoding, loudness comparison, actor notes, or lineage;
+- managed-CAS take preview, recording, trimming, normalization, transcoding,
+  loudness comparison, actor notes, or lineage (only the selected local
+  pre-import Ogg has an author preview);
 - folder/batch import, translation/Voice coverage, CSV/XLIFF, or review queues;
 - qualified Opus output; or
 - new-member namespace/lookup proof or a sealed generation-bound path for
   adopting vanilla dialog/localization identities;
 - topic registration, AngelScript generation, conditions/effects, or a
   playable dialog path for a newly authored managed line; or
-- localization delete/clone, line/slot relationship editing, bulk language
-  production, history, and provenance/rebase workflows, or a complete
-  conversation graph editor.
+- localization delete/clone, general line relinking/speaker/NPC relationships,
+  bulk language production, provenance/rebase workflows, or a complete
+  conversation graph editor. Empty generated line/locale slots can now be
+  removed safely, but that narrow inverse is not a general relationship editor.
 
 This closes the fresh-project project-local prerequisite and retains the
 managed existing-member target and offline build foundation. It does not

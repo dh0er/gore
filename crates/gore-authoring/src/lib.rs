@@ -26,6 +26,7 @@ mod story_transaction;
 mod story_transaction_revision3;
 mod story_transaction_revision3_dialog;
 mod story_transaction_revision3_dialog_localization_edit;
+mod story_transaction_revision3_dialog_voice_slot_removal;
 mod story_transaction_revision3_npc;
 mod story_transaction_revision3_npc_profile;
 mod story_transaction_revision3_quest_outline;
@@ -226,6 +227,17 @@ pub use story_transaction_revision3_dialog_localization_edit::{
     Revision3DialogLocalizationEditRequestV1, Revision3DialogLocalizationEditRuntimeStatusV1,
     Revision3DialogLocalizationEditTopicAuthorityV1,
     MAX_REVISION3_DIALOG_LOCALIZATION_EDIT_REQUEST_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_dialog_voice_slot_removal::{
+    apply_revision3_dialog_voice_slot_removal_transaction_v1,
+    Revision3DialogVoiceSlotRemovalBuildStatusV1, Revision3DialogVoiceSlotRemovalConflictV1,
+    Revision3DialogVoiceSlotRemovalErrorV1, Revision3DialogVoiceSlotRemovalEvaluationV1,
+    Revision3DialogVoiceSlotRemovalOutcomeV1, Revision3DialogVoiceSlotRemovalPublicationStatusV1,
+    Revision3DialogVoiceSlotRemovalRejectionV1, Revision3DialogVoiceSlotRemovalRequestJsonErrorV1,
+    Revision3DialogVoiceSlotRemovalRequestV1, Revision3DialogVoiceSlotRemovalRuntimeStatusV1,
+    Revision3DialogVoiceSlotRemovalTargetAuthorityV1,
+    Revision3DialogVoiceSlotRemovalTargetResolutionV1,
+    MAX_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_npc::{
     apply_revision3_npc_draft_transaction_v1, Revision3NpcCatalogAuthorityV1,

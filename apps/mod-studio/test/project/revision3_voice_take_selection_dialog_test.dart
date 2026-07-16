@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
+import 'package:gore_mod/project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -44,6 +45,28 @@ void main() {
       expect(find.textContaining('Approval required'), findsOneWidget);
     },
   );
+
+  testWidgets('context handoff preselects the exact visible line and locale', (
+    tester,
+  ) async {
+    await _openDialog(
+      tester,
+      index: _index(),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+    );
+
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byKey(const Key('voice-selection-locale')),
+          )
+          .initialValue,
+      'de',
+    );
+    expect(find.textContaining('Current selection'), findsOneWidget);
+    expect(find.textContaining(revision3VoiceContentLineId), findsNothing);
+  });
 
   testWidgets(
     'clear warns, stays explicit, and publishes a project-only clear',
@@ -612,6 +635,217 @@ void main() {
   );
 
   testWidgets(
+    'empty Voice setup removal is explicit and cancel never publishes',
+    (tester) async {
+      var publishes = 0;
+      await _openDialog(
+        tester,
+        index: _index(candidateCount: 0, selected: false, generatedSlot: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        publishSlotRemoval:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              throw StateError('cancel must not publish');
+            },
+      );
+
+      final remove = find.byKey(const Key('voice-slot-remove-empty'));
+      await tester.ensureVisible(remove);
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('voice-slot-remove-confirm-dialog')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('dialog text stays'), findsOneWidget);
+      expect(find.textContaining('game file'), findsOneWidget);
+      expect(
+        find.textContaining('created again automatically'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('voice-slot-remove-target-warning')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('voice-slot-remove-cancel')));
+      await tester.pumpAndSettle();
+      expect(publishes, 0);
+      expect(
+        find.byKey(const Key('voice-slot-remove-confirm-dialog')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('empty imported Voice setup exposes no destructive action', (
+    tester,
+  ) async {
+    await _openDialog(
+      tester,
+      index: _index(candidateCount: 0, selected: false),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+    );
+
+    expect(
+      find.byKey(const Key('voice-selection-no-candidates')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('voice-slot-remove-empty')), findsNothing);
+  });
+
+  testWidgets(
+    'empty Voice setup removal warns about target evidence and confirms refresh',
+    (tester) async {
+      var loads = 0;
+      var publishes = 0;
+      final initial = revision3VoiceContentIndexFixture(
+        existingSlotTargetResolution: 'resolved',
+        existingSlotGenerated: true,
+      );
+      final refreshed = _indexWithoutSlot(revision: 8, lineRevision: 3);
+      await _openDialog(
+        tester,
+        index: initial,
+        load: () async => ++loads < 3 ? initial : refreshed,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        publishSlotRemoval:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              return _slotRemovalPublication(
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+                plan: plan,
+              );
+            },
+      );
+
+      final remove = find.byKey(const Key('voice-slot-remove-empty'));
+      await tester.ensureVisible(remove);
+      await tester.tap(remove);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('voice-slot-remove-target-warning')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('voice-slot-remove-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(publishes, 1);
+      expect(loads, 3);
+      expect(find.textContaining('Empty Voice setup removed'), findsOneWidget);
+      expect(find.textContaining(revision3VoiceContentSlotId), findsNothing);
+      expect(
+        find.byKey(const Key('revision3-voice-take-selection-dialog')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'uncertain empty setup removal is neutral, terminal, and never retryable',
+    (tester) async {
+      var publishes = 0;
+      await _openDialog(
+        tester,
+        index: _index(candidateCount: 0, selected: false, generatedSlot: true),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        publishSlotRemoval:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
+            },
+      );
+
+      await tester.tap(find.byKey(const Key('voice-slot-remove-empty')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-slot-remove-confirm')));
+      await tester.pumpAndSettle();
+
+      expect(publishes, 1);
+      expect(find.textContaining('may have been saved'), findsOneWidget);
+      expect(find.textContaining('Do not repeat'), findsOneWidget);
+      expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+      expect(find.widgetWithText(TextButton, 'Close'), findsOneWidget);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('voice-slot-remove-empty')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'saved last-slot removal reload clears the now invisible line selection',
+    (tester) async {
+      final initial = _index(
+        candidateCount: 0,
+        selected: false,
+        generatedSlot: true,
+      );
+      final refreshed = _indexWithoutSlot(revision: 8, lineRevision: 3);
+      var loads = 0;
+      var publishes = 0;
+      await _openDialog(
+        tester,
+        index: initial,
+        load: () async {
+          loads++;
+          if (loads == 3) throw StateError('temporary reload failure');
+          return loads >= 4 ? refreshed : initial;
+        },
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        publishSlotRemoval:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              publishes++;
+              return _slotRemovalPublication(
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+                plan: plan,
+              );
+            },
+      );
+
+      await tester.tap(find.byKey(const Key('voice-slot-remove-empty')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-slot-remove-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('voice-status-reload')));
+      await tester.pumpAndSettle();
+
+      expect(publishes, 1);
+      expect(find.textContaining('confirmed'), findsOneWidget);
+      expect(find.byKey(const Key('voice-selection-locale')), findsNothing);
+      expect(find.textContaining('No matching dialog line'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
     'selected take warns, removes and clears atomically without replacement',
     (tester) async {
       var current = _index(candidateCount: 1);
@@ -1029,8 +1263,11 @@ Future<void> _openDialog(
   Revision3VoiceTakeSelectionTechnicalPublisher? publish,
   Revision3VoiceTakeStatusTechnicalPublisher? publishStatus,
   Revision3VoiceTakeRemovalTechnicalPublisher? publishRemoval,
+  Revision3DialogVoiceSlotRemovalTechnicalPublisher? publishSlotRemoval,
   Locale locale = const Locale('en'),
   Size surfaceSize = const Size(1200, 1000),
+  String? initialLineId,
+  String? initialLocale,
 }) async {
   await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1046,6 +1283,10 @@ Future<void> _openDialog(
     loadContentIndex: load ?? () async => index,
     publishTechnicalPlan: publishRemoval ?? _unexpectedRemovalPublish,
   );
+  final slotRemovalService = Revision3DialogVoiceSlotRemovalAuthoringService(
+    loadContentIndex: load ?? () async => index,
+    publishTechnicalPlan: publishSlotRemoval ?? _unexpectedSlotRemovalPublish,
+  );
   await tester.pumpWidget(
     MaterialApp(
       locale: locale,
@@ -1060,6 +1301,9 @@ Future<void> _openDialog(
               service: service,
               statusService: statusService,
               removalService: removalService,
+              slotRemovalService: slotRemovalService,
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
             ),
           ),
           child: const Text('Open'),
@@ -1079,9 +1323,11 @@ Revision3ContentIndex _index({
   int candidateCount = 2,
   bool selected = true,
   bool sharedFirstTake = false,
+  bool generatedSlot = false,
 }) {
   final json = revision3VoiceContentIndexJsonFixture(
     revision: revision,
+    existingSlotGenerated: generatedSlot,
     existingSlotCandidateCount: candidateCount,
     existingSlotHasSelectedTake: selected,
   );
@@ -1109,6 +1355,22 @@ Revision3ContentIndex _index({
   if (sharedFirstTake) {
     _addSharedVoiceCandidateUse(json, takeId: takes.first['id']! as String);
   }
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
+Revision3ContentIndex _indexWithoutSlot({
+  required int revision,
+  required int lineRevision,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(
+    revision: revision,
+    existingDeSlot: false,
+  );
+  final entities = (json['entities']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLineId,
+  )['revision'] = lineRevision;
   return Revision3ContentIndex.fromJsonObject(json);
 }
 
@@ -1348,6 +1610,23 @@ Revision3VoiceTakeRemovalPublication _removalPublication({
   remainingCandidateCount: remainingCandidateCount,
 );
 
+Revision3DialogVoiceSlotRemovalPublication _slotRemovalPublication({
+  required String projectId,
+  required int revision,
+  required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+}) => Revision3DialogVoiceSlotRemovalPublication(
+  projectId: projectId,
+  projectRevision: revision,
+  lineId: plan.lineId,
+  lineRevision: plan.expectedLineRevision + 1,
+  localizationId: plan.localizationId,
+  slotId: plan.slotId,
+  removedSlotRevision: plan.expectedSlotRevision,
+  locale: plan.locale,
+  locId: plan.locId,
+  removedTargetResolution: plan.targetResolution,
+);
+
 Future<Revision3VoiceTakeSelectionPublication> _unexpectedPublish({
   required String expectedProjectId,
   required int expectedProjectRevision,
@@ -1365,6 +1644,13 @@ Future<Revision3VoiceTakeRemovalPublication> _unexpectedRemovalPublish({
   required int expectedProjectRevision,
   required Revision3VoiceTakeRemovalTechnicalPlan plan,
 }) => throw StateError('removal publisher was not expected');
+
+Future<Revision3DialogVoiceSlotRemovalPublication>
+_unexpectedSlotRemovalPublish({
+  required String expectedProjectId,
+  required int expectedProjectRevision,
+  required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+}) => throw StateError('slot removal publisher was not expected');
 
 ButtonStyleButton _button(WidgetTester tester, String key) =>
     tester.widget<ButtonStyleButton>(find.byKey(Key(key)));

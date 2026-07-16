@@ -211,12 +211,21 @@ final class Revision3DialogLocalizationLocaleSeed {
 /// Friendly backlink shown to authors when one text is shared by dialog lines.
 final class Revision3DialogLocalizationLineBacklink {
   const Revision3DialogLocalizationLineBacklink._({
+    required this.lineId,
     required this.displayName,
+    required this.displayLabel,
     required this.speakerLabel,
     required this.voiceSlotLocales,
   });
 
+  /// Exact hidden orchestration identity for contextual Voice actions.
+  ///
+  /// Normal presentation must never render this value. It is exposed only so
+  /// the host can carry the author's visible line selection into another
+  /// exact managed workflow without asking them to search for it again.
+  final String lineId;
   final String displayName;
+  final String displayLabel;
   final String? speakerLabel;
   final List<String> voiceSlotLocales;
 }
@@ -455,15 +464,36 @@ Revision3DialogLocalizationEditSeed _localizationSeedFromExact({
         ),
       )
       .toList(growable: false);
-  final lines = exact.lineBacklinks
-      .map(
-        (line) => Revision3DialogLocalizationLineBacklink._(
-          displayName: line.displayName,
-          speakerLabel: line.speakerHint,
-          voiceSlotLocales: line.voiceSlotLocales,
-        ),
-      )
-      .toList(growable: false);
+  final duplicateCounts = <String, int>{};
+  for (final line in exact.lineBacklinks) {
+    final key = _localizationBacklinkVisibleKey(
+      line.displayName,
+      line.speakerHint,
+    );
+    duplicateCounts[key] = (duplicateCounts[key] ?? 0) + 1;
+  }
+  final duplicateOrdinals = <String, int>{};
+  final lines = <Revision3DialogLocalizationLineBacklink>[];
+  for (final line in exact.lineBacklinks) {
+    final key = _localizationBacklinkVisibleKey(
+      line.displayName,
+      line.speakerHint,
+    );
+    final count = duplicateCounts[key]!;
+    final ordinal = (duplicateOrdinals[key] ?? 0) + 1;
+    duplicateOrdinals[key] = ordinal;
+    lines.add(
+      Revision3DialogLocalizationLineBacklink._(
+        lineId: line.lineId,
+        displayName: line.displayName,
+        displayLabel: count == 1
+            ? line.displayName
+            : '${line.displayName} · $ordinal of $count',
+        speakerLabel: line.speakerHint,
+        voiceSlotLocales: line.voiceSlotLocales,
+      ),
+    );
+  }
   return Revision3DialogLocalizationEditSeed._(
     choice: choice,
     locales: List<Revision3DialogLocalizationLocaleSeed>.unmodifiable(locales),
@@ -479,6 +509,9 @@ Revision3DialogLocalizationEditSeed _localizationSeedFromExact({
     locId: exact.locId,
   );
 }
+
+String _localizationBacklinkVisibleKey(String displayName, String? speaker) =>
+    '${displayName.trim().toLowerCase()}\u0000${speaker?.trim().toLowerCase() ?? ''}';
 
 String _localizationFriendlyName(String value) {
   final normalized = value.trim();

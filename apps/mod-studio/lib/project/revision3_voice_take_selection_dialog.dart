@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
 import '../l10n/app_localizations.dart';
+import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
@@ -17,11 +18,17 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     required this.service,
     required this.statusService,
     required this.removalService,
+    required this.slotRemovalService,
+    this.initialLineId,
+    this.initialLocale,
   });
 
   final Revision3VoiceTakeSelectionAuthoringService service;
   final Revision3VoiceTakeStatusAuthoringService statusService;
   final Revision3VoiceTakeRemovalAuthoringService removalService;
+  final Revision3DialogVoiceSlotRemovalAuthoringService slotRemovalService;
+  final String? initialLineId;
+  final String? initialLocale;
 
   @override
   State<Revision3VoiceTakeSelectionDialog> createState() =>
@@ -41,12 +48,15 @@ class _Revision3VoiceTakeSelectionDialogState
   String? _removalBusyTakeId;
   Revision3VoiceTakeStatusPublication? _pendingStatusPublication;
   Revision3VoiceTakeRemovalPublication? _pendingRemovalPublication;
+  Revision3DialogVoiceSlotRemovalPublication? _pendingSlotRemovalPublication;
   bool _loading = true;
   bool _busy = false;
   bool _statusWasSaved = false;
   bool _removalWasSaved = false;
+  bool _slotRemovalWasSaved = false;
   bool _requiresClose = false;
   bool _reloadRequired = false;
+  bool _initialSelectionConsumed = false;
 
   bool get _interactionLocked => _busy || _requiresClose || _reloadRequired;
 
@@ -78,11 +88,25 @@ class _Revision3VoiceTakeSelectionDialogState
     try {
       final catalog = await widget.service.loadCatalog();
       if (!mounted) return;
+      final initialLine = _initialSelectionConsumed
+          ? null
+          : catalog.line(widget.initialLineId ?? '');
+      final initialLocales = initialLine == null
+          ? const <String>[]
+          : _intactLocalesFor(initialLine);
+      final initialLocale = initialLocales.contains(widget.initialLocale)
+          ? widget.initialLocale
+          : initialLocales.firstOrNull;
+      _initialSelectionConsumed = true;
       setState(() {
         _catalog = catalog;
-        _lineId = null;
-        _locale = null;
-        _selectionValue = null;
+        _lineId = initialLine?.lineId;
+        _locale = initialLocale;
+        _selectionValue = initialLine == null || initialLocale == null
+            ? null
+            : _selectionValueFor(
+                initialLine.slotSummaryForLocale(initialLocale)!,
+              );
         _loading = false;
       });
     } on Revision3VoiceTakeSelectionRequiresReopenException {
@@ -117,6 +141,11 @@ class _Revision3VoiceTakeSelectionDialogState
       .existingSlotLocales
       .where((locale) => line.slotSummaryForLocale(locale) != null)
       .toList(growable: false);
+
+  static List<String> _intactLocalesFor(Revision3VoiceDialogLineChoice line) =>
+      line.existingSlotLocales
+          .where((locale) => line.slotSummaryForLocale(locale) != null)
+          .toList(growable: false);
 
   Revision3VoiceDialogLineChoice? get _selectedLine =>
       _lineId == null ? null : _catalog?.line(_lineId!);
@@ -502,11 +531,164 @@ class _Revision3VoiceTakeSelectionDialogState
     }
   }
 
+  Future<void> _confirmRemoveEmptySlot() async {
+    final line = _selectedLine;
+    final locale = _locale;
+    final summary = _selectedSummary;
+    if (_interactionLocked ||
+        _hasChange ||
+        line == null ||
+        locale == null ||
+        summary == null ||
+        !summary.isRemovableGeneratedSlot ||
+        summary.candidateCount != 0 ||
+        summary.selectedTakeId != null) {
+      return;
+    }
+    final retainsTargetEvidence = summary.targetResolution.name != 'unresolved';
+    final copy = AppLocalizations.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('voice-slot-remove-confirm-dialog'),
+        title: Text(copy.managedVoiceSlotRemoveDialogTitle),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  copy.managedVoiceSlotRemoveDialogSummary(
+                    line.displayLabel,
+                    locale,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(copy.managedVoiceSlotRemoveRetention),
+                if (retainsTargetEvidence) ...[
+                  const SizedBox(height: 12),
+                  Container(
+                    key: const Key('voice-slot-remove-target-warning'),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Theme.of(dialogContext).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(copy.managedVoiceSlotRemoveTargetWarning),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(copy.managedVoiceSlotRemoveRecreate),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('voice-slot-remove-cancel'),
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text(copy.managedVoiceSlotRemoveCancel),
+          ),
+          FilledButton(
+            key: const Key('voice-slot-remove-confirm'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(copy.managedVoiceSlotRemoveConfirm),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _removeEmptySlot();
+  }
+
+  Future<void> _removeEmptySlot() async {
+    final catalog = _catalog;
+    final lineId = _lineId;
+    final locale = _locale;
+    if (_interactionLocked ||
+        _hasChange ||
+        catalog == null ||
+        lineId == null ||
+        locale == null) {
+      return;
+    }
+    var publishedThisAttempt = false;
+    Revision3DialogVoiceSlotRemovalPublication? publication;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      publication = await widget.slotRemovalService.publish(
+        checkpoint: catalog,
+        lineId: lineId,
+        locale: locale,
+      );
+      publishedThisAttempt = true;
+      _slotRemovalWasSaved = true;
+      _pendingSlotRemovalPublication = publication;
+      final refreshed = await widget.slotRemovalService.loadCatalog();
+      if (!_catalogConfirmsSlotRemoval(refreshed, publication)) {
+        throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
+      }
+      final refreshedLine = refreshed.line(lineId);
+      final locales = refreshedLine == null
+          ? const <String>[]
+          : _intactLocales(refreshedLine);
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _catalog = refreshed;
+        _lineId = locales.isEmpty ? null : refreshedLine!.lineId;
+        _locale = locales.firstOrNull;
+        _selectionValue = _locale == null
+            ? null
+            : _selectionValueFor(
+                refreshedLine!.slotSummaryForLocale(_locale!)!,
+              );
+        _busy = false;
+        _pendingSlotRemovalPublication = null;
+        _notice = copy.managedVoiceSlotRemoveSuccess;
+      });
+    } on Revision3DialogVoiceSlotRemovalStaleCheckpointException {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _reloadRequired = true;
+        _error = copy.managedVoiceSlotRemoveStale;
+      });
+    } on Revision3DialogVoiceSlotRemovalRequiresReopenException {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _reloadRequired = false;
+        _requiresClose = true;
+        _error = copy.managedVoiceSlotRemoveSavedUnconfirmed;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _reloadRequired = publishedThisAttempt;
+        _error = publishedThisAttempt
+            ? copy.managedVoiceSlotRemoveSavedReloadFailed
+            : copy.managedVoiceSlotRemoveFailed(_friendlyError(error));
+      });
+    }
+  }
+
   Future<void> _reloadTakes() async {
     if (_busy || !_reloadRequired || _requiresClose) return;
     final previous = _catalog;
     final pending = _pendingStatusPublication;
     final pendingRemoval = _pendingRemovalPublication;
+    final pendingSlotRemoval = _pendingSlotRemovalPublication;
     setState(() {
       _busy = true;
       _error = null;
@@ -525,27 +707,32 @@ class _Revision3VoiceTakeSelectionDialogState
           !_catalogConfirmsRemoval(refreshed, pendingRemoval)) {
         throw const Revision3VoiceTakeRemovalRequiresReopenException();
       }
+      if (pendingSlotRemoval != null &&
+          !_catalogConfirmsSlotRemoval(refreshed, pendingSlotRemoval)) {
+        throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
+      }
       final line = _lineId == null ? null : refreshed.line(_lineId!);
-      final locale =
-          line == null ||
-              _locale == null ||
-              line.slotSummaryForLocale(_locale!) == null
-          ? null
-          : _locale;
+      final locales = line == null ? const <String>[] : _intactLocales(line);
+      final locale = _locale != null && locales.contains(_locale)
+          ? _locale
+          : locales.firstOrNull;
       final summary = locale == null
           ? null
           : line!.slotSummaryForLocale(locale);
       if (!mounted) return;
       setState(() {
         _catalog = refreshed;
-        _lineId = line?.lineId;
+        _lineId = locale == null ? null : line!.lineId;
         _locale = locale;
         _selectionValue = summary == null ? null : _selectionValueFor(summary);
         _pendingStatusPublication = null;
         _pendingRemovalPublication = null;
+        _pendingSlotRemovalPublication = null;
         _reloadRequired = false;
         _busy = false;
-        _notice = pendingRemoval != null
+        _notice = pendingSlotRemoval != null
+            ? AppLocalizations.of(context).managedVoiceSlotRemoveReloadConfirmed
+            : pendingRemoval != null
             ? AppLocalizations.of(context).managedVoiceTakeRemoveReloadConfirmed
             : pending == null
             ? 'Latest Voice takes reloaded.'
@@ -560,6 +747,16 @@ class _Revision3VoiceTakeSelectionDialogState
         _error = AppLocalizations.of(
           context,
         ).managedVoiceTakeRemoveSavedUnconfirmed;
+      });
+    } on Revision3DialogVoiceSlotRemovalRequiresReopenException {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _reloadRequired = false;
+        _requiresClose = true;
+        _error = AppLocalizations.of(
+          context,
+        ).managedVoiceSlotRemoveSavedUnconfirmed;
       });
     } on Revision3VoiceTakeStatusRequiresReopenException {
       if (!mounted) return;
@@ -755,11 +952,27 @@ class _Revision3VoiceTakeSelectionDialogState
                     ),
                   ),
                 if (summary.candidates.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: Text(
-                      'This Voice slot has no candidate takes yet.',
-                      key: Key('voice-selection-no-candidates'),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'This Voice setup has no takes.',
+                          key: Key('voice-selection-no-candidates'),
+                        ),
+                        if (summary.isRemovableGeneratedSlot) ...[
+                          const SizedBox(height: 8),
+                          OutlinedButton.icon(
+                            key: const Key('voice-slot-remove-empty'),
+                            onPressed: _interactionLocked || _hasChange
+                                ? null
+                                : _confirmRemoveEmptySlot,
+                            icon: const Icon(Icons.link_off),
+                            label: Text(copy.managedVoiceSlotRemoveAction),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
               ],
@@ -802,6 +1015,7 @@ class _Revision3VoiceTakeSelectionDialogState
           child: Text(
             _statusWasSaved ||
                     _removalWasSaved ||
+                    _slotRemovalWasSaved ||
                     _requiresClose ||
                     _reloadRequired
                 ? 'Close'
@@ -1068,6 +1282,24 @@ bool _catalogConfirmsRemoval(
   }
   final takeStillExists = catalog.entityIds.contains(publication.takeId);
   return publication.takeEntityRemoved != takeStillExists;
+}
+
+bool _catalogConfirmsSlotRemoval(
+  Revision3VoiceCatalog catalog,
+  Revision3DialogVoiceSlotRemovalPublication publication,
+) {
+  if (catalog.projectId != publication.projectId ||
+      catalog.projectRevision != publication.projectRevision ||
+      catalog.entityIds.contains(publication.slotId)) {
+    return false;
+  }
+  final line = catalog.line(publication.lineId);
+  return line != null &&
+      line.lineRevision == publication.lineRevision &&
+      line.localizationId == publication.localizationId &&
+      line.localizationIdentity == publication.locId &&
+      line.slotIdForLocale(publication.locale) == null &&
+      line.slotSummaryForLocale(publication.locale) == null;
 }
 
 String _friendlyError(Object error) {

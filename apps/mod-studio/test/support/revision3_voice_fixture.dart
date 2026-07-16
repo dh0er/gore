@@ -142,6 +142,7 @@ String revision3VoiceFixtureProjectWithVoiceSlotCountJson(
   int slotCount, {
   String projectId = revision3VoiceFixtureProjectId,
   int projectRevision = 7,
+  bool generatedSlots = false,
 }) {
   if (slotCount < 0 || slotCount > 2048) {
     throw ArgumentError.value(slotCount, 'slotCount');
@@ -175,7 +176,18 @@ String revision3VoiceFixtureProjectWithVoiceSlotCountJson(
     entities[slotId] = <String, Object?>{
       'id': slotId,
       'display_name': 'Voice $locale',
-      'origin': _importedOrigin('5'),
+      'origin': generatedSlots
+          ? <String, Object?>{
+              'type': 'generated',
+              'generator_id': 'gore-authoring.voice-slot',
+              'generator_version': 1,
+              'owner': _typedRefForProject(
+                projectId,
+                revision3VoiceFixtureLineId,
+                'dialog_line',
+              ),
+            }
+          : _importedOrigin('5'),
       'revision': 0,
       'payload': <String, Object?>{
         'kind': 'voice_slot',

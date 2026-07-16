@@ -98,6 +98,32 @@ void main() {
     },
   );
 
+  testWidgets('context handoff preselects the exact line and Voice language', (
+    tester,
+  ) async {
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan: _unexpectedPublish,
+    );
+    await _openDialog(
+      tester,
+      service,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+    );
+
+    expect(find.text('Current target: unresolved'), findsOneWidget);
+    expect(
+      tester
+          .widget<DropdownButtonFormField<String>>(
+            find.byType(DropdownButtonFormField<String>),
+          )
+          .initialValue,
+      'de',
+    );
+    expect(find.text(revision3VoiceContentLineId), findsNothing);
+  });
+
   testWidgets('offers an intact target even when its take capacity is full', (
     tester,
   ) async {
@@ -341,6 +367,8 @@ Future<void> _openDialog(
   WidgetTester tester,
   Revision3VoiceTargetAuthoringService service, {
   ValueChanged<Revision3VoiceTargetPublication?>? onResult,
+  String? initialLineId,
+  String? initialLocale,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1;
@@ -355,7 +383,11 @@ Future<void> _openDialog(
             onPressed: () async {
               final result = await showDialog<Revision3VoiceTargetPublication>(
                 context: context,
-                builder: (_) => Revision3VoiceTargetDialog(service: service),
+                builder: (_) => Revision3VoiceTargetDialog(
+                  service: service,
+                  initialLineId: initialLineId,
+                  initialLocale: initialLocale,
+                ),
               );
               onResult?.call(result);
             },

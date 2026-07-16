@@ -18,6 +18,7 @@ import 'package:path/path.dart' as p;
 
 import '../dataasset/dataasset_test_fixtures.dart';
 import '../support/revision3_dataasset_fixture.dart';
+import '../support/revision3_dialog_voice_slot_removal_fixture.dart';
 import '../support/revision3_npc_fixture.dart';
 import '../support/revision3_npc_profile_edit_fixture.dart';
 import '../support/revision3_quest_fixture.dart';
@@ -6561,6 +6562,90 @@ void main() {
     await session.close();
   });
 
+  test('dialog Voice slot removal publishes through full reopen', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'dialog_voice_slot_remove',
+    );
+    final store = _FakeRevision3DialogVoiceSlotRemovalStore();
+    final project = revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+      1,
+      generatedSlots: true,
+    );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: project,
+    );
+    final headOpens = store.headVerifications.length;
+
+    final removed = await _removeDialogVoiceSlot(session);
+
+    expect(session.supportsDialogVoiceSlotRemoval, isTrue);
+    expect(store.removalCalls, 1);
+    expect(removed.projectRevision, session.projectRevision);
+    expect(removed.lineRevision, 3);
+    expect(removed.removedSlotRevision, 0);
+    expect(
+      removed.removedTargetResolution,
+      Revision3ContentVoiceTargetResolution.unresolved,
+    );
+    final published = jsonDecode(session.projectJson) as Map<String, Object?>;
+    expect(
+      (published['entities']! as Map),
+      isNot(contains(revision3DialogVoiceSlotRemovalSlotId)),
+    );
+    expect(
+      store.headVerifications.skip(headOpens),
+      everyElement(AuthoringAssetVerification.full),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test(
+    'closed dialog Voice slot conflict remains retryable; uncertainty poisons',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'dialog_voice_slot_remove_errors',
+      );
+      final store = _FakeRevision3DialogVoiceSlotRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectWithVoiceSlotCountJson(
+          1,
+          generatedSlots: true,
+        ),
+      );
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_NOT_EMPTY',
+        message: 'injected correctable conflict',
+      );
+      await expectLater(
+        _removeDialogVoiceSlot(session),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+
+      store.nextError = const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_STORE_INVARIANT',
+        message: 'injected uncertain failure',
+      );
+      await expectLater(
+        _removeDialogVoiceSlot(session),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      await session.close();
+    },
+  );
+
   for (final kind in AuthoringStoryDraftKind.values) {
     test(
       '${kind.wireName} removal publishes only the Draft/module pair through full reopen',
@@ -7148,6 +7233,27 @@ Future<ManagedRevision3VoiceTakeRemovalCheckpoint> _removeVoiceTake(
     takeId: takeId,
     expectedTakeRevision: take['revision']! as int,
     expectedSelectedTakeId: selectedId,
+  );
+}
+
+Future<ManagedRevision3DialogVoiceSlotRemovalCheckpoint> _removeDialogVoiceSlot(
+  ManagedRevision3AuthoringProjectSession session,
+) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  final slot = (entities[revision3DialogVoiceSlotRemovalSlotId]! as Map)
+      .cast<String, Object?>();
+  return session.prepareAndPublishDialogVoiceSlotRemovalV1(
+    lineId: revision3VoiceFixtureLineId,
+    expectedLineRevision: line['revision']! as int,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    slotId: revision3DialogVoiceSlotRemovalSlotId,
+    expectedSlotRevision: slot['revision']! as int,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
   );
 }
 
@@ -9505,6 +9611,80 @@ final class _FakeRevision3VoiceTakeRemovalStore extends _FakeRevision3Store
         'remaining_candidate_count': candidates.length,
         'build_status': 'blocked',
         'runtime_status': 'runtime_unqualified',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3DialogVoiceSlotRemovalStore
+    extends _FakeRevision3Store
+    implements ManagedRevision3DialogVoiceSlotRemovalStore {
+  int removalCalls = 0;
+  Object? nextError;
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotRemovalPreparation>
+  prepareDialogVoiceSlotRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
+  }) async {
+    removalCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command:
+            'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+        code: 'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_HEAD_CONFLICT',
+        message: 'fake native dialog Voice slot removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final line = (entities[request.lineId]! as Map).cast<String, Object?>();
+    line['revision'] = request.expectedLineRevision + 1;
+    final payload = (line['payload']! as Map).cast<String, Object?>();
+    final data = (payload['data']! as Map).cast<String, Object?>();
+    final slots = (data['voice_slots']! as Map).cast<String, Object?>();
+    slots.remove(request.locale);
+    data['voice_slots'] = slots;
+    payload['data'] = data;
+    line['payload'] = payload;
+    entities[request.lineId] = line;
+    entities.remove(request.slotId);
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    return AuthoringRevision3DialogVoiceSlotRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'line_revision': request.expectedLineRevision + 1,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'removed_slot_revision': request.expectedSlotRevision,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'removed_target_resolution': 'unresolved',
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
+        'target_authority': 'not_granted',
         'publication_status': 'not_supported',
       },
       currentProjectJson: currentProjectJson,

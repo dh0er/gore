@@ -11,6 +11,7 @@ const _targetSha =
 Revision3ContentIndex revision3VoiceContentIndexFixture({
   int revision = 7,
   bool existingDeSlot = true,
+  bool existingSlotGenerated = false,
   int existingSlotCandidateCount = 0,
   bool existingSlotHasSelectedTake = false,
   String existingSlotTargetResolution = 'unresolved',
@@ -23,6 +24,7 @@ Revision3ContentIndex revision3VoiceContentIndexFixture({
   revision3VoiceContentIndexJsonFixture(
     revision: revision,
     existingDeSlot: existingDeSlot,
+    existingSlotGenerated: existingSlotGenerated,
     existingSlotCandidateCount: existingSlotCandidateCount,
     existingSlotHasSelectedTake: existingSlotHasSelectedTake,
     existingSlotTargetResolution: existingSlotTargetResolution,
@@ -37,6 +39,7 @@ Revision3ContentIndex revision3VoiceContentIndexFixture({
 Map<String, Object?> revision3VoiceContentIndexJsonFixture({
   int revision = 7,
   bool existingDeSlot = true,
+  bool existingSlotGenerated = false,
   int existingSlotCandidateCount = 0,
   bool existingSlotHasSelectedTake = false,
   String existingSlotTargetResolution = 'unresolved',
@@ -100,8 +103,19 @@ Map<String, Object?> revision3VoiceContentIndexJsonFixture({
             'display_name': 'Asghan German Voice',
             'revision': 1,
             'origin': <String, Object?>{
-              'type': 'new',
-              'authored_runtime_id': 'fixture-voice-slot',
+              if (existingSlotGenerated) ...<String, Object?>{
+                'type': 'generated',
+                'generator_id': 'gore-authoring.voice-slot',
+                'generator_version': 1,
+                'owner': <String, Object?>{
+                  'project_id': revision3VoiceContentProjectId,
+                  'entity_id': revision3VoiceContentLineId,
+                  'expected_kind': 'dialog_line',
+                },
+              } else ...<String, Object?>{
+                'type': 'new',
+                'authored_runtime_id': 'fixture-voice-slot',
+              },
             },
             'summary': <String, Object?>{
               'kind': 'voice_slot',
@@ -114,6 +128,12 @@ Map<String, Object?> revision3VoiceContentIndexJsonFixture({
               },
             },
             'references': <Object?>[
+              if (existingSlotGenerated)
+                _entityReference(
+                  role: 'origin_owner',
+                  entityId: revision3VoiceContentLineId,
+                  expectedKind: 'dialog_line',
+                ),
               for (final id in takeIds.take(existingSlotCandidateCount))
                 _entityReference(
                   role: 'voice_candidate',

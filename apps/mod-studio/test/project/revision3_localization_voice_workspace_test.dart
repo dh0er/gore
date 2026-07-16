@@ -140,6 +140,121 @@ void main() {
     },
   );
 
+  testWidgets(
+    'context actions carry the explicitly selected line and language',
+    (tester) async {
+      await _setSurface(tester, width: 1200);
+      final calls = <String>[];
+      final service = _serviceForIndex(
+        _contentIndex(
+          displayName: 'Mine warning',
+          locales: const <String>['de', 'en'],
+        ),
+        seedFor:
+            ({
+              required projectId,
+              required projectRevision,
+              required localizationId,
+              required localizationRevision,
+              required locId,
+            }) => _exactSeed(
+              projectId: projectId,
+              projectRevision: projectRevision,
+              localizationId: localizationId,
+              localizationRevision: localizationRevision,
+              locId: locId,
+              backlinks: _backlinks(shared: true, identicalVisibleLines: true),
+            ),
+      );
+      Future<void> record(
+        String action, {
+        required String initialLineId,
+        required String initialLocale,
+      }) async => calls.add('$action:$initialLineId:$initialLocale');
+
+      await _pumpWorkspace(
+        tester,
+        service: service,
+        onAddVoiceTakeFor: ({required initialLineId, required initialLocale}) =>
+            record(
+              'add',
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
+            ),
+        onManageVoiceTakesFor:
+            ({required initialLineId, required initialLocale}) => record(
+              'manage',
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
+            ),
+        onResolveVoiceTargetFor:
+            ({required initialLineId, required initialLocale}) => record(
+              'resolve',
+              initialLineId: initialLineId,
+              initialLocale: initialLocale,
+            ),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-localization-voice-select-line-hint')),
+        findsOneWidget,
+      );
+      expect(find.text('Mine entrance question · 1 of 2'), findsOneWidget);
+      expect(find.text('Mine entrance question · 2 of 2'), findsOneWidget);
+      expect(find.textContaining(_lineId), findsNothing);
+      expect(find.textContaining(_secondLineId), findsNothing);
+      await tester.tap(
+        find.byKey(
+          const ValueKey('revision3-localization-voice-line-$_secondLineId'),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('revision3-localization-voice-locale-en')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-context-add-voice')),
+      );
+      await tester.pump();
+      expect(calls, <String>['add:$_secondLineId:en']);
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(
+                const Key('revision3-localization-context-manage-voice'),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+
+      await tester.tap(
+        find.byKey(
+          const ValueKey('revision3-localization-voice-line-$_lineId'),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('revision3-localization-voice-locale-de')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-context-manage-voice')),
+      );
+      await tester.pump();
+      await tester.tap(
+        find.byKey(const Key('revision3-localization-context-resolve-voice')),
+      );
+      await tester.pump();
+      expect(calls, <String>[
+        'add:$_secondLineId:en',
+        'manage:$_lineId:de',
+        'resolve:$_lineId:de',
+      ]);
+    },
+  );
+
   testWidgets('compact browser opens the first item and discard resets it', (
     tester,
   ) async {
@@ -1559,6 +1674,9 @@ Future<void> _pumpWorkspace(
   Revision3LocalizationVoiceAction? onAddVoiceTake,
   Revision3LocalizationVoiceAction? onManageVoiceTakes,
   Revision3LocalizationVoiceAction? onResolveVoiceTarget,
+  Revision3LocalizationVoiceContextAction? onAddVoiceTakeFor,
+  Revision3LocalizationVoiceContextAction? onManageVoiceTakesFor,
+  Revision3LocalizationVoiceContextAction? onResolveVoiceTargetFor,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -1574,6 +1692,9 @@ Future<void> _pumpWorkspace(
           onAddVoiceTake: onAddVoiceTake ?? () {},
           onManageVoiceTakes: onManageVoiceTakes ?? () {},
           onResolveVoiceTarget: onResolveVoiceTarget ?? () {},
+          onAddVoiceTakeFor: onAddVoiceTakeFor,
+          onManageVoiceTakesFor: onManageVoiceTakesFor,
+          onResolveVoiceTargetFor: onResolveVoiceTargetFor,
         ),
       ),
     ),
@@ -1735,6 +1856,7 @@ AuthoringRevision3DialogLocalizationEditSeed _exactSeed({
 
 List<Map<String, Object?>> _backlinks({
   bool shared = false,
+  bool identicalVisibleLines = false,
   List<String> voiceSlotLocales = const <String>['de'],
 }) => <Map<String, Object?>>[
   <String, Object?>{
@@ -1748,8 +1870,10 @@ List<Map<String, Object?>> _backlinks({
     <String, Object?>{
       'line_id': _secondLineId,
       'line_revision': 1,
-      'display_name': 'Mine entrance question (copy)',
-      'speaker_hint': 'Viper',
+      'display_name': identicalVisibleLines
+          ? 'Mine entrance question'
+          : 'Mine entrance question (copy)',
+      'speaker_hint': identicalVisibleLines ? 'Asghan' : 'Viper',
       'voice_slot_locales': const <String>[],
     },
 ];

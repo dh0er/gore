@@ -16,6 +16,7 @@ import 'revision3_content_index.dart';
 import 'revision3_dataasset_authoring.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
+import 'revision3_dialog_voice_slot_removal_authoring.dart';
 import 'revision3_npc_authoring.dart';
 import 'revision3_npc_profile_edit_authoring.dart';
 import 'revision3_quest_authoring.dart';
@@ -325,6 +326,26 @@ const _revision3VoiceTakeRemovalCorrectableCodes = <String>{
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_REJECTED',
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
+};
+
+const _revision3DialogVoiceSlotRemovalCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LINE_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LOC_ID_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_NOT_EMPTY',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_BACKLINK_CONFLICT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REVISION_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_INVALID',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SIGNED_WIRE_LIMIT',
 };
 
 const _revision3NpcProfileEditCorrectableCodes = <String>{
@@ -661,6 +682,19 @@ abstract interface class ManagedRevision3VoiceTakeRemovalLease {
   });
 }
 
+/// Optional exact-current authority for removing one empty, unselected dialog
+/// VoiceSlot and its line locale binding.
+abstract interface class ManagedRevision3DialogVoiceSlotRemovalLease {
+  bool get supportsDialogVoiceSlotRemoval;
+
+  void markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty();
+
+  Future<Revision3DialogVoiceSlotRemovalPublication>
+  prepareAndPublishDialogVoiceSlotRemovalV1({
+    required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+  });
+}
+
 /// Optional authority for reconciling one managed lease after an uncertain
 /// publication. Recovery remains separate from normal editing so unrelated
 /// leases and fakes do not accidentally claim repair authority.
@@ -846,6 +880,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3NpcProfileEditLease,
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3VoiceTakeRemovalLease,
+        ManagedRevision3DialogVoiceSlotRemovalLease,
         ManagedRevision3RecoveryLease,
         ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
@@ -918,6 +953,10 @@ final class _ManagedRevision3SessionLease
   bool get supportsVoiceTakeRemoval => _session.supportsVoiceTakeRemoval;
 
   @override
+  bool get supportsDialogVoiceSlotRemoval =>
+      _session.supportsDialogVoiceSlotRemoval;
+
+  @override
   bool get supportsNpcProfileEdit => _session.supportsNpcProfileEdit;
 
   @override
@@ -926,6 +965,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   void markRequiresReopenAfterVoiceTakeRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1371,6 +1414,34 @@ final class _ManagedRevision3SessionLease
       selectionCleared: checkpoint.selectionCleared,
       takeEntityRemoved: checkpoint.takeEntityRemoved,
       remainingCandidateCount: checkpoint.remainingCandidateCount,
+    );
+  }
+
+  @override
+  Future<Revision3DialogVoiceSlotRemovalPublication>
+  prepareAndPublishDialogVoiceSlotRemovalV1({
+    required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishDialogVoiceSlotRemovalV1(
+      lineId: plan.lineId,
+      expectedLineRevision: plan.expectedLineRevision,
+      localizationId: plan.localizationId,
+      slotId: plan.slotId,
+      expectedSlotRevision: plan.expectedSlotRevision,
+      locale: plan.locale,
+      expectedLocId: plan.locId,
+    );
+    return Revision3DialogVoiceSlotRemovalPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      lineRevision: checkpoint.lineRevision,
+      localizationId: checkpoint.localizationId,
+      slotId: checkpoint.slotId,
+      removedSlotRevision: checkpoint.removedSlotRevision,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      removedTargetResolution: checkpoint.removedTargetResolution,
     );
   }
 
@@ -3871,6 +3942,100 @@ final class CurrentProjectCoordinator
       removalLease.markRequiresReopenAfterVoiceTakeRemovalUncertainty();
       Error.throwWithStackTrace(
         const Revision3VoiceTakeRemovalRequiresReopenException(),
+        stackTrace,
+      );
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Remove one exact empty and unselected dialog Voice slot. Correctable
+  /// prepublication conflicts become stale checkpoints; uncertain outcomes
+  /// permanently remove mutation authority until recovery or reopen.
+  Future<Revision3DialogVoiceSlotRemovalPublication>
+  removeCurrentRevision3DialogVoiceSlot({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'dialog Voice slot removal is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DialogVoiceSlotRemovalStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3DialogVoiceSlotRemovalLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project lease does not support dialog Voice slot removal',
+      );
+    }
+    final removalLease = lease as ManagedRevision3DialogVoiceSlotRemovalLease;
+    if (!removalLease.supportsDialogVoiceSlotRemoval) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project Store does not support dialog Voice slot removal',
+      );
+    }
+    try {
+      final publication = await removalLease
+          .prepareAndPublishDialogVoiceSlotRemovalV1(plan: plan);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.lineRevision != plan.expectedLineRevision + 1 ||
+          publication.localizationId != plan.localizationId ||
+          publication.slotId != plan.slotId ||
+          publication.removedSlotRevision != plan.expectedSlotRevision ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId ||
+          publication.removedTargetResolution != plan.targetResolution) {
+        removalLease.markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty();
+        throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3DialogVoiceSlotRemovalRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          removalLease
+              .markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DialogVoiceSlotRemovalRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3DialogVoiceSlotRemovalCorrectableCodes.contains(
+            error.code,
+          )) {
+        Error.throwWithStackTrace(
+          const Revision3DialogVoiceSlotRemovalStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error is Revision3DialogVoiceSlotRemovalStaleCheckpointException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      removalLease.markRequiresReopenAfterDialogVoiceSlotRemovalUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3DialogVoiceSlotRemovalRequiresReopenException(),
         stackTrace,
       );
     } finally {

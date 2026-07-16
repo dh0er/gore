@@ -559,6 +559,38 @@ final class ManagedRevision3VoiceTakeRemovalCheckpoint {
   final int remainingCandidateCount;
 }
 
+/// One exact empty dialog VoiceSlot removed after native preparation, full
+/// candidate reopen, fixed-head CAS publication, and full published reopen.
+final class ManagedRevision3DialogVoiceSlotRemovalCheckpoint {
+  const ManagedRevision3DialogVoiceSlotRemovalCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.lineRevision,
+    required this.localizationId,
+    required this.slotId,
+    required this.removedSlotRevision,
+    required this.locale,
+    required this.locId,
+    required this.removedTargetResolution,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final int lineRevision;
+  final String localizationId;
+  final String slotId;
+  final int removedSlotRevision;
+  final String locale;
+  final String locId;
+  final Revision3ContentVoiceTargetResolution removedTargetResolution;
+}
+
 /// One retained VoiceTake review-status change returned only after native
 /// preparation, full candidate reopen, fixed-head CAS publication, and a full
 /// published reopen. The VoiceSlot is unchanged; build remains blocked and
@@ -1057,6 +1089,17 @@ abstract interface class ManagedRevision3VoiceTakeRemovalStore {
   });
 }
 
+/// Narrow capability for deleting one exact empty and unselected dialog
+/// VoiceSlot. Alternate checkpoint stores receive no implicit deletion power.
+abstract interface class ManagedRevision3DialogVoiceSlotRemovalStore {
+  Future<AuthoringRevision3DialogVoiceSlotRemovalPreparation>
+  prepareDialogVoiceSlotRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
+  });
+}
+
 /// Narrow capability for preparing one existing NPC name/archetype edit.
 /// Checkpoint-only alternate stores do not gain this mutation authority.
 abstract interface class ManagedRevision3NpcProfileEditStore {
@@ -1076,6 +1119,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3ProjectHistoryStore,
         ManagedRevision3StoryDraftRemovalStore,
         ManagedRevision3VoiceTakeRemovalStore,
+        ManagedRevision3DialogVoiceSlotRemovalStore,
         ManagedRevision3NpcProfileEditStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
@@ -1393,6 +1437,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3VoiceTakeRemovalV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3DialogVoiceSlotRemovalPreparation>
+  prepareDialogVoiceSlotRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3DialogVoiceSlotRemovalV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -1878,6 +1934,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3StoryDraftRemovalStore;
   bool get supportsVoiceTakeRemoval =>
       _store is ManagedRevision3VoiceTakeRemovalStore;
+  bool get supportsDialogVoiceSlotRemoval =>
+      _store is ManagedRevision3DialogVoiceSlotRemovalStore;
   bool get supportsNpcProfileEdit =>
       _store is ManagedRevision3NpcProfileEditStore;
   bool get supportsProjectHistory =>
@@ -3298,6 +3356,108 @@ class ManagedRevision3AuthoringProjectSession {
             selectionCleared: prepared.selectionCleared,
             takeEntityRemoved: prepared.takeEntityRemoved,
             remainingCandidateCount: prepared.remainingCandidateCount,
+          ),
+        );
+      },
+    );
+  }
+
+  /// Remove one exact empty and unselected dialog VoiceSlot through the
+  /// project-only managed publication lane.
+  Future<ManagedRevision3DialogVoiceSlotRemovalCheckpoint>
+  prepareAndPublishDialogVoiceSlotRemovalV1({
+    required String lineId,
+    required int expectedLineRevision,
+    required String localizationId,
+    required String slotId,
+    required int expectedSlotRevision,
+    required String locale,
+    required String expectedLocId,
+  }) {
+    final removalStore = _store;
+    if (removalStore is! ManagedRevision3DialogVoiceSlotRemovalStore) {
+      return Future<ManagedRevision3DialogVoiceSlotRemovalCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no dialog Voice slot removal capability',
+        ),
+      );
+    }
+    final removalCapability =
+        removalStore as ManagedRevision3DialogVoiceSlotRemovalStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3DialogVoiceSlotRemovalCheckpoint
+    >(
+      operation: 'prepareAndPublishDialogVoiceSlotRemovalV1',
+      handlePrepareError:
+          _core._throwRevision3DialogVoiceSlotRemovalPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 dialog Voice slot removal has no exact project identity',
+          );
+        }
+        if (projectRevision >= 0x7fffffffffffffff) {
+          throw const ModFfiException(
+            command:
+                'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1',
+            code:
+                'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REVISION_LIMIT',
+            message:
+                'dialog Voice slot removal cannot advance the signed wire revision',
+          );
+        }
+        final request =
+            AuthoringRevision3DialogVoiceSlotRemovalRequestV1.forProject(
+              expectedHead: basis.head,
+              currentProjectJson: basis.projectJson,
+              lineId: lineId,
+              expectedLineRevision: expectedLineRevision,
+              localizationId: localizationId,
+              expectedLocId: expectedLocId,
+              locale: locale,
+              slotId: slotId,
+              expectedSlotRevision: expectedSlotRevision,
+            );
+        final prepared = await removalCapability
+            .prepareDialogVoiceSlotRemovalV1(
+              root: root.path,
+              currentProjectJson: basis.projectJson,
+              request: request,
+            );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.lineId != request.lineId ||
+            prepared.lineRevision != request.expectedLineRevision + 1 ||
+            prepared.localizationId != request.localizationId ||
+            prepared.slotId != request.slotId ||
+            prepared.removedSlotRevision != request.expectedSlotRevision ||
+            prepared.locale != request.locale ||
+            prepared.locId != request.expectedLocId) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 dialog Voice slot removal preparation disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3DialogVoiceSlotRemovalCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3DialogVoiceSlotRemovalCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            lineId: prepared.lineId,
+            lineRevision: prepared.lineRevision,
+            localizationId: prepared.localizationId,
+            slotId: prepared.slotId,
+            removedSlotRevision: prepared.removedSlotRevision,
+            locale: prepared.locale,
+            locId: prepared.locId,
+            removedTargetResolution: prepared.removedTargetResolution,
           ),
         );
       },
@@ -5815,6 +5975,43 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3DialogVoiceSlotRemovalPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3DialogVoiceSlotRemovalPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 dialog Voice slot removal could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceTakeStatusPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -6865,6 +7062,27 @@ bool _revision3VoiceTakeRemovalPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
 }.contains(code);
+
+bool _revision3DialogVoiceSlotRemovalPrepareErrorIsRetryable(String code) =>
+    const {
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_INPUT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_PROJECT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_TARGET_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LINE_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LOCALIZATION_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_LOC_ID_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SLOT_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_NOT_EMPTY',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_BACKLINK_CONFLICT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REFERENCE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REVISION_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_PROJECT_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_INVALID',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_REQUEST_REJECTED',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_RESPONSE_LIMIT',
+      'AUTHORING_REVISION3_DIALOG_VOICE_SLOT_REMOVAL_SIGNED_WIRE_LIMIT',
+    }.contains(code);
 
 bool _revision3VoiceTakeStatusPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_TAKE_STATUS_INPUT_LIMIT',

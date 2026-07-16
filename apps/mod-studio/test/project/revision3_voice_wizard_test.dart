@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
+import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_wizard.dart';
@@ -97,6 +98,47 @@ void main() {
       expect(captured!.text, isNull);
     },
   );
+
+  testWidgets('previews only the selected local Ogg before import', (
+    tester,
+  ) async {
+    await _useLargeSurface(tester);
+    String? previewed;
+    final service = Revision3VoiceAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan: _unexpectedPublish,
+    );
+    await _openWizard(
+      tester,
+      service: service,
+      picker: () async => r'C:\Voice\asghan_preview.ogg',
+      preview: (path) async => previewed = path,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+    );
+
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('revision3-voice-preview')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(find.byKey(const Key('revision3-voice-browse')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const Key('revision3-voice-preview')))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byKey(const Key('revision3-voice-preview')));
+    await tester.pumpAndSettle();
+
+    expect(previewed, r'C:\Voice\asghan_preview.ogg');
+    expect(find.textContaining('author preview'), findsOneWidget);
+    expect(find.textContaining('does not approve'), findsOneWidget);
+    expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
+  });
 
   testWidgets('default Voice workflow preserves localization exactly', (
     tester,
@@ -550,11 +592,14 @@ Future<void> _openWizard(
   WidgetTester tester, {
   required Revision3VoiceAuthoringService service,
   Revision3VoiceOggPicker? picker,
+  Revision3VoiceOggPreviewLauncher? preview,
   String? initialLineId,
   String? initialLocale,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Scaffold(
         body: Builder(
           builder: (context) => FilledButton(
@@ -564,6 +609,7 @@ Future<void> _openWizard(
               builder: (_) => Revision3VoiceTakeDialog(
                 service: service,
                 pickOgg: picker,
+                previewOgg: preview,
                 initialLineId: initialLineId,
                 initialLocale: initialLocale,
               ),
@@ -591,3 +637,9 @@ Revision3VoiceTakePublication _publication({
   slotCreated: plan.expectsSlotCreated,
   selected: plan.selectTake,
 );
+
+Future<Revision3VoiceTakePublication> _unexpectedPublish({
+  required String expectedProjectId,
+  required int expectedProjectRevision,
+  required Revision3VoiceTakeTechnicalPlan plan,
+}) => throw StateError('publisher was not expected');

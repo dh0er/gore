@@ -890,6 +890,20 @@ class AppLocalizationsDe extends AppLocalizations {
   String get managedLocalizationUsedByLines => 'Von Dialogzeilen verwendet';
 
   @override
+  String get managedLocalizationVoiceContextTitle =>
+      'Voice für diese Dialogzeile';
+
+  @override
+  String get managedLocalizationVoiceSelectLine =>
+      'Wähle oben eine Dialogzeile aus';
+
+  @override
+  String get managedLocalizationVoiceSetupExists => 'Voice-Setup vorhanden';
+
+  @override
+  String get managedLocalizationVoiceSetupMissing => 'noch kein Voice-Setup';
+
+  @override
   String get managedLocalizationNoLine => 'Noch keiner Dialogzeile zugeordnet';
 
   @override
@@ -2264,6 +2278,78 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedVoiceTakeRemoveReloadConfirmed =>
       'Die gespeicherte Entfernung wurde im aktuellen Projektstand bestätigt.';
+
+  @override
+  String get managedVoiceSlotRemoveAction => 'Leeres Voice-Setup entfernen…';
+
+  @override
+  String get managedVoiceSlotRemoveDialogTitle =>
+      'Leeres Voice-Setup entfernen?';
+
+  @override
+  String managedVoiceSlotRemoveDialogSummary(String line, String locale) {
+    return 'Das leere Voice-Setup für $locale aus $line entfernen?';
+  }
+
+  @override
+  String get managedVoiceSlotRemoveRetention =>
+      'Der Dialogtext bleibt im Projekt. Keine Aufnahme, kein Audio-Blob, keine Spieldatei und kein Spielstand werden gelöscht.';
+
+  @override
+  String get managedVoiceSlotRemoveTargetWarning =>
+      'Dabei wird auch der gespeicherte Nachweis zum installierten Ziel für diese Zeile und Sprache entfernt. Das installierte Archiv selbst bleibt unberührt.';
+
+  @override
+  String get managedVoiceSlotRemoveRecreate =>
+      'Du kannst später einen neuen Take hinzufügen; das benötigte Voice-Setup wird dann automatisch neu erstellt.';
+
+  @override
+  String get managedVoiceSlotRemoveCancel => 'Setup behalten';
+
+  @override
+  String get managedVoiceSlotRemoveConfirm => 'Setup entfernen';
+
+  @override
+  String get managedVoiceSlotRemoveSuccess =>
+      'Das leere Voice-Setup wurde entfernt. Dialogtext, Audiospeicher, Spieldateien und Spielstände wurden nicht verändert.';
+
+  @override
+  String get managedVoiceSlotRemoveStale =>
+      'Das Projekt wurde geändert, bevor das leere Voice-Setup entfernt werden konnte. Lade die aktuellen Voice-Takes neu und versuche es erneut.';
+
+  @override
+  String get managedVoiceSlotRemoveRequiresReopen =>
+      'Öffne das verwaltete Projekt erneut, bevor du dieses Voice-Setup entfernst.';
+
+  @override
+  String get managedVoiceSlotRemoveSavedUnconfirmed =>
+      'Das Ergebnis konnte nicht bestätigt werden; das leere Voice-Setup wurde möglicherweise gespeichert. Wiederhole die Entfernung nicht. Schließe dieses Fenster, öffne das verwaltete Projekt erneut und prüfe die Zeile.';
+
+  @override
+  String get managedVoiceSlotRemoveSavedReloadFailed =>
+      'Das leere Voice-Setup wurde gespeichert, aber das Neuladen ist fehlgeschlagen. Lade neu, um die Änderung zu bestätigen; die Entfernung wird nicht wiederholt.';
+
+  @override
+  String managedVoiceSlotRemoveFailed(String error) {
+    return 'Das leere Voice-Setup konnte nicht entfernt werden: $error';
+  }
+
+  @override
+  String get managedVoiceSlotRemoveReloadConfirmed =>
+      'Die gespeicherte Entfernung des leeren Voice-Setups wurde im aktuellen Projektstand bestätigt.';
+
+  @override
+  String get managedVoicePreviewTooltip =>
+      'Ausgewählte lokale Ogg-Datei vorhören';
+
+  @override
+  String get managedVoicePreviewOpened =>
+      'Die ausgewählte lokale Aufnahme wurde zur Autoren-Vorschau geöffnet. Dadurch wird das Audio weder freigegeben noch für das Spiel qualifiziert.';
+
+  @override
+  String managedVoicePreviewFailed(String error) {
+    return 'Die lokale Aufnahme konnte nicht zur Vorschau geöffnet werden: $error';
+  }
 
   @override
   String get managedStoryWorkbenchEditNpcProfile =>

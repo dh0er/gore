@@ -4,6 +4,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../app/domain/ui_settings.dart';
 import '../../app/game_paths.dart';
@@ -269,20 +270,14 @@ class _VoiceLineEditorState extends ConsumerState<VoiceLineEditor> {
     final messenger = ScaffoldMessenger.of(context);
     try {
       _validatePickedOgg(path);
-      if (Platform.isWindows) {
-        // The empty title argument is required by `start`; the path remains a
-        // separate quoted process argument and is never interpolated into a
-        // shell command string.
-        await Process.start('cmd', [
-          '/c',
-          'start',
-          '',
-          path,
-        ], runInShell: false);
-      } else if (Platform.isMacOS) {
-        await Process.start('open', [path], runInShell: false);
-      } else {
-        await Process.start('xdg-open', [path], runInShell: false);
+      final opened = await launchUrl(
+        Uri.file(path, windows: Platform.isWindows),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!opened) {
+        throw const FileSystemException(
+          'No external application accepted the selected Ogg file.',
+        );
       }
     } catch (error) {
       messenger.showSnackBar(

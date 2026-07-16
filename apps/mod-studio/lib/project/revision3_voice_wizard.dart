@@ -1,12 +1,16 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../core/mod_ffi.dart';
+import '../l10n/app_localizations.dart';
 import 'revision3_voice_authoring.dart';
 
 typedef Revision3VoiceOggPicker = Future<String?> Function();
+typedef Revision3VoiceOggPreviewLauncher = Future<void> Function(String path);
 
 /// Visible normal-mode workflow for attaching a real Ogg take to one existing
 /// managed-R3 dialog line. It exposes no entity IDs, CAS hashes, build,
@@ -15,6 +19,7 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
   const Revision3VoiceTakeDialog({
     required this.service,
     this.pickOgg,
+    this.previewOgg,
     this.initialLineId,
     this.initialLocale,
     super.key,
@@ -22,6 +27,7 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
 
   final Revision3VoiceAuthoringService service;
   final Revision3VoiceOggPicker? pickOgg;
+  final Revision3VoiceOggPreviewLauncher? previewOgg;
 
   /// Optional exact-current selection supplied by a preceding project action,
   /// such as creating a new DialogLine. The freshly loaded catalog still has
@@ -53,6 +59,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
   bool _requiresReopen = false;
   bool _staleCheckpoint = false;
   bool _picking = false;
+  bool _previewing = false;
   String? _error;
   int _loadGeneration = 0;
   int _catalogEpoch = 0;
@@ -146,6 +153,33 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       });
     } finally {
       if (mounted) setState(() => _picking = false);
+    }
+  }
+
+  Future<void> _previewSource() async {
+    if (_picking || _previewing || _publishing) return;
+    final path = _source.text;
+    setState(() {
+      _previewing = true;
+      _error = null;
+    });
+    try {
+      await (widget.previewOgg ?? _previewRevision3VoiceOgg)(path);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(AppLocalizations.of(context).managedVoicePreviewOpened),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = AppLocalizations.of(
+          context,
+        ).managedVoicePreviewFailed('$error');
+      });
+    } finally {
+      if (mounted) setState(() => _previewing = false);
     }
   }
 
@@ -275,7 +309,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
   @override
   Widget build(BuildContext context) {
     final blocked = _requiresReopen || _staleCheckpoint;
-    final busy = _loading || _publishing || _picking;
+    final busy = _loading || _publishing || _picking || _previewing;
     return PopScope(
       canPop: !_publicationStarted,
       child: AlertDialog(
@@ -509,13 +543,34 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
               helperText:
                   'Vorbis and Opus Ogg files are validated before the project changes.',
               border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                key: const Key('revision3-voice-browse'),
-                tooltip: 'Choose Ogg file',
-                onPressed: enabled ? _pickSource : null,
-                icon: const Icon(Icons.folder_open),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    key: const Key('revision3-voice-preview'),
+                    tooltip: AppLocalizations.of(
+                      context,
+                    ).managedVoicePreviewTooltip,
+                    onPressed: enabled && _validateSource(_source.text) == null
+                        ? _previewSource
+                        : null,
+                    icon: _previewing
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow),
+                  ),
+                  IconButton(
+                    key: const Key('revision3-voice-browse'),
+                    tooltip: 'Choose Ogg file',
+                    onPressed: enabled ? _pickSource : null,
+                    icon: const Icon(Icons.folder_open),
+                  ),
+                ],
               ),
             ),
+            onChanged: (_) => setState(() => _error = null),
             validator: _validateSource,
           ),
           const SizedBox(height: 14),
@@ -832,6 +887,34 @@ Future<String?> _pickRevision3VoiceOgg() async {
     ],
   );
   return file?.path;
+}
+
+Future<void> _previewRevision3VoiceOgg(String path) async {
+  _validateRevision3VoicePreviewPath(path);
+  final opened = await launchUrl(
+    Uri.file(path, windows: Platform.isWindows),
+    mode: LaunchMode.externalApplication,
+  );
+  if (!opened) {
+    throw const FileSystemException(
+      'No external application accepted the selected Ogg file.',
+    );
+  }
+}
+
+void _validateRevision3VoicePreviewPath(String path) {
+  if (path.isEmpty ||
+      path.trim() != path ||
+      !path.toLowerCase().endsWith('.ogg') ||
+      path.runes.any((rune) => rune < 0x20 || (rune >= 0x7f && rune <= 0x9f))) {
+    throw const FormatException('Choose a valid local Ogg recording first.');
+  }
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+      FileSystemEntityType.file) {
+    throw const FormatException(
+      'The selected Ogg must be a regular local file.',
+    );
+  }
 }
 
 String? _validateSource(String? value) {

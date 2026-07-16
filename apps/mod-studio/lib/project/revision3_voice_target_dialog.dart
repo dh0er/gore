@@ -11,9 +11,16 @@ import 'revision3_voice_authoring.dart';
 /// modify game files, or touch a save. The selected line and locale always
 /// originate from one exact content-index checkpoint.
 class Revision3VoiceTargetDialog extends StatefulWidget {
-  const Revision3VoiceTargetDialog({required this.service, super.key});
+  const Revision3VoiceTargetDialog({
+    required this.service,
+    this.initialLineId,
+    this.initialLocale,
+    super.key,
+  });
 
   final Revision3VoiceTargetAuthoringService service;
+  final String? initialLineId;
+  final String? initialLocale;
 
   @override
   State<Revision3VoiceTargetDialog> createState() =>
@@ -34,6 +41,7 @@ class _Revision3VoiceTargetDialogState
   String? _error;
   int _loadGeneration = 0;
   int _catalogEpoch = 0;
+  bool _initialSelectionConsumed = false;
 
   @override
   void initState() {
@@ -77,13 +85,23 @@ class _Revision3VoiceTargetDialogState
         _catalog = catalog;
         _lines = List.unmodifiable(lines);
         _catalogEpoch += 1;
-        final selected = _lineFrom(lines, _lineId);
+        final initial = _initialSelectionConsumed
+            ? null
+            : _lineFrom(lines, widget.initialLineId);
+        _initialSelectionConsumed = true;
+        final selected = initial ?? _lineFrom(lines, _lineId);
         if (selected == null) {
           _lineId = null;
           _locale = null;
         } else {
+          _lineId = selected.lineId;
           final locales = _safeLocales(selected);
-          if (!locales.contains(_locale)) _locale = locales.first;
+          final requestedLocale = initial == null
+              ? _locale
+              : widget.initialLocale;
+          _locale = locales.contains(requestedLocale)
+              ? requestedLocale
+              : locales.first;
         }
         _loading = false;
       });

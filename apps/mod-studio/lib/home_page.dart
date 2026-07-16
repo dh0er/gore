@@ -44,6 +44,7 @@ import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_dialog_line_authoring.dart';
 import 'project/revision3_dialog_line_dialog.dart';
 import 'project/revision3_dialog_localization_authoring.dart';
+import 'project/revision3_dialog_voice_slot_removal_authoring.dart';
 import 'project/revision3_global_content_search.dart';
 import 'project/revision3_global_content_search_view.dart';
 import 'project/revision3_npc_authoring.dart';
@@ -1336,6 +1337,28 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          publishDialogVoiceSlotRemoval:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3DialogVoiceSlotRemovalStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .removeCurrentRevision3DialogVoiceSlot(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTarget:
               ({
                 required expectedProjectId,
@@ -1917,6 +1940,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTakeStatus,
     required this.publishVoiceTakeRemoval,
+    required this.publishDialogVoiceSlotRemoval,
     required this.publishVoiceTarget,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
@@ -1979,6 +2003,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
   final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
+  final Revision3DialogVoiceSlotRemovalTechnicalPublisher
+  publishDialogVoiceSlotRemoval;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
@@ -2055,6 +2081,8 @@ class _ManagedRevision3ProjectViewState
       widget.publishVoiceTakeStatus;
   Revision3VoiceTakeRemovalTechnicalPublisher get publishVoiceTakeRemoval =>
       widget.publishVoiceTakeRemoval;
+  Revision3DialogVoiceSlotRemovalTechnicalPublisher
+  get publishDialogVoiceSlotRemoval => widget.publishDialogVoiceSlotRemoval;
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
@@ -3037,6 +3065,30 @@ class _ManagedRevision3ProjectViewState
           onResolveVoiceTarget: gameConfigured && intactVoiceLine
               ? () => _openVoiceTargetResolver(context)
               : null,
+          onAddVoiceTakeFor: gameConfigured && intactVoiceLine
+              ? ({required initialLineId, required initialLocale}) =>
+                    _openVoiceWizard(
+                      context,
+                      initialLineId: initialLineId,
+                      initialLocale: initialLocale,
+                    )
+              : null,
+          onManageVoiceTakesFor: intactVoiceLine
+              ? ({required initialLineId, required initialLocale}) =>
+                    _openVoiceTakeSelection(
+                      context,
+                      initialLineId: initialLineId,
+                      initialLocale: initialLocale,
+                    )
+              : null,
+          onResolveVoiceTargetFor: gameConfigured && intactVoiceLine
+              ? ({required initialLineId, required initialLocale}) =>
+                    _openVoiceTargetResolver(
+                      context,
+                      initialLineId: initialLineId,
+                      initialLocale: initialLocale,
+                    )
+              : null,
         );
       },
     );
@@ -3372,7 +3424,11 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
-  Future<void> _openVoiceTakeSelection(BuildContext context) async {
+  Future<void> _openVoiceTakeSelection(
+    BuildContext context, {
+    String? initialLineId,
+    String? initialLocale,
+  }) async {
     if (project.requiresReopen) return;
     final publication =
         await showDialog<Revision3VoiceTakeSelectionPublication>(
@@ -3390,6 +3446,12 @@ class _ManagedRevision3ProjectViewState
               loadContentIndex: loadContentIndex,
               publishTechnicalPlan: publishVoiceTakeRemoval,
             ),
+            slotRemovalService: Revision3DialogVoiceSlotRemovalAuthoringService(
+              loadContentIndex: loadContentIndex,
+              publishTechnicalPlan: publishDialogVoiceSlotRemoval,
+            ),
+            initialLineId: initialLineId,
+            initialLocale: initialLocale,
           ),
         );
     if (!context.mounted || publication == null) return;
@@ -3405,7 +3467,11 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
-  Future<void> _openVoiceTargetResolver(BuildContext context) async {
+  Future<void> _openVoiceTargetResolver(
+    BuildContext context, {
+    String? initialLineId,
+    String? initialLocale,
+  }) async {
     if (gameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3VoiceTargetPublication>(
       context: context,
@@ -3414,6 +3480,8 @@ class _ManagedRevision3ProjectViewState
           loadContentIndex: loadContentIndex,
           publishTechnicalPlan: publishVoiceTarget,
         ),
+        initialLineId: initialLineId,
+        initialLocale: initialLocale,
       ),
     );
     if (!context.mounted || publication == null) return;
@@ -4040,6 +4108,10 @@ Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
   selectTextLabel: l10n.managedLocalizationSelectText,
   languagesLabel: l10n.managedLocalizationLanguagesLabel,
   usedByLinesLabel: l10n.managedLocalizationUsedByLines,
+  voiceContextTitle: l10n.managedLocalizationVoiceContextTitle,
+  voiceSelectLineLabel: l10n.managedLocalizationVoiceSelectLine,
+  voiceSetupExistsLabel: l10n.managedLocalizationVoiceSetupExists,
+  voiceSetupMissingLabel: l10n.managedLocalizationVoiceSetupMissing,
   noLineLabel: l10n.managedLocalizationNoLine,
   speakerLabel: l10n.managedLocalizationSpeakerLabel,
   addLanguageLabel: l10n.managedLocalizationAddLanguage,

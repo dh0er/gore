@@ -1574,6 +1574,30 @@ abstract class AppLocalizations {
   /// **'Used by dialog lines'**
   String get managedLocalizationUsedByLines;
 
+  /// No description provided for @managedLocalizationVoiceContextTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice for this dialog line'**
+  String get managedLocalizationVoiceContextTitle;
+
+  /// No description provided for @managedLocalizationVoiceSelectLine.
+  ///
+  /// In en, this message translates to:
+  /// **'Select a dialog line above'**
+  String get managedLocalizationVoiceSelectLine;
+
+  /// No description provided for @managedLocalizationVoiceSetupExists.
+  ///
+  /// In en, this message translates to:
+  /// **'setup exists'**
+  String get managedLocalizationVoiceSetupExists;
+
+  /// No description provided for @managedLocalizationVoiceSetupMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'no setup yet'**
+  String get managedLocalizationVoiceSetupMissing;
+
   /// No description provided for @managedLocalizationNoLine.
   ///
   /// In en, this message translates to:
@@ -3869,6 +3893,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The saved removal was confirmed from the latest project.'**
   String get managedVoiceTakeRemoveReloadConfirmed;
+
+  /// No description provided for @managedVoiceSlotRemoveAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove empty Voice setup…'**
+  String get managedVoiceSlotRemoveAction;
+
+  /// No description provided for @managedVoiceSlotRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove empty Voice setup?'**
+  String get managedVoiceSlotRemoveDialogTitle;
+
+  /// No description provided for @managedVoiceSlotRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove the empty {locale} Voice setup from {line}?'**
+  String managedVoiceSlotRemoveDialogSummary(String line, String locale);
+
+  /// No description provided for @managedVoiceSlotRemoveRetention.
+  ///
+  /// In en, this message translates to:
+  /// **'The dialog text stays in the project. No recording, audio blob, game file, or save is deleted.'**
+  String get managedVoiceSlotRemoveRetention;
+
+  /// No description provided for @managedVoiceSlotRemoveTargetWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This also removes the stored installed-target evidence for this line and language. The installed archive itself remains untouched.'**
+  String get managedVoiceSlotRemoveTargetWarning;
+
+  /// No description provided for @managedVoiceSlotRemoveRecreate.
+  ///
+  /// In en, this message translates to:
+  /// **'You can add a new take later; the required Voice setup will then be created again automatically.'**
+  String get managedVoiceSlotRemoveRecreate;
+
+  /// No description provided for @managedVoiceSlotRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Keep setup'**
+  String get managedVoiceSlotRemoveCancel;
+
+  /// No description provided for @managedVoiceSlotRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove setup'**
+  String get managedVoiceSlotRemoveConfirm;
+
+  /// No description provided for @managedVoiceSlotRemoveSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.'**
+  String get managedVoiceSlotRemoveSuccess;
+
+  /// No description provided for @managedVoiceSlotRemoveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.'**
+  String get managedVoiceSlotRemoveStale;
+
+  /// No description provided for @managedVoiceSlotRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'Reopen the managed project before removing this Voice setup.'**
+  String get managedVoiceSlotRemoveRequiresReopen;
+
+  /// No description provided for @managedVoiceSlotRemoveSavedUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The result could not be confirmed and the empty Voice setup may have been saved. Do not repeat the removal. Close this window, reopen the managed project, and inspect the line.'**
+  String get managedVoiceSlotRemoveSavedUnconfirmed;
+
+  /// No description provided for @managedVoiceSlotRemoveSavedReloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The empty Voice setup was saved, but reloading failed. Reload to confirm it; the removal will not be repeated.'**
+  String get managedVoiceSlotRemoveSavedReloadFailed;
+
+  /// No description provided for @managedVoiceSlotRemoveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The empty Voice setup could not be removed: {error}'**
+  String managedVoiceSlotRemoveFailed(String error);
+
+  /// No description provided for @managedVoiceSlotRemoveReloadConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved empty Voice setup removal confirmed from the latest project.'**
+  String get managedVoiceSlotRemoveReloadConfirmed;
+
+  /// No description provided for @managedVoicePreviewTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Preview selected local Ogg'**
+  String get managedVoicePreviewTooltip;
+
+  /// No description provided for @managedVoicePreviewOpened.
+  ///
+  /// In en, this message translates to:
+  /// **'Opened the selected local recording for author preview. This does not approve or qualify the audio for the game.'**
+  String get managedVoicePreviewOpened;
+
+  /// No description provided for @managedVoicePreviewFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The local recording preview could not be opened: {error}'**
+  String managedVoicePreviewFailed(String error);
 
   /// No description provided for @managedStoryWorkbenchEditNpcProfile.
   ///

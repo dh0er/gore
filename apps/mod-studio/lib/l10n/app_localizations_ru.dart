@@ -879,6 +879,19 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedLocalizationUsedByLines => 'Used by dialog lines';
 
   @override
+  String get managedLocalizationVoiceContextTitle =>
+      'Voice for this dialog line';
+
+  @override
+  String get managedLocalizationVoiceSelectLine => 'Select a dialog line above';
+
+  @override
+  String get managedLocalizationVoiceSetupExists => 'setup exists';
+
+  @override
+  String get managedLocalizationVoiceSetupMissing => 'no setup yet';
+
+  @override
   String get managedLocalizationNoLine => 'Not used by a dialog line yet';
 
   @override
@@ -2249,6 +2262,76 @@ class AppLocalizationsRu extends AppLocalizations {
   @override
   String get managedVoiceTakeRemoveReloadConfirmed =>
       'The saved removal was confirmed from the latest project.';
+
+  @override
+  String get managedVoiceSlotRemoveAction => 'Remove empty Voice setup…';
+
+  @override
+  String get managedVoiceSlotRemoveDialogTitle => 'Remove empty Voice setup?';
+
+  @override
+  String managedVoiceSlotRemoveDialogSummary(String line, String locale) {
+    return 'Remove the empty $locale Voice setup from $line?';
+  }
+
+  @override
+  String get managedVoiceSlotRemoveRetention =>
+      'The dialog text stays in the project. No recording, audio blob, game file, or save is deleted.';
+
+  @override
+  String get managedVoiceSlotRemoveTargetWarning =>
+      'This also removes the stored installed-target evidence for this line and language. The installed archive itself remains untouched.';
+
+  @override
+  String get managedVoiceSlotRemoveRecreate =>
+      'You can add a new take later; the required Voice setup will then be created again automatically.';
+
+  @override
+  String get managedVoiceSlotRemoveCancel => 'Keep setup';
+
+  @override
+  String get managedVoiceSlotRemoveConfirm => 'Remove setup';
+
+  @override
+  String get managedVoiceSlotRemoveSuccess =>
+      'Empty Voice setup removed. The dialog text, audio storage, game files, and saves were not changed.';
+
+  @override
+  String get managedVoiceSlotRemoveStale =>
+      'The project changed before the empty Voice setup could be removed. Reload the latest Voice takes and try again.';
+
+  @override
+  String get managedVoiceSlotRemoveRequiresReopen =>
+      'Reopen the managed project before removing this Voice setup.';
+
+  @override
+  String get managedVoiceSlotRemoveSavedUnconfirmed =>
+      'The result could not be confirmed and the empty Voice setup may have been saved. Do not repeat the removal. Close this window, reopen the managed project, and inspect the line.';
+
+  @override
+  String get managedVoiceSlotRemoveSavedReloadFailed =>
+      'The empty Voice setup was saved, but reloading failed. Reload to confirm it; the removal will not be repeated.';
+
+  @override
+  String managedVoiceSlotRemoveFailed(String error) {
+    return 'The empty Voice setup could not be removed: $error';
+  }
+
+  @override
+  String get managedVoiceSlotRemoveReloadConfirmed =>
+      'Saved empty Voice setup removal confirmed from the latest project.';
+
+  @override
+  String get managedVoicePreviewTooltip => 'Preview selected local Ogg';
+
+  @override
+  String get managedVoicePreviewOpened =>
+      'Opened the selected local recording for author preview. This does not approve or qualify the audio for the game.';
+
+  @override
+  String managedVoicePreviewFailed(String error) {
+    return 'The local recording preview could not be opened: $error';
+  }
 
   @override
   String get managedStoryWorkbenchEditNpcProfile => 'Edit name & archetype';

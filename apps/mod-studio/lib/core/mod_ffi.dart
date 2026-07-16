@@ -23,6 +23,7 @@ part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
 part '../project/revision3_dialog_localization_edit.dart';
 part '../project/revision3_dialog_line_entry.dart';
+part '../project/revision3_dialog_voice_slot_removal.dart';
 part '../project/revision3_managed_compiler_check.dart';
 part '../project/revision3_npc_draft.dart';
 part '../project/revision3_npc_profile_edit.dart';
@@ -1684,6 +1685,42 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakeRemovalPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Remove one exact empty and unselected dialog Voice slot, preparing only
+  /// an unpublished project candidate.
+  Future<AuthoringRevision3DialogVoiceSlotRemovalPreparation>
+  authoringStorePrepareRevision3DialogVoiceSlotRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3DialogVoiceSlotRemovalRequestV1 request,
+  }) async {
+    const command =
+        'authoring_store_prepare_revision3_dialog_voice_slot_removal_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'dialog_voice_slot_removal_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3DialogVoiceSlotRemovalPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,
