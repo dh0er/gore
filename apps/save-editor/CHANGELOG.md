@@ -33,6 +33,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   individually undone before saving.
 - Improved the quest layout and hierarchy.
 - Moved tutorials to the Glossary.
+- Almost all dialog knowledge IDs are now replaced with localized texts.
 - Improved UI consistency and translations across the editor.
 
 ## [1.1.0] - 2026-07-14
