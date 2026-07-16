@@ -4,6 +4,11 @@
 fixed-width leaves in legacy split Unreal packages. It is not a generic
 DataAsset serializer and it does not deploy files into the game.
 
+Managed revision-3 projects additionally have one bounded Studio build path for
+an exact-current, reviewed fixed-leaf stage. That path reuses the same offline
+verification and packing boundary; it does not make arbitrary or structural
+DataAssets buildable.
+
 The public commands are:
 
 ```text
@@ -142,8 +147,11 @@ to match before applying the offset-free semantic edit in memory. The normal
 closed stage verifier and exact-head publication lane are then reused. A final
 generation/source recheck wins over parsing or patch diagnostics.
 
-The result is still an offline, build-blocked project stage. It does not pack,
-deploy, touch the game installation or a save, or qualify runtime behavior.
+The publication step still creates only an offline project stage. It does not
+itself pack, deploy, touch the game installation or a save, or qualify runtime
+behavior. A stage carrying the closed reviewed profile can later enter the
+separate managed offline build described below; generic fixed-leaf stages
+cannot.
 
 ## 3. Prepare one raw fixed-width replacement
 
@@ -319,14 +327,16 @@ registry removal does not modify the source receipt or game installation.
 
 The visible registry manages independently receipt-verified fixed-size edits;
 the generic semantic component remains a typed value-editor slice, not a
-general DataAsset editor. Neither grants build, pack, deploy, gameplay,
-runtime, or future-reinspection authority. The first closed reviewed schema now
-covers only the `FeetTextureSize` X/Y field of the exact Human, Scavenger, and
-Wolf footstep presets. Broader gameplay schemas, gameplay-qualified units,
-multi-edit transactions, undo, build lowering, post-pack verification,
-structural edits, and the sealed Unreal handoff remain separate work. The typed
-workflow writes only immutable objects and the guarded fixed head inside the
-managed project; it never writes the installed game or any save file.
+general DataAsset editor. Registry staging itself grants no pack, deploy,
+gameplay, runtime, or future-reinspection authority. A separate build action can
+consume only an exact-current stage carrying the closed reviewed profile. That
+profile covers only the `FeetTextureSize` X/Y field of the exact Human,
+Scavenger, and Wolf footstep presets. Broader gameplay schemas,
+gameplay-qualified units, multi-edit transactions, undo, structural edits, new
+DataAsset creation, and the sealed Unreal handoff remain separate work. The
+typed editing workflow writes only immutable objects and the guarded fixed head
+inside the managed project; it never writes the installed game or any save
+file.
 
 ### First reviewed installed schema
 
@@ -355,9 +365,11 @@ from the ordinary selector/replacement stage binding and the complete installed
 source proof. Dart recomputes the ordinary stage binding from the prior exact
 inspection and requested value before the managed session may publish.
 
-The result is still only a managed-project stage. Build is blocked, runtime is
-unqualified, native publication is unsupported, and neither the game
-installation nor a save file is written.
+The result is still only a managed-project stage; the edit transaction does not
+publish an artifact. If that reviewed stage remains exact-current, the separate
+build action below can create one offline triplet. Runtime remains unqualified,
+and neither the edit nor build route writes the game installation or a save
+file.
 
 ### Direct installed fixed-leaf staging
 
@@ -384,6 +396,64 @@ ordinal and all caller-visible seals. Dart recomputes that binding and validates
 the source echo, target/selector shape, intent binding, candidate, manifest, and
 head before the managed session may publish by exact fixed-head CAS. Source or
 checkpoint drift fails closed and leaves the game and saves untouched.
+
+### Managed reviewed-stage build in Mod Studio
+
+In **Content > DataAssets**, expand a saved edit and choose **Build files...**.
+The dialog asks only for a portable pack name and an existing destination
+folder, then derives a brand-new output folder from them. It shows the friendly
+asset name and canonical `/Game` target read-only. The action is intentionally
+attached to the selected stage instead of a project-wide build dashboard.
+Support is checked natively before publication: only the reviewed
+Human/Scavenger/Wolf `FeetTextureSize` X/Y profile, without target-package
+sidecars, is accepted.
+
+Studio runs this operation through the managed session's serialized
+`readBasisSnapshot` lane. It audits the exact head before native work, sends the
+canonical current project plus head/project/revision/target intent, and audits
+the head again afterwards. Native code independently fully reopens the exact
+project and reviewed stage at entry. It freshly converts the installed vanilla
+target, reopens the live USMAP, replays only the reviewed fixed-leaf
+replacement, and requires the replayed pair to equal the immutable staged pair.
+The installed executable and generation are rechecked throughout. After the
+triplet has been built, native code strictly reopens it, reads the generated
+package back with the bounded game fallback, re-inspects the reviewed leaf, and
+requires its selector, replacement, package pair, USMAP, chunk sources, and
+generation evidence to agree.
+
+Publication has a final source gate: the exact project and complete reviewed
+stage identity must still be current after mechanical staging. Live generation,
+mount inventory, protected Store/game/output layout, staged file seals, and
+output absence are then revalidated before an exclusive atomic no-clobber
+rename. The destination must be absent under an existing real parent. It is
+refused inside the configured game, the managed Store, or any ancestor that has
+a recognizable canonical `G1R-Win64-Shipping.exe` install layout. A sibling mod
+output outside those trees remains valid.
+
+The new directory contains `<pack>.pak`, `<pack>.ucas`, `<pack>.utoc`, and the
+fixed `gore-authoring-dataasset-build.json`. That canonical receipt binds the
+exact managed basis, reviewed intent, live replay, strict post-pack readback,
+and output triplet. The receipt itself and the triplet seal entries are
+path-free: they use canonical relative names, byte lengths, and SHA-256 hashes;
+Studio separately retains the exact destination spelling supplied by the
+author.
+
+The wire preserves three typed terminals. `outcome=built` pairs with
+`artifact_publication_status=published`;
+`outcome=built_with_cleanup_warning` pairs with
+`artifact_publication_status=published_with_cleanup_warning`; and uncertainty
+uses `publication_uncertain` for both fields. A cleanup warning still means the
+sealed build was published. Uncertainty means the atomic rename may already
+have completed, so Studio tells the author to inspect the destination and never
+offers or performs an automatic retry. All three terminal responses are
+explicitly `retry_safe=false`.
+
+This is a write-new offline build only. It does not deploy or install the mod,
+does not mutate the project, Store head, game installation, or a save, and does
+not test or qualify gameplay/runtime behavior. It is not structural package
+authoring and cannot create a new DataAsset, collection, reference graph, or
+class. Structural/new DataAssets and an optional sealed Unreal Editor bridge
+remain future work, with separate round-trip and runtime evidence required.
 
 ## 6. Pack the patched pair without deploying it
 
@@ -502,15 +572,24 @@ to bounded memory, selects the installed generation USMAP, and returns the
 ordinary fixed-leaf report with closed authority statuses. Only a proven
 `editable=true` selector can enter the typed editor. Save triggers another fresh
 snapshot/USMAP verification and an independent live conversion; it never trusts
-the display path as authority. Success publishes only a build-blocked managed
-stage. Package construction, deployment, runtime authority, structural edits,
-and writes to the installed game remain unavailable.
+the display path as authority. Success publishes only a managed stage; it does
+not construct a package itself. Only a stage that also carries the closed
+reviewed profile can later enter the bounded build described above. Deployment,
+runtime authority, structural edits, and writes to the installed game remain
+unavailable.
 
 ## Receipts, source proofs, and limits
 
 Extract, patch, and pack form a mandatory receipt chain. Extract and pack place
 their receipt in the newly published directory; patch writes its receipt beside
 the new pair. `--json` prints the same JSON.
+
+The managed reviewed-stage build uses a separate canonical
+`gore.authoring.managed-revision3-reviewed-dataasset-build-receipt.v1`
+envelope. It is constructed only from the consumed exact-current Store basis
+and the opaque verified triplet/post-pack proof. Parsing it grants no path,
+filesystem, publication, deployment, or runtime authority. It is not a shortcut
+into the standalone extract/patch/pack receipt chain.
 
 The extract receipt contains SHA-256 seals for the raw USMAP and its exact copied
 artifact, global script
@@ -577,6 +656,10 @@ into the game. `patch-fixed` likewise requires both destination component names,
 all three possible sidecar names, and its derived receipt name to be absent. It
 never modifies its source package and copies only the exact receipt-bound
 sidecar set.
+The managed reviewed-stage build uses the same exclusive no-replace directory
+publication after its exact-current Store gate, live-generation gate, protected
+layout checks, and complete staged-file revalidation. An output created by a
+racer wins and is never overwritten.
 Virtual `/Game` paths are limited to 32 ASCII identifier segments; Win32 device
 aliases (including case/extension/trailing-dot variants) and traversal are
 rejected before staging. Cleanup's fixed depth ceiling remains above the
@@ -633,3 +716,18 @@ the validated `Vector4` leaf at
 `/BoneData/struct:BoneFeetData/FeetTextureSize`. The `.uasset` stayed
 byte-identical; exactly one `.uexp` byte changed, the result reopened and walked,
 and both stale-selector and existing-output attempts failed without clobbering.
+
+The managed-build coverage additionally exercises exact-current project/stage
+gates, full live replay, strict generated-triplet readback, reviewed semantic
+post-pack verification, path-free canonical receipt cross-bindings, protected
+Store/game/output layouts, recognizable-install rejection, racing-output
+no-clobber, and distinct published/cleanup-warning/publication-uncertain
+terminals. Negative tests prove stale basis, source drift, existing output,
+malformed or widened FFI wires, receipt/evidence mutations, and prepublication
+failures do not modify the Store, game, or destination; the route accepts no
+save path. Mod Studio tests cover strict request/result bindings, all terminal
+messages including no retry after uncertainty, destination and pack-name
+guards, serialized exact-basis session/controller behavior, and the direct
+expanded-stage **Build files...** action. This is offline construction evidence
+only; no test currently qualifies the Footstep values' gameplay meaning or an
+installed runtime result.

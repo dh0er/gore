@@ -612,7 +612,7 @@ void main() {
         find.byKey(const Key('revision3-dataasset-stage-panel')),
         findsOneWidget,
       );
-      expect(find.textContaining('not yet included in builds'), findsOneWidget);
+      expect(find.textContaining('Support is checked'), findsOneWidget);
       expect(managed.dataAssetListCalls, 1);
       expect(legacy.closeCalls, 1);
 
@@ -4089,6 +4089,22 @@ void main() {
 
       await tester.tap(find.text('TestAsset'));
       await tester.pumpAndSettle();
+      expect(
+        find.text(
+          'Choose the Gothic 1 Remake installation in Settings before building files.',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(
+                ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
       final removeButton = find.byKey(
         ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
       );

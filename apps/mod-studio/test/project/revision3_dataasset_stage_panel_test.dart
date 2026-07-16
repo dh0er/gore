@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -44,7 +45,7 @@ void main() {
       find.byKey(const Key('revision3-dataasset-stage-empty')),
       findsOneWidget,
     );
-    expect(find.textContaining('not yet included in builds'), findsOneWidget);
+    expect(find.textContaining('new mod-file folder'), findsOneWidget);
     expect(find.text('Build / Deploy'), findsNothing);
     expect(find.text('Test in game'), findsNothing);
   });
@@ -242,6 +243,8 @@ void main() {
         load: () async => [stage],
         publish: _unexpectedPublish,
         remove: _unexpectedRemove,
+        buildUnavailableReason:
+            'Choose the Gothic 1 Remake installation in Settings before building files.',
       ),
     );
 
@@ -255,9 +258,442 @@ void main() {
       find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Build unavailable'), findsOneWidget);
+    expect(find.text('Build ready'), findsNothing);
+    expect(
+      find.text(
+        'Choose the Gothic 1 Remake installation in Settings before building files.',
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(
+              ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+            ),
+          )
+          .onPressed,
+      isNull,
+    );
     expect(find.text('Gameplay unverified'), findsOneWidget);
     expect(find.text('1 byte'), findsOneWidget);
+  });
+
+  testWidgets(
+    'places the build action beside remove without claiming readiness',
+    (tester) async {
+      await _pumpPanel(
+        tester,
+        Revision3DataAssetStagePanel(
+          projectRoot: _projectRoot,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHead: fixture.stagedHead,
+          load: () async => [stage],
+          publish: _unexpectedPublish,
+          remove: _unexpectedRemove,
+          buildReviewedStage:
+              ({
+                required targetPath,
+                required packName,
+                required output,
+              }) async => throw StateError('build should not run yet'),
+          pickBuildParentDirectory: () async => null,
+        ),
+      );
+
+      await tester.tap(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      await tester.pumpAndSettle();
+
+      final buildFinder = find.byKey(
+        ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+      );
+      final removeFinder = find.byKey(
+        ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
+      );
+      expect(find.text('Build ready'), findsNothing);
+      expect(find.textContaining('Support is checked'), findsOneWidget);
+      expect(tester.widget<FilledButton>(buildFinder).onPressed, isNotNull);
+      final buildRect = tester.getRect(buildFinder);
+      final removeRect = tester.getRect(removeFinder);
+      expect((buildRect.center.dy - removeRect.center.dy).abs(), lessThan(1));
+      expect(buildRect.right, lessThanOrEqualTo(removeRect.left));
+
+      await tester.tap(buildFinder);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dataasset-build-dialog')),
+        findsOneWidget,
+      );
+      expect(find.text('/Game/TestAsset'), findsOneWidget);
+      expect(find.text('Build files'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'checkpoint change while build dialog is open never reaches the builder',
+    (tester) async {
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_dataasset_stage_stale_build_',
+      );
+      addTearDown(() => parent.deleteSync(recursive: true));
+      var projectRevision = 5;
+      var projectHead = fixture.stagedHead;
+      var buildCalls = 0;
+      late StateSetter rebuild;
+
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('same-build-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: projectRevision,
+                  projectHead: projectHead,
+                  load: () async => [stage],
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  buildReviewedStage:
+                      ({
+                        required targetPath,
+                        required packName,
+                        required output,
+                      }) async {
+                        buildCalls++;
+                        throw StateError('stale build callback must not run');
+                      },
+                  pickBuildParentDirectory: () async => parent.path,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-dataasset-build-dialog')),
+        findsOneWidget,
+      );
+
+      rebuild(() {
+        projectRevision = 6;
+        projectHead = fixture.removedHead;
+      });
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('revision3-dataasset-build-pack-name')),
+        'StalePack',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-build-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-build-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(buildCalls, 0);
+      expect(
+        find.textContaining('project changed while this window was open'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-dataasset-build-submit')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'requires-reopen while build dialog is open never reaches the builder',
+    (tester) async {
+      final parent = Directory.systemTemp.createTempSync(
+        'gore_dataasset_stage_locked_build_',
+      );
+      addTearDown(() => parent.deleteSync(recursive: true));
+      var requiresReopen = false;
+      var buildCalls = 0;
+      late StateSetter rebuild;
+
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('same-locked-build-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: 5,
+                  projectHead: fixture.stagedHead,
+                  requiresReopen: requiresReopen,
+                  load: () async => [stage],
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  buildReviewedStage:
+                      ({
+                        required targetPath,
+                        required packName,
+                        required output,
+                      }) async {
+                        buildCalls++;
+                        throw StateError('locked build callback must not run');
+                      },
+                  pickBuildParentDirectory: () async => parent.path,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(
+          ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      rebuild(() => requiresReopen = true);
+      await tester.pump();
+      await tester.enterText(
+        find.byKey(const Key('revision3-dataasset-build-pack-name')),
+        'LockedPack',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-build-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-build-submit')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(buildCalls, 0);
+      expect(find.textContaining('build may already exist'), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-dataasset-build-submit')),
+            )
+            .onPressed,
+        isNull,
+      );
+    },
+  );
+
+  testWidgets(
+    'external requires-reopen locks every stage action immediately and unlocks by exact reload',
+    (tester) async {
+      var requiresReopen = false;
+      var loadCalls = 0;
+      late StateSetter rebuild;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('externally-locked-stage-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: 5,
+                  projectHead: fixture.stagedHead,
+                  requiresReopen: requiresReopen,
+                  load: () async {
+                    loadCalls++;
+                    return [stage];
+                  },
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  publishSemanticEdit: (_) async =>
+                      throw StateError('locked semantic action must not run'),
+                  semanticExtractReceiptInspector: _matchingReceiptInspector,
+                  browseInstalledPackages: () async =>
+                      throw StateError('locked browse action must not run'),
+                  buildReviewedStage:
+                      ({
+                        required targetPath,
+                        required packName,
+                        required output,
+                      }) async =>
+                          throw StateError('locked build action must not run'),
+                  pickBuildParentDirectory: () async => null,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      await tester.pumpAndSettle();
+      expect(loadCalls, 1);
+
+      rebuild(() => requiresReopen = true);
+      await tester.pump();
+
+      expect(
+        find.textContaining('Reopen the managed project before continuing'),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('revision3-dataasset-stage-refresh')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-dataasset-stage-add')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-dataasset-semantic-create')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-dataasset-browse-installed')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(
+                ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(
+                ValueKey(
+                  'revision3-dataasset-stage-remove-${stage.targetPath}',
+                ),
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(loadCalls, 1);
+
+      rebuild(() => requiresReopen = false);
+      await tester.pumpAndSettle();
+      expect(loadCalls, 2);
+      expect(
+        tester
+            .widget<IconButton>(
+              find.byKey(const Key('revision3-dataasset-stage-refresh')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    },
+  );
+
+  testWidgets('internal integrity lock survives an external lock cycle', (
+    tester,
+  ) async {
+    var requiresReopen = false;
+    var loadCalls = 0;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return Revision3DataAssetStagePanel(
+                key: const ValueKey('internally-locked-stage-panel'),
+                projectRoot: _projectRoot,
+                projectId: stage.projectId,
+                projectRevision: 5,
+                projectHead: fixture.stagedHead,
+                requiresReopen: requiresReopen,
+                load: () async {
+                  loadCalls++;
+                  throw const Revision3DataAssetRequiresReopenException();
+                },
+                publish: _unexpectedPublish,
+                remove: _unexpectedRemove,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(loadCalls, 1);
+
+    rebuild(() => requiresReopen = true);
+    await tester.pump();
+    rebuild(() => requiresReopen = false);
+    await tester.pumpAndSettle();
+
+    expect(loadCalls, 1);
+    expect(
+      tester
+          .widget<IconButton>(
+            find.byKey(const Key('revision3-dataasset-stage-refresh')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(
+      find.textContaining('Reopen the managed project before continuing'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('picker cancellation never publishes and busy picker is single', (

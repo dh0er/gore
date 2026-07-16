@@ -18,6 +18,7 @@ export '../dataasset/domain/dataasset_semantic_edit.dart';
 export '../dataasset/domain/reviewed_dataasset_schema.dart';
 
 part '../project/revision3_dataasset_stage.dart';
+part '../project/revision3_dataasset_build.dart';
 part '../project/revision3_dataasset_package_index.dart';
 part '../project/revision3_installed_dataasset_inspection.dart';
 part '../project/revision3_dialog_localization_edit.dart';
@@ -1611,6 +1612,74 @@ class ModFfi {
         response,
         expectedHead: expectedHead,
         expectedProjectJson: currentProjectJson,
+        expectedOutput: output,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Build one exact-basis reviewed revision-3 DataAsset stage into a new,
+  /// receipt-bound PAK/UCAS/UTOC triplet.
+  ///
+  /// Native code owns every filesystem and publication decision. The returned
+  /// value is a strict projection of the terminal receipt: only the
+  /// caller-bound output spelling is pathful, while every artifact seal is
+  /// path-free. It grants neither deployment nor runtime authority and is
+  /// never retried automatically when publication is uncertain.
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  authoringStoreBuildRevision3ReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) async {
+    const command = 'authoring_store_build_revision3_reviewed_dataasset_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3Path(gameRoot, 'gameRoot');
+    _authoringRevision3Path(output, 'output');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRequireCanonicalRevision3ProjectJson(currentProjectJson);
+    _authoringRevision3DataAssetTargetPath(targetPath, 'targetPath');
+    _authoringRevision3ReviewedDataAssetPackName(packName, 'packName');
+    _authoringRevision3DataAssetEnvelopePreflight(command, <(String, String)>[
+      ('currentProjectJson', currentProjectJson),
+      ('expectedHead', expectedHead.canonicalJson),
+      ('gameRoot', gameRoot),
+      ('output', output),
+      ('packName', packName),
+      ('root', root),
+      ('targetPath', targetPath),
+    ]);
+    final payload = <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': expectedHead.canonicalJson,
+      'game_root': gameRoot,
+      'output': output,
+      'pack_name': packName,
+      'root': root,
+      'target_path': targetPath,
+    };
+    _authoringRevision3DataAssetEditEnvelopePreflight(
+      command,
+      payload,
+      maxBytes: _maxAuthoringRevision3ReviewedDataAssetBuildRequestBytes,
+    );
+    final response = await _call(command, payload);
+    try {
+      return AuthoringRevision3ReviewedDataAssetBuildResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedProjectJson: currentProjectJson,
+        expectedTargetPath: targetPath,
+        expectedPackName: packName,
         expectedOutput: output,
       );
     } on FormatException catch (error) {

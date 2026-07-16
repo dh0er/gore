@@ -3310,6 +3310,122 @@ void main() {
   );
 
   test(
+    'reviewed DataAsset build rejects a stale lease before access and accepts an exact uncertain receipt',
+    () async {
+      const targetPath = '/Game/Blueprints/Items/FootstepPreset';
+      const packName = 'ReviewedFootsteps';
+      const output = r'C:\Builds\ReviewedFootsteps';
+      final managed = _FakeManagedLease(
+        root: Directory('managed-reviewed-dataasset-build'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        onReviewedDataAssetBuild:
+            (lease, gameRoot, receivedTarget, receivedPack, receivedOutput) {
+              expect(gameRoot, r'C:\Games\Gothic Remake');
+              expect(receivedTarget, targetPath);
+              expect(receivedPack, packName);
+              expect(receivedOutput, output);
+              return _reviewedDataAssetBuildResult(
+                head: lease.head,
+                projectId: lease.projectId,
+                projectRevision: lease.projectRevision,
+                targetPath: receivedTarget,
+                packName: receivedPack,
+                output: receivedOutput,
+                publicationUncertain: true,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.buildCurrentRevision3ReviewedDataAsset(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 6,
+          expectedHead: _head(6),
+          gameRoot: r'C:\Games\Gothic Remake',
+          targetPath: targetPath,
+          packName: packName,
+          output: output,
+        ),
+        throwsA(isA<Revision3DataAssetStaleCheckpointException>()),
+      );
+      expect(managed.reviewedDataAssetBuildCalls, 0);
+
+      final result = await coordinator.buildCurrentRevision3ReviewedDataAsset(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+        gameRoot: r'C:\Games\Gothic Remake',
+        targetPath: targetPath,
+        packName: packName,
+        output: output,
+      );
+
+      expect(result.publicationIsUncertain, isTrue);
+      expect(
+        result.receipt.relativeName,
+        'gore-authoring-dataasset-build.json',
+      );
+      expect(result.output, output);
+      expect(managed.reviewedDataAssetBuildCalls, 1);
+      expect(managed.projectRevision, 7);
+      expect(managed.head.canonicalJson, _head(7).canonicalJson);
+    },
+  );
+
+  test(
+    'reviewed DataAsset build rejects an absent lease capability without poisoning it',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-reviewed-dataasset-build-unsupported'),
+        projectIdValue: revision3VoiceFixtureProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.buildCurrentRevision3ReviewedDataAsset(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: managed.projectRevision,
+          expectedHead: managed.head,
+          gameRoot: r'C:\Games\Gothic Remake',
+          targetPath: '/Game/Blueprints/Items/FootstepPreset',
+          packName: 'ReviewedFootsteps',
+          output: r'C:\Builds\ReviewedFootsteps',
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.reviewedDataAssetBuildCalls, 0);
+      expect(managed.requiresReopen, isFalse);
+      expect(
+        (coordinator.state as ManagedRevision3CurrentProjectState)
+            .requiresReopen,
+        isFalse,
+      );
+    },
+  );
+
+  test(
     'DataAsset list is exact-checkpoint bound before lease access',
     () async {
       final stage = _dataAssetStage();
@@ -4407,6 +4523,14 @@ typedef _VoiceBuildHook =
       String gameRoot,
       String output,
     );
+typedef _ReviewedDataAssetBuildHook =
+    FutureOr<AuthoringRevision3ReviewedDataAssetBuildResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      String targetPath,
+      String packName,
+      String output,
+    );
 typedef _DataAssetPublishHook =
     FutureOr<Revision3DataAssetStagePublication> Function(
       _FakeManagedLease lease,
@@ -4475,7 +4599,8 @@ final class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
-        ManagedRevision3DialogLocalizationEditLease {
+        ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3ReviewedDataAssetBuildLease {
   _FakeManagedLease({
     required this.root,
     required this.projectIdValue,
@@ -4501,6 +4626,7 @@ final class _FakeManagedLease
     this.onVoiceSelectionPublish,
     this.onVoiceTargetPublish,
     this.onVoiceBuild,
+    this.onReviewedDataAssetBuild,
     this.onDataAssetPublish,
     this.onDataAssetSemanticPublish,
     this.onInstalledDataAssetEditPublish,
@@ -4543,6 +4669,7 @@ final class _FakeManagedLease
   final _VoiceSelectionPublishHook? onVoiceSelectionPublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
   final _VoiceBuildHook? onVoiceBuild;
+  final _ReviewedDataAssetBuildHook? onReviewedDataAssetBuild;
   final _DataAssetPublishHook? onDataAssetPublish;
   final _DataAssetSemanticPublishHook? onDataAssetSemanticPublish;
   final _InstalledDataAssetEditPublishHook? onInstalledDataAssetEditPublish;
@@ -4589,6 +4716,7 @@ final class _FakeManagedLease
   int voiceSelectionPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
   int voiceBuildCalls = 0;
+  int reviewedDataAssetBuildCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
   int dataAssetSemanticPublishCalls = 0;
@@ -4623,6 +4751,9 @@ final class _FakeManagedLease
 
   @override
   bool get requiresReopen => requiresReopenValue;
+
+  @override
+  bool get supportsReviewedDataAssetBuild => onReviewedDataAssetBuild != null;
 
   @override
   Future<void> verifyCurrentHead() async {
@@ -4998,6 +5129,22 @@ final class _FakeManagedLease
   }
 
   @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String gameRoot,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) async {
+    reviewedDataAssetBuildCalls++;
+    final build = onReviewedDataAssetBuild;
+    if (build == null) {
+      throw StateError('fake managed lease has no reviewed DataAsset builder');
+    }
+    return build(this, gameRoot, targetPath, packName, output);
+  }
+
+  @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() async {
     dataAssetListCalls++;
     return dataAssetStages;
@@ -5132,6 +5279,72 @@ AuthoringRevision3VoiceBuildResult _voiceBuildResult({
     projectId: projectId,
     projectRevision: projectRevision,
   ),
+  expectedOutput: output,
+);
+
+AuthoringRevision3ReviewedDataAssetBuildResult _reviewedDataAssetBuildResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+  required String targetPath,
+  required String packName,
+  required String output,
+  bool publicationUncertain = false,
+}) => AuthoringRevision3ReviewedDataAssetBuildResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': publicationUncertain ? 'publication_uncertain' : 'built',
+    'basis_head_json': head.canonicalJson,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'target_path': targetPath,
+    'pack_name': packName,
+    'output': output,
+    'files': <Object?>[
+      <String, Object?>{
+        'relative_name': '$packName.pak',
+        'byte_len': 101,
+        'sha256': List<String>.filled(64, 'a').join(),
+      },
+      <String, Object?>{
+        'relative_name': '$packName.ucas',
+        'byte_len': 102,
+        'sha256': List<String>.filled(64, 'b').join(),
+      },
+      <String, Object?>{
+        'relative_name': '$packName.utoc',
+        'byte_len': 103,
+        'sha256': List<String>.filled(64, 'c').join(),
+      },
+    ],
+    'receipt': <String, Object?>{
+      'format':
+          'gore.authoring.managed-revision3-reviewed-dataasset-build-receipt.v1',
+      'relative_name': 'gore-authoring-dataasset-build.json',
+      'byte_len': 456,
+      'sha256': List<String>.filled(64, 'd').join(),
+    },
+    'build_authority': 'reviewed_fixed_leaf_single_package_triplet',
+    'artifact_publication_status': publicationUncertain
+        ? 'publication_uncertain'
+        : 'published',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'retry_safe': false,
+    'warning': publicationUncertain
+        ? <String, Object?>{
+            'code': 'AUTHORING_REVISION3_DATAASSET_BUILD_PUBLICATION_UNCERTAIN',
+            'message':
+                'publication may have completed; do not retry automatically',
+          }
+        : null,
+  },
+  expectedHead: head,
+  expectedProjectJson: revision3VoiceFixtureProjectJson(
+    revision: projectRevision,
+  ),
+  expectedTargetPath: targetPath,
+  expectedPackName: packName,
   expectedOutput: output,
 );
 

@@ -38,6 +38,7 @@ import 'project/revision3_content_workspace.dart';
 import 'project/revision3_story_entity_workbench.dart';
 import 'project/revision3_story_workspace.dart';
 import 'project/revision3_dataasset_authoring.dart';
+import 'project/revision3_dataasset_build_dialog.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_dialog_line_authoring.dart';
 import 'project/revision3_dialog_line_dialog.dart';
@@ -1090,6 +1091,30 @@ class _HomePageState extends ConsumerState<HomePage>
           pickVoiceBuildParent: () => ref.read(
             managedRevision3DirectoryPickerProvider,
           )('Choose Voice bundle parent'),
+          buildReviewedDataAsset:
+              ({required targetPath, required packName, required output}) {
+                final configuredGameRoot = gameRoot;
+                if (configuredGameRoot == null) {
+                  throw StateError(
+                    'Configure the Gothic 1 Remake installation before building DataAsset files.',
+                  );
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .buildCurrentRevision3ReviewedDataAsset(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: currentProject.projectId,
+                      expectedProjectRevision: currentProject.projectRevision,
+                      expectedHead: currentProject.head,
+                      gameRoot: configuredGameRoot,
+                      targetPath: targetPath,
+                      packName: packName,
+                      output: output,
+                    );
+              },
+          pickDataAssetBuildParent: () => ref.read(
+            managedRevision3DirectoryPickerProvider,
+          )('Choose DataAsset build parent'),
           loadDataAssetStages: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .listCurrentRevision3DataAssetStages(
@@ -1554,6 +1579,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceTarget,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
+    required this.buildReviewedDataAsset,
+    required this.pickDataAssetBuildParent,
     required this.loadDataAssetStages,
     required this.loadInstalledPackageIndex,
     required this.inspectInstalledDataAsset,
@@ -1600,6 +1627,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
+  final Revision3ReviewedDataAssetStageBuilder buildReviewedDataAsset;
+  final Revision3DataAssetBuildParentDirectoryPicker pickDataAssetBuildParent;
   final Revision3DataAssetStageLoader loadDataAssetStages;
   final Revision3InstalledPackageIndexLoader loadInstalledPackageIndex;
   final Revision3InstalledDataAssetInspector inspectInstalledDataAsset;
@@ -1663,6 +1692,10 @@ class _ManagedRevision3ProjectViewState
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
   Revision3VoiceBuildParentDirectoryPicker get pickVoiceBuildParent =>
       widget.pickVoiceBuildParent;
+  Revision3ReviewedDataAssetStageBuilder get buildReviewedDataAsset =>
+      widget.buildReviewedDataAsset;
+  Revision3DataAssetBuildParentDirectoryPicker get pickDataAssetBuildParent =>
+      widget.pickDataAssetBuildParent;
   Revision3DataAssetStageLoader get loadDataAssetStages =>
       widget.loadDataAssetStages;
   Revision3InstalledPackageIndexLoader get loadInstalledPackageIndex =>
@@ -2289,6 +2322,7 @@ class _ManagedRevision3ProjectViewState
       projectId: project.projectId,
       projectRevision: project.projectRevision,
       projectHead: project.head,
+      requiresReopen: project.requiresReopen,
       load: loadDataAssetStages,
       publish: publishDataAssetStage,
       publishSemanticEdit: publishDataAssetSemanticEdit,
@@ -2299,6 +2333,17 @@ class _ManagedRevision3ProjectViewState
       semanticUsmapPicker: pickDataAssetSemanticUsmap,
       semanticExtractReceiptPicker: pickDataAssetExtractReceipt,
       semanticExtractReceiptInspector: inspectDataAssetExtractReceipt,
+      buildReviewedStage: gameRoot == null || project.requiresReopen
+          ? null
+          : buildReviewedDataAsset,
+      pickBuildParentDirectory: gameRoot == null || project.requiresReopen
+          ? null
+          : pickDataAssetBuildParent,
+      buildUnavailableReason: project.requiresReopen
+          ? 'Reopen this managed project before building files.'
+          : gameRoot == null
+          ? 'Choose the Gothic 1 Remake installation in Settings before building files.'
+          : null,
       browseInstalledPackages: gameRoot == null
           ? null
           : () => _openInstalledPackageBrowser(context, gameRoot!),

@@ -6,12 +6,21 @@ import '../dataasset/ui/dataasset_lab.dart';
 import '../dataasset/ui/dataasset_semantic_edit_panel.dart';
 import '../dataasset/ui/dataasset_semantic_edit_wizard.dart';
 import 'revision3_dataasset_authoring.dart';
+import 'revision3_dataasset_build_dialog.dart';
+
+typedef Revision3ReviewedDataAssetStageBuilder =
+    Future<AuthoringRevision3ReviewedDataAssetBuildResult> Function({
+      required String targetPath,
+      required String packName,
+      required String output,
+    });
 
 /// Visible management surface for receipt-verified DataAsset edits already
 /// supported by the managed revision-3 session.
 ///
-/// This panel guides typed value edits and also imports/removes verified expert
-/// proofs. It exposes no build, pack, deploy, or gameplay action.
+/// This panel guides typed value edits, imports/removes verified expert proofs,
+/// and can create write-new mod files for an existing reviewed stage. It never
+/// deploys files or changes the game installation.
 class Revision3DataAssetStagePanel extends StatefulWidget {
   const Revision3DataAssetStagePanel({
     required this.projectRoot,
@@ -21,6 +30,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
     required this.load,
     required this.publish,
     required this.remove,
+    this.requiresReopen = false,
     this.pickPatchReceipt,
     this.publishSemanticEdit,
     this.semanticInspector,
@@ -29,6 +39,9 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
     this.semanticExtractReceiptPicker,
     this.semanticExtractReceiptInspector,
     this.browseInstalledPackages,
+    this.buildReviewedStage,
+    this.pickBuildParentDirectory,
+    this.buildUnavailableReason,
     super.key,
   });
 
@@ -36,6 +49,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final String projectId;
   final int projectRevision;
   final AuthoringWorkingHead projectHead;
+  final bool requiresReopen;
   final Revision3DataAssetStageLoader load;
   final Revision3DataAssetStagePublisher publish;
   final Revision3DataAssetStageRemover remove;
@@ -47,6 +61,9 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final DataAssetExtractReceiptPicker? semanticExtractReceiptPicker;
   final DataAssetExtractReceiptInspector? semanticExtractReceiptInspector;
   final Future<void> Function()? browseInstalledPackages;
+  final Revision3ReviewedDataAssetStageBuilder? buildReviewedStage;
+  final Revision3DataAssetBuildParentDirectoryPicker? pickBuildParentDirectory;
+  final String? buildUnavailableReason;
 
   @override
   State<Revision3DataAssetStagePanel> createState() =>
@@ -63,30 +80,38 @@ class _Revision3DataAssetStagePanelState
   bool _picking = false;
   bool _mutating = false;
   bool _semanticEditorOpen = false;
+  bool _buildDialogOpen = false;
   bool _semanticCheckpointStale = false;
   bool _confirmationOpen = false;
   bool _locked = false;
   int _loadEpoch = 0;
   int _actionEpoch = 0;
 
-  bool get _busy => _picking || _mutating || _semanticEditorOpen;
+  bool get _busy =>
+      _picking || _mutating || _semanticEditorOpen || _buildDialogOpen;
   bool get _registryReady => _stages != null && !_loading && _loadError == null;
+  bool get _effectivelyLocked => _locked || widget.requiresReopen;
 
   @override
   void initState() {
     super.initState();
     _search.addListener(_searchChanged);
-    _reload();
+    if (widget.requiresReopen) {
+      _loadError = const Revision3DataAssetRequiresReopenException();
+    } else {
+      _reload();
+    }
   }
 
   @override
   void didUpdateWidget(covariant Revision3DataAssetStagePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.projectRoot != widget.projectRoot ||
+    final checkpointChanged =
+        oldWidget.projectRoot != widget.projectRoot ||
         oldWidget.projectId != widget.projectId ||
         oldWidget.projectRevision != widget.projectRevision ||
-        oldWidget.projectHead.canonicalJson !=
-            widget.projectHead.canonicalJson) {
+        oldWidget.projectHead.canonicalJson != widget.projectHead.canonicalJson;
+    if (checkpointChanged) {
       if (oldWidget.projectRoot != widget.projectRoot ||
           oldWidget.projectId != widget.projectId ||
           oldWidget.projectHead.canonicalJson !=
@@ -99,9 +124,36 @@ class _Revision3DataAssetStagePanelState
       _picking = false;
       _mutating = false;
       _semanticEditorOpen = false;
+      _buildDialogOpen = false;
       _semanticCheckpointStale = false;
       _confirmationOpen = false;
-      _reload(clearCurrent: true);
+      if (widget.requiresReopen) {
+        _loadEpoch++;
+        _stages = null;
+        _loading = false;
+        _loadError = const Revision3DataAssetRequiresReopenException();
+      } else {
+        _reload(clearCurrent: true);
+      }
+      return;
+    }
+    if (oldWidget.requiresReopen != widget.requiresReopen) {
+      if (widget.requiresReopen) {
+        _loadEpoch++;
+        _actionEpoch++;
+        _loading = false;
+        _picking = false;
+        _mutating = false;
+        _semanticEditorOpen = false;
+        _buildDialogOpen = false;
+        _confirmationOpen = false;
+        _actionError = null;
+        if (_stages == null) {
+          _loadError = const Revision3DataAssetRequiresReopenException();
+        }
+      } else if (!_locked) {
+        _reload(clearCurrent: _stages == null);
+      }
     }
   }
 
@@ -118,6 +170,7 @@ class _Revision3DataAssetStagePanelState
   void _searchChanged() => setState(() {});
 
   Future<void> _reload({bool clearCurrent = false}) async {
+    if (_effectivelyLocked) return;
     final epoch = ++_loadEpoch;
     setState(() {
       _loading = true;
@@ -155,7 +208,7 @@ class _Revision3DataAssetStagePanelState
   }
 
   Future<void> _addVerifiedEdit() async {
-    if (_busy || _locked || !_registryReady) return;
+    if (_busy || _effectivelyLocked || !_registryReady) return;
     final projectRoot = widget.projectRoot;
     final projectId = widget.projectId;
     final projectRevision = widget.projectRevision;
@@ -211,7 +264,7 @@ class _Revision3DataAssetStagePanelState
       }
       setState(() => _mutating = false);
       _showSuccess(
-        'Verified DataAsset edit saved in project revision ${publication.projectRevision}. It is not available to build or test in-game yet.',
+        'Verified DataAsset edit saved in project revision ${publication.projectRevision}. Expand it to build new mod files.',
       );
     } catch (error) {
       if (!mounted || epoch != _actionEpoch) return;
@@ -235,7 +288,7 @@ class _Revision3DataAssetStagePanelState
     final publish = widget.publishSemanticEdit;
     final receiptInspector = widget.semanticExtractReceiptInspector;
     if (_busy ||
-        _locked ||
+        _effectivelyLocked ||
         !_registryReady ||
         publish == null ||
         receiptInspector == null) {
@@ -273,7 +326,7 @@ class _Revision3DataAssetStagePanelState
     switch (result) {
       case DataAssetSemanticStagePublication publication:
         _showSuccess(
-          'Verified value edit saved in project revision ${publication.revision}. It is not available to build or test in-game yet.',
+          'Verified value edit saved in project revision ${publication.revision}. Expand it to build new mod files.',
         );
       case DataAssetSemanticStageUnavailableException error:
         setState(() {
@@ -294,8 +347,59 @@ class _Revision3DataAssetStagePanelState
     }
   }
 
+  Future<void> _openBuildDialog(AuthoringRevision3DataAssetStage stage) async {
+    final build = widget.buildReviewedStage;
+    final picker = widget.pickBuildParentDirectory;
+    if (_busy ||
+        _effectivelyLocked ||
+        !_registryReady ||
+        build == null ||
+        picker == null) {
+      return;
+    }
+    final projectRoot = widget.projectRoot;
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectHeadJson = widget.projectHead.canonicalJson;
+    final targetPath = stage.targetPath;
+    setState(() {
+      _buildDialogOpen = true;
+      _actionError = null;
+    });
+    await showDialog<AuthoringRevision3ReviewedDataAssetBuildResult>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Revision3DataAssetBuildDialog(
+        targetPath: targetPath,
+        pickExistingParentDirectory: picker,
+        build: ({required packName, required output}) {
+          if (_effectivelyLocked) {
+            throw const Revision3DataAssetRequiresReopenException();
+          }
+          if (!_sameCheckpoint(
+            projectRoot,
+            projectId,
+            projectRevision,
+            projectHeadJson,
+          )) {
+            throw const Revision3DataAssetStaleCheckpointException();
+          }
+          return build(
+            targetPath: targetPath,
+            packName: packName,
+            output: output,
+          );
+        },
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _buildDialogOpen = false);
+  }
+
   Future<void> _removeStage(AuthoringRevision3DataAssetStage stage) async {
-    if (_busy || _locked || !_registryReady || _confirmationOpen) return;
+    if (_busy || _effectivelyLocked || !_registryReady || _confirmationOpen) {
+      return;
+    }
     final confirmationProjectRoot = widget.projectRoot;
     final confirmationProjectId = widget.projectId;
     final confirmationProjectRevision = widget.projectRevision;
@@ -328,7 +432,7 @@ class _Revision3DataAssetStagePanelState
     if (!mounted ||
         confirmed != true ||
         _busy ||
-        _locked ||
+        _effectivelyLocked ||
         !_sameCheckpoint(
           confirmationProjectRoot,
           confirmationProjectId,
@@ -397,6 +501,7 @@ class _Revision3DataAssetStagePanelState
     int projectRevision,
     String projectHeadJson,
   ) =>
+      !_effectivelyLocked &&
       widget.projectRoot == projectRoot &&
       widget.projectId == projectId &&
       widget.projectRevision == projectRevision &&
@@ -431,7 +536,7 @@ class _Revision3DataAssetStagePanelState
     return Column(
       key: const Key('revision3-dataasset-stage-panel'),
       children: [
-        _DataAssetBoundaryNotice(locked: _locked),
+        _DataAssetBoundaryNotice(locked: _effectivelyLocked),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Column(
@@ -450,7 +555,9 @@ class _Revision3DataAssetStagePanelState
                   IconButton(
                     key: const Key('revision3-dataasset-stage-refresh'),
                     tooltip: 'Refresh exact project list',
-                    onPressed: _busy || _loading || _locked ? null : _reload,
+                    onPressed: _busy || _loading || _effectivelyLocked
+                        ? null
+                        : _reload,
                     icon: const Icon(Icons.refresh),
                   ),
                 ],
@@ -465,7 +572,7 @@ class _Revision3DataAssetStagePanelState
                   children: [
                     OutlinedButton.icon(
                       key: const Key('revision3-dataasset-browse-installed'),
-                      onPressed: _busy || _locked
+                      onPressed: _busy || _effectivelyLocked
                           ? null
                           : widget.browseInstalledPackages,
                       icon: const Icon(Icons.travel_explore_outlined),
@@ -476,7 +583,7 @@ class _Revision3DataAssetStagePanelState
                         key: const Key('revision3-dataasset-semantic-create'),
                         onPressed:
                             _busy ||
-                                _locked ||
+                                _effectivelyLocked ||
                                 _semanticCheckpointStale ||
                                 widget.semanticExtractReceiptInspector ==
                                     null ||
@@ -488,7 +595,7 @@ class _Revision3DataAssetStagePanelState
                       ),
                     FilledButton.icon(
                       key: const Key('revision3-dataasset-stage-add'),
-                      onPressed: _busy || _locked || !_registryReady
+                      onPressed: _busy || _effectivelyLocked || !_registryReady
                           ? null
                           : _addVerifiedEdit,
                       icon: _picking || _mutating
@@ -537,7 +644,7 @@ class _Revision3DataAssetStagePanelState
           child: switch ((stages, _loadError)) {
             (null, final Object error) => _DataAssetLoadError(
               error: error,
-              retry: _locked || _loading ? null : _reload,
+              retry: _effectivelyLocked || _loading ? null : _reload,
             ),
             (null, null) => Center(
               child: Semantics(
@@ -563,7 +670,16 @@ class _Revision3DataAssetStagePanelState
               itemCount: visible.length,
               itemBuilder: (context, index) => _DataAssetStageTile(
                 stage: visible[index],
-                remove: _busy || _locked || !_registryReady
+                onBuild:
+                    _busy ||
+                        _effectivelyLocked ||
+                        !_registryReady ||
+                        widget.buildReviewedStage == null ||
+                        widget.pickBuildParentDirectory == null
+                    ? null
+                    : () => _openBuildDialog(visible[index]),
+                buildUnavailableReason: widget.buildUnavailableReason,
+                remove: _busy || _effectivelyLocked || !_registryReady
                     ? null
                     : () => _removeStage(visible[index]),
               ),
@@ -606,7 +722,7 @@ class _DataAssetBoundaryNotice extends StatelessWidget {
             child: Text(
               locked
                   ? 'Exact verification is unavailable. Reopen the managed project before continuing.'
-                  : 'This list contains proven fixed-size value edits saved in the project. Create value edit guides you through inspection and an exact extraction proof; Import verified proof accepts an existing guarded PatchReceipt-v2. Neither path writes to the game installation, and these edits are not yet included in builds, deployable, or qualified for gameplay.',
+                  : 'These are verified value edits saved in this project. For supported reviewed edits, Build files creates a new mod-file folder without changing the project or game installation. Support is checked before files are created, and the action does not install or test the mod.',
               style: TextStyle(
                 color: locked
                     ? scheme.onErrorContainer
@@ -621,9 +737,16 @@ class _DataAssetBoundaryNotice extends StatelessWidget {
 }
 
 class _DataAssetStageTile extends StatelessWidget {
-  const _DataAssetStageTile({required this.stage, required this.remove});
+  const _DataAssetStageTile({
+    required this.stage,
+    required this.onBuild,
+    required this.buildUnavailableReason,
+    required this.remove,
+  });
 
   final AuthoringRevision3DataAssetStage stage;
+  final VoidCallback? onBuild;
+  final String? buildUnavailableReason;
   final VoidCallback? remove;
 
   @override
@@ -647,11 +770,31 @@ class _DataAssetStageTile extends StatelessWidget {
             runSpacing: 6,
             children: [
               Chip(label: Text('Saved project edit')),
-              Chip(label: Text('Build unavailable')),
               Chip(label: Text('Gameplay unverified')),
             ],
           ),
         ),
+        if (onBuild == null && buildUnavailableReason != null) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.info_outline, size: 18),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    buildUnavailableReason!,
+                    key: ValueKey(
+                      'revision3-dataasset-stage-build-unavailable-${stage.targetPath}',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         _DataAssetFact(
           label: 'Verified value shape',
@@ -674,13 +817,28 @@ class _DataAssetStageTile extends StatelessWidget {
         const SizedBox(height: 8),
         Align(
           alignment: Alignment.centerRight,
-          child: OutlinedButton.icon(
-            key: ValueKey(
-              'revision3-dataasset-stage-remove-${stage.targetPath}',
-            ),
-            onPressed: remove,
-            icon: const Icon(Icons.remove_circle_outline),
-            label: const Text('Remove from project...'),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            alignment: WrapAlignment.end,
+            children: [
+              FilledButton.icon(
+                key: ValueKey(
+                  'revision3-dataasset-stage-build-${stage.targetPath}',
+                ),
+                onPressed: onBuild,
+                icon: const Icon(Icons.inventory_2_outlined),
+                label: const Text('Build files...'),
+              ),
+              OutlinedButton.icon(
+                key: ValueKey(
+                  'revision3-dataasset-stage-remove-${stage.targetPath}',
+                ),
+                onPressed: remove,
+                icon: const Icon(Icons.remove_circle_outline),
+                label: const Text('Remove from project...'),
+              ),
+            ],
           ),
         ),
       ],

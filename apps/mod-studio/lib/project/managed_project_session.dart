@@ -763,8 +763,26 @@ abstract interface class ManagedRevision3AuthoringStore {
   });
 }
 
+/// Narrow capability for producing one immutable reviewed DataAsset pack.
+/// Keeping it separate avoids forcing checkpoint-only test stores to claim
+/// build authority they do not implement.
+abstract interface class ManagedRevision3ReviewedDataAssetBuildStore {
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
-    implements ManagedRevision3AuthoringStore {
+    implements
+        ManagedRevision3AuthoringStore,
+        ManagedRevision3ReviewedDataAssetBuildStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1090,6 +1108,26 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) => ffi.authoringStoreBuildRevision3ReviewedDataAssetV1(
+    root: root,
+    gameRoot: gameRoot,
+    currentProjectJson: currentProjectJson,
+    expectedHead: expectedHead,
+    targetPath: targetPath,
+    packName: packName,
+    output: output,
+  );
+
+  @override
   Future<AuthoringRevision3ContentIndexResult> readContentIndex({
     required String root,
     required AuthoringWorkingHead expectedHead,
@@ -1173,6 +1211,8 @@ final class _ManagedPreparedCheckpoint<T> {
 }
 
 abstract interface class _ManagedCheckpointStore {
+  bool get supportsReviewedDataAssetBuild;
+
   Future<_ManagedOpenedCheckpoint> open({
     required String root,
     required AuthoringAssetVerification verification,
@@ -1189,6 +1229,17 @@ abstract interface class _ManagedCheckpointStore {
     required AuthoringWorkingHead head,
     required AuthoringAssetVerification verification,
   });
+
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  });
 }
 
 final class _Revision12ManagedCheckpointStore
@@ -1197,6 +1248,9 @@ final class _Revision12ManagedCheckpointStore
 
   final ManagedAuthoringStore store;
   final AuthoringValidationProfile profile;
+
+  @override
+  bool get supportsReviewedDataAssetBuild => false;
 
   @override
   Future<_ManagedOpenedCheckpoint> open({
@@ -1235,6 +1289,20 @@ final class _Revision12ManagedCheckpointStore
     ),
   );
 
+  @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) => throw UnsupportedError(
+    'reviewed DataAsset builds require a managed revision-3 Store',
+  );
+
   static _ManagedOpenedCheckpoint _fromOpened(
     AuthoringStoreOpenedResult opened,
   ) => _ManagedOpenedCheckpoint(
@@ -1250,6 +1318,10 @@ final class _Revision3ManagedCheckpointStore
   const _Revision3ManagedCheckpointStore(this.store);
 
   final ManagedRevision3AuthoringStore store;
+
+  @override
+  bool get supportsReviewedDataAssetBuild =>
+      store is ManagedRevision3ReviewedDataAssetBuildStore;
 
   @override
   Future<_ManagedOpenedCheckpoint> open({
@@ -1284,6 +1356,36 @@ final class _Revision3ManagedCheckpointStore
       verification: verification,
     ),
   );
+
+  @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) {
+    final buildStore = store;
+    if (!supportsReviewedDataAssetBuild ||
+        buildStore is! ManagedRevision3ReviewedDataAssetBuildStore) {
+      throw UnsupportedError(
+        'this managed revision-3 Store has no reviewed DataAsset build capability',
+      );
+    }
+    return (buildStore as ManagedRevision3ReviewedDataAssetBuildStore)
+        .buildReviewedDataAssetV1(
+          root: root,
+          gameRoot: gameRoot,
+          currentProjectJson: currentProjectJson,
+          expectedHead: expectedHead,
+          targetPath: targetPath,
+          packName: packName,
+          output: output,
+        );
+  }
 
   static _ManagedOpenedCheckpoint _fromOpened(
     AuthoringRevision3StoreOpenedResult opened,
@@ -1380,6 +1482,8 @@ class ManagedRevision3AuthoringProjectSession {
   int get projectRevision => _core._opened.projectRevision!;
   bool get isClosed => _core.isClosed;
   bool get requiresReopen => _core.requiresReopen;
+  bool get supportsReviewedDataAssetBuild =>
+      _core.supportsReviewedDataAssetBuild;
   File get headFile => _core.headFile;
 
   static Future<ManagedRevision3AuthoringProjectSession> create({
@@ -2492,6 +2596,60 @@ class ManagedRevision3AuthoringProjectSession {
     handleReadError: _core._throwRevision3VoiceBuildError,
   );
 
+  /// Build one exact-basis, reviewed DataAsset stage into a new immutable
+  /// offline triplet. Publication uncertainty is retained as a successful,
+  /// sealed result so callers do not accidentally retry a completed rename.
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String gameRoot,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) {
+    if (!supportsReviewedDataAssetBuild) {
+      return Future<AuthoringRevision3ReviewedDataAssetBuildResult>.error(
+        UnsupportedError(
+          'this managed revision-3 Store cannot build reviewed DataAssets',
+        ),
+      );
+    }
+    return _core.readBasisSnapshot<
+      AuthoringRevision3ReviewedDataAssetBuildResult
+    >(
+      (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 reviewed DataAsset build has no exact project identity',
+          );
+        }
+        final result = await _core._store.buildReviewedDataAssetV1(
+          root: root.path,
+          gameRoot: gameRoot,
+          currentProjectJson: basis.projectJson,
+          expectedHead: basis.head,
+          targetPath: targetPath,
+          packName: packName,
+          output: output,
+        );
+        if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+            result.projectId != projectId ||
+            result.projectRevision != projectRevision ||
+            result.targetPath != targetPath ||
+            result.packName != packName ||
+            result.output != output) {
+          throw const ManagedProjectVerificationException(
+            'reviewed DataAsset build disagrees with its exact session basis or intent',
+          );
+        }
+        return result;
+      },
+      operation: 'buildReviewedDataAssetV1',
+      handleReadError: _core._throwRevision3ReviewedDataAssetBuildError,
+    );
+  }
+
   /// Verify a PatchReceipt-v2 input and publish its closed fixed-leaf DataAsset stage through the
   /// session's existing full-reopen, crash-repair and exact byte-CAS lane.
   Future<ManagedRevision3DataAssetStageCheckpoint>
@@ -3341,6 +3499,8 @@ class _ManagedProjectSessionCore {
   String get projectJson => _opened.projectJson;
   AuthoringWorkingHead get head => _opened.head;
   bool get isClosed => _closed;
+  bool get supportsReviewedDataAssetBuild =>
+      _store.supportsReviewedDataAssetBuild;
 
   /// True after an I/O or verification failure leaves publication state
   /// uncertain. Close and reopen before attempting another edit.
@@ -4434,6 +4594,42 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3ReviewedDataAssetBuildError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_DATAASSET_BUILD_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3ReviewedDataAssetBuildErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed reviewed DataAsset build could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3DataAssetError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT') {
@@ -5178,6 +5374,22 @@ bool _revision3VoiceBuildErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_BUILD_STORE_OUTPUT_ALIAS',
   'AUTHORING_REVISION3_VOICE_BUILD_STORE_GAME_ALIAS',
   'AUTHORING_REVISION3_VOICE_BUILD_VERIFY_FAILED',
+}.contains(code);
+
+bool _revision3ReviewedDataAssetBuildErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_DATAASSET_BUILD_INPUT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_INPUT_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_OUTPUT_EXISTS',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_OUTPUT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_PACK_FAILED',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_PACK_NAME_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_PROJECT_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_PUBLICATION_FAILED',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_SOURCE_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_TARGET_INVALID',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_TARGET_MISSING',
+  'AUTHORING_REVISION3_DATAASSET_BUILD_TARGET_NOT_REVIEWED',
 }.contains(code);
 
 bool _revision3ContentReadErrorRequiresReopen(String code) => const {

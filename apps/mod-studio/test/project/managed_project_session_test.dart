@@ -10,6 +10,8 @@ import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:path/path.dart' as p;
 
+import '../support/revision3_voice_fixture.dart';
+
 void main() {
   late Directory fixture;
 
@@ -145,6 +147,93 @@ void main() {
         'authoring_store_prepare_document_checkpoint',
         'authoring_store_open_head_bytes_document',
       ]);
+    },
+  );
+
+  test(
+    'reviewed DataAsset build returns its sealed basis receipt and poisons a post-audit drift',
+    () async {
+      final root = Directory(p.join(fixture.path, 'reviewed-build-project'));
+      await root.create();
+      final store = _FakeRevision3ReviewedBuildStore();
+      final project = revision3VoiceFixtureProjectJson(revision: 7);
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+      );
+      final basisHead = session.head;
+      store.afterBuild = (buildRoot, result) async {
+        final driftProject = revision3VoiceFixtureProjectJson(revision: 8);
+        final driftHead = store.register(driftProject);
+        await File(
+          p.join(buildRoot, 'gore-project.json'),
+        ).writeAsString(driftHead.canonicalJson, flush: true);
+        expect(result.basisHead.canonicalJson, basisHead.canonicalJson);
+      };
+
+      const targetPath = '/Game/Blueprints/Items/FootstepPreset';
+      const packName = 'ReviewedFootsteps';
+      const output = r'C:\Builds\ReviewedFootsteps';
+      final result = await session.buildReviewedDataAssetV1(
+        gameRoot: r'C:\Games\Gothic Remake',
+        targetPath: targetPath,
+        packName: packName,
+        output: output,
+      );
+
+      expect(result.basisHead.canonicalJson, basisHead.canonicalJson);
+      expect(
+        result.receipt.relativeName,
+        'gore-authoring-dataasset-build.json',
+      );
+      expect(result.receipt.sha256, List<String>.filled(64, 'd').join());
+      expect(result.output, output);
+      expect(store.buildCalls, 1);
+      expect(store.buildCurrentProjects.single, project);
+      expect(store.buildHeads.single.canonicalJson, basisHead.canonicalJson);
+      expect(session.requiresReopen, isTrue);
+      await expectLater(
+        session.buildReviewedDataAssetV1(
+          gameRoot: r'C:\Games\Gothic Remake',
+          targetPath: targetPath,
+          packName: packName,
+          output: r'C:\Builds\MustNotRetry',
+        ),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(store.buildCalls, 1);
+      await session.close();
+    },
+  );
+
+  test(
+    'checkpoint-only revision-3 Store rejects reviewed build without poisoning the session',
+    () async {
+      final root = Directory(p.join(fixture.path, 'checkpoint-only-project'));
+      await root.create();
+      final buildStore = _FakeRevision3ReviewedBuildStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: _FakeRevision3CheckpointOnlyStore(buildStore),
+        projectJson: revision3VoiceFixtureProjectJson(revision: 7),
+      );
+
+      expect(session.supportsReviewedDataAssetBuild, isFalse);
+      await expectLater(
+        session.buildReviewedDataAssetV1(
+          gameRoot: r'C:\Games\Gothic Remake',
+          targetPath: '/Game/Blueprints/Items/FootstepPreset',
+          packName: 'ReviewedFootsteps',
+          output: r'C:\Builds\ReviewedFootsteps',
+        ),
+        throwsA(isA<UnsupportedError>()),
+      );
+      expect(buildStore.buildCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      await session.verifyCurrentHead();
+      expect(session.requiresReopen, isFalse);
+      await session.close();
     },
   );
 
@@ -981,6 +1070,237 @@ void main() {
     expect(await root.exists(), isFalse);
   });
 }
+
+typedef _AfterRevision3ReviewedBuild =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3ReviewedDataAssetBuildResult result,
+    );
+
+final class _FakeRevision3CheckpointOnlyStore
+    implements ManagedRevision3AuthoringStore {
+  const _FakeRevision3CheckpointOnlyStore(this.delegate);
+
+  final _FakeRevision3ReviewedBuildStore delegate;
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) => delegate.open(root: root, verification: verification);
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) => delegate.openHeadBytes(
+    root: root,
+    head: head,
+    verification: verification,
+  );
+
+  @override
+  Future<AuthoringRevision3CheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) => delegate.prepareCheckpoint(
+    root: root,
+    expectedHead: expectedHead,
+    projectJson: projectJson,
+  );
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'unexpected checkpoint-only revision-3 Store call: ${invocation.memberName}',
+  );
+}
+
+final class _FakeRevision3ReviewedBuildStore
+    implements
+        ManagedRevision3AuthoringStore,
+        ManagedRevision3ReviewedDataAssetBuildStore {
+  final Map<String, String> _projectsByHead = <String, String>{};
+  int _sequence = 0;
+  int buildCalls = 0;
+  final List<String> buildCurrentProjects = <String>[];
+  final List<AuthoringWorkingHead> buildHeads = <AuthoringWorkingHead>[];
+  _AfterRevision3ReviewedBuild? afterBuild;
+
+  AuthoringWorkingHead register(String projectJson) {
+    _sequence++;
+    final head = AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': utf8.encode(projectJson).length,
+          'sha256': _sequence.toRadixString(16).padLeft(64, '0'),
+        },
+      }),
+    );
+    _projectsByHead[head.canonicalJson] = projectJson;
+    return head;
+  }
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> open({
+    required String root,
+    required AuthoringAssetVerification verification,
+  }) async {
+    final rawHead = await File(
+      p.join(root, 'gore-project.json'),
+    ).readAsString();
+    final head = AuthoringWorkingHead.fromCanonicalJson(rawHead);
+    final project = _projectsByHead[rawHead];
+    if (project == null) throw StateError('unknown revision-3 head');
+    return AuthoringRevision3StoreOpenedResult.fromJson(
+      _revision3OpenedResponse(head, project),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3StoreOpenedResult> openHeadBytes({
+    required String root,
+    required AuthoringWorkingHead head,
+    required AuthoringAssetVerification verification,
+  }) async {
+    final project = _projectsByHead[head.canonicalJson];
+    if (project == null) throw StateError('unknown revision-3 checkpoint');
+    return AuthoringRevision3StoreOpenedResult.fromJson(
+      _revision3OpenedResponse(head, project),
+    );
+  }
+
+  @override
+  Future<AuthoringRevision3CheckpointPreparation> prepareCheckpoint({
+    required String root,
+    required AuthoringWorkingHead? expectedHead,
+    required String projectJson,
+  }) async {
+    final headFile = File(p.join(root, 'gore-project.json'));
+    final actual = await headFile.exists()
+        ? await headFile.readAsString()
+        : null;
+    if (actual != expectedHead?.canonicalJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_checkpoint',
+        code: 'AUTHORING_STORE_HEAD_CONFLICT',
+        message: 'fake revision-3 head CAS rejected',
+      );
+    }
+    final head = register(projectJson);
+    return AuthoringRevision3CheckpointPreparation.fromJson(<String, Object?>{
+      'ok': true,
+      'head_json': head.canonicalJson,
+    });
+  }
+
+  @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String root,
+    required String gameRoot,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) async {
+    buildCalls++;
+    buildCurrentProjects.add(currentProjectJson);
+    buildHeads.add(expectedHead);
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_build_revision3_reviewed_dataasset_v1',
+        code: 'AUTHORING_REVISION3_DATAASSET_BUILD_HEAD_CONFLICT',
+        message: 'fake reviewed DataAsset basis CAS rejected',
+      );
+    }
+    final result = _sessionReviewedDataAssetBuildResult(
+      head: expectedHead,
+      projectJson: currentProjectJson,
+      targetPath: targetPath,
+      packName: packName,
+      output: output,
+    );
+    final hook = afterBuild;
+    afterBuild = null;
+    await hook?.call(root, result);
+    return result;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnsupportedError(
+    'unexpected fake revision-3 Store call: ${invocation.memberName}',
+  );
+}
+
+Map<String, Object?> _revision3OpenedResponse(
+  AuthoringWorkingHead head,
+  String projectJson,
+) => <String, Object?>{
+  'ok': true,
+  'head_json': head.canonicalJson,
+  'project_json': projectJson,
+};
+
+AuthoringRevision3ReviewedDataAssetBuildResult
+_sessionReviewedDataAssetBuildResult({
+  required AuthoringWorkingHead head,
+  required String projectJson,
+  required String targetPath,
+  required String packName,
+  required String output,
+}) => AuthoringRevision3ReviewedDataAssetBuildResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'built',
+    'basis_head_json': head.canonicalJson,
+    'project_id': revision3VoiceFixtureProjectId,
+    'project_revision': 7,
+    'target_path': targetPath,
+    'pack_name': packName,
+    'output': output,
+    'files': <Object?>[
+      <String, Object?>{
+        'relative_name': '$packName.pak',
+        'byte_len': 101,
+        'sha256': List<String>.filled(64, 'a').join(),
+      },
+      <String, Object?>{
+        'relative_name': '$packName.ucas',
+        'byte_len': 102,
+        'sha256': List<String>.filled(64, 'b').join(),
+      },
+      <String, Object?>{
+        'relative_name': '$packName.utoc',
+        'byte_len': 103,
+        'sha256': List<String>.filled(64, 'c').join(),
+      },
+    ],
+    'receipt': <String, Object?>{
+      'format':
+          'gore.authoring.managed-revision3-reviewed-dataasset-build-receipt.v1',
+      'relative_name': 'gore-authoring-dataasset-build.json',
+      'byte_len': 456,
+      'sha256': List<String>.filled(64, 'd').join(),
+    },
+    'build_authority': 'reviewed_fixed_leaf_single_package_triplet',
+    'artifact_publication_status': 'published',
+    'deployment_status': 'not_performed',
+    'runtime_status': 'runtime_unqualified',
+    'retry_safe': false,
+    'warning': null,
+  },
+  expectedHead: head,
+  expectedProjectJson: projectJson,
+  expectedTargetPath: targetPath,
+  expectedPackName: packName,
+  expectedOutput: output,
+);
 
 typedef _AfterPrepare =
     FutureOr<void> Function(

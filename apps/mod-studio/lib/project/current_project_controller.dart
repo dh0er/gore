@@ -367,6 +367,20 @@ abstract interface class ManagedRevision3DialogLocalizationEditLease {
   });
 }
 
+/// Optional immutable-build capability. It is separate from checkpoint editing
+/// so unrelated lease fakes do not accidentally claim artifact authority.
+abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
+  bool get supportsReviewedDataAssetBuild;
+
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String gameRoot,
+    required String targetPath,
+    required String packName,
+    required String output,
+  });
+}
+
 typedef ManagedRevision3CurrentProjectOpener =
     Future<ManagedRevision3CurrentProjectLease> Function(Directory root);
 
@@ -474,7 +488,8 @@ final class _ManagedRevision3SessionLease
     implements
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
-        ManagedRevision3DialogLocalizationEditLease {
+        ManagedRevision3DialogLocalizationEditLease,
+        ManagedRevision3ReviewedDataAssetBuildLease {
   const _ManagedRevision3SessionLease(this._session);
 
   final ManagedRevision3AuthoringProjectSession _session;
@@ -493,6 +508,10 @@ final class _ManagedRevision3SessionLease
 
   @override
   bool get requiresReopen => _session.requiresReopen;
+
+  @override
+  bool get supportsReviewedDataAssetBuild =>
+      _session.supportsReviewedDataAssetBuild;
 
   @override
   Directory get root => _session.root;
@@ -869,6 +888,20 @@ final class _ManagedRevision3SessionLease
     required String gameRoot,
     required String output,
   }) => _session.buildVoiceV1(gameRoot: gameRoot, output: output);
+
+  @override
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildReviewedDataAssetV1({
+    required String gameRoot,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) => _session.buildReviewedDataAssetV1(
+    gameRoot: gameRoot,
+    targetPath: targetPath,
+    packName: packName,
+    output: output,
+  );
 
   @override
   Future<List<AuthoringRevision3DataAssetStage>> listDataAssetStagesV1() =>
@@ -2807,6 +2840,87 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceBuildRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Build one reviewed DataAsset stage from the exact visible managed
+  /// checkpoint. The Store is not mutated; every terminal publication outcome,
+  /// including uncertainty after rename, remains a successful sealed result.
+  Future<AuthoringRevision3ReviewedDataAssetBuildResult>
+  buildCurrentRevision3ReviewedDataAsset({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required String gameRoot,
+    required String targetPath,
+    required String packName,
+    required String output,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'reviewed DataAsset builds are available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3DataAssetRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3DataAssetStaleCheckpointException();
+    }
+    if (gameRoot.isEmpty) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'a configured game installation is required for reviewed DataAsset builds',
+      );
+    }
+    if (lease is! ManagedRevision3ReviewedDataAssetBuildLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project session cannot build reviewed DataAssets',
+      );
+    }
+    final buildLease = lease as ManagedRevision3ReviewedDataAssetBuildLease;
+    if (!buildLease.supportsReviewedDataAssetBuild) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'this managed project session cannot build reviewed DataAssets',
+      );
+    }
+    try {
+      final result = await buildLease.buildReviewedDataAssetV1(
+        gameRoot: gameRoot,
+        targetPath: targetPath,
+        packName: packName,
+        output: output,
+      );
+      if (result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          result.projectId != expectedProjectId ||
+          result.projectId != lease.projectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.projectRevision != lease.projectRevision ||
+          result.targetPath != targetPath ||
+          result.packName != packName ||
+          result.output != output ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        throw const CurrentProjectCoordinatorException(
+          'reviewed DataAsset build disagrees with the current managed checkpoint or intent',
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3DataAssetRequiresReopenException(),
           stackTrace,
         );
       }

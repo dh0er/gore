@@ -51,6 +51,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_project_check',
   'authoring_project_story_draft_insert_v1',
   'authoring_read_dataasset_extract_receipt_v2',
+  'authoring_store_build_revision3_reviewed_dataasset_v1',
   'authoring_store_build_revision3_voice_v1',
   'authoring_store_check_revision3_npc_compiler_v1',
   'authoring_store_check_revision3_quest_compiler_v1',

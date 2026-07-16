@@ -130,7 +130,7 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 | Quests | Managed R3 has the friendly one-to-eight-objective Draft wizard plus three selected-Quest actions: **Name & objectives**, **Description & connections**, and **States & transitions**. The behavior table covers the main Quest and objectives across Available/Start/Success/Failure, offers a sequential template, and edits independent direct-engine triggers, typed DNF conditions, bounded cross-node Start/Succeed/Fail actions, and objective-parent completion without exposing technical IDs or source. It does not author dialog, journal, rewards, items, raw AngelScript, or arbitrary effects. Merely reading or deriving the effective behavior plan does not migrate generator-v2/v3 project JSON/source or add `transition_plan`; an otherwise unchanged Quest remains byte-identical. V4 retains stable objective slots and a canonical plan whose frozen seed reproduces the legacy source bytes. The integrated Outline V2 editor now changes V4 display/title text and presentation order while carrying those exact active slots; legacy generator V2/V3 Quests retain the count-preserving Outline V1 path. Context V1 preserves V4 exactly. | The native V4 validator closes canonical order/references, required drivers/edges, 8x8 predicate and 8-effect limits, lifecycle contradictions, same-handler terminal conflicts, self effects, and same-kind cycles. The pure behavior and Outline V2 transactions bind exact head/project/target/Quest/module revisions and the retained plan seal, prove/regenerate the owned module, update only their declared fields/revisions, and preserve the active slot set, transitions, predicates, effects, identities, provenance, and unrelated entities. Their prepare-only FFI routes fully reopen immutable candidates and never publish the fixed head; only the serialized managed session may publish through exact-head byte CAS, repair, and full reopen. Native status stays `blocked`, `runtime_unqualified`, and publication `not_supported`. Two isolated 1.0.3 compiler runs covered the four external-trigger fields and predicate-hook shapes, all three handler shapes, `bSucceedParent`, typed getters, and guarded lifecycle-call shapes and produced the same reopened 7,306-module cache. One renderer-produced fixture spanning every state-test expression remains an offline gate, and `default-sites` still cannot enumerate new-class defaults. No Quest operation writes the game installation or a save. | New-class discovery is narrowly runtime-proven on one generation, and the listed lifecycle source shapes are compiler/cache-qualified; neither proves exact full renderer output, generated transition polling/order, or effects in game. Dialog selection, journal, rewards/items/knowledge, persistence, save/reload, uninstall, other versions, complete build/deploy, and general story graphs remain **Research-gated** independently. |
 | Items and economy | Existing scalar edits are an integrated subset; semantic clone/new-item/economy workflows are not. | Bounded existing-value paths exist. A general new-item identity/package pipeline is not offline-proven. | New identity, construction, visuals, equip/use behavior, trade/loot integration, and persistence are **Research-gated** independently. |
 | World, routines, and spawns | The canonical World destination is integrated as an honest unavailable/status surface; no semantic map/routine/spawn authoring surface exists. | A typed Draft model and an optional sealed Unreal handoff are planned, but neither a bridge nor arbitrary level/world-partition output is implemented or proven. | Qualified anchors, schedules, spawns, triggers, navigation, streaming, ownership, and persistence require operation-specific research. A visible World page, map pin, or Unreal handoff must not imply writable or game-compatible world content. |
-| DataAssets and cooked content | The read-only Lab, generic fixed-leaf editor, installed-package browser, and managed **Verified DataAsset edits** registry are integrated bounded subsets. The first reviewed form recognizes only exact Human/Scavenger/Wolf Footstep targets after inspection and exposes `FeetTextureSize` X/Y with scale presets, Before/After preview, preserved Z/W, and raw-unit warnings. Expert receipt import/edit and registry-only removal remain. No surface exposes offsets, structural editing, build/pack/deploy, gameplay, or Unreal-bridge authority. | The reviewed request carries only exact head/ordinal/package-source seals plus closed schema/field/X/Y intent. Native code rediscovers the exact `FootstepTag` Vector4 selector, preserves Z/W, and reuses the installed typed-stage executor through two complete drift windows. Separate reviewed, ordinary stage, and installed-proof bindings are independently checked by Dart before guarded exact-head publication. Results remain build-blocked, runtime-unqualified, artifact-not-granted, and native-publication-not-supported. Broader reviewed schemas, gameplay-qualified units, multi-edit/undo, build lowering, post-pack verification, structural package/reference/collection writing, and the sealed Unreal handoff remain missing. | The Footstep property shape and offline lowering are proven; its gameplay units/effect are not. Managed project staging grants no pack, deployment, gameplay, or save authority. Structural creation remains **Research-gated** until complete round-trip and runtime qualification. A stock Unreal Editor is not assumed to open cooked G1R packages or emit compatible output. |
+| DataAssets and cooked content | The read-only Lab, generic fixed-leaf editor, installed-package browser, and managed **Verified DataAsset edits** registry are integrated bounded subsets. The first reviewed form recognizes only exact Human/Scavenger/Wolf Footstep targets after inspection and exposes `FeetTextureSize` X/Y with scale presets, Before/After preview, preserved Z/W, and raw-unit warnings. An expanded saved-stage tile now offers **Build files...** beside removal; its focused dialog asks only for a portable pack name and destination parent and creates a new offline mod-file folder. Expert receipt import/edit and registry-only removal remain. No surface exposes offsets, structural editing, deploy/gameplay, or Unreal-bridge authority. | The reviewed edit request still carries only exact head/ordinal/package-source seals plus closed schema/field/X/Y intent. The managed build runs through the serialized `readBasisSnapshot` lane and a native exact-current final Store gate, independently replays the fixed-leaf edit from the live generation, strictly reopens and semantically re-inspects the generated triplet, and emits a path-free canonical basis/post-pack receipt plus three relative-name/length/hash seals. Protected-root and recognizable-game-install checks precede an atomic absent-output no-clobber rename. Published, cleanup-warning, and publication-uncertain are distinct sealed terminals and none is automatically retryable. Broader reviewed schemas, gameplay-qualified units, multi-edit/undo, structural package/reference/collection writing, and the sealed Unreal handoff remain missing. | The Footstep property shape and one exact offline triplet build are proven; its gameplay units/effect are not. Build neither deploys nor mutates the project, Store head, game installation, or save, and it grants no runtime authority. Structural/new DataAsset creation remains **Research-gated** until complete round-trip and runtime qualification. A stock Unreal Editor is not assumed to open cooked G1R packages or emit compatible output. |
 | Visual media | Existing texture replacement is integrated. General visual content and the optional Unreal handoff are not. | Texture bundle output has bounded evidence; general material, mesh, character visual, animation, VFX package creation, and Unreal round-trip do not. | New cooked visual registration/resolution is **Research-gated**. End state includes import validation, thumbnails, lineage, qualified previews, and an optional sealed specialist-tool handoff only for explicitly supported asset types. |
 | Audio and music | FMOD sample browsing/preview/replacement is integrated. Semantic cue/event creation is not. | Existing-bank replacement has bounded backend evidence. | New event/cue integration is **Research-gated**. End state adds batch normalize/transcode, loudness/codec checks, ownership, and conflict handling. |
 | Cinematics and presentation | No Studio integration. | No current authoring pipeline claim. | Scene timelines, cameras, staging, subtitle/audio sync, animation, and reusable sequences are **future Research-gated** capabilities. |
@@ -153,28 +153,40 @@ new authoring transaction, build, deploy, runtime, game, or save authority. It
 does not start World work, and the unchanged Legacy tabs remain the usability
 baseline until their managed replacements are comparably direct and capable.
 
-DataAsset status addendum (2026-07-14): the managed installed-package browser
-now supplies a second normal typed fixed-leaf route alongside the retained
+DataAsset status addendum (updated 2026-07-16): the managed installed-package
+browser supplies a normal typed fixed-leaf route alongside the retained
 ExtractReceipt workflow described in the matrix. It selects only a sealed
 original ordinal, binds the exact package/USMAP inspection, independently
 reconstructs and compares package bytes, role-bearing sidecars, parsed UTOC
-identities, chunk winners, and USMAP name/bytes, then publishes only the same
-build-blocked revision-3 stage by exact-head CAS. No extracted receipt or
-caller-supplied target/package/output authority crosses this route. Structural
-editing, package creation, build/pack/deploy, and runtime qualification remain
-missing exactly as stated above. The first schema layered on this route now
-recognizes only exact Human/Scavenger/Wolf Footstep presets and one reviewed
-`FeetTextureSize` X/Y field. The guided form preserves Z/W and labels the values
-as raw asset units; neither gameplay effect nor units are qualified.
+identities, chunk winners, and USMAP name/bytes, then publishes the same
+revision-3 stage by exact-head CAS. No extracted receipt or caller-supplied
+target/package/output authority crosses that edit route. The first reviewed
+schema recognizes only exact Human/Scavenger/Wolf Footstep presets and one
+`FeetTextureSize` X/Y field; the guided form preserves Z/W and labels all
+values as raw asset units.
+
+That exact-current reviewed stage can now produce one offline package triplet
+through the direct expanded-stage **Build files...** action. The managed session
+uses `readBasisSnapshot`; native code performs live generation replay, strict
+post-pack readback/reinspection, a final exact Store source gate, protected-root
+checks, recognizable-game-install rejection, and atomic absent-output
+publication. Its fixed receipt and returned triplet seals are path-free. The UI
+distinguishes complete publication, completed-with-cleanup-warning, and an
+uncertain rename that must not be retried automatically. It performs no deploy,
+runtime test, or project/game/save mutation. Structural/new DataAssets, other
+reviewed schemas, a sealed Unreal bridge, and gameplay qualification remain
+missing; neither gameplay effect nor units are qualified.
 
 Usability checkpoint addendum (2026-07-15): **Validate & Test** now contains
 bounded **Problems & Readiness V1**. It searches and filters exact-current
 reference problems, game-configuration state, and DataAsset-registry/stage
 limits, then routes to the exact source entity or asset and the relevant
-workspace. Compiler evidence remains **Not evaluated**, managed build remains
-**Blocked**, and runtime remains **Unqualified**; there is no aggregate Ready
-verdict and the view performs no compiler check, lowering, deployment, or
-gameplay proof. **Project > Close** releases the coordinator-owned current
+workspace. Compiler evidence remains **Not evaluated**, general project-wide
+managed build remains **Blocked**, and runtime remains **Unqualified**; the
+bounded reviewed-DataAsset action is a separate offline build and does not turn
+this into an aggregate Ready verdict. The view performs no compiler check,
+general lowering, deployment, or gameplay proof. **Project > Close** releases
+the coordinator-owned current
 session without deleting project data. Add, Manage, and Resolve Voice actions
 also fail closed until the current projection contains an intact
 Voice-authorable `DialogLine` with its resolved same-project
@@ -736,10 +748,10 @@ precedence over new breadth.** Problems & Readiness V1, honest action gates,
 compact project chrome, Project Close, and the guided project-local dialog-line
 create/exact-managed-reuse V1 form the landed baseline. Direct project-text
 editing and the direct NPC/Quest Story workspace now replace two former
-card/modal detours without changing their authority boundaries. The next
-reviewed non-World backend candidate is an exact offline build for one selected,
-reviewed managed DataAsset stage: derive it from the current project, lower only
-to a new receipt-owned output, then reopen and reinspect that output. After that,
+card/modal detours without changing their authority boundaries. The first
+reviewed non-World offline build is now integrated for one selected reviewed
+managed DataAsset stage: it derives from the exact-current project, creates only
+a new receipt-owned output, then reopens and re-inspects that output. Next,
 complete the remaining line/localization/Voice production journey, safe project
 fundamentals such as deletion, undo/history, export, and recovery, and deeper
 NPC/Quest semantics before general managed build/release and qualified test
