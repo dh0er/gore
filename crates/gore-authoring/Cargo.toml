@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 gore-asset = { path = "../gore-asset" }
+gore-tex = { path = "../gore-tex" }
 gore-vo = { path = "../gore-vo" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

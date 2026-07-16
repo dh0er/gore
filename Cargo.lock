@@ -925,6 +925,7 @@ name = "gore-authoring"
 version = "0.0.0"
 dependencies = [
  "gore-asset",
+ "gore-tex",
  "gore-vo",
  "serde",
  "serde_json",
