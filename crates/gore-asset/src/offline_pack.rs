@@ -18,13 +18,20 @@ use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+#[path = "staged_pack_core.rs"]
+pub(crate) mod staged_pack_core;
+
+use self::staged_pack_core::{
+    MechanicalPublication, MechanicalPublishedPack, MechanicalReceipt, MechanicalStagedPack,
+    PackBytes, PackInput, PackSidecarInput,
+};
 use crate::dataasset_workflow::{
     asset_package_limits, generation_mismatch_reason, probe_current_generation_receipt,
     read_verified_file_bounded, validate_patch_output_against_carrier, validate_patched_sidecars,
     validate_sidecar_generation_mapping, AssetGenerationReceipt, ReceiptComponent, ReceiptFileSeal,
     SidecarRole, SourceFileReceipt, VerifiedExtractReceipt, VerifiedFileSeal, VerifiedPatchReceipt,
-    MAX_CONTAINER_COMPONENT_BYTES, MAX_COOKED_PACKAGE_BYTES, MAX_GAME_ASSET_SEGMENTS,
-    MAX_MOUNT_UCAS_BYTES, MAX_MOUNT_UTOC_BYTES, MAX_OPTIONAL_SIDECAR_BYTES,
+    MAX_CONTAINER_COMPONENT_BYTES, MAX_GAME_ASSET_SEGMENTS, MAX_MOUNT_UCAS_BYTES,
+    MAX_MOUNT_UTOC_BYTES, MAX_OPTIONAL_SIDECAR_BYTES,
 };
 use crate::{PackageCarrier, PackageComponent, PackagePairSeal};
 
@@ -144,15 +151,12 @@ impl OfflineDataAssetPackRequestV1 {
 /// staging directory. Publication is a separate consuming operation.
 #[derive(Debug)]
 pub struct StagedOfflineDataAssetPackV1 {
-    request: OfflineDataAssetPackRequestV1,
+    core: MechanicalStagedPack<LegacyPackReceiptPayload>,
     proof: OfflinePackPublicationProofV1,
-    staging: StagingDirectory,
-    build_root: PathBuf,
-    build_identity: HeldFileIdentity,
-    main_ucas: HeldFileIdentity,
-    pack_source_utocs: Vec<FileSeal>,
-    output_seals: Vec<FileSeal>,
-    receipt_seal: FileSeal,
+}
+
+#[derive(Debug)]
+struct LegacyPackReceiptPayload {
     receipt: Value,
     printable_receipt: String,
 }
@@ -444,499 +448,272 @@ fn verify_chained_extract_identity(
 /// Build, structurally reopen, seal, and receipt one offline package under an
 /// owned sibling staging directory. This function never publishes or deploys.
 pub fn stage_offline_dataasset_pack_v1(
-    mut package: VerifiedOfflineDataAssetPackageV1,
+    package: VerifiedOfflineDataAssetPackageV1,
     request: OfflineDataAssetPackRequestV1,
 ) -> Result<StagedOfflineDataAssetPackV1> {
     if package.asset != request.asset || package.generation.asset != request.asset {
         bail!("ASSET_GENERATION_MISMATCH: verified package and request target different assets");
     }
-    request.reverify_output_parent_and_disjoint()?;
 
-    let main_utoc =
-        gore_tex::paths::main_container(&request.game_root).context("ASSET_PACK_CONTAINER")?;
-    let main_ucas = HeldFileIdentity::open(
-        &main_utoc.with_extension("ucas"),
-        64 * 1024 * 1024 * 1024,
-        "ASSET_PACK_CONTAINER",
-    )?;
-    let current_generation = probe_current_generation_receipt(
-        &request.game_root,
-        &request.asset,
-        &package.generation,
-        "ASSET_PACK_GENERATION",
-    )
-    .context("ASSET_PACK_GENERATION")?;
-    if current_generation != package.generation {
-        let reason = generation_mismatch_reason(&package.generation, &current_generation);
-        bail!(
-            "ASSET_GENERATION_MISMATCH: installed target/USMAP/UTOC/global generation changed since extract ({reason}); re-extract and reapply the patch"
-        );
-    }
-
-    // The generation probe may be long. Re-pin the output parent immediately
-    // before creating owned staging so a swapped junction cannot redirect it.
-    request.reverify_output_parent_and_disjoint()?;
-    ensure_path_absent(&request.output, "ASSET_PACK_OUTPUT")?;
-
-    let parent = request.output_parent.path.as_path();
-    let staging = create_staging_directory(parent, "pack", "ASSET_PACK_OUTPUT")?;
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    let cooked_root = staging.path.join("cooked");
-    let build_root = staging.path.join("triplet");
-    fs::create_dir(&cooked_root).context("ASSET_PACK_STAGE")?;
-    fs::create_dir(&build_root).context("ASSET_PACK_STAGE")?;
-    let staged_uasset = cooked_root.join(&request.mount.cooked_uasset);
-    let staged_relative_parent = request
-        .mount
-        .cooked_uasset
-        .parent()
-        .context("ASSET_PACK_ASSET: cooked asset has no parent")?;
-    create_relative_directory_chain(&cooked_root, staged_relative_parent, "ASSET_PACK_STAGE")?;
-    write_new_synced(&staged_uasset, &package.uasset, "ASSET_PACK_STAGE")?;
-    write_new_synced(
-        &staged_uasset.with_extension("uexp"),
-        &package.uexp,
-        "ASSET_PACK_STAGE",
-    )?;
-
-    let limits = asset_package_limits();
-    let mut staged_input_seals = vec![
-        digest_regular_file_bounded(&staged_uasset, limits.max_uasset_bytes, "ASSET_PACK_STAGE")?,
-        digest_regular_file_bounded(
-            &staged_uasset.with_extension("uexp"),
-            limits.max_uexp_bytes,
-            "ASSET_PACK_STAGE",
-        )?,
-    ];
-    let mut input_components = vec![
-        packed_input_receipt(
-            &package.source_uasset,
-            &request.mount.cooked_uasset,
-            u64::try_from(package.uasset.len())?,
-            &package.source_seal.uasset_sha256,
-        ),
-        packed_input_receipt(
-            &package.source_uexp,
-            &request.mount.cooked_uasset.with_extension("uexp"),
-            u64::try_from(package.uexp.len())?,
-            &package.source_seal.uexp_sha256,
-        ),
-    ];
-    let mut cooked_total = u64::try_from(package.uasset.len())?
-        .checked_add(u64::try_from(package.uexp.len())?)
-        .context("ASSET_PACK_INPUT: cooked size overflowed")?;
-    let mut expected_sidecars = [false; 3];
-    for sidecar in &package.sidecars {
-        let (target_relative_name, target) =
-            sidecar_path(&staged_uasset, sidecar.role, "ASSET_PACK_SIDECAR")?;
-        write_new_synced(&target, &sidecar.bytes, "ASSET_PACK_SIDECAR")?;
-        let target_seal =
-            digest_regular_file_bounded(&target, MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_STAGE")?;
-        if target_seal.length != sidecar.source.length()
-            || &target_seal.sha256 != sidecar.source.sha256()
-        {
-            bail!("ASSET_PACK_SIDECAR: staged sidecar differs from verified source");
-        }
-        cooked_total = cooked_total
-            .checked_add(target_seal.length)
-            .context("ASSET_PACK_SIDECAR: cooked size overflowed")?;
-        if cooked_total > MAX_COOKED_PACKAGE_BYTES {
-            bail!(
-                "ASSET_PACK_SIDECAR: cooked package is {cooked_total} bytes; aggregate limit is {MAX_COOKED_PACKAGE_BYTES}"
-            );
-        }
-        input_components.push(packed_input_receipt(
-            sidecar.source.path(),
-            &request
-                .mount
-                .cooked_uasset
-                .with_file_name(target_relative_name),
-            sidecar.source.length(),
-            sidecar.source.sha256(),
-        ));
-        expected_sidecars[sidecar.role.index()] = true;
-        staged_input_seals.push(target_seal);
-    }
-
-    // Staging now owns sealed copies. Release the potentially large package
-    // buffers before conversion; the staged value retains only source seals
-    // needed at the publication boundary.
-    drop(std::mem::take(&mut package.uasset));
-    drop(std::mem::take(&mut package.uexp));
-    for sidecar in &mut package.sidecars {
-        drop(std::mem::take(&mut sidecar.bytes));
-    }
-
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &staging.path,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_STAGE",
-    )?;
-    for seal in &staged_input_seals {
-        reverify_file_seal(
-            seal,
-            MAX_OPTIONAL_SIDECAR_BYTES.max(limits.max_uexp_bytes),
-            "ASSET_PACK_STAGE",
-        )?;
-    }
-
-    let repacked = gore_tex::container::repack_to_zen_verified(
-        &cooked_root,
-        &request.name,
-        &build_root,
-        &request.game_root,
-        false,
-    )
-    .context("ASSET_PACK_CONVERT")?;
-    let triplet = repacked.triplet;
-    let mut pack_source_paths = std::collections::BTreeSet::new();
-    pack_source_paths.extend(repacked.metadata_utocs.iter().cloned());
-    for chunk in &repacked.source_chunks {
-        pack_source_paths.insert(chunk.source_utoc.clone());
-    }
-    let mut pack_source_utocs = Vec::with_capacity(pack_source_paths.len());
-    for source_utoc in pack_source_paths {
-        pack_source_utocs.push(digest_regular_file_bounded(
-            &source_utoc,
-            MAX_CONTAINER_COMPONENT_BYTES,
-            "ASSET_PACK_GAME",
-        )?);
-    }
-    let pack_source_receipts: Vec<_> = pack_source_utocs.iter().map(source_file_receipt).collect();
-
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &staging.path,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_OUTPUT",
-    )?;
-    for seal in &staged_input_seals {
-        reverify_file_seal(
-            seal,
-            MAX_OPTIONAL_SIDECAR_BYTES.max(limits.max_uexp_bytes),
-            "ASSET_PACK_STAGE",
-        )?;
-    }
-    let reopened = gore_tex::container::verify_single_package_triplet(
-        &triplet[0],
-        &triplet[2],
-        &request.asset,
-        gore_tex::container::ExpectedSidecars {
-            bulk: expected_sidecars[0],
-            optional_bulk: expected_sidecars[1],
-            memory_mapped_bulk: expected_sidecars[2],
-        },
-    )
-    .context("ASSET_PACK_REOPEN")?;
-
-    let mut triplet_receipts = Vec::with_capacity(3);
-    let mut output_seals = Vec::with_capacity(3);
-    for path in &triplet {
-        sync_existing_regular_file(path, "ASSET_PACK_OUTPUT")?;
-        let seal =
-            digest_regular_file_bounded(path, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
-        let relative = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("ASSET_PACK_OUTPUT: non-UTF-8 triplet filename")?;
-        triplet_receipts.push(component_receipt(relative, seal.length, &seal.sha256));
-        output_seals.push(seal);
-    }
-    validate_flat_triplet_directory(&build_root, &request.name)?;
-
-    let receipt = json!({
-        "format": "gore.asset.pack.v2",
-        "status": "packed",
-        "asset": request.asset,
-        "name": request.name,
-        "generation_bound": true,
-        "provenance": {
-            "patch_receipt": package.patch_receipt,
-            "extract_receipt": package.extract_receipt,
-            "generation": current_generation,
-            "input_package_seal": package.input_package_seal,
-            "patched_package_seal": package.patched_package_seal,
-        },
-        "source": {
-            "game_root": request.game_root.display().to_string(),
-            "consumed_chunks": repacked.source_chunks,
-            "source_container_tocs": pack_source_receipts,
-            "content_binding": "script-object and container-header chunks were verified against the winning containers' TOC BLAKE3 hashes before conversion",
-            "global_script_store": {
-                "utoc": source_file_receipt(&request.global_utoc),
-                "ucas": source_file_receipt(&request.global_ucas),
-            },
-        },
-        "input": {
-            "package_seal": package.source_seal,
-            "components": input_components,
-        },
-        "output": {
-            "root": request.output.display().to_string(),
-            "receipt": OFFLINE_PACK_RECEIPT_NAME_V1,
-            "triplet": triplet_receipts,
-            "reopened_packages": [reopened.package().to_owned()],
-            "strict_reopen": reopened,
-            "compressed": false,
-        },
-        "deployed": false,
-    });
-    let printable_receipt = serde_json::to_string_pretty(&receipt)?;
-    let receipt_path = build_root.join(OFFLINE_PACK_RECEIPT_NAME_V1);
-    write_new_synced(
-        &receipt_path,
-        printable_receipt.as_bytes(),
-        "ASSET_PACK_RECEIPT",
-    )?;
-    let receipt_seal = digest_regular_file_bounded(
-        &receipt_path,
-        crate::dataasset_workflow::MAX_RECEIPT_BYTES,
-        "ASSET_PACK_RECEIPT",
-    )?;
-    validate_flat_build_directory(&build_root, &request.name)?;
-
-    // Cooked input is private staging-only data. Remove it before the final
-    // publication gate so promotion leaves only an empty owned staging parent.
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    validate_tree_no_reparse(
-        &cooked_root,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_STAGE",
-    )?;
-    remove_tree_bounded_no_follow(
-        &cooked_root,
-        MAX_STAGING_TREE_DEPTH,
-        MAX_STAGING_TREE_ENTRIES,
-        "ASSET_PACK_STAGE",
-    )?;
-    staging.verify_owned("ASSET_PACK_OUTPUT")?;
-    let build_identity = HeldFileIdentity::open_directory(&build_root, "ASSET_PACK_OUTPUT")?;
+    let VerifiedOfflineDataAssetPackageV1 {
+        asset: _,
+        generation,
+        source_uasset,
+        source_uexp,
+        source_seal,
+        uasset,
+        uexp,
+        sidecars,
+        patch_receipt,
+        extract_receipt,
+        input_package_seal,
+        patched_package_seal,
+    } = package;
+    let expected_generation = generation.clone();
     let proof = OfflinePackPublicationProofV1 {
-        generation: package.generation,
-        source_uasset: package.source_uasset,
-        source_seal: package.source_seal,
-        sidecars: package
-            .sidecars
-            .into_iter()
-            .map(|sidecar| sidecar.source)
+        generation,
+        source_uasset: source_uasset.clone(),
+        source_seal: source_seal.clone(),
+        sidecars: sidecars
+            .iter()
+            .map(|sidecar| sidecar.source.clone())
             .collect(),
     };
+    let mut sidecar_sources = Vec::with_capacity(sidecars.len());
+    let mut mechanical_sidecars = Vec::with_capacity(sidecars.len());
+    for sidecar in sidecars {
+        mechanical_sidecars.push(PackSidecarInput {
+            role: sidecar.role,
+            source_length: sidecar.source.length(),
+            source_sha256: *sidecar.source.sha256(),
+            bytes: PackBytes::Owned(sidecar.bytes),
+        });
+        sidecar_sources.push((sidecar.role, sidecar.source));
+    }
+    let uasset_length = u64::try_from(uasset.len())?;
+    let uexp_length = u64::try_from(uexp.len())?;
+    let mechanical_input = PackInput {
+        uasset: PackBytes::Owned(uasset),
+        uexp: PackBytes::Owned(uexp),
+        sidecars: mechanical_sidecars,
+    };
 
-    Ok(StagedOfflineDataAssetPackV1 {
+    let core = staged_pack_core::stage_with_receipt(
         request,
-        proof,
-        staging,
-        build_root,
-        build_identity,
-        main_ucas,
-        pack_source_utocs,
-        output_seals,
-        receipt_seal,
-        receipt,
-        printable_receipt,
-    })
+        mechanical_input,
+        |request| {
+            let current = probe_current_generation_receipt(
+                &request.game_root,
+                &request.asset,
+                &expected_generation,
+                "ASSET_PACK_GENERATION",
+            )
+            .context("ASSET_PACK_GENERATION")?;
+            if current != expected_generation {
+                let reason = generation_mismatch_reason(&expected_generation, &current);
+                bail!(
+                    "ASSET_GENERATION_MISMATCH: installed target/USMAP/UTOC/global generation changed since extract ({reason}); re-extract and reapply the patch"
+                );
+            }
+            Ok(current)
+        },
+        |evidence| {
+            let request = evidence.request();
+            let mut input_components = vec![
+                packed_input_receipt(
+                    &source_uasset,
+                    &request.mount.cooked_uasset,
+                    uasset_length,
+                    &proof.source_seal.uasset_sha256,
+                ),
+                packed_input_receipt(
+                    &source_uexp,
+                    &request.mount.cooked_uasset.with_extension("uexp"),
+                    uexp_length,
+                    &proof.source_seal.uexp_sha256,
+                ),
+            ];
+            for (role, source) in &sidecar_sources {
+                let (target_relative_name, _) =
+                    sidecar_path(&request.mount.cooked_uasset, *role, "ASSET_PACK_SIDECAR")?;
+                input_components.push(packed_input_receipt(
+                    source.path(),
+                    &request
+                        .mount
+                        .cooked_uasset
+                        .with_file_name(target_relative_name),
+                    source.length(),
+                    source.sha256(),
+                ));
+            }
+            let source_container_tocs: Vec<_> = evidence
+                .source_utoc_seals()
+                .iter()
+                .map(source_file_receipt)
+                .collect();
+            let triplet_receipts: Vec<_> = evidence
+                .output_seals()
+                .iter()
+                .map(|seal| {
+                    let relative = seal
+                        .path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .context("ASSET_PACK_OUTPUT: non-UTF-8 triplet filename")?;
+                    Ok(component_receipt(relative, seal.length, &seal.sha256))
+                })
+                .collect::<Result<_>>()?;
+            let receipt = json!({
+                "format": "gore.asset.pack.v2",
+                "status": "packed",
+                "asset": request.asset,
+                "name": request.name,
+                "generation_bound": true,
+                "provenance": {
+                    "patch_receipt": patch_receipt,
+                    "extract_receipt": extract_receipt,
+                    "generation": evidence.initial_live_evidence(),
+                    "input_package_seal": input_package_seal,
+                    "patched_package_seal": patched_package_seal,
+                },
+                "source": {
+                    "game_root": request.game_root.display().to_string(),
+                    "consumed_chunks": evidence.source_chunks(),
+                    "source_container_tocs": source_container_tocs,
+                    "content_binding": "script-object and container-header chunks were verified against the winning containers' TOC BLAKE3 hashes before conversion",
+                    "global_script_store": {
+                        "utoc": source_file_receipt(&request.global_utoc),
+                        "ucas": source_file_receipt(&request.global_ucas),
+                    },
+                },
+                "input": {
+                    "package_seal": proof.source_seal,
+                    "components": input_components,
+                },
+                "output": {
+                    "root": request.output.display().to_string(),
+                    "receipt": OFFLINE_PACK_RECEIPT_NAME_V1,
+                    "triplet": triplet_receipts,
+                    "reopened_packages": [evidence.strict().package().to_owned()],
+                    "strict_reopen": evidence.strict(),
+                    "compressed": false,
+                },
+                "deployed": false,
+            });
+            let printable_receipt = serde_json::to_string_pretty(&receipt)?;
+            MechanicalReceipt::new(
+                OFFLINE_PACK_RECEIPT_NAME_V1,
+                printable_receipt.as_bytes().to_vec(),
+                crate::dataasset_workflow::MAX_RECEIPT_BYTES,
+                LegacyPackReceiptPayload {
+                    receipt,
+                    printable_receipt,
+                },
+            )
+        },
+    )?;
+
+    Ok(StagedOfflineDataAssetPackV1 { core, proof })
 }
 
 impl StagedOfflineDataAssetPackV1 {
     /// Reverify every source and staged output, run the final generation probe
     /// followed by the exact mount-inventory check, then atomically promote the
     /// absent output. No deploy/game/save write occurs.
-    pub fn publish_with_bound_receipt_new(mut self) -> Result<OfflineDataAssetPackPublicationV1> {
-        self.request
-            .global_utoc
-            .reverify(MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_GAME")?;
-        self.request
-            .global_ucas
-            .reverify(MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_GAME")?;
-        for seal in &self.pack_source_utocs {
-            reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_GAME")?;
-        }
-        self.main_ucas.reverify("ASSET_PACK_GENERATION")?;
-
-        let reloaded = PackageCarrier::load(&self.proof.source_uasset, asset_package_limits())
-            .context("ASSET_PACK_INPUT: reverifying source package")?;
-        if PackagePairSeal::capture(&reloaded) != self.proof.source_seal {
-            bail!("ASSET_PACK_INPUT: source package changed during pack");
-        }
-        drop(reloaded);
-        for sidecar in &self.proof.sidecars {
-            sidecar.reverify(MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_SIDECAR")?;
-        }
-        for seal in &self.output_seals {
-            reverify_file_seal(seal, MAX_CONTAINER_COMPONENT_BYTES, "ASSET_PACK_OUTPUT")?;
-        }
-        reverify_file_seal(
-            &self.receipt_seal,
-            crate::dataasset_workflow::MAX_RECEIPT_BYTES,
-            "ASSET_PACK_RECEIPT",
-        )?;
-        self.staging.verify_owned("ASSET_PACK_OUTPUT")?;
-        validate_tree_no_reparse(
-            &self.staging.path,
-            MAX_STAGING_TREE_DEPTH,
-            MAX_STAGING_TREE_ENTRIES,
-            "ASSET_PACK_OUTPUT",
-        )?;
-        validate_flat_build_directory(&self.build_root, &self.request.name)?;
-        let published_triplet_seals = self
-            .output_seals
-            .iter()
-            .map(|seal| retarget_published_seal(&self.request.output, seal))
-            .collect::<Result<Vec<_>>>()?;
-        let published_receipt_seal =
-            retarget_published_seal(&self.request.output, &self.receipt_seal)?;
-        self.request.reverify_output_parent_and_disjoint()?;
-        ensure_path_absent(&self.request.output, "ASSET_PACK_OUTPUT")?;
-        sync_directory_before_publish(&self.build_root).with_context(|| {
-            format!(
-                "ASSET_PACK_OUTPUT: syncing staged directory '{}' before publication",
-                self.build_root.display()
-            )
-        })?;
-        self.request.reverify_output_parent_and_disjoint()?;
-        self.build_identity.reverify("ASSET_PACK_OUTPUT")?;
-
-        // Ordering is a security invariant and is kept in one injected helper:
-        // full generation probe+comparison, exact mount inventory, then the
-        // atomic no-clobber rename with no intervening fallible operation.
-        run_final_gate_and_promote(
+    pub fn publish_with_bound_receipt_new(self) -> Result<OfflineDataAssetPackPublicationV1> {
+        let StagedOfflineDataAssetPackV1 { core, proof } = self;
+        let published = core.publish_with_hooks(
             || {
-                probe_current_generation_receipt(
-                    &self.request.game_root,
-                    &self.request.asset,
-                    &self.proof.generation,
-                    "ASSET_PACK_GENERATION",
-                )
+                let reloaded = PackageCarrier::load(&proof.source_uasset, asset_package_limits())
+                    .context("ASSET_PACK_INPUT: reverifying source package")?;
+                if PackagePairSeal::capture(&reloaded) != proof.source_seal {
+                    bail!("ASSET_PACK_INPUT: source package changed during pack");
+                }
+                drop(reloaded);
+                for sidecar in &proof.sidecars {
+                    sidecar.reverify(MAX_OPTIONAL_SIDECAR_BYTES, "ASSET_PACK_SIDECAR")?;
+                }
+                Ok(())
             },
-            |current| {
-                if current != &self.proof.generation {
-                    let reason = generation_mismatch_reason(&self.proof.generation, current);
+            |request| {
+                let current = probe_current_generation_receipt(
+                    &request.game_root,
+                    &request.asset,
+                    &proof.generation,
+                    "ASSET_PACK_GENERATION",
+                )?;
+                if current != proof.generation {
+                    let reason = generation_mismatch_reason(&proof.generation, &current);
                     bail!(
                         "ASSET_GENERATION_MISMATCH: target generation changed before pack publication ({reason})"
                     );
                 }
                 Ok(())
             },
-            || {
-                self.request
-                    .mount_inventory
-                    .reverify_exact("ASSET_PACK_GAME")
-            },
-            || {
-                promote_directory_noclobber(&self.build_root, &self.request.output).with_context(
-                    || {
-                        format!(
-                            "ASSET_PACK_OUTPUT: publishing staged directory '{}' as '{}'",
-                            self.build_root.display(),
-                            self.request.output.display()
-                        )
-                    },
-                )
-            },
         )?;
-
-        // From here onward the output is published and is never deleted by an
-        // error path. Parent durability and cleanup have distinct outcomes.
-        let finalization = classify_post_publication(
-            sync_parents_after_publish(&self.build_root, &self.request.output)
-                .context("syncing publication parents"),
-            || self.staging.remove_empty_after_publication(),
-        );
-
-        let output = self.request.output.clone();
-        let published = PublishedOfflineDataAssetPackV1 {
-            receipt_path: output.join(OFFLINE_PACK_RECEIPT_NAME_V1),
-            output,
-            receipt: self.receipt,
-            printable_receipt: self.printable_receipt,
-            triplet_seals: published_triplet_seals,
-            receipt_seal: published_receipt_seal,
-        };
-        Ok(finish_publication_outcome(published, finalization))
+        Ok(map_mechanical_publication(published))
     }
 }
 
-fn finish_publication_outcome(
-    published: PublishedOfflineDataAssetPackV1,
-    finalization: PostPublicationFinalizationV1,
+fn map_mechanical_published(
+    published: MechanicalPublishedPack<LegacyPackReceiptPayload>,
+) -> PublishedOfflineDataAssetPackV1 {
+    let MechanicalPublishedPack {
+        output,
+        receipt_path,
+        triplet_seals,
+        receipt_seal,
+        receipt_payload,
+    } = published;
+    PublishedOfflineDataAssetPackV1 {
+        output,
+        receipt_path,
+        receipt: receipt_payload.receipt,
+        printable_receipt: receipt_payload.printable_receipt,
+        triplet_seals: triplet_seals
+            .into_iter()
+            .map(PublishedOfflinePackFileSealV1::from)
+            .collect(),
+        receipt_seal: PublishedOfflinePackFileSealV1::from(receipt_seal),
+    }
+}
+
+fn map_mechanical_publication(
+    publication: MechanicalPublication<LegacyPackReceiptPayload>,
 ) -> OfflineDataAssetPackPublicationV1 {
-    match finalization {
-        PostPublicationFinalizationV1::Complete => {
-            OfflineDataAssetPackPublicationV1::Published(published)
+    match publication {
+        MechanicalPublication::Published(published) => {
+            OfflineDataAssetPackPublicationV1::Published(map_mechanical_published(published))
         }
-        PostPublicationFinalizationV1::CleanupWarning { detail } => {
+        MechanicalPublication::PublishedWithCleanupWarning { published, detail } => {
             OfflineDataAssetPackPublicationV1::PublishedWithCleanupWarning(
-                OfflinePackPublishedWithCleanupWarningV1 { published, detail },
+                OfflinePackPublishedWithCleanupWarningV1 {
+                    published: map_mechanical_published(published),
+                    detail,
+                },
             )
         }
-        PostPublicationFinalizationV1::PublicationUncertain { reason } => {
+        MechanicalPublication::PublicationUncertain { published, detail } => {
             OfflineDataAssetPackPublicationV1::PublicationUncertain(
-                OfflinePackPublicationUncertainV1 { published, reason },
+                OfflinePackPublicationUncertainV1 {
+                    published: map_mechanical_published(published),
+                    reason: OfflinePackPublicationUncertainReasonV1::ParentDurabilitySyncFailed {
+                        detail,
+                    },
+                },
             )
         }
     }
 }
 
-fn run_final_gate_and_promote<T>(
-    probe_generation: impl FnOnce() -> Result<T>,
-    compare_generation: impl FnOnce(&T) -> Result<()>,
-    verify_mount_inventory: impl FnOnce() -> Result<()>,
-    promote_noclobber: impl FnOnce() -> Result<()>,
-) -> Result<T> {
-    let current = probe_generation()?;
-    compare_generation(&current)?;
-    verify_mount_inventory()?;
-    promote_noclobber()?;
-    Ok(current)
-}
-
-#[derive(Debug)]
-enum PostPublicationFinalizationV1 {
-    Complete,
-    CleanupWarning {
-        detail: String,
-    },
-    PublicationUncertain {
-        reason: OfflinePackPublicationUncertainReasonV1,
-    },
-}
-
-fn classify_post_publication(
-    parent_sync: Result<()>,
-    cleanup_staging: impl FnOnce() -> Result<()>,
-) -> PostPublicationFinalizationV1 {
-    if let Err(error) = parent_sync {
-        return PostPublicationFinalizationV1::PublicationUncertain {
-            reason: OfflinePackPublicationUncertainReasonV1::ParentDurabilitySyncFailed {
-                detail: format!("syncing publication parents: {error:#}"),
-            },
-        };
+impl From<FileSeal> for PublishedOfflinePackFileSealV1 {
+    fn from(seal: FileSeal) -> Self {
+        Self {
+            path: seal.path,
+            length: seal.length,
+            sha256: seal.sha256,
+        }
     }
-    if let Err(error) = cleanup_staging() {
-        return PostPublicationFinalizationV1::CleanupWarning {
-            detail: format!("removing empty owned staging directory: {error:#}"),
-        };
-    }
-    PostPublicationFinalizationV1::Complete
-}
-
-fn retarget_published_seal(
-    output: &Path,
-    seal: &FileSeal,
-) -> Result<PublishedOfflinePackFileSealV1> {
-    let file_name = seal
-        .path
-        .file_name()
-        .context("ASSET_PACK_OUTPUT: sealed staged file has no filename")?;
-    Ok(PublishedOfflinePackFileSealV1 {
-        path: output.join(file_name),
-        length: seal.length,
-        sha256: seal.sha256,
-    })
 }
 
 #[derive(Debug, Clone)]
@@ -1863,31 +1640,6 @@ fn sync_existing_regular_file(path: &Path, code: &'static str) -> Result<()> {
         .with_context(|| format!("{code}: syncing '{}'", path.display()))
 }
 
-fn validate_flat_triplet_directory(directory: &Path, name: &str) -> Result<()> {
-    validate_flat_directory(
-        directory,
-        &[
-            format!("{name}.utoc"),
-            format!("{name}.ucas"),
-            format!("{name}.pak"),
-        ],
-        "ASSET_PACK_OUTPUT",
-    )
-}
-
-fn validate_flat_build_directory(directory: &Path, name: &str) -> Result<()> {
-    validate_flat_directory(
-        directory,
-        &[
-            format!("{name}.utoc"),
-            format!("{name}.ucas"),
-            format!("{name}.pak"),
-            OFFLINE_PACK_RECEIPT_NAME_V1.to_owned(),
-        ],
-        "ASSET_PACK_OUTPUT",
-    )
-}
-
 fn validate_flat_directory(directory: &Path, allowed: &[String], code: &'static str) -> Result<()> {
     let mut found = Vec::new();
     for entry in fs::read_dir(directory).context(code)? {
@@ -2065,24 +1817,26 @@ fn sync_parents_after_publish(_staged: &Path, _output: &Path) -> std::io::Result
 
 #[cfg(test)]
 mod tests {
-    use std::cell::{Cell, RefCell};
-
     use super::*;
 
-    fn fixture_published(output: PathBuf) -> PublishedOfflineDataAssetPackV1 {
+    fn fixture_mechanical_published(
+        output: PathBuf,
+    ) -> MechanicalPublishedPack<LegacyPackReceiptPayload> {
         let triplet_seals = ["fixture.utoc", "fixture.ucas", "fixture.pak"]
             .into_iter()
-            .map(|name| PublishedOfflinePackFileSealV1 {
+            .map(|name| FileSeal {
                 path: output.join(name),
                 length: 1,
                 sha256: [7; 32],
             })
             .collect();
-        PublishedOfflineDataAssetPackV1 {
+        MechanicalPublishedPack {
             receipt_path: output.join(OFFLINE_PACK_RECEIPT_NAME_V1),
-            receipt: json!({"format": "gore.asset.pack.v2"}),
-            printable_receipt: "{}".to_owned(),
-            receipt_seal: PublishedOfflinePackFileSealV1 {
+            receipt_payload: LegacyPackReceiptPayload {
+                receipt: json!({"format": "gore.asset.pack.v2"}),
+                printable_receipt: "{}".to_owned(),
+            },
+            receipt_seal: FileSeal {
                 path: output.join(OFFLINE_PACK_RECEIPT_NAME_V1),
                 length: 2,
                 sha256: [8; 32],
@@ -2200,66 +1954,16 @@ mod tests {
     }
 
     #[test]
-    fn final_gate_order_is_generation_compare_mount_then_promote() {
-        let order = RefCell::new(Vec::new());
-        let current = run_final_gate_and_promote(
-            || {
-                order.borrow_mut().push("generation");
-                Ok(7u8)
-            },
-            |value| {
-                order.borrow_mut().push("compare");
-                assert_eq!(*value, 7);
-                Ok(())
-            },
-            || {
-                order.borrow_mut().push("mount");
-                Ok(())
-            },
-            || {
-                order.borrow_mut().push("promote");
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert_eq!(current, 7);
-        assert_eq!(
-            order.into_inner(),
-            ["generation", "compare", "mount", "promote"]
-        );
-    }
-
-    #[test]
-    fn final_gate_failure_cannot_reach_promotion() {
-        let promoted = Cell::new(false);
-        let error = run_final_gate_and_promote(
-            || Ok(()),
-            |_| Ok(()),
-            || bail!("mount inventory changed"),
-            || {
-                promoted.set(true);
-                Ok(())
-            },
-        )
-        .unwrap_err();
-
-        assert!(format!("{error:#}").contains("mount inventory changed"));
-        assert!(!promoted.get());
-    }
-
-    #[test]
     fn post_publication_failure_is_typed_and_retains_output() {
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().join("published");
         fs::create_dir(&output).unwrap();
         fs::write(output.join("sentinel"), b"published").unwrap();
 
-        let finalization =
-            classify_post_publication(Err(anyhow::anyhow!("forced parent sync failure")), || {
-                panic!("cleanup must not run after parent-sync failure")
-            });
-        let outcome = finish_publication_outcome(fixture_published(output.clone()), finalization);
+        let outcome = map_mechanical_publication(MechanicalPublication::PublicationUncertain {
+            published: fixture_mechanical_published(output.clone()),
+            detail: "syncing publication parents: forced parent sync failure".to_owned(),
+        });
         let OfflineDataAssetPackPublicationV1::PublicationUncertain(uncertain) = outcome else {
             panic!("parent-sync failure must be typed as publication uncertain");
         };
@@ -2282,10 +1986,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let output = temp.path().join("published");
         fs::create_dir(&output).unwrap();
-        let finalization =
-            classify_post_publication(Ok(()), || bail!("forced staging cleanup failure"));
-
-        let outcome = finish_publication_outcome(fixture_published(output.clone()), finalization);
+        let outcome =
+            map_mechanical_publication(MechanicalPublication::PublishedWithCleanupWarning {
+                published: fixture_mechanical_published(output.clone()),
+                detail: "removing empty owned staging directory: forced staging cleanup failure"
+                    .to_owned(),
+            });
         let OfflineDataAssetPackPublicationV1::PublishedWithCleanupWarning(warning) = outcome
         else {
             panic!("cleanup-only failure must remain a published outcome");
