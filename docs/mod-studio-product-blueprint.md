@@ -140,6 +140,19 @@ must wait for a recovered, tested, version-qualified runtime mechanism.
 | Build and release | Studio can build/deploy represented legacy domains. The compatibility Scripts workspace now consumes a bounded structured compiler report and an app-scoped read-only install-safety state: Compile and Deploy stay disabled while the game runs, inspection is uncertain, or compiler/deploy recovery evidence exists; a fresh native Recheck is required to clear the dominant recovery banner. Offline Build remains available because it does not mutate the installation, and Undeploy remains reachable so the native recovery path can decide safely. Managed Quest/NPC compile, diagnostics, build, and deploy flows are still not integrated. Project-wide semantic build roots, dependencies/rebase, immutable releases, and CI are also missing. | The bundle engine can build/reopen/inspect represented components. `gore-as` exposes `InstallRestoreDisposition` independently from compile outcome and captured diagnostics, while the additive FFI route reports typed coordinates/severity, explicit normal-generator fallback, exact restoration, and pre-existing recovery without parsing formatted error text. Native code creates only a uniquely owned, marker-bound compile child, holds one shared install-mutation guard across deployment-aware pristine selection and compiler use, rechecks the shipping process immediately before the first live-content or recovery write, and retains a durable blocker when cleanup cannot be proved. Compile, deploy, manager apply, and undeploy share that guard; the read-only probe also projects persistent `gore-mod` recovery. | The process recheck narrows but cannot eliminate a launch race because the game does not honor the toolkit lock. Typed restore/install state is a compatibility safety integration, not managed Quest/NPC compiler support, future-signature compatibility, or gameplay proof; unsupported diagnostics hooks still use the normal compiler fallback. End state adds deterministic profiles, semantic plans/conflicts, compatibility, rollback, provenance, closed-world release validation, and guided recovery/isolated-test workflows. |
 | Collaboration and extension | No semantic collaboration workflow is integrated. | Canonical V2 primitives are groundwork, not merge/sync implementation. | Planned after the single-author managed-project/transaction contract; core authoring must not require a cloud account. |
 
+Story status addendum (2026-07-16): the managed-R3 **Story** destination is now
+a direct workspace rather than a card page that sends authors to Content. It
+loads the exact-current project index, projects only NPC and Quest Drafts, and
+combines friendly search, All/NPC/Quest filters, creation, selection, and the
+existing tabbed Story Workbench. A wide and sufficiently tall host uses an
+inline list/workbench split; compact or short hosts use the same workbench in a
+details sheet. Same-project revisions retain only a still-existing selection
+and supported tab, a newly published Draft is selected only at its exact
+revision, and non-Story references open their exact Content owner. This adds no
+new authoring transaction, build, deploy, runtime, game, or save authority. It
+does not start World work, and the unchanged Legacy tabs remain the usability
+baseline until their managed replacements are comparably direct and capable.
+
 DataAsset status addendum (2026-07-14): the managed installed-package browser
 now supplies a second normal typed fixed-leaf route alongside the retained
 ExtractReceipt workflow described in the matrix. It selects only a sealed
@@ -308,6 +321,13 @@ the existing guided wizard as a second exact-head transaction. Cancel before
 publication leaves revision 0; an uncertain result requires reopening and is
 never described as empty. Multi-domain templates still require a native compound
 prepare/publication transaction.
+
+The primary **Story** destination now follows the productive-workspace rule
+directly: it searches and filters current NPC/Quest Drafts, creates another
+bounded Draft, and opens the selected exact entity in the existing Workbench in
+place. Content remains the cross-source discovery owner, not a mandatory detour
+for Story editing. Both views project the same managed graph and route every
+mutation through the same session; neither owns a private editable copy.
 
 These primary destinations are stable and discoverable; they do not appear and
 disappear based on project contents or support level. A section with no authored
@@ -711,15 +731,19 @@ release gates. Subjective "works on my machine" testing is insufficient.
 This blueprint maps to the detailed Phase 0-7 roadmap in the architecture
 specification:
 
-**Immediate checkpoint order (2026-07-15): usability and completion take
+**Immediate checkpoint order (updated 2026-07-16): usability and completion take
 precedence over new breadth.** Problems & Readiness V1, honest action gates,
 compact project chrome, Project Close, and the guided project-local dialog-line
-create/exact-managed-reuse V1 form the landed baseline. Next, complete the rest
-of the existing-line/localization/Voice offline journey; then build, reopen,
-and verify one reviewed managed DataAsset stage; then finish safe project
-fundamentals such as deletion, undo/history, export, and recovery; then deepen
-the existing NPC and Quest journeys; and only then complete general managed
-build/release and qualified test paths. Broad World or level authoring does not
+create/exact-managed-reuse V1 form the landed baseline. Direct project-text
+editing and the direct NPC/Quest Story workspace now replace two former
+card/modal detours without changing their authority boundaries. The next
+reviewed non-World backend candidate is an exact offline build for one selected,
+reviewed managed DataAsset stage: derive it from the current project, lower only
+to a new receipt-owned output, then reopen and reinspect that output. After that,
+complete the remaining line/localization/Voice production journey, safe project
+fundamentals such as deletion, undo/history, export, and recovery, and deeper
+NPC/Quest semantics before general managed build/release and qualified test
+paths. Broad World or level authoring does not
 start while these primary workflows still strand authors or lack an honest
 end-to-end result. Until that gate is met, World remains a visible, truthful
 unavailable surface.

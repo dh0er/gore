@@ -1135,26 +1135,32 @@ void main() {
         const Key('revision3-project-workspace-nav-story'),
       );
       expect(
-        find.byKey(const Key('revision3-project-section-story-page')),
+        find.byKey(const Key('revision3-story-workspace')),
         findsOneWidget,
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'story',
-        actionId: 'create-npc-draft',
-        enabled: false,
+      expect(
+        find.byKey(const Key('revision3-project-section-story-page')),
+        findsNothing,
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'story',
-        actionId: 'create-quest-draft',
-        enabled: false,
+      expect(
+        tester
+            .widget<FilledButton>(
+              find.byKey(const Key('revision3-story-workspace-create-npc')),
+            )
+            .onPressed,
+        isNull,
       );
-      _expectManagedSectionAction(
-        tester,
-        sectionId: 'story',
-        actionId: 'browse-story-content',
-        enabled: true,
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const Key('revision3-story-workspace-create-quest')),
+            )
+            .onPressed,
+        isNull,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-workspace-empty')),
+        findsOneWidget,
       );
 
       await _navigateManagedWorkspace(
@@ -1172,15 +1178,14 @@ void main() {
         tester,
         const Key('revision3-project-workspace-nav-story'),
       );
-      await _tapManagedSectionAction(
-        tester,
-        sectionId: 'story',
-        actionId: 'browse-story-content',
+      expect(
+        find.byKey(const Key('revision3-story-workspace')),
+        findsOneWidget,
+        reason: 'Story is a direct workspace, not a Content launcher',
       );
       expect(
         find.byKey(const Key('revision3-content-workspace-page-library')),
-        findsOneWidget,
-        reason: 'the Story action opens the real Content library',
+        findsNothing,
       );
 
       await _navigateManagedWorkspace(
@@ -1278,6 +1283,469 @@ void main() {
         find.byKey(const Key('revision3-project-dashboard')),
         findsOneWidget,
       );
+    },
+  );
+
+  testWidgets(
+    'direct Story reports an exact-selection miss after Quest publish',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_story_workspace_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-workspace'),
+        projectId: '56565656565656565656565656565656',
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onQuestPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          lease.projectRevision = 4;
+          lease.head = _head(4);
+          return Revision3QuestDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: 4,
+            questId: '57575757575757575757575757575757',
+            scriptModuleId: '58585858585858585858585858585858',
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadNpcCatalog: (_) async => _npcCatalog(),
+        loadQuestCatalog: (_) async => _questCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+
+      final createNpc = find.byKey(
+        const Key('revision3-story-workspace-create-npc'),
+      );
+      expect(tester.widget<FilledButton>(createNpc).onPressed, isNotNull);
+      await tester.tap(createNpc);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+
+      final createQuest = find.byKey(
+        const Key('revision3-story-workspace-create-quest'),
+      );
+      expect(tester.widget<OutlinedButton>(createQuest).onPressed, isNotNull);
+      await tester.tap(createQuest);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-title')),
+        'Story route Quest',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-description')),
+        'Prove the direct Story creation route.',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-objective')),
+        'Return to Story',
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+      expect(managed.questPublishCalls, 1);
+      expect(managed.projectRevision, 4);
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.textContaining(
+          'could not be selected at its exact project revision',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-story-workspace')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'direct Story publish refreshes the provider and selects the exact new Quest',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_story_exact_publish_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const projectId = '59595959595959595959595959595959';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-exact-publish'),
+        projectId: projectId,
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => lease.projectRevision == 3
+            ? _contentIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              )
+            : _storyWorkbenchGameGateIndex(
+                projectId: lease.projectId,
+                revision: lease.projectRevision,
+              ),
+        onQuestPublish: (lease, requestedGameRoot, input) {
+          expect(requestedGameRoot, gameRoot.path);
+          expect(input.title, 'Select the exact Quest');
+          lease.projectRevision = 4;
+          lease.head = _head(4);
+          return Revision3QuestDraftPublication(
+            projectId: lease.projectId,
+            projectRevision: 4,
+            questId: revision3QuestOutlineQuestId,
+            scriptModuleId: revision3QuestOutlineModuleId,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadQuestCatalog: (_) async => _questCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      expect(
+        find.byKey(const Key('revision3-story-workspace-empty')),
+        findsOneWidget,
+      );
+
+      await tester.tap(
+        find.byKey(const Key('revision3-story-workspace-create-quest')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-title')),
+        'Select the exact Quest',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-description')),
+        'Refresh the provider and keep authoring in Story.',
+      );
+      await tester.enterText(
+        find.byKey(const Key('revision3-quest-objective')),
+        'Open the newly published Quest',
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-submit')));
+      await tester.pumpAndSettle();
+
+      final providerState = container.read(currentProjectCoordinatorProvider);
+      expect(providerState, isA<ManagedRevision3CurrentProjectState>());
+      expect(
+        (providerState as ManagedRevision3CurrentProjectState).projectRevision,
+        4,
+      );
+      expect(providerState.head.canonicalJson, _head(4).canonicalJson);
+      expect(managed.questPublishCalls, 1);
+      final selectedQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(selectedQuest, findsOneWidget);
+      expect(tester.widget<ListTile>(selectedQuest).selected, isTrue);
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-'
+            '$projectId-$revision3QuestOutlineQuestId',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(
+                const Key('revision3-story-workspace-checkpoint-summary'),
+              ),
+            )
+            .data,
+        contains('project revision 4'),
+      );
+      expect(
+        find.textContaining(
+          'could not be selected at its exact project revision',
+        ),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'an awaiting Story create modal cannot select into a switched project',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_story_switched_modal_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      const firstProjectId = '61616161616161616161616161616161';
+      const secondProjectId = '62626262626262626262626262626262';
+      final first = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-modal-first'),
+        projectId: firstProjectId,
+        projectRevision: 3,
+        head: _head(3),
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final second = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-modal-second'),
+        projectId: secondProjectId,
+        projectRevision: 4,
+        head: _head(4),
+        contentIndexBuilder: (lease) => _storyWorkbenchGameGateIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async {
+          if (root.path == first.root.path) return first;
+          if (root.path == second.root.path) return second;
+          throw StateError('unexpected managed project ${root.path}');
+        },
+      );
+      await coordinator.openManagedRevision3(first.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+        loadQuestCatalog: (_) async => _questCatalog(),
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-story'),
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-story-workspace-create-quest')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      final oldWizard = find.byKey(const Key('revision3-quest-wizard'));
+      expect(oldWizard, findsOneWidget);
+
+      await coordinator.openManagedRevision3(second.root);
+      await tester.pumpAndSettle();
+      expect(
+        (container.read(currentProjectCoordinatorProvider)
+                as ManagedRevision3CurrentProjectState)
+            .projectId,
+        secondProjectId,
+      );
+      final switchedRail = find.byKey(
+        const Key('revision3-project-workspace-rail'),
+        skipOffstage: false,
+      );
+      expect(switchedRail, findsOneWidget);
+      tester.widget<NavigationRail>(switchedRail).onDestinationSelected!(2);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-'
+            '$secondProjectId-$revision3NpcInspectionNpcId',
+          ),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      Navigator.of(tester.element(oldWizard)).pop(
+        Revision3QuestDraftPublication(
+          projectId: firstProjectId,
+          projectRevision: 4,
+          questId: revision3QuestOutlineQuestId,
+          scriptModuleId: revision3QuestOutlineModuleId,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final secondNpc = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$revision3NpcInspectionNpcId',
+        ),
+      );
+      final sameIdQuest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+        ),
+      );
+      expect(tester.widget<ListTile>(secondNpc).selected, isTrue);
+      expect(tester.widget<ListTile>(sameIdQuest).selected, isFalse);
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-'
+            '$secondProjectId-$revision3NpcInspectionNpcId',
+          ),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key(
+            'revision3-story-workspace-workbench-'
+            '$secondProjectId-$revision3QuestOutlineQuestId',
+          ),
+        ),
+        findsNothing,
+      );
+      expect(first.questPublishCalls, 0);
+      expect(second.questPublishCalls, 0);
+    },
+  );
+
+  testWidgets(
+    'real compact German Home keeps Story copy list and actions usable',
+    (tester) async {
+      await _setNarrowShortTestSurface(tester);
+      const projectId = '63636363636363636363636363636363';
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\story-compact-german'),
+        projectId: projectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) => _storyWorkbenchGameGateIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        Localizations.localeOf(
+          tester.element(find.byKey(const Key('revision3-project-workspace'))),
+        ).languageCode,
+        'de',
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-project-workspace-narrow-menu')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-project-workspace-nav-story')),
+      );
+      await tester.pumpAndSettle();
+
+      final createNpc = find.byKey(
+        const Key('revision3-story-workspace-create-npc'),
+      );
+      final createQuest = find.byKey(
+        const Key('revision3-story-workspace-create-quest'),
+      );
+      expect(tester.widget<FilledButton>(createNpc).onPressed, isNull);
+      expect(tester.widget<OutlinedButton>(createQuest).onPressed, isNull);
+      final missingGame = AppLocalizations.of(
+        tester.element(createNpc),
+      ).managedDashboardMissingGameDescription;
+      expect(
+        missingGame,
+        'Richte die Gothic-1-Remake-Installation in den Einstellungen ein, '
+        'bevor du Aktionen verwendest, die Nachweise aus dem installierten '
+        'Spiel benötigen.',
+      );
+      expect(find.text(missingGame), findsOneWidget);
+      expect(tester.takeException(), isNull);
+
+      final quest = find.byKey(
+        const Key(
+          'revision3-story-workspace-entity-$revision3QuestOutlineQuestId',
+        ),
+      );
+      await tester.ensureVisible(quest);
+      await tester.pumpAndSettle();
+      expect(quest.hitTestable(), findsOneWidget);
+      await tester.tap(quest);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-story-workspace-details-sheet')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+
+      final edit = _storyWorkbenchAction(
+        const Key(
+          'revision3-story-workbench-action-edit-overview-'
+          '$revision3QuestOutlineQuestId',
+        ),
+      );
+      await _revealWorkbenchAction(tester, edit);
+      expect(_workbenchActionTileWidget(tester, edit).enabled, isTrue);
+      await _tapWorkbenchAction(tester, edit);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-dialog')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const Key('revision3-quest-outline-cancel')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -4327,24 +4795,6 @@ void _expectLocalizationVoiceAction(
     tester.widget<OutlinedButton>(button).onPressed,
     enabled ? isNotNull : isNull,
   );
-}
-
-Future<void> _tapManagedSectionAction(
-  WidgetTester tester, {
-  required String sectionId,
-  required String actionId,
-}) async {
-  final action = _managedSectionAction(
-    sectionId: sectionId,
-    actionId: actionId,
-  );
-  expect(action, findsOneWidget);
-  await tester.ensureVisible(action);
-  await tester.pumpAndSettle();
-  final inkWell = find.descendant(of: action, matching: find.byType(InkWell));
-  expect(tester.widget<InkWell>(inkWell).onTap, isNotNull);
-  await tester.tap(inkWell);
-  await tester.pump();
 }
 
 Future<void> _tapManagedDashboardAction(WidgetTester tester, Key key) async {

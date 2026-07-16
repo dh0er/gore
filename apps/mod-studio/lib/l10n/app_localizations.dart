@@ -1142,6 +1142,96 @@ abstract class AppLocalizations {
   /// **'NPCs, quests, and dialogue.'**
   String get managedSectionStoryDescription;
 
+  /// No description provided for @managedStoryWorkspaceLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Opening the current Story drafts…'**
+  String get managedStoryWorkspaceLoading;
+
+  /// No description provided for @managedStoryWorkspaceAuthorityNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Project-only NPC and Quest drafts. Build readiness has not been evaluated; runtime behavior remains unqualified.'**
+  String get managedStoryWorkspaceAuthorityNotice;
+
+  /// No description provided for @managedStoryWorkspaceSearchHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Search NPC and Quest names, objectives, speakers, or IDs'**
+  String get managedStoryWorkspaceSearchHint;
+
+  /// No description provided for @managedStoryWorkspaceCreatingNpc.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating NPC draft…'**
+  String get managedStoryWorkspaceCreatingNpc;
+
+  /// No description provided for @managedStoryWorkspaceCreatingQuest.
+  ///
+  /// In en, this message translates to:
+  /// **'Creating Quest draft…'**
+  String get managedStoryWorkspaceCreatingQuest;
+
+  /// No description provided for @managedStoryWorkspaceEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No NPC or Quest drafts yet'**
+  String get managedStoryWorkspaceEmpty;
+
+  /// No description provided for @managedStoryWorkspaceNoMatches.
+  ///
+  /// In en, this message translates to:
+  /// **'No NPC or Quest drafts match this search'**
+  String get managedStoryWorkspaceNoMatches;
+
+  /// No description provided for @managedStoryWorkspaceSelectDraft.
+  ///
+  /// In en, this message translates to:
+  /// **'Select an NPC or Quest draft to continue'**
+  String get managedStoryWorkspaceSelectDraft;
+
+  /// No description provided for @managedStoryWorkspaceLoadErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Story drafts could not be opened'**
+  String get managedStoryWorkspaceLoadErrorTitle;
+
+  /// No description provided for @managedStoryWorkspaceCheckpointMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed while Story was loading. Refresh the exact current checkpoint and try again.'**
+  String get managedStoryWorkspaceCheckpointMismatch;
+
+  /// No description provided for @managedStoryWorkspacePublishedSelectionStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved Story draft could not be selected at its exact project revision. Check the current Story list before continuing.'**
+  String get managedStoryWorkspacePublishedSelectionStale;
+
+  /// No description provided for @managedStoryWorkspaceCheckpointSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'NPC and Quest drafts: {count} · project revision {revision}'**
+  String managedStoryWorkspaceCheckpointSummary(int count, int revision);
+
+  /// No description provided for @managedStoryWorkspaceLoadErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'The exact current Story view could not be read: {error}'**
+  String managedStoryWorkspaceLoadErrorDetails(String error);
+
+  /// No description provided for @managedStoryWorkspaceCreateErrorDetails.
+  ///
+  /// In en, this message translates to:
+  /// **'The Story draft could not be created: {error}'**
+  String managedStoryWorkspaceCreateErrorDetails(String error);
+
+  /// No description provided for @managedStoryWorkspaceDetailsSheetLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'{entityName} Story details'**
+  String managedStoryWorkspaceDetailsSheetLabel(String entityName);
+
   /// No description provided for @managedSectionWorldDescription.
   ///
   /// In en, this message translates to:

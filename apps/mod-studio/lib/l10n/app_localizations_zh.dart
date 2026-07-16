@@ -585,6 +585,67 @@ class AppLocalizationsZh extends AppLocalizations {
   String get managedSectionStoryDescription => 'NPC、任务与对话。';
 
   @override
+  String get managedStoryWorkspaceLoading =>
+      'Opening the current Story drafts…';
+
+  @override
+  String get managedStoryWorkspaceAuthorityNotice =>
+      'Project-only NPC and Quest drafts. Build readiness has not been evaluated; runtime behavior remains unqualified.';
+
+  @override
+  String get managedStoryWorkspaceSearchHint =>
+      'Search NPC and Quest names, objectives, speakers, or IDs';
+
+  @override
+  String get managedStoryWorkspaceCreatingNpc => 'Creating NPC draft…';
+
+  @override
+  String get managedStoryWorkspaceCreatingQuest => 'Creating Quest draft…';
+
+  @override
+  String get managedStoryWorkspaceEmpty => 'No NPC or Quest drafts yet';
+
+  @override
+  String get managedStoryWorkspaceNoMatches =>
+      'No NPC or Quest drafts match this search';
+
+  @override
+  String get managedStoryWorkspaceSelectDraft =>
+      'Select an NPC or Quest draft to continue';
+
+  @override
+  String get managedStoryWorkspaceLoadErrorTitle =>
+      'Story drafts could not be opened';
+
+  @override
+  String get managedStoryWorkspaceCheckpointMismatch =>
+      'The project changed while Story was loading. Refresh the exact current checkpoint and try again.';
+
+  @override
+  String get managedStoryWorkspacePublishedSelectionStale =>
+      'The saved Story draft could not be selected at its exact project revision. Check the current Story list before continuing.';
+
+  @override
+  String managedStoryWorkspaceCheckpointSummary(int count, int revision) {
+    return 'NPC and Quest drafts: $count · project revision $revision';
+  }
+
+  @override
+  String managedStoryWorkspaceLoadErrorDetails(String error) {
+    return 'The exact current Story view could not be read: $error';
+  }
+
+  @override
+  String managedStoryWorkspaceCreateErrorDetails(String error) {
+    return 'The Story draft could not be created: $error';
+  }
+
+  @override
+  String managedStoryWorkspaceDetailsSheetLabel(String entityName) {
+    return '$entityName Story details';
+  }
+
+  @override
   String get managedSectionWorldDescription => '世界放置及相关工作流程尚在规划中。';
 
   @override

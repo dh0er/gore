@@ -601,6 +601,69 @@ class AppLocalizationsDe extends AppLocalizations {
   String get managedSectionStoryDescription => 'NPCs, Quests und Dialoge.';
 
   @override
+  String get managedStoryWorkspaceLoading =>
+      'Aktuelle Story-Entwürfe werden geöffnet…';
+
+  @override
+  String get managedStoryWorkspaceAuthorityNotice =>
+      'Hier siehst du ausschließlich NPC- und Quest-Entwürfe aus diesem Projekt. Die Build-Bereitschaft wurde noch nicht bewertet; das Laufzeitverhalten ist weiterhin nicht qualifiziert.';
+
+  @override
+  String get managedStoryWorkspaceSearchHint =>
+      'NPC- und Questnamen, Ziele, Sprecher oder IDs durchsuchen';
+
+  @override
+  String get managedStoryWorkspaceCreatingNpc => 'NPC-Entwurf wird erstellt…';
+
+  @override
+  String get managedStoryWorkspaceCreatingQuest =>
+      'Quest-Entwurf wird erstellt…';
+
+  @override
+  String get managedStoryWorkspaceEmpty =>
+      'Noch keine NPC- oder Quest-Entwürfe';
+
+  @override
+  String get managedStoryWorkspaceNoMatches =>
+      'Keine NPC- oder Quest-Entwürfe passen zu dieser Suche';
+
+  @override
+  String get managedStoryWorkspaceSelectDraft =>
+      'Wähle einen NPC- oder Quest-Entwurf aus, um weiterzuarbeiten';
+
+  @override
+  String get managedStoryWorkspaceLoadErrorTitle =>
+      'Story-Entwürfe konnten nicht geöffnet werden';
+
+  @override
+  String get managedStoryWorkspaceCheckpointMismatch =>
+      'Das Projekt hat sich während des Ladens der Story geändert. Aktualisiere den exakt aktuellen Checkpoint und versuche es erneut.';
+
+  @override
+  String get managedStoryWorkspacePublishedSelectionStale =>
+      'Der gespeicherte Story-Entwurf konnte nicht in seiner exakten Projektrevision ausgewählt werden. Prüfe die aktuelle Story-Liste, bevor du weiterarbeitest.';
+
+  @override
+  String managedStoryWorkspaceCheckpointSummary(int count, int revision) {
+    return 'NPC- und Quest-Entwürfe: $count · Projektrevision $revision';
+  }
+
+  @override
+  String managedStoryWorkspaceLoadErrorDetails(String error) {
+    return 'Die exakt aktuelle Story-Ansicht konnte nicht gelesen werden: $error';
+  }
+
+  @override
+  String managedStoryWorkspaceCreateErrorDetails(String error) {
+    return 'Der Story-Entwurf konnte nicht erstellt werden: $error';
+  }
+
+  @override
+  String managedStoryWorkspaceDetailsSheetLabel(String entityName) {
+    return 'Story-Details für $entityName';
+  }
+
+  @override
   String get managedSectionWorldDescription =>
       'Weltplatzierung und zugehörige Arbeitsabläufe sind geplant.';
 

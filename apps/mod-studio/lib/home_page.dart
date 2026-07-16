@@ -36,6 +36,7 @@ import 'project/revision3_content_index.dart';
 import 'project/revision3_content_library.dart';
 import 'project/revision3_content_workspace.dart';
 import 'project/revision3_story_entity_workbench.dart';
+import 'project/revision3_story_workspace.dart';
 import 'project/revision3_dataasset_authoring.dart';
 import 'project/revision3_dataasset_stage_panel.dart';
 import 'project/revision3_dialog_line_authoring.dart';
@@ -95,6 +96,18 @@ final class _Revision3ManagedCompilerSelection {
   final int entityRevision;
   final String moduleId;
   final int moduleRevision;
+}
+
+final class _ManagedStorySelectionOrigin {
+  const _ManagedStorySelectionOrigin({
+    required this.projectRoot,
+    required this.projectId,
+    required this.controller,
+  });
+
+  final String projectRoot;
+  final String projectId;
+  final Revision3StoryWorkspaceController controller;
 }
 
 _Revision3ManagedCompilerSelection? _revision3ManagedCompilerSelection({
@@ -1625,6 +1638,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
 class _ManagedRevision3ProjectViewState
     extends State<_ManagedRevision3ProjectView> {
   late Revision3ContentLibraryController _contentLibraryController;
+  late Revision3StoryWorkspaceController _storyWorkspaceController;
 
   ManagedRevision3CurrentProjectState get project => widget.project;
   String? get gameRoot => widget.gameRoot;
@@ -1709,12 +1723,26 @@ class _ManagedRevision3ProjectViewState
         projectId: project.projectId,
       );
 
+  _ManagedStorySelectionOrigin get _storySelectionOrigin =>
+      _ManagedStorySelectionOrigin(
+        projectRoot: project.root.path,
+        projectId: project.projectId,
+        controller: _storyWorkspaceController,
+      );
+
+  bool _isCurrentStorySelectionOrigin(_ManagedStorySelectionOrigin origin) =>
+      mounted &&
+      project.root.path == origin.projectRoot &&
+      project.projectId == origin.projectId &&
+      identical(_storyWorkspaceController, origin.controller);
+
   @override
   void initState() {
     super.initState();
     _contentLibraryController = Revision3ContentLibraryController(
       projectIdentity: _contentProjectIdentity,
     );
+    _storyWorkspaceController = Revision3StoryWorkspaceController();
   }
 
   @override
@@ -1728,11 +1756,14 @@ class _ManagedRevision3ProjectViewState
     _contentLibraryController = Revision3ContentLibraryController(
       projectIdentity: _contentProjectIdentity,
     );
+    _storyWorkspaceController.dispose();
+    _storyWorkspaceController = Revision3StoryWorkspaceController();
   }
 
   @override
   void dispose() {
     _contentLibraryController.dispose();
+    _storyWorkspaceController.dispose();
     super.dispose();
   }
 
@@ -2064,73 +2095,7 @@ class _ManagedRevision3ProjectViewState
                   ? l10n.managedDashboardMissingGameDescription
                   : null,
               controller: contentLibraryController,
-              storyWorkbenchCopy: Revision3StoryEntityWorkbenchCopy(
-                draftBadge: l10n.managedStoryWorkbenchDraftBadge,
-                buildBlockedBadge: l10n.managedStoryWorkbenchBuildBlockedBadge,
-                runtimeUnqualifiedBadge:
-                    l10n.managedStoryWorkbenchRuntimeUnqualifiedBadge,
-                overviewTab: l10n.managedStoryWorkbenchOverviewTab,
-                profileTab: l10n.managedStoryWorkbenchProfileTab,
-                storyTab: l10n.managedStoryWorkbenchStoryTab,
-                logicTab: l10n.managedStoryWorkbenchLogicTab,
-                routineTab: l10n.managedStoryWorkbenchRoutineTab,
-                inventoryTab: l10n.managedStoryWorkbenchInventoryTab,
-                dialogVoiceTab: l10n.managedStoryWorkbenchDialogVoiceTab,
-                referencesTab: l10n.managedStoryWorkbenchReferencesTab,
-                problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
-                editOverview: l10n.managedStoryWorkbenchEditOverview,
-                editStory: l10n.managedStoryWorkbenchEditStory,
-                editLogic: l10n.managedStoryWorkbenchEditLogic,
-                inspectQuest: l10n.managedStoryWorkbenchInspectQuest,
-                inspectNpc: l10n.managedStoryWorkbenchInspectNpc,
-                capabilityUnavailable:
-                    l10n.managedStoryWorkbenchCapabilityUnavailable,
-                npcStoryUnavailable:
-                    l10n.managedStoryWorkbenchNpcStoryUnavailable,
-                npcRoutineUnavailable:
-                    l10n.managedStoryWorkbenchNpcRoutineUnavailable,
-                npcInventoryUnavailable:
-                    l10n.managedStoryWorkbenchNpcInventoryUnavailable,
-                npcDialogVoiceUnavailable:
-                    l10n.managedStoryWorkbenchNpcDialogVoiceUnavailable,
-                questDialogVoiceUnavailable:
-                    l10n.managedStoryWorkbenchQuestDialogVoiceUnavailable,
-                noReferenceProblems:
-                    l10n.managedStoryWorkbenchNoReferenceProblems,
-                referenceProblemCount:
-                    l10n.managedStoryWorkbenchReferenceProblemCount,
-                referenceScopeNotice:
-                    l10n.managedStoryWorkbenchReferenceScopeNotice,
-                technicalDetails: l10n.managedStoryWorkbenchTechnicalDetails,
-                questKindLabel: l10n.managedStoryWorkbenchQuestKindLabel,
-                npcKindLabel: l10n.managedStoryWorkbenchNpcKindLabel,
-                questTitleLabel: l10n.managedStoryWorkbenchQuestTitleLabel,
-                technicalIdLabel: l10n.managedStoryWorkbenchTechnicalIdLabel,
-                objectivesLabel: l10n.managedStoryWorkbenchObjectivesLabel,
-                uniqueNameLabel: l10n.managedStoryWorkbenchUniqueNameLabel,
-                moduleNamespaceLabel:
-                    l10n.managedStoryWorkbenchModuleNamespaceLabel,
-                questGiverLabel: l10n.managedStoryWorkbenchQuestGiverLabel,
-                runtimeParentLabel:
-                    l10n.managedStoryWorkbenchRuntimeParentLabel,
-                logicDescription: l10n.managedStoryWorkbenchLogicDescription,
-                outgoingHeading: l10n.managedStoryWorkbenchOutgoingHeading,
-                noOutgoingReferences:
-                    l10n.managedStoryWorkbenchNoOutgoingReferences,
-                incomingHeading: l10n.managedStoryWorkbenchIncomingHeading,
-                noIncomingReferences:
-                    l10n.managedStoryWorkbenchNoIncomingReferences,
-                semanticIdentityLabel:
-                    l10n.managedStoryWorkbenchSemanticIdentityLabel,
-                originLabel: l10n.managedStoryWorkbenchOriginLabel,
-                entityRevisionLabel:
-                    l10n.managedStoryWorkbenchEntityRevisionLabel,
-                stableIdLabel: l10n.managedStoryWorkbenchStableIdLabel,
-                referenceResolvedLabel:
-                    l10n.managedStoryWorkbenchReferenceResolvedLabel,
-                referenceUnresolvedLabel:
-                    l10n.managedStoryWorkbenchReferenceUnresolvedLabel,
-              ),
+              storyWorkbenchCopy: _storyWorkbenchCopy(l10n),
             ),
             baseGame: Revision3BaseGameContentBrowser(
               gameRoot: gameRoot,
@@ -2342,50 +2307,46 @@ class _ManagedRevision3ProjectViewState
 
   Widget _buildStorySection(BuildContext context, AppLocalizations l10n) {
     final gameConfigured = gameRoot != null;
-    return Revision3ProjectSectionPage(
-      sectionId: 'story',
-      icon: Icons.menu_book_outlined,
-      title: l10n.managedWorkspaceStoryLabel,
-      description: l10n.managedSectionStoryDescription,
-      notice: gameConfigured
+    final gameRequiredReason = l10n.managedDashboardMissingGameDescription;
+    return Revision3StoryWorkspace(
+      projectRoot: project.root.path,
+      projectId: project.projectId,
+      projectRevision: project.projectRevision,
+      projectHeadCanonicalJson: project.head.canonicalJson,
+      load: loadContentIndex,
+      copy: _storyWorkspaceCopy(l10n),
+      controller: _storyWorkspaceController,
+      createNpcDraft: gameConfigured
+          ? () => _openNpcWizard(context, selectPublishedInStory: true)
+          : null,
+      createQuestDraft: gameConfigured
+          ? () => _openQuestWizard(context, selectPublishedInStory: true)
+          : null,
+      createNpcDraftDisabledReason: gameConfigured ? null : gameRequiredReason,
+      createQuestDraftDisabledReason: gameConfigured
           ? null
-          : l10n.managedDashboardMissingGameDescription,
-      actionHeading: l10n.managedSectionActionsHeading,
-      actionCards: [
-        Revision3ProjectSectionActionCard(
-          id: 'create-npc-draft',
-          icon: Icons.person_add_alt_1_outlined,
-          title: l10n.managedActionNewNpcTitle,
-          description: l10n.managedActionNewNpcDescription,
-          badge: l10n.managedCapabilityPartial,
-          onPressed: gameConfigured
-              ? () => unawaited(_openNpcWizard(context))
-              : null,
-        ),
-        Revision3ProjectSectionActionCard(
-          id: 'create-quest-draft',
-          icon: Icons.assignment_add,
-          title: l10n.managedActionNewQuestTitle,
-          description: l10n.managedActionNewQuestDescription,
-          badge: l10n.managedCapabilityPartial,
-          onPressed: gameConfigured
-              ? () => unawaited(_openQuestWizard(context))
-              : null,
-        ),
-        Revision3ProjectSectionActionCard(
-          id: 'browse-story-content',
-          icon: Icons.account_tree_outlined,
-          title: l10n.managedWorkspaceContentLabel,
-          description: l10n.managedActionBrowseProjectContentDescription,
-          badge: l10n.managedCapabilityAvailable,
-          onPressed: () => Revision3ProjectWorkspace.navigate(
-            context,
-            const Revision3ProjectWorkspaceLocation(
-              Revision3ProjectWorkspaceSection.content,
-            ),
-          ),
-        ),
-      ],
+          : gameRequiredReason,
+      editQuestOutline: (index, quest) =>
+          _openQuestOutlineEditor(context, index, quest),
+      editQuestContext: gameConfigured
+          ? (index, quest) => _openQuestContextEditor(context, index, quest)
+          : null,
+      editQuestContextDisabledReason: gameConfigured
+          ? null
+          : gameRequiredReason,
+      editQuestTransitions: (index, quest) =>
+          _openQuestTransitionsEditor(context, index, quest),
+      inspectQuestSource: gameConfigured
+          ? (index, quest) => _openQuestSourceInspection(context, index, quest)
+          : null,
+      inspectQuestSourceDisabledReason: gameConfigured
+          ? null
+          : gameRequiredReason,
+      inspectNpcSource: (index, npc) => _openNpcProfile(context, index, npc),
+      onOpenExternalEntity: (entityId) =>
+          _openStoryExternalEntity(context, entityId),
+      onOpenExternalAsset: (assetSha256) =>
+          _openStoryExternalAsset(context, assetSha256),
     );
   }
 
@@ -2851,9 +2812,11 @@ class _ManagedRevision3ProjectViewState
     BuildContext context, {
     String? initialParentCatalogId,
     String? initialGiverCatalogId,
+    bool selectPublishedInStory = false,
   }) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || project.requiresReopen) return;
+    final selectionOrigin = _storySelectionOrigin;
     final publication = await showDialog<Revision3QuestDraftPublication>(
       context: context,
       builder: (context) => Revision3QuestWizardDialog(
@@ -2872,6 +2835,15 @@ class _ManagedRevision3ProjectViewState
         ),
       ),
     );
+    if (selectPublishedInStory &&
+        publication.projectId == selectionOrigin.projectId &&
+        _isCurrentStorySelectionOrigin(selectionOrigin)) {
+      _selectPublishedStoryEntity(
+        selectionOrigin,
+        entityId: publication.questId,
+        projectRevision: publication.projectRevision,
+      );
+    }
   }
 
   Future<void> _openQuestOutlineEditor(
@@ -3052,9 +3024,11 @@ class _ManagedRevision3ProjectViewState
   Future<void> _openNpcWizard(
     BuildContext context, {
     String? initialCatalogId,
+    bool selectPublishedInStory = false,
   }) async {
     final configuredGameRoot = gameRoot;
     if (configuredGameRoot == null || project.requiresReopen) return;
+    final selectionOrigin = _storySelectionOrigin;
     final publication = await showDialog<Revision3NpcDraftPublication>(
       context: context,
       builder: (context) => Revision3NpcWizardDialog(
@@ -3072,6 +3046,82 @@ class _ManagedRevision3ProjectViewState
           'NPC draft saved in project revision ${publication.projectRevision}. It remains build-blocked, runtime-unqualified, and is not spawned.',
         ),
       ),
+    );
+    if (selectPublishedInStory &&
+        publication.projectId == selectionOrigin.projectId &&
+        _isCurrentStorySelectionOrigin(selectionOrigin)) {
+      _selectPublishedStoryEntity(
+        selectionOrigin,
+        entityId: publication.npcId,
+        projectRevision: publication.projectRevision,
+      );
+    }
+  }
+
+  void _selectPublishedStoryEntity(
+    _ManagedStorySelectionOrigin origin, {
+    required String entityId,
+    required int projectRevision,
+  }) {
+    final messenger = ScaffoldMessenger.of(context);
+    final staleMessage = AppLocalizations.of(
+      context,
+    ).managedStoryWorkspacePublishedSelectionStale;
+    unawaited(
+      origin.controller
+          .selectEntityAtRevision(
+            entityId: entityId,
+            projectRevision: projectRevision,
+          )
+          .then((selected) {
+            if (selected || !_isCurrentStorySelectionOrigin(origin)) return;
+            messenger.removeCurrentSnackBar();
+            messenger.showSnackBar(SnackBar(content: Text(staleMessage)));
+          }),
+    );
+  }
+
+  void _openStoryExternalEntity(BuildContext context, String entityId) {
+    final open = _contentLibraryController.openEntityById(entityId);
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+      ),
+    );
+    unawaited(
+      open.then((opened) {
+        if (opened || !context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).managedGlobalSearchResultStale,
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  void _openStoryExternalAsset(BuildContext context, String assetSha256) {
+    final open = _contentLibraryController.openAssetBySha256(assetSha256);
+    Revision3ProjectWorkspace.navigate(
+      context,
+      const Revision3ProjectWorkspaceLocation(
+        Revision3ProjectWorkspaceSection.content,
+      ),
+    );
+    unawaited(
+      open.then((opened) {
+        if (opened || !context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context).managedGlobalSearchResultStale,
+            ),
+          ),
+        );
+      }),
     );
   }
 
@@ -3146,6 +3196,89 @@ Revision3DialogLineEntryDialogCopy _dialogLineEntryCopy(
   done: l10n.managedDialogLineDone,
   addRecording: l10n.managedDialogLineAddRecording,
 );
+
+Revision3StoryEntityWorkbenchCopy _storyWorkbenchCopy(
+  AppLocalizations l10n,
+) => Revision3StoryEntityWorkbenchCopy(
+  draftBadge: l10n.managedStoryWorkbenchDraftBadge,
+  buildBlockedBadge: l10n.managedStoryWorkbenchBuildBlockedBadge,
+  runtimeUnqualifiedBadge: l10n.managedStoryWorkbenchRuntimeUnqualifiedBadge,
+  overviewTab: l10n.managedStoryWorkbenchOverviewTab,
+  profileTab: l10n.managedStoryWorkbenchProfileTab,
+  storyTab: l10n.managedStoryWorkbenchStoryTab,
+  logicTab: l10n.managedStoryWorkbenchLogicTab,
+  routineTab: l10n.managedStoryWorkbenchRoutineTab,
+  inventoryTab: l10n.managedStoryWorkbenchInventoryTab,
+  dialogVoiceTab: l10n.managedStoryWorkbenchDialogVoiceTab,
+  referencesTab: l10n.managedStoryWorkbenchReferencesTab,
+  problemsChecksTab: l10n.managedStoryWorkbenchProblemsChecksTab,
+  editOverview: l10n.managedStoryWorkbenchEditOverview,
+  editStory: l10n.managedStoryWorkbenchEditStory,
+  editLogic: l10n.managedStoryWorkbenchEditLogic,
+  inspectQuest: l10n.managedStoryWorkbenchInspectQuest,
+  inspectNpc: l10n.managedStoryWorkbenchInspectNpc,
+  capabilityUnavailable: l10n.managedStoryWorkbenchCapabilityUnavailable,
+  npcStoryUnavailable: l10n.managedStoryWorkbenchNpcStoryUnavailable,
+  npcRoutineUnavailable: l10n.managedStoryWorkbenchNpcRoutineUnavailable,
+  npcInventoryUnavailable: l10n.managedStoryWorkbenchNpcInventoryUnavailable,
+  npcDialogVoiceUnavailable:
+      l10n.managedStoryWorkbenchNpcDialogVoiceUnavailable,
+  questDialogVoiceUnavailable:
+      l10n.managedStoryWorkbenchQuestDialogVoiceUnavailable,
+  noReferenceProblems: l10n.managedStoryWorkbenchNoReferenceProblems,
+  referenceProblemCount: l10n.managedStoryWorkbenchReferenceProblemCount,
+  referenceScopeNotice: l10n.managedStoryWorkbenchReferenceScopeNotice,
+  technicalDetails: l10n.managedStoryWorkbenchTechnicalDetails,
+  questKindLabel: l10n.managedStoryWorkbenchQuestKindLabel,
+  npcKindLabel: l10n.managedStoryWorkbenchNpcKindLabel,
+  questTitleLabel: l10n.managedStoryWorkbenchQuestTitleLabel,
+  technicalIdLabel: l10n.managedStoryWorkbenchTechnicalIdLabel,
+  objectivesLabel: l10n.managedStoryWorkbenchObjectivesLabel,
+  uniqueNameLabel: l10n.managedStoryWorkbenchUniqueNameLabel,
+  moduleNamespaceLabel: l10n.managedStoryWorkbenchModuleNamespaceLabel,
+  questGiverLabel: l10n.managedStoryWorkbenchQuestGiverLabel,
+  runtimeParentLabel: l10n.managedStoryWorkbenchRuntimeParentLabel,
+  logicDescription: l10n.managedStoryWorkbenchLogicDescription,
+  outgoingHeading: l10n.managedStoryWorkbenchOutgoingHeading,
+  noOutgoingReferences: l10n.managedStoryWorkbenchNoOutgoingReferences,
+  incomingHeading: l10n.managedStoryWorkbenchIncomingHeading,
+  noIncomingReferences: l10n.managedStoryWorkbenchNoIncomingReferences,
+  semanticIdentityLabel: l10n.managedStoryWorkbenchSemanticIdentityLabel,
+  originLabel: l10n.managedStoryWorkbenchOriginLabel,
+  entityRevisionLabel: l10n.managedStoryWorkbenchEntityRevisionLabel,
+  stableIdLabel: l10n.managedStoryWorkbenchStableIdLabel,
+  referenceResolvedLabel: l10n.managedStoryWorkbenchReferenceResolvedLabel,
+  referenceUnresolvedLabel: l10n.managedStoryWorkbenchReferenceUnresolvedLabel,
+);
+
+Revision3StoryWorkspaceCopy _storyWorkspaceCopy(AppLocalizations l10n) =>
+    Revision3StoryWorkspaceCopy(
+      title: l10n.managedWorkspaceStoryLabel,
+      loadingLabel: l10n.managedStoryWorkspaceLoading,
+      authorityNotice: l10n.managedStoryWorkspaceAuthorityNotice,
+      searchHint: l10n.managedStoryWorkspaceSearchHint,
+      clearSearchLabel: l10n.managedGlobalSearchClear,
+      allFilterLabel: l10n.changesAll,
+      npcFilterLabel: l10n.managedBaseGameBrowserFilterNpcs,
+      questFilterLabel: l10n.managedBaseGameBrowserFilterQuests,
+      createNpcLabel: l10n.managedActionNewNpcTitle,
+      createQuestLabel: l10n.managedActionNewQuestTitle,
+      creatingNpcLabel: l10n.managedStoryWorkspaceCreatingNpc,
+      creatingQuestLabel: l10n.managedStoryWorkspaceCreatingQuest,
+      noStoryDrafts: l10n.managedStoryWorkspaceEmpty,
+      noMatchingStoryDrafts: l10n.managedStoryWorkspaceNoMatches,
+      selectDraftLabel: l10n.managedStoryWorkspaceSelectDraft,
+      retryLabel: l10n.managedDashboardRetry,
+      loadErrorTitle: l10n.managedStoryWorkspaceLoadErrorTitle,
+      checkpointMismatchError: l10n.managedStoryWorkspaceCheckpointMismatch,
+      checkpointSummary: l10n.managedStoryWorkspaceCheckpointSummary,
+      loadErrorDetails: (error) =>
+          l10n.managedStoryWorkspaceLoadErrorDetails('$error'),
+      createErrorDetails: (error) =>
+          l10n.managedStoryWorkspaceCreateErrorDetails('$error'),
+      detailsSheetLabel: l10n.managedStoryWorkspaceDetailsSheetLabel,
+      workbench: _storyWorkbenchCopy(l10n),
+    );
 
 Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
   AppLocalizations l10n,

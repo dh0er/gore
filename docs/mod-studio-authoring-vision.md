@@ -16,7 +16,7 @@ Related evidence and operating boundaries:
 - [Cooked DataAsset fixed-leaf workflow](dataasset-authoring.md)
 - [Offline AngelScript default patching](angelscript-default-patching.md)
 
-### Current implementation delta (2026-07-15)
+### Current implementation delta (2026-07-16)
 
 The current landed checkpoints advance previously partial rows below; these
 statements supersede older “not wired yet” wording where the matrix has not yet
@@ -64,6 +64,18 @@ been consolidated:
   unmodeled tabs say so explicitly. Projected reference problems are not
   promoted to full build/runtime readiness, and distinct Draft/build-blocked/
   runtime-unqualified badges remain visible.
+- The primary managed-R3 **Story** destination is now a direct authoring
+  workspace instead of a card page that redirects authors into Content. It
+  loads the exact-current content index, projects only `NpcDraft` and
+  `QuestDraft`, and keeps friendly search, All/NPC/Quest filters, creation,
+  selection, and the existing Story Workbench together. Wide hosts use an
+  inline list/workbench split; compact or short hosts open the same workbench
+  in a details sheet. Same-project checkpoint advances retain only still-valid
+  selection/tab state, newly published drafts can be selected at their exact
+  revision, and non-Story references route to their exact Content owner. This
+  is a UI projection over the existing managed session and grants no additional
+  mutation, build, deploy, runtime, game, or save authority. The useful Legacy
+  tabs remain the migration baseline and are unchanged.
 - Managed R3 **Validate & Test** now hosts bounded **Problems & Readiness V1**.
   It derives unresolved entity and asset references from the exact-current
   content index, loads the managed DataAsset-stage registry independently, and
@@ -233,8 +245,9 @@ direction.
 
 Home still loads the exact current `Revision3ContentIndex`, shows friendly
 project metadata and Draft status, counts NPCs, Quests, Dialog, Voice, assets,
-and unresolved references, and groups the already bounded actions. Story
-exposes the working NPC Draft and Quest Draft flows; Localization & Voice
+and unresolved references, and groups the already bounded actions. Story now
+opens a direct exact-current NPC/Quest search, filter, list, creation, and
+Workbench surface rather than a card/link landing page; Localization & Voice
 exposes the bounded take, selection, and target actions; Validate & Test can
 verify the exact current head and inspect references; Build & Release exposes
 only the bounded Voice bundle; and Settings is available. World authoring,
@@ -266,7 +279,10 @@ result does not imply a dependency, typed reference, backlink, or cross-source
 authoring authority.
 
 Within **This mod**, selecting an exact-current `QuestDraft` or `NpcDraft` now
-opens Story Workbench V1. It shares the screen with the entity list only when
+opens Story Workbench V1. The primary **Story** destination also projects those
+same exact entities directly, with search and All/NPC/Quest filters, and reuses
+the same bounded editors and inspections rather than creating another project
+state. The workbench shares the screen with its entity list only when
 the entity area is at least 900 logical pixels wide and 430 logical pixels high;
 falling below either bound opens the same tabbed detail in the existing
 78%-height modal sheet. The selected entity and its last supported tab survive
@@ -327,7 +343,7 @@ proof. It does not widen that evidence to adjacent use cases.
 
 | Authoring capability | Current status | Evidence and exact boundary |
 |---|---|---|
-| Managed R3 workspace shell | **Canonical eight-destination shell implemented; domain depth remains partial** | Managed R3 exposes Home, Content, Story, World, Localization & Voice, Validate & Test, Build & Release, and Settings & Expert through one responsive shell. DataAssets is a Content secondary view. Lazy-mounted pages preserve primary selection, per-section secondary routes, and page state across same-project revisions; a different project resets to Home. Story exposes bounded NPC/Quest Draft actions; Localization & Voice exposes the guided dialog-line prerequisite V1 plus take/selection/target actions; Validate hosts bounded Problems & Readiness V1 plus exact-head verification while keeping compiler, managed-build, and runtime evidence explicitly separate; Build exposes only the sealed Voice bundle; and Settings is available. World authoring, runtime test, full managed build/deploy, and Expert tools remain visible but unavailable. Explicit exact-current Quest/NPC compiler checks temporarily stage the exact generated source and mutate the authenticated compiler/cache paths in the selected installation under the shared install guard, while restoring every touched install path or retaining recovery evidence. They discard output and grant no save write, deployment, general managed build, or runtime qualification. |
+| Managed R3 workspace shell | **Canonical eight-destination shell implemented; direct Story workspace landed; domain depth remains partial** | Managed R3 exposes Home, Content, Story, World, Localization & Voice, Validate & Test, Build & Release, and Settings & Expert through one responsive shell. DataAssets is a Content secondary view. Lazy-mounted pages preserve primary selection, per-section secondary routes, and page state across same-project revisions; a different project resets to Home. Story is no longer a card/link landing page: it directly loads the exact current index, lists only NPC/Quest Drafts with friendly search and All/NPC/Quest filters, offers the bounded create actions, and opens the existing responsive Workbench in place or in a compact/short-host details sheet. Exact-revision selection after creation and same-project state retention fail closed on drift or deletion; non-Story references route to Content. Localization & Voice exposes the guided dialog-line prerequisite V1 plus take/selection/target actions; Validate hosts bounded Problems & Readiness V1 plus exact-head verification while keeping compiler, managed-build, and runtime evidence explicitly separate; Build exposes only the sealed Voice bundle; and Settings is available. World authoring was not started; runtime test, full managed build/deploy, and Expert tools remain visible but unavailable. Explicit exact-current Quest/NPC compiler checks temporarily stage the exact generated source and mutate the authenticated compiler/cache paths in the selected installation under the shared install guard, while restoring every touched install path or retaining recovery evidence. They discard output and grant no save write, deployment, general managed build, or runtime qualification. Legacy remains available as the usability baseline and was not replaced by this projection. |
 | Project save/load | **Partial Studio paths; managed revision-3 create/open/close shell proven** | The compatibility session still saves `.goremod` format 1, and the separate Story flow still owns a schema-revision-2 directory. The Project menu can now create a new managed R3 project from friendly name/version/author/locales plus an existing empty real directory. Creation authenticates one exact registered V1 or current Steam-build-`24169431` executable/Shipping/Binds triple, generates a secure nonzero project ID, builds canonical empty revision-3 JSON, publishes by absent-head CAS, fully reopens it, and adopts it only after exact identity/project-byte checks. Unknown or cross-paired generations fail closed. A valid head produced before a late create failure is reopened and recovered; a mismatched candidate is closed, while every nonempty or game-overlapping destination—including a prior lock-only scaffold—is rejected before generation hashing or native creation. A live current-install test created, read, closed, and reopened the empty project while proving the executable and both caches unchanged by length and SHA-256. The same coordinator opens existing R3 directories, drives Home and `Ctrl+S`, verifies exact-current heads, preserves dirty Legacy work on failed transitions, and surfaces `requiresReopen` and cleanup failures. **Project > Close** releases the current session after dirty-Legacy confirmation; project deletion, Save As, history, and recovery UI remain missing. While R3 is authoritative, legacy editors and Build/Deploy are hidden. Home exposes the strict semantic index and bounded Quest/NPC/Voice/DataAsset mutations through the same lease, but these remain offline/build-blocked except for the separately labelled Voice-only offline bundle. General semantic editors, migration/import/clone/Save As, full history/recovery UI, dependency search and collections, unified blob ownership, and all-domain transactions remain missing. |
 | Unified content browser | **Bounded global cross-source search and Story Workbench V1 integrated; semantic breadth remains partial** | Content keeps the exact-current project Library and verified DataAsset stages under one responsive, lazy scope host that resets on a different project. `Base game` exposes curated NPC/Quest starting points plus search-gated inspect-only experimental NPC evidence; missing setup performs no load and routes to Settings. `Installed` reads exact package-index metadata and opens the existing inspector by canonical path. `Search all` runs only after an explicit nonempty query, scans the three source projections independently in memory, and retains at most 100 rows per source with independent loading/complete/partial/error state. Results are case/accent tolerant and expose only exact same-source actions: open a current mod identity, create a Draft from one exact Base catalog identity, or inspect one exact installed target. Selected current-project Quest/NPC Drafts now open the responsive tabbed Workbench described in section 4.2; it reuses existing atomic editors/inspections and leaves unmodeled domains unavailable. The screen is not one atomic combined snapshot and grants no dependency, package/build/deploy/runtime/game-write, or cross-source mutation authority. No fake `Dependencies` scope exists. Items, complete dialog/localization, FMOD audio, textures, scripts, several Legacy tools, indexed/virtualized large-scale search, complete semantic NPC/Quest browsing, source-aware clone, collections, complete incremental semantic validation, transactional quick fixes, profile-specific build/runtime readiness, and a complete cross-domain editing workspace remain missing. |
 | Existing item scalar edits | **Proven subset** | The categorized item browser and typed scalar field editor stage CDO overrides. The fallback schema is limited and does not imply arbitrary property or item creation support. |
@@ -506,6 +522,10 @@ and previews reachable dialog, objectives, rewards, and terminal paths. It is a
 semantic validator, not evidence that an unqualified runtime effect works.
 
 The current managed-R3 subset is deliberately smaller than that end state.
+The primary Story destination now directly searches and filters exact-current
+NPC/Quest Drafts, creates another bounded Draft, and opens the selected entity
+in Workbench V1 without detouring through Content. Content retains the same
+global discovery projection, while non-Story reference targets return there.
 Selecting a `QuestDraft` opens Workbench V1 with **Overview**, **Story**,
 **Logic**, **Dialog & Voice**, **References**, and **Problems & Checks**.
 Overview, Story, and Logic invoke the existing atomic **Name & objectives**,
@@ -1273,13 +1293,17 @@ Current execution priority is **completion before expansion**. Problems &
 Readiness V1 and honest prerequisite gates are the first landed usability
 checkpoint. Project-local dialog-line/localization creation or exact managed
 reuse plus direct full-text/locale editing and full reopen are now landed
-bounded slices, not vanilla adoption. The immediate queue remains: (1) complete
-the rest of that line/localization/Voice offline journey, especially semantic
-line/slot relationships and production tooling; (2) build, reopen, and verify
-one reviewed managed DataAsset stage; (3) finish project deletion, undo/history,
-export, and recovery, with Close already landed; (4) make the existing NPC and Quest
-surfaces coherent authoring journeys; and (5) complete honest managed build/
-release and qualified test paths. Broad World or level authoring remains frozen
+bounded slices, not vanilla adoption. The card-only Story destination has also
+been replaced by a direct exact-current NPC/Quest search/filter/list plus the
+existing Workbench; this improves access but does not make the underlying Drafts
+buildable or runtime-qualified. The next reviewed non-World backend candidate is
+(1) build, reopen, and verify one exact selected reviewed managed DataAsset
+stage into a new receipt-owned offline output. Then (2) complete semantic
+line/slot relationships and the remaining localization/Voice production tools;
+(3) finish project deletion, undo/history, export, and recovery, with Close
+already landed; (4) deepen the existing NPC and Quest journeys beyond their
+direct workspace; and (5) complete honest managed build/release and qualified
+test paths. Broad World or level authoring remains frozen
 until these workflows are usable end to end. World may stay visible as an
 unavailable destination, but research or a placeholder must not displace this
 queue.

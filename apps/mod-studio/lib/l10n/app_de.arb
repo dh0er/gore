@@ -176,6 +176,36 @@
   "managedWorkspaceBuildReleaseLabel": "Bauen & Veröffentlichen",
   "managedWorkspaceSettingsExpertLabel": "Einstellungen & Expertenmodus",
   "managedSectionStoryDescription": "NPCs, Quests und Dialoge.",
+  "managedStoryWorkspaceLoading": "Aktuelle Story-Entwürfe werden geöffnet…",
+  "managedStoryWorkspaceAuthorityNotice": "Hier siehst du ausschließlich NPC- und Quest-Entwürfe aus diesem Projekt. Die Build-Bereitschaft wurde noch nicht bewertet; das Laufzeitverhalten ist weiterhin nicht qualifiziert.",
+  "managedStoryWorkspaceSearchHint": "NPC- und Questnamen, Ziele, Sprecher oder IDs durchsuchen",
+  "managedStoryWorkspaceCreatingNpc": "NPC-Entwurf wird erstellt…",
+  "managedStoryWorkspaceCreatingQuest": "Quest-Entwurf wird erstellt…",
+  "managedStoryWorkspaceEmpty": "Noch keine NPC- oder Quest-Entwürfe",
+  "managedStoryWorkspaceNoMatches": "Keine NPC- oder Quest-Entwürfe passen zu dieser Suche",
+  "managedStoryWorkspaceSelectDraft": "Wähle einen NPC- oder Quest-Entwurf aus, um weiterzuarbeiten",
+  "managedStoryWorkspaceLoadErrorTitle": "Story-Entwürfe konnten nicht geöffnet werden",
+  "managedStoryWorkspaceCheckpointMismatch": "Das Projekt hat sich während des Ladens der Story geändert. Aktualisiere den exakt aktuellen Checkpoint und versuche es erneut.",
+  "managedStoryWorkspacePublishedSelectionStale": "Der gespeicherte Story-Entwurf konnte nicht in seiner exakten Projektrevision ausgewählt werden. Prüfe die aktuelle Story-Liste, bevor du weiterarbeitest.",
+  "managedStoryWorkspaceCheckpointSummary": "NPC- und Quest-Entwürfe: {count} · Projektrevision {revision}",
+  "@managedStoryWorkspaceCheckpointSummary": {
+    "placeholders": {
+      "count": {"type": "int"},
+      "revision": {"type": "int"}
+    }
+  },
+  "managedStoryWorkspaceLoadErrorDetails": "Die exakt aktuelle Story-Ansicht konnte nicht gelesen werden: {error}",
+  "@managedStoryWorkspaceLoadErrorDetails": {
+    "placeholders": {"error": {"type": "String"}}
+  },
+  "managedStoryWorkspaceCreateErrorDetails": "Der Story-Entwurf konnte nicht erstellt werden: {error}",
+  "@managedStoryWorkspaceCreateErrorDetails": {
+    "placeholders": {"error": {"type": "String"}}
+  },
+  "managedStoryWorkspaceDetailsSheetLabel": "Story-Details für {entityName}",
+  "@managedStoryWorkspaceDetailsSheetLabel": {
+    "placeholders": {"entityName": {"type": "String"}}
+  },
   "managedSectionWorldDescription": "Weltplatzierung und zugehörige Arbeitsabläufe sind geplant.",
   "managedSectionLocalizationVoiceDescription": "Schreibe und übersetze Projektdialoge an einem Ort und arbeite anschließend direkt an der Sprachausgabe weiter.",
   "managedLocalizationProjectTextsLabel": "Projekttexte",

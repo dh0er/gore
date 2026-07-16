@@ -373,6 +373,36 @@
   "managedWorkspaceBuildReleaseLabel": "Build & Release",
   "managedWorkspaceSettingsExpertLabel": "Settings & Expert",
   "managedSectionStoryDescription": "NPCs, quests, and dialogue.",
+  "managedStoryWorkspaceLoading": "Opening the current Story drafts…",
+  "managedStoryWorkspaceAuthorityNotice": "Project-only NPC and Quest drafts. Build readiness has not been evaluated; runtime behavior remains unqualified.",
+  "managedStoryWorkspaceSearchHint": "Search NPC and Quest names, objectives, speakers, or IDs",
+  "managedStoryWorkspaceCreatingNpc": "Creating NPC draft…",
+  "managedStoryWorkspaceCreatingQuest": "Creating Quest draft…",
+  "managedStoryWorkspaceEmpty": "No NPC or Quest drafts yet",
+  "managedStoryWorkspaceNoMatches": "No NPC or Quest drafts match this search",
+  "managedStoryWorkspaceSelectDraft": "Select an NPC or Quest draft to continue",
+  "managedStoryWorkspaceLoadErrorTitle": "Story drafts could not be opened",
+  "managedStoryWorkspaceCheckpointMismatch": "The project changed while Story was loading. Refresh the exact current checkpoint and try again.",
+  "managedStoryWorkspacePublishedSelectionStale": "The saved Story draft could not be selected at its exact project revision. Check the current Story list before continuing.",
+  "managedStoryWorkspaceCheckpointSummary": "NPC and Quest drafts: {count} · project revision {revision}",
+  "@managedStoryWorkspaceCheckpointSummary": {
+    "placeholders": {
+      "count": {"type": "int"},
+      "revision": {"type": "int"}
+    }
+  },
+  "managedStoryWorkspaceLoadErrorDetails": "The exact current Story view could not be read: {error}",
+  "@managedStoryWorkspaceLoadErrorDetails": {
+    "placeholders": {"error": {"type": "String"}}
+  },
+  "managedStoryWorkspaceCreateErrorDetails": "The Story draft could not be created: {error}",
+  "@managedStoryWorkspaceCreateErrorDetails": {
+    "placeholders": {"error": {"type": "String"}}
+  },
+  "managedStoryWorkspaceDetailsSheetLabel": "{entityName} Story details",
+  "@managedStoryWorkspaceDetailsSheetLabel": {
+    "placeholders": {"entityName": {"type": "String"}}
+  },
   "managedSectionWorldDescription": "World placement and workflows are planned.",
   "managedSectionLocalizationVoiceDescription": "Write and translate project dialog in one place, then continue with voice work.",
   "managedLocalizationProjectTextsLabel": "Project texts",

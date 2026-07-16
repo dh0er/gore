@@ -1,0 +1,1282 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+
+import 'revision3_content_index.dart';
+import 'revision3_story_entity_workbench.dart';
+
+typedef Revision3StoryWorkspaceLoader =
+    Future<Revision3ContentIndex> Function();
+typedef Revision3StoryWorkspaceCreateAction = Future<void> Function();
+typedef Revision3StoryWorkspaceEntityAction =
+    Future<void> Function(
+      Revision3ContentIndex index,
+      Revision3ContentEntity entity,
+    );
+
+/// Localized, author-facing copy for the direct managed-R3 Story workspace.
+///
+/// The workspace deliberately owns no fallback strings: its embedding surface
+/// supplies every user-visible claim and the Workbench copy as one unit.
+@immutable
+final class Revision3StoryWorkspaceCopy {
+  const Revision3StoryWorkspaceCopy({
+    required this.title,
+    required this.loadingLabel,
+    required this.authorityNotice,
+    required this.searchHint,
+    required this.clearSearchLabel,
+    required this.allFilterLabel,
+    required this.npcFilterLabel,
+    required this.questFilterLabel,
+    required this.createNpcLabel,
+    required this.createQuestLabel,
+    required this.creatingNpcLabel,
+    required this.creatingQuestLabel,
+    required this.noStoryDrafts,
+    required this.noMatchingStoryDrafts,
+    required this.selectDraftLabel,
+    required this.retryLabel,
+    required this.loadErrorTitle,
+    required this.checkpointMismatchError,
+    required this.checkpointSummary,
+    required this.loadErrorDetails,
+    required this.createErrorDetails,
+    required this.detailsSheetLabel,
+    required this.workbench,
+  });
+
+  final String title;
+  final String loadingLabel;
+  final String authorityNotice;
+  final String searchHint;
+  final String clearSearchLabel;
+  final String allFilterLabel;
+  final String npcFilterLabel;
+  final String questFilterLabel;
+  final String createNpcLabel;
+  final String createQuestLabel;
+  final String creatingNpcLabel;
+  final String creatingQuestLabel;
+  final String noStoryDrafts;
+  final String noMatchingStoryDrafts;
+  final String selectDraftLabel;
+  final String retryLabel;
+  final String loadErrorTitle;
+  final String checkpointMismatchError;
+  final String Function(int count, int projectRevision) checkpointSummary;
+  final String Function(Object error) loadErrorDetails;
+  final String Function(Object error) createErrorDetails;
+  final String Function(String entityName) detailsSheetLabel;
+  final Revision3StoryEntityWorkbenchCopy workbench;
+}
+
+/// Exact pending navigation for a newly-created Story draft.
+///
+/// The expected project revision is mandatory so a delayed request can never
+/// select a coincidentally matching entity from a later checkpoint. Requests
+/// only attach while the matching workspace is mounted; a newer request
+/// supersedes an older one. Call [dispose] when the owning project surface is
+/// permanently released.
+final class Revision3StoryWorkspaceController {
+  Object? _attachment;
+  Future<bool> Function(
+    String entityId,
+    int projectRevision,
+    Revision3StoryWorkbenchSection? section,
+  )?
+  _selectEntityAtRevision;
+  VoidCallback? _cancelPendingSelection;
+  bool _disposed = false;
+
+  Future<bool> selectEntityAtRevision({
+    required String entityId,
+    required int projectRevision,
+    Revision3StoryWorkbenchSection? section,
+  }) {
+    final select = _selectEntityAtRevision;
+    if (_disposed ||
+        select == null ||
+        entityId.isEmpty ||
+        projectRevision < 1) {
+      return Future<bool>.value(false);
+    }
+    return select(entityId, projectRevision, section);
+  }
+
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _cancelPendingSelection?.call();
+    _attachment = null;
+    _selectEntityAtRevision = null;
+    _cancelPendingSelection = null;
+  }
+
+  bool _attach(
+    Object attachment,
+    Future<bool> Function(
+      String entityId,
+      int projectRevision,
+      Revision3StoryWorkbenchSection? section,
+    )
+    selectEntityAtRevision,
+    VoidCallback cancelPendingSelection,
+  ) {
+    if (_disposed ||
+        (_attachment != null && !identical(_attachment, attachment))) {
+      return false;
+    }
+    _attachment = attachment;
+    _selectEntityAtRevision = selectEntityAtRevision;
+    _cancelPendingSelection = cancelPendingSelection;
+    return true;
+  }
+
+  void _detach(Object attachment) {
+    if (!identical(_attachment, attachment)) return;
+    _attachment = null;
+    _selectEntityAtRevision = null;
+    _cancelPendingSelection = null;
+  }
+}
+
+enum _StoryFilter { all, npc, quest }
+
+@immutable
+final class _StoryCheckpoint {
+  const _StoryCheckpoint({
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+  });
+
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _StoryCheckpoint &&
+      projectRoot == other.projectRoot &&
+      projectId == other.projectId &&
+      projectRevision == other.projectRevision &&
+      projectHeadCanonicalJson == other.projectHeadCanonicalJson;
+
+  @override
+  int get hashCode => Object.hash(
+    projectRoot,
+    projectId,
+    projectRevision,
+    projectHeadCanonicalJson,
+  );
+}
+
+final class _PendingStorySelection {
+  _PendingStorySelection({
+    required this.entityId,
+    required this.projectRevision,
+    required this.section,
+  });
+
+  final String entityId;
+  final int projectRevision;
+  final Revision3StoryWorkbenchSection? section;
+  final Completer<bool> result = Completer<bool>();
+}
+
+/// Direct Quest/NPC authoring surface for one exact managed-R3 checkpoint.
+///
+/// This surface projects only `NpcDraft` and `QuestDraft` entities. It routes
+/// bounded authoring callbacks supplied by its owner and does not create build,
+/// deployment, runtime, save-game, or game-installation authority.
+final class Revision3StoryWorkspace extends StatefulWidget {
+  const Revision3StoryWorkspace({
+    required this.projectRoot,
+    required this.projectId,
+    required this.projectRevision,
+    required this.projectHeadCanonicalJson,
+    required this.load,
+    required this.copy,
+    required this.onOpenExternalEntity,
+    required this.onOpenExternalAsset,
+    this.controller,
+    this.createNpcDraft,
+    this.createQuestDraft,
+    this.createNpcDraftDisabledReason,
+    this.createQuestDraftDisabledReason,
+    this.editQuestOutline,
+    this.editQuestContext,
+    this.editQuestTransitions,
+    this.inspectQuestSource,
+    this.inspectNpcSource,
+    this.editQuestOutlineDisabledReason,
+    this.editQuestContextDisabledReason,
+    this.editQuestTransitionsDisabledReason,
+    this.inspectQuestSourceDisabledReason,
+    this.inspectNpcSourceDisabledReason,
+    super.key,
+  }) : assert(projectRoot != ''),
+       assert(projectId != ''),
+       assert(projectRevision >= 1),
+       assert(projectHeadCanonicalJson != ''),
+       assert(
+         createNpcDraft != null ||
+             (createNpcDraftDisabledReason != null &&
+                 createNpcDraftDisabledReason != ''),
+       ),
+       assert(
+         createQuestDraft != null ||
+             (createQuestDraftDisabledReason != null &&
+                 createQuestDraftDisabledReason != ''),
+       );
+
+  final String projectRoot;
+  final String projectId;
+  final int projectRevision;
+  final String projectHeadCanonicalJson;
+  final Revision3StoryWorkspaceLoader load;
+  final Revision3StoryWorkspaceCopy copy;
+  final ValueChanged<String> onOpenExternalEntity;
+  final ValueChanged<String> onOpenExternalAsset;
+  final Revision3StoryWorkspaceController? controller;
+  final Revision3StoryWorkspaceCreateAction? createNpcDraft;
+  final Revision3StoryWorkspaceCreateAction? createQuestDraft;
+  final String? createNpcDraftDisabledReason;
+  final String? createQuestDraftDisabledReason;
+  final Revision3StoryWorkspaceEntityAction? editQuestOutline;
+  final Revision3StoryWorkspaceEntityAction? editQuestContext;
+  final Revision3StoryWorkspaceEntityAction? editQuestTransitions;
+  final Revision3StoryWorkspaceEntityAction? inspectQuestSource;
+  final Revision3StoryWorkspaceEntityAction? inspectNpcSource;
+  final String? editQuestOutlineDisabledReason;
+  final String? editQuestContextDisabledReason;
+  final String? editQuestTransitionsDisabledReason;
+  final String? inspectQuestSourceDisabledReason;
+  final String? inspectNpcSourceDisabledReason;
+
+  @override
+  State<Revision3StoryWorkspace> createState() =>
+      _Revision3StoryWorkspaceState();
+}
+
+class _Revision3StoryWorkspaceState extends State<Revision3StoryWorkspace> {
+  final TextEditingController _search = TextEditingController();
+  Revision3ContentIndex? _index;
+  Object? _loadError;
+  bool _loading = false;
+  bool _creatingNpc = false;
+  bool _creatingQuest = false;
+  int _loadGeneration = 0;
+  int _detailsPresentationEpoch = 0;
+  _StoryFilter _filter = _StoryFilter.all;
+  String? _selectedEntityId;
+  final Map<String, Revision3StoryWorkbenchSection> _sections = {};
+  _PendingStorySelection? _pendingSelection;
+  bool _usesDetailsSheet = false;
+  bool _openingDetailsSheet = false;
+  Route<void>? _detailsSheetRoute;
+
+  _StoryCheckpoint get _checkpoint => _StoryCheckpoint(
+    projectRoot: widget.projectRoot,
+    projectId: widget.projectId,
+    projectRevision: widget.projectRevision,
+    projectHeadCanonicalJson: widget.projectHeadCanonicalJson,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _search.addListener(_searchChanged);
+    _attachController(widget.controller);
+    unawaited(_reload());
+  }
+
+  @override
+  void didUpdateWidget(covariant Revision3StoryWorkspace oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller?._detach(this);
+      _cancelPendingSelection();
+      _attachController(widget.controller);
+    }
+
+    final oldCheckpoint = _StoryCheckpoint(
+      projectRoot: oldWidget.projectRoot,
+      projectId: oldWidget.projectId,
+      projectRevision: oldWidget.projectRevision,
+      projectHeadCanonicalJson: oldWidget.projectHeadCanonicalJson,
+    );
+    if (oldCheckpoint == _checkpoint) return;
+
+    final changedProject =
+        oldWidget.projectRoot != widget.projectRoot ||
+        oldWidget.projectId != widget.projectId;
+    if (changedProject) {
+      _cancelPendingSelection();
+      _search.clear();
+      _filter = _StoryFilter.all;
+      _selectedEntityId = null;
+      _sections.clear();
+      _usesDetailsSheet = false;
+    } else {
+      final pending = _pendingSelection;
+      if (pending != null && widget.projectRevision > pending.projectRevision) {
+        _completePendingSelection(false);
+      }
+    }
+    unawaited(_reload(clearCurrent: true));
+  }
+
+  @override
+  void dispose() {
+    _detailsPresentationEpoch++;
+    _loadGeneration++;
+    _closeRouteIfPresent(_detailsSheetRoute, removeImmediately: true);
+    _clearDetailsSheetBinding();
+    _cancelPendingSelection();
+    widget.controller?._detach(this);
+    _search
+      ..removeListener(_searchChanged)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _attachController(Revision3StoryWorkspaceController? controller) {
+    controller?._attach(this, _selectEntityAtRevision, _cancelPendingSelection);
+  }
+
+  void _searchChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _reload({bool clearCurrent = false}) async {
+    _invalidateDetailsSheet();
+    final generation = ++_loadGeneration;
+    final checkpoint = _checkpoint;
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      if (clearCurrent) _index = null;
+    });
+    try {
+      final index = await Future<Revision3ContentIndex>.sync(widget.load);
+      if (!mounted ||
+          generation != _loadGeneration ||
+          checkpoint != _checkpoint) {
+        return;
+      }
+      if (index.projectId != checkpoint.projectId ||
+          index.projectRevision != checkpoint.projectRevision) {
+        throw _StoryCheckpointMismatch(widget.copy.checkpointMismatchError);
+      }
+      final story = _storyEntities(index);
+      setState(() {
+        _index = index;
+        _loading = false;
+        _loadError = null;
+        final selected = _selectedEntityId;
+        _selectedEntityId =
+            selected != null && story.any((entity) => entity.id == selected)
+            ? selected
+            : story.firstOrNull?.id;
+        _sections.removeWhere(
+          (entityId, _) => !story.any((entity) => entity.id == entityId),
+        );
+      });
+      _resolvePendingSelection(index);
+    } catch (error) {
+      if (!mounted ||
+          generation != _loadGeneration ||
+          checkpoint != _checkpoint) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _loadError = error;
+      });
+    }
+  }
+
+  Future<bool> _selectEntityAtRevision(
+    String entityId,
+    int projectRevision,
+    Revision3StoryWorkbenchSection? section,
+  ) {
+    if (!mounted || entityId.isEmpty || projectRevision < 1) {
+      return Future<bool>.value(false);
+    }
+    final index = _index;
+    if (index != null && index.projectRevision == projectRevision) {
+      return Future<bool>.value(
+        _resolveExactSelection(index, entityId, section),
+      );
+    }
+    if (projectRevision < widget.projectRevision) {
+      return Future<bool>.value(false);
+    }
+    _completePendingSelection(false);
+    final pending = _PendingStorySelection(
+      entityId: entityId,
+      projectRevision: projectRevision,
+      section: section,
+    );
+    _pendingSelection = pending;
+    return pending.result.future;
+  }
+
+  void _resolvePendingSelection(Revision3ContentIndex index) {
+    final pending = _pendingSelection;
+    if (pending == null) return;
+    if (index.projectRevision < pending.projectRevision) return;
+    if (index.projectRevision > pending.projectRevision) {
+      _completePendingSelection(false);
+      return;
+    }
+    final resolved = _resolveExactSelection(
+      index,
+      pending.entityId,
+      pending.section,
+    );
+    _completePendingSelection(resolved);
+  }
+
+  bool _resolveExactSelection(
+    Revision3ContentIndex index,
+    String entityId,
+    Revision3StoryWorkbenchSection? section,
+  ) {
+    final entity = index.entityById(entityId);
+    if (entity == null || !_isStoryEntity(entity)) return false;
+    if (section != null &&
+        !Revision3StoryEntityWorkbench.supportsSection(entity, section)) {
+      return false;
+    }
+    _selectEntity(index, entity, section: section, reveal: true);
+    _scheduleDetailsPresentation(index, entity.id);
+    return true;
+  }
+
+  void _completePendingSelection(bool resolved) {
+    final pending = _pendingSelection;
+    _pendingSelection = null;
+    if (pending != null && !pending.result.isCompleted) {
+      pending.result.complete(resolved);
+    }
+  }
+
+  void _cancelPendingSelection() => _completePendingSelection(false);
+
+  void _selectEntity(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity, {
+    Revision3StoryWorkbenchSection? section,
+    bool reveal = false,
+  }) {
+    if (!identical(index, _index) || !_isStoryEntity(entity)) return;
+    if (reveal && _search.text.isNotEmpty) _search.clear();
+    setState(() {
+      if (reveal) _filter = _StoryFilter.all;
+      _selectedEntityId = entity.id;
+      if (section != null) _sections[entity.id] = section;
+    });
+  }
+
+  void _scheduleDetailsPresentation(
+    Revision3ContentIndex index,
+    String entityId,
+  ) {
+    final epoch = ++_detailsPresentationEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          epoch != _detailsPresentationEpoch ||
+          !_usesDetailsSheet ||
+          !identical(index, _index) ||
+          _selectedEntityId != entityId) {
+        return;
+      }
+      final entity = index.entityById(entityId);
+      if (entity != null && _isStoryEntity(entity)) {
+        unawaited(_showDetailsSheet(index, entity));
+      }
+    });
+  }
+
+  Future<void> _runCreate(
+    Revision3StoryWorkspaceCreateAction action, {
+    required bool npc,
+  }) async {
+    if (_creatingNpc || _creatingQuest) return;
+    setState(() {
+      if (npc) {
+        _creatingNpc = true;
+      } else {
+        _creatingQuest = true;
+      }
+    });
+    try {
+      await action();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(widget.copy.createErrorDetails(error))),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          if (npc) {
+            _creatingNpc = false;
+          } else {
+            _creatingQuest = false;
+          }
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      _usesDetailsSheet =
+          constraints.maxWidth < 900 || constraints.maxHeight < 430;
+      final denseChrome =
+          constraints.maxWidth < 720 || constraints.maxHeight < 520;
+      final scrollTightChrome =
+          constraints.hasBoundedHeight && constraints.maxHeight < 520;
+      final index = _index;
+      final creatingStoryDraft = _creatingNpc || _creatingQuest;
+      final header = _StoryHeader(
+        copy: widget.copy,
+        index: index,
+        loading: _loading,
+        dense: denseChrome,
+        creatingNpc: _creatingNpc,
+        creatingQuest: _creatingQuest,
+        createNpc: widget.createNpcDraft == null || creatingStoryDraft
+            ? null
+            : () => _runCreate(widget.createNpcDraft!, npc: true),
+        createQuest: widget.createQuestDraft == null || creatingStoryDraft
+            ? null
+            : () => _runCreate(widget.createQuestDraft!, npc: false),
+        createNpcDisabledReason: widget.createNpcDraft == null
+            ? widget.createNpcDraftDisabledReason
+            : null,
+        createQuestDisabledReason: widget.createQuestDraft == null
+            ? widget.createQuestDraftDisabledReason
+            : null,
+      );
+      final loaded = _loadError == null && index != null;
+      final searchAndFilters = loaded
+          ? _StorySearchAndFilters(
+              copy: widget.copy,
+              controller: _search,
+              filter: _filter,
+              dense: denseChrome,
+              onFilterChanged: (value) => setState(() => _filter = value),
+            )
+          : null;
+      final body = _loadError != null
+          ? _StoryLoadError(
+              copy: widget.copy,
+              error: _loadError!,
+              retry: _loading ? null : _reload,
+            )
+          : index == null
+          ? Center(
+              child: Semantics(
+                liveRegion: true,
+                label: widget.copy.loadingLabel,
+                child: const CircularProgressIndicator(
+                  key: Key('revision3-story-workspace-loading'),
+                ),
+              ),
+            )
+          : _buildLoaded(index);
+
+      if (!scrollTightChrome) {
+        return Column(
+          key: const Key('revision3-story-workspace'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            header,
+            ?searchAndFilters,
+            Expanded(child: body),
+          ],
+        );
+      }
+
+      final reservedBodyHeight = constraints.maxHeight < 260
+          ? constraints.maxHeight * 0.45
+          : 128.0;
+      final chromeHeight = (constraints.maxHeight - reservedBodyHeight)
+          .clamp(0.0, 280.0)
+          .toDouble();
+      return Column(
+        key: const Key('revision3-story-workspace'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: chromeHeight,
+            child: SingleChildScrollView(
+              key: const Key('revision3-story-workspace-tight-chrome-scroll'),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [header, ?searchAndFilters],
+              ),
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      );
+    },
+  );
+
+  Widget _buildLoaded(Revision3ContentIndex index) {
+    final allStory = _storyEntities(index);
+    final foldedQuery = _search.text.trim().toLowerCase();
+    final visible = allStory
+        .where(
+          (entity) => switch (_filter) {
+            _StoryFilter.all => true,
+            _StoryFilter.npc =>
+              entity.kind == Revision3ContentEntityKind.npcDraft,
+            _StoryFilter.quest =>
+              entity.kind == Revision3ContentEntityKind.questDraft,
+          },
+        )
+        .where((entity) => entity.matches(foldedQuery))
+        .toList(growable: false);
+    final selected = visible
+        .where((entity) => entity.id == _selectedEntityId)
+        .firstOrNull;
+    final list = _StoryEntityList(
+      copy: widget.copy,
+      entities: visible,
+      selectedId: selected?.id,
+      emptyLabel: allStory.isEmpty
+          ? widget.copy.noStoryDrafts
+          : widget.copy.noMatchingStoryDrafts,
+      onSelected: (entity) {
+        _selectEntity(index, entity);
+        if (_usesDetailsSheet) unawaited(_showDetailsSheet(index, entity));
+      },
+    );
+    if (_usesDetailsSheet) return list;
+    return Row(
+      key: const Key('revision3-story-workspace-wide'),
+      children: [
+        Expanded(flex: 2, child: list),
+        const VerticalDivider(width: 1),
+        Expanded(
+          flex: 3,
+          child: selected == null
+              ? _StoryEmptyDetails(label: widget.copy.selectDraftLabel)
+              : _buildWorkbench(index, selected),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWorkbench(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity, {
+    bool sheet = false,
+  }) {
+    Future<void> run(Revision3StoryWorkspaceEntityAction action) async {
+      if (!_isExactCurrentIndex(index)) return;
+      if (sheet && mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      await action(index, entity);
+    }
+
+    return Revision3StoryEntityWorkbench(
+      key: ValueKey(
+        'revision3-story-workspace-workbench-${widget.projectId}-${entity.id}',
+      ),
+      projectId: widget.projectId,
+      index: index,
+      entity: entity,
+      selectedSection:
+          _sections[entity.id] ??
+          Revision3StoryEntityWorkbench.defaultSectionFor(entity),
+      onSectionChanged: (section) {
+        if (_isExactCurrentIndex(index)) {
+          setState(() => _sections[entity.id] = section);
+        }
+      },
+      actions: Revision3StoryEntityWorkbenchActions(
+        openEntity: (entityId) =>
+            _openEntityReference(index, entityId, fromSheet: sheet),
+        openAsset: (sha256) {
+          if (!_isExactCurrentIndex(index)) return;
+          if (sheet && mounted && Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
+          widget.onOpenExternalAsset(sha256);
+        },
+        editOverview:
+            entity.kind == Revision3ContentEntityKind.questDraft &&
+                widget.editQuestOutline != null
+            ? () => run(widget.editQuestOutline!)
+            : null,
+        editStory:
+            entity.kind == Revision3ContentEntityKind.questDraft &&
+                widget.editQuestContext != null
+            ? () => run(widget.editQuestContext!)
+            : null,
+        editLogic:
+            entity.kind == Revision3ContentEntityKind.questDraft &&
+                widget.editQuestTransitions != null
+            ? () => run(widget.editQuestTransitions!)
+            : null,
+        inspectQuest:
+            entity.kind == Revision3ContentEntityKind.questDraft &&
+                widget.inspectQuestSource != null
+            ? () => run(widget.inspectQuestSource!)
+            : null,
+        inspectNpc:
+            entity.kind == Revision3ContentEntityKind.npcDraft &&
+                widget.inspectNpcSource != null
+            ? () => run(widget.inspectNpcSource!)
+            : null,
+        editOverviewDisabledReason: widget.editQuestOutlineDisabledReason,
+        editStoryDisabledReason: widget.editQuestContextDisabledReason,
+        editLogicDisabledReason: widget.editQuestTransitionsDisabledReason,
+        inspectQuestDisabledReason: widget.inspectQuestSourceDisabledReason,
+        inspectNpcDisabledReason: widget.inspectNpcSourceDisabledReason,
+      ),
+      copy: widget.copy.workbench,
+    );
+  }
+
+  void _openEntityReference(
+    Revision3ContentIndex index,
+    String entityId, {
+    required bool fromSheet,
+  }) {
+    if (!_isExactCurrentIndex(index)) return;
+    final target = index.entityById(entityId);
+    if (target == null) return;
+    if (!_isStoryEntity(target)) {
+      if (fromSheet && mounted && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      widget.onOpenExternalEntity(entityId);
+      return;
+    }
+    if (fromSheet && mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    _selectEntity(index, target, reveal: true);
+    if (_usesDetailsSheet) _scheduleDetailsPresentation(index, target.id);
+  }
+
+  Future<void> _showDetailsSheet(
+    Revision3ContentIndex index,
+    Revision3ContentEntity entity,
+  ) async {
+    if (!_isExactCurrentIndex(index) || _openingDetailsSheet) return;
+    _openingDetailsSheet = true;
+    final presentationEpoch = ++_detailsPresentationEpoch;
+    Route<void>? route;
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (sheetContext) {
+          route ??= ModalRoute.of(sheetContext) as Route<void>?;
+          if (!mounted ||
+              presentationEpoch != _detailsPresentationEpoch ||
+              !_isExactCurrentIndex(index)) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _closeRouteIfPresent(route);
+            });
+            return const SizedBox.shrink();
+          }
+          _detailsSheetRoute = route;
+          return SafeArea(
+            child: Semantics(
+              container: true,
+              explicitChildNodes: true,
+              label: widget.copy.detailsSheetLabel(_entityName(entity)),
+              child: SizedBox(
+                key: const Key('revision3-story-workspace-details-sheet'),
+                height: MediaQuery.sizeOf(sheetContext).height * 0.9,
+                child: _buildWorkbench(index, entity, sheet: true),
+              ),
+            ),
+          );
+        },
+      );
+      if (route case final TransitionRoute<void> transitionRoute) {
+        await transitionRoute.completed;
+      }
+    } finally {
+      if (identical(_detailsSheetRoute, route)) _clearDetailsSheetBinding();
+      _openingDetailsSheet = false;
+    }
+  }
+
+  bool _isExactCurrentIndex(Revision3ContentIndex index) =>
+      mounted &&
+      !_loading &&
+      identical(_index, index) &&
+      index.projectId == widget.projectId &&
+      index.projectRevision == widget.projectRevision;
+
+  void _invalidateDetailsSheet() {
+    _detailsPresentationEpoch++;
+    final route = _detailsSheetRoute;
+    _closeRouteIfPresent(route);
+    _clearDetailsSheetBinding();
+  }
+
+  void _clearDetailsSheetBinding() {
+    _detailsSheetRoute = null;
+  }
+
+  void _closeRouteIfPresent(
+    Route<void>? route, {
+    bool removeImmediately = false,
+  }) {
+    if (route == null || !route.isActive) return;
+    final navigator = route.navigator;
+    if (navigator == null) return;
+    if (route.isCurrent && !removeImmediately) {
+      navigator.pop();
+    } else {
+      navigator.removeRoute(route);
+    }
+  }
+}
+
+final class _StoryCheckpointMismatch implements Exception {
+  const _StoryCheckpointMismatch(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class _StoryHeader extends StatelessWidget {
+  const _StoryHeader({
+    required this.copy,
+    required this.index,
+    required this.loading,
+    required this.dense,
+    required this.creatingNpc,
+    required this.creatingQuest,
+    required this.createNpc,
+    required this.createQuest,
+    required this.createNpcDisabledReason,
+    required this.createQuestDisabledReason,
+  });
+
+  final Revision3StoryWorkspaceCopy copy;
+  final Revision3ContentIndex? index;
+  final bool loading;
+  final bool dense;
+  final bool creatingNpc;
+  final bool creatingQuest;
+  final VoidCallback? createNpc;
+  final VoidCallback? createQuest;
+  final String? createNpcDisabledReason;
+  final String? createQuestDisabledReason;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final storyCount = index == null ? 0 : _storyEntities(index!).length;
+    return Material(
+      color: scheme.surfaceContainerLowest,
+      child: Padding(
+        padding: dense
+            ? const EdgeInsets.fromLTRB(10, 8, 10, 7)
+            : const EdgeInsets.fromLTRB(16, 12, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Wrap(
+              spacing: dense ? 8 : 12,
+              runSpacing: dense ? 6 : 10,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              alignment: WrapAlignment.spaceBetween,
+              children: [
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minWidth: 180),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Semantics(
+                        header: true,
+                        child: Text(
+                          copy.title,
+                          key: const Key('revision3-story-workspace-title'),
+                          style: Theme.of(context).textTheme.titleLarge,
+                          maxLines: dense ? 1 : null,
+                          overflow: dense ? TextOverflow.ellipsis : null,
+                        ),
+                      ),
+                      Semantics(
+                        liveRegion: loading,
+                        child: Text(
+                          index == null
+                              ? copy.loadingLabel
+                              : copy.checkpointSummary(
+                                  storyCount,
+                                  index!.projectRevision,
+                                ),
+                          key: const Key(
+                            'revision3-story-workspace-checkpoint-summary',
+                          ),
+                          maxLines: dense ? 1 : null,
+                          overflow: dense ? TextOverflow.ellipsis : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    Tooltip(
+                      message: createNpcDisabledReason ?? '',
+                      child: FilledButton.icon(
+                        key: const Key('revision3-story-workspace-create-npc'),
+                        onPressed: createNpc,
+                        style: dense
+                            ? FilledButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                maximumSize: const Size(280, 44),
+                              )
+                            : null,
+                        icon: creatingNpc
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.person_add_alt_1_outlined),
+                        label: Text(
+                          creatingNpc
+                              ? copy.creatingNpcLabel
+                              : copy.createNpcLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                    Tooltip(
+                      message: createQuestDisabledReason ?? '',
+                      child: OutlinedButton.icon(
+                        key: const Key(
+                          'revision3-story-workspace-create-quest',
+                        ),
+                        onPressed: createQuest,
+                        style: dense
+                            ? OutlinedButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                maximumSize: const Size(280, 44),
+                              )
+                            : null,
+                        icon: creatingQuest
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.playlist_add_outlined),
+                        label: Text(
+                          creatingQuest
+                              ? copy.creatingQuestLabel
+                              : copy.createQuestLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            SizedBox(height: dense ? 5 : 8),
+            Container(
+              key: const Key('revision3-story-workspace-authority-notice'),
+              padding: EdgeInsets.symmetric(
+                horizontal: dense ? 8 : 10,
+                vertical: dense ? 5 : 7,
+              ),
+              decoration: BoxDecoration(
+                color: scheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.edit_note_outlined,
+                    size: 18,
+                    color: scheme.onSecondaryContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Tooltip(
+                      message: dense ? copy.authorityNotice : '',
+                      child: Text(
+                        copy.authorityNotice,
+                        style: TextStyle(color: scheme.onSecondaryContainer),
+                        maxLines: dense ? 2 : null,
+                        overflow: dense ? TextOverflow.ellipsis : null,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (createNpcDisabledReason != null ||
+                createQuestDisabledReason != null) ...[
+              SizedBox(height: dense ? 4 : 6),
+              if (createNpcDisabledReason != null)
+                Tooltip(
+                  message: dense ? createNpcDisabledReason! : '',
+                  child: Text(
+                    createNpcDisabledReason!,
+                    key: const Key(
+                      'revision3-story-workspace-create-npc-disabled-reason',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                    maxLines: dense ? 2 : null,
+                    overflow: dense ? TextOverflow.ellipsis : null,
+                  ),
+                ),
+              if (createQuestDisabledReason != null &&
+                  createQuestDisabledReason != createNpcDisabledReason)
+                Tooltip(
+                  message: dense ? createQuestDisabledReason! : '',
+                  child: Text(
+                    createQuestDisabledReason!,
+                    key: const Key(
+                      'revision3-story-workspace-create-quest-disabled-reason',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                    maxLines: dense ? 2 : null,
+                    overflow: dense ? TextOverflow.ellipsis : null,
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _StorySearchAndFilters extends StatelessWidget {
+  const _StorySearchAndFilters({
+    required this.copy,
+    required this.controller,
+    required this.filter,
+    required this.dense,
+    required this.onFilterChanged,
+  });
+
+  final Revision3StoryWorkspaceCopy copy;
+  final TextEditingController controller;
+  final _StoryFilter filter;
+  final bool dense;
+  final ValueChanged<_StoryFilter> onFilterChanged;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: dense
+        ? const EdgeInsets.fromLTRB(8, 5, 8, 4)
+        : const EdgeInsets.fromLTRB(12, 8, 12, 6),
+    child: Column(
+      children: [
+        TextField(
+          key: const Key('revision3-story-workspace-search'),
+          controller: controller,
+          decoration: InputDecoration(
+            isDense: true,
+            prefixIcon: const Icon(Icons.search),
+            hintText: copy.searchHint,
+            suffixIcon: controller.text.isEmpty
+                ? null
+                : IconButton(
+                    key: const Key('revision3-story-workspace-clear-search'),
+                    tooltip: copy.clearSearchLabel,
+                    onPressed: controller.clear,
+                    icon: const Icon(Icons.close),
+                  ),
+          ),
+        ),
+        SizedBox(height: dense ? 3 : 6),
+        SingleChildScrollView(
+          key: const Key('revision3-story-workspace-filters-scroll'),
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              ChoiceChip(
+                key: const Key('revision3-story-workspace-filter-all'),
+                label: Text(copy.allFilterLabel),
+                selected: filter == _StoryFilter.all,
+                onSelected: (_) => onFilterChanged(_StoryFilter.all),
+                visualDensity: dense ? VisualDensity.compact : null,
+              ),
+              const SizedBox(width: 6),
+              ChoiceChip(
+                key: const Key('revision3-story-workspace-filter-npc'),
+                label: Text(copy.npcFilterLabel),
+                selected: filter == _StoryFilter.npc,
+                onSelected: (_) => onFilterChanged(_StoryFilter.npc),
+                visualDensity: dense ? VisualDensity.compact : null,
+              ),
+              const SizedBox(width: 6),
+              ChoiceChip(
+                key: const Key('revision3-story-workspace-filter-quest'),
+                label: Text(copy.questFilterLabel),
+                selected: filter == _StoryFilter.quest,
+                onSelected: (_) => onFilterChanged(_StoryFilter.quest),
+                visualDensity: dense ? VisualDensity.compact : null,
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _StoryEntityList extends StatelessWidget {
+  const _StoryEntityList({
+    required this.copy,
+    required this.entities,
+    required this.selectedId,
+    required this.emptyLabel,
+    required this.onSelected,
+  });
+
+  final Revision3StoryWorkspaceCopy copy;
+  final List<Revision3ContentEntity> entities;
+  final String? selectedId;
+  final String emptyLabel;
+  final ValueChanged<Revision3ContentEntity> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (entities.isEmpty) {
+      return _StoryEmptyDetails(
+        key: const Key('revision3-story-workspace-empty'),
+        label: emptyLabel,
+      );
+    }
+    return ListView.builder(
+      key: const Key('revision3-story-workspace-list'),
+      itemCount: entities.length,
+      itemBuilder: (context, index) {
+        final entity = entities[index];
+        final selected = entity.id == selectedId;
+        return Semantics(
+          button: true,
+          selected: selected,
+          child: ListTile(
+            key: Key('revision3-story-workspace-entity-${entity.id}'),
+            selected: selected,
+            leading: Icon(
+              entity.kind == Revision3ContentEntityKind.npcDraft
+                  ? Icons.person_outline
+                  : Icons.assignment_outlined,
+            ),
+            title: Text(_entityName(entity)),
+            subtitle: Text(
+              entity.kind == Revision3ContentEntityKind.npcDraft
+                  ? copy.workbench.npcKindLabel
+                  : copy.workbench.questKindLabel,
+            ),
+            trailing: entity.problemCount == 0
+                ? const Icon(Icons.check_circle_outline, size: 18)
+                : Badge(
+                    label: Text('${entity.problemCount}'),
+                    child: const Icon(Icons.warning_amber_rounded),
+                  ),
+            onTap: () => onSelected(entity),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _StoryLoadError extends StatelessWidget {
+  const _StoryLoadError({
+    required this.copy,
+    required this.error,
+    required this.retry,
+  });
+
+  final Revision3StoryWorkspaceCopy copy;
+  final Object error;
+  final VoidCallback? retry;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        key: const Key('revision3-story-workspace-error'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.error_outline, size: 40),
+          const SizedBox(height: 10),
+          Text(
+            copy.loadErrorTitle,
+            style: Theme.of(context).textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          Text(copy.loadErrorDetails(error), textAlign: TextAlign.center),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            key: const Key('revision3-story-workspace-retry'),
+            onPressed: retry,
+            icon: const Icon(Icons.refresh),
+            label: Text(copy.retryLabel),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _StoryEmptyDetails extends StatelessWidget {
+  const _StoryEmptyDetails({required this.label, super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(20),
+      child: Text(label, textAlign: TextAlign.center),
+    ),
+  );
+}
+
+List<Revision3ContentEntity> _storyEntities(Revision3ContentIndex index) =>
+    index.entities.where(_isStoryEntity).toList(growable: false);
+
+bool _isStoryEntity(Revision3ContentEntity entity) =>
+    entity.kind == Revision3ContentEntityKind.npcDraft ||
+    entity.kind == Revision3ContentEntityKind.questDraft;
+
+String _entityName(Revision3ContentEntity entity) => entity.displayName.isEmpty
+    ? entity.summary.primaryIdentity
+    : entity.displayName;
