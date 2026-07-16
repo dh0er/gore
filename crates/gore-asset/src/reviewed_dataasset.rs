@@ -4,12 +4,20 @@
 //! It recognizes one reviewed property shape, validates a semantic value, and lowers it to the
 //! same fixed-width bytes already consumed by the generic patch planner.
 
+use gore_tex::container::{
+    StrictTripletVerification, VerifiedPrimaryAssetReadbackV1, VerifiedReadbackChunkSealV1,
+    VerifiedReadbackSourceSealV1,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    FixedLeafRole, FixedLeafSelector, FixedLeafSelectorStep, FixedLeafWireType, FixedWireKind,
-    PackageComponent, FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
+    dataasset_workflow::asset_package_limits, EnvelopeError, FixedLeafDescriptor,
+    FixedLeafInspectionError, FixedLeafInspectionLimits, FixedLeafInspectionSession, FixedLeafRole,
+    FixedLeafSelector, FixedLeafSelectorError, FixedLeafSelectorStep, FixedLeafWireType,
+    FixedLeafWorkBudget, FixedLeafWorkLimits, FixedWireKind, LegacyHeaderLimits,
+    LegacyPackageEnvelope, PackageCarrier, PackageComponent, PackageError, PackagePairSeal,
+    SchemaDb, SchemaError, UsmapLimits, FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
 };
 
 /// Closed wire-format revision for reviewed DataAsset intents.
@@ -188,6 +196,223 @@ impl ReviewedFootstepPresetReplacementV1 {
     pub const fn binding_sha256(&self) -> &[u8; 32] {
         &self.binding_sha256
     }
+}
+
+/// Exact, write-free semantic proof for one freshly rebuilt reviewed footstep preset.
+///
+/// Construction binds a strict one-package triplet to a primary-only readback, then independently
+/// re-inspects the rebuilt legacy package with the exact reviewed USMAP. This value carries no
+/// filesystem path and grants no build, publication, deployment, or runtime authority.
+#[derive(Debug)]
+pub struct VerifiedReviewedFootstepPresetPostPackV1 {
+    target: ReviewedFootstepPresetTargetV1,
+    requested: ReviewedFootstepPresetSizeV1,
+    replacement_bytes: [u8; 32],
+    reviewed_binding_sha256: [u8; 32],
+    fresh_selector: FixedLeafSelector,
+    package_seal: PackagePairSeal,
+    usmap_sha256: [u8; 32],
+    source_seals: Vec<VerifiedReadbackSourceSealV1>,
+    chunk_seals: Vec<VerifiedReadbackChunkSealV1>,
+}
+
+impl VerifiedReviewedFootstepPresetPostPackV1 {
+    pub const fn target(&self) -> ReviewedFootstepPresetTargetV1 {
+        self.target
+    }
+
+    pub const fn requested(&self) -> ReviewedFootstepPresetSizeV1 {
+        self.requested
+    }
+
+    pub const fn replacement_bytes(&self) -> &[u8; 32] {
+        &self.replacement_bytes
+    }
+
+    pub const fn reviewed_binding_sha256(&self) -> &[u8; 32] {
+        &self.reviewed_binding_sha256
+    }
+
+    pub fn fresh_selector(&self) -> &FixedLeafSelector {
+        &self.fresh_selector
+    }
+
+    pub fn package_seal(&self) -> &PackagePairSeal {
+        &self.package_seal
+    }
+
+    pub const fn usmap_sha256(&self) -> &[u8; 32] {
+        &self.usmap_sha256
+    }
+
+    pub fn source_seals(&self) -> &[VerifiedReadbackSourceSealV1] {
+        &self.source_seals
+    }
+
+    pub fn chunk_seals(&self) -> &[VerifiedReadbackChunkSealV1] {
+        &self.chunk_seals
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ReviewedFootstepPresetPostPackErrorV1 {
+    #[error("strict triplet and primary readback are not exactly bound")]
+    ReadbackBinding(#[source] gore_tex::TexError),
+    #[error("primary readback target differs from reviewed target: expected {expected:?}, got {actual:?}")]
+    ReadbackTargetMismatch {
+        expected: &'static str,
+        actual: String,
+    },
+    #[error("reviewed footstep-preset readback contains {count} unsupported sidecar components")]
+    UnsupportedSidecars { count: usize },
+    #[error(transparent)]
+    Package(#[from] PackageError),
+    #[error(transparent)]
+    Usmap(#[from] SchemaError),
+    #[error("parsed USMAP has no exact source seal")]
+    MissingUsmapSeal,
+    #[error("post-pack USMAP differs from the reviewed input USMAP")]
+    UsmapSealMismatch,
+    #[error(transparent)]
+    Envelope(#[from] EnvelopeError),
+    #[error(transparent)]
+    Inspection(#[from] FixedLeafInspectionError),
+    #[error("fresh package contains no exact editable reviewed FeetTextureSize leaf")]
+    MissingReviewedLeaf,
+    #[error("fresh package contains more than one exact editable reviewed FeetTextureSize leaf")]
+    AmbiguousReviewedLeaf,
+    #[error("fresh reviewed selector is not bound to the inspected package and USMAP")]
+    FreshSelectorBindingMismatch,
+    #[error(transparent)]
+    FreshSelector(#[from] FixedLeafSelectorError),
+    #[error("fresh reviewed FeetTextureSize bytes differ from the complete reviewed replacement")]
+    ReplacementMismatch,
+}
+
+/// Prove that one strictly reopened primary IoStore output still contains the complete reviewed
+/// `FeetTextureSize` replacement.
+///
+/// The original selector is deliberately not reused after packing: its package, export, and
+/// expected-value seals are stale by construction. A fresh bounded inspection must produce exactly
+/// one reviewed selector whose complete 32-byte value equals the reviewed replacement, including
+/// the bit-exact preserved Z/W lanes.
+pub fn verify_reviewed_footstep_preset_post_pack_v1(
+    reviewed: &ReviewedFootstepPresetReplacementV1,
+    usmap: &[u8],
+    strict: &StrictTripletVerification,
+    readback: VerifiedPrimaryAssetReadbackV1,
+) -> Result<VerifiedReviewedFootstepPresetPostPackV1, ReviewedFootstepPresetPostPackErrorV1> {
+    strict
+        .verify_primary_readback_binding_v1(&readback)
+        .map_err(ReviewedFootstepPresetPostPackErrorV1::ReadbackBinding)?;
+
+    let expected_target = reviewed.target().target_path();
+    if readback.asset_path() != expected_target {
+        return Err(
+            ReviewedFootstepPresetPostPackErrorV1::ReadbackTargetMismatch {
+                expected: expected_target,
+                actual: readback.asset_path().to_owned(),
+            },
+        );
+    }
+    if !readback.sidecars().is_empty() {
+        return Err(ReviewedFootstepPresetPostPackErrorV1::UnsupportedSidecars {
+            count: readback.sidecars().len(),
+        });
+    }
+
+    let (asset_path, uasset, uexp, sidecars, source_seals, chunk_seals) = readback.into_parts();
+    if asset_path != expected_target {
+        return Err(
+            ReviewedFootstepPresetPostPackErrorV1::ReadbackTargetMismatch {
+                expected: expected_target,
+                actual: asset_path,
+            },
+        );
+    }
+    if !sidecars.is_empty() {
+        return Err(ReviewedFootstepPresetPostPackErrorV1::UnsupportedSidecars {
+            count: sidecars.len(),
+        });
+    }
+
+    let carrier = PackageCarrier::from_bytes(uasset, uexp, asset_package_limits())?;
+    let schemas = SchemaDb::from_usmap_bounded(usmap, UsmapLimits::default())?;
+    let usmap_sha256 = schemas
+        .source_sha256()
+        .ok_or(ReviewedFootstepPresetPostPackErrorV1::MissingUsmapSeal)?;
+    require_exact_reviewed_usmap(reviewed, usmap_sha256)?;
+
+    let package = LegacyPackageEnvelope::parse_g1r_ue5_4_with_limits(
+        &carrier,
+        LegacyHeaderLimits::default(),
+    )?;
+    let export = package.export(0)?;
+    let session = FixedLeafInspectionSession::new(&carrier, &schemas)?;
+    let mut work_budget = FixedLeafWorkBudget::new(FixedLeafWorkLimits::default());
+    let inspection = session.inspect_export_bounded(
+        &export,
+        FixedLeafInspectionLimits::default(),
+        &mut work_budget,
+    )?;
+    let package_seal = session.package_seal().clone();
+    let fresh_selector = select_fresh_reviewed_selector(
+        reviewed,
+        inspection.into_descriptors(),
+        &package_seal,
+        session.usmap_sha256(),
+    )?;
+
+    Ok(VerifiedReviewedFootstepPresetPostPackV1 {
+        target: reviewed.target(),
+        requested: reviewed.requested(),
+        replacement_bytes: *reviewed.replacement_bytes(),
+        reviewed_binding_sha256: *reviewed.binding_sha256(),
+        fresh_selector,
+        package_seal,
+        usmap_sha256,
+        source_seals,
+        chunk_seals,
+    })
+}
+
+fn require_exact_reviewed_usmap(
+    reviewed: &ReviewedFootstepPresetReplacementV1,
+    actual: [u8; 32],
+) -> Result<(), ReviewedFootstepPresetPostPackErrorV1> {
+    let expected = decode_canonical_hex_32(&reviewed.selector().usmap_sha256)
+        .ok_or(ReviewedFootstepPresetPostPackErrorV1::UsmapSealMismatch)?;
+    if actual != expected {
+        return Err(ReviewedFootstepPresetPostPackErrorV1::UsmapSealMismatch);
+    }
+    Ok(())
+}
+
+fn select_fresh_reviewed_selector(
+    reviewed: &ReviewedFootstepPresetReplacementV1,
+    descriptors: Vec<FixedLeafDescriptor>,
+    package_seal: &PackagePairSeal,
+    usmap_sha256: &str,
+) -> Result<FixedLeafSelector, ReviewedFootstepPresetPostPackErrorV1> {
+    let mut selected = None;
+    for descriptor in descriptors {
+        if !descriptor.editable
+            || validate_reviewed_selector(reviewed.target(), descriptor.selector()).is_err()
+        {
+            continue;
+        }
+        if selected.replace(descriptor.selector).is_some() {
+            return Err(ReviewedFootstepPresetPostPackErrorV1::AmbiguousReviewedLeaf);
+        }
+    }
+    let selector = selected.ok_or(ReviewedFootstepPresetPostPackErrorV1::MissingReviewedLeaf)?;
+    if selector.package_seal != *package_seal || selector.usmap_sha256 != usmap_sha256 {
+        return Err(ReviewedFootstepPresetPostPackErrorV1::FreshSelectorBindingMismatch);
+    }
+    if selector.expected_bytes()?.as_slice() != reviewed.replacement_bytes() {
+        return Err(ReviewedFootstepPresetPostPackErrorV1::ReplacementMismatch);
+    }
+    Ok(selector)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -523,6 +748,10 @@ fn is_canonical_sha256(value: &str) -> bool {
 }
 
 fn decode_canonical_vector4_hex(value: &str) -> Option<[u8; 32]> {
+    decode_canonical_hex_32(value)
+}
+
+fn decode_canonical_hex_32(value: &str) -> Option<[u8; 32]> {
     if !is_canonical_sha256(value) {
         return None;
     }
@@ -670,6 +899,22 @@ mod tests {
         )
     }
 
+    fn fresh_reviewed_descriptor(
+        reviewed: &ReviewedFootstepPresetReplacementV1,
+    ) -> FixedLeafDescriptor {
+        let mut selector = reviewed.selector().clone();
+        selector.package_seal = PackagePairSeal {
+            uasset_sha256: [0x31; 32],
+            uexp_sha256: [0x32; 32],
+        };
+        selector.export_sha256 = "33".repeat(32);
+        selector.expected_hex = hex(reviewed.replacement_bytes());
+        FixedLeafDescriptor {
+            selector,
+            editable: true,
+        }
+    }
+
     #[test]
     fn closed_identity_accepts_only_the_declared_schema_field_and_targets() {
         for target in ReviewedFootstepPresetTargetV1::ALL {
@@ -780,6 +1025,124 @@ mod tests {
         assert_eq!(&result.replacement_bytes()[..8], &11.0f64.to_le_bytes());
         assert_eq!(&result.replacement_bytes()[8..16], &12.0f64.to_le_bytes());
         assert_eq!(result.selector(), &wolf_selector());
+    }
+
+    #[test]
+    fn postpack_selector_requires_one_fresh_exact_full_vector_match() {
+        let reviewed = prepare(&wolf_selector()).unwrap();
+        let descriptor = fresh_reviewed_descriptor(&reviewed);
+        let package_seal = descriptor.selector.package_seal.clone();
+        let usmap_sha256 = descriptor.selector.usmap_sha256.clone();
+
+        let selected = select_fresh_reviewed_selector(
+            &reviewed,
+            vec![descriptor],
+            &package_seal,
+            &usmap_sha256,
+        )
+        .unwrap();
+
+        assert_eq!(selected.package_seal, package_seal);
+        assert_eq!(selected.usmap_sha256, usmap_sha256);
+        assert_eq!(
+            selected.expected_bytes().unwrap().as_slice(),
+            reviewed.replacement_bytes()
+        );
+
+        let mut drifted = fresh_reviewed_descriptor(&reviewed);
+        let mut drifted_bytes = *reviewed.replacement_bytes();
+        drifted_bytes[16] ^= 1;
+        drifted.selector.expected_hex = hex(&drifted_bytes);
+        assert!(matches!(
+            select_fresh_reviewed_selector(&reviewed, vec![drifted], &package_seal, &usmap_sha256,),
+            Err(ReviewedFootstepPresetPostPackErrorV1::ReplacementMismatch)
+        ));
+
+        let mut drifted = fresh_reviewed_descriptor(&reviewed);
+        let mut drifted_bytes = *reviewed.replacement_bytes();
+        drifted_bytes[31] ^= 1;
+        drifted.selector.expected_hex = hex(&drifted_bytes);
+        assert!(matches!(
+            select_fresh_reviewed_selector(&reviewed, vec![drifted], &package_seal, &usmap_sha256,),
+            Err(ReviewedFootstepPresetPostPackErrorV1::ReplacementMismatch)
+        ));
+    }
+
+    #[test]
+    fn postpack_selector_rejects_wrong_usmap_wrong_intent_duplicates_and_no_match() {
+        let reviewed = prepare(&wolf_selector()).unwrap();
+        let descriptor = fresh_reviewed_descriptor(&reviewed);
+        let package_seal = descriptor.selector.package_seal.clone();
+        let usmap_sha256 = descriptor.selector.usmap_sha256.clone();
+        let mut actual_usmap = decode_canonical_hex_32(&usmap_sha256).unwrap();
+        actual_usmap[0] ^= 1;
+        assert!(matches!(
+            require_exact_reviewed_usmap(&reviewed, actual_usmap),
+            Err(ReviewedFootstepPresetPostPackErrorV1::UsmapSealMismatch)
+        ));
+
+        let mut wrong_intent = descriptor.clone();
+        wrong_intent.selector.path[2] = FixedLeafSelectorStep::Property {
+            schema_index: 0,
+            property_name: "FeetTextureSizeNearMiss".to_owned(),
+            array_index: 0,
+            array_dimension: 1,
+            declaring_schema_name: "BoneFeetData".to_owned(),
+            declaring_module_path: Some("/Script/G1R".to_owned()),
+            property_type: FixedLeafWireType::Struct {
+                name: "Vector4".to_owned(),
+            },
+        };
+        assert!(matches!(
+            select_fresh_reviewed_selector(
+                &reviewed,
+                vec![wrong_intent],
+                &package_seal,
+                &usmap_sha256,
+            ),
+            Err(ReviewedFootstepPresetPostPackErrorV1::MissingReviewedLeaf)
+        ));
+
+        assert!(matches!(
+            select_fresh_reviewed_selector(
+                &reviewed,
+                vec![descriptor.clone(), descriptor.clone()],
+                &package_seal,
+                &usmap_sha256,
+            ),
+            Err(ReviewedFootstepPresetPostPackErrorV1::AmbiguousReviewedLeaf)
+        ));
+
+        let mut uneditable = descriptor;
+        uneditable.editable = false;
+        assert!(matches!(
+            select_fresh_reviewed_selector(
+                &reviewed,
+                vec![uneditable],
+                &package_seal,
+                &usmap_sha256,
+            ),
+            Err(ReviewedFootstepPresetPostPackErrorV1::MissingReviewedLeaf)
+        ));
+    }
+
+    #[test]
+    fn postpack_proof_is_not_cloneable_or_serializable() {
+        trait AmbiguousIfClone<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+        impl<T: Clone + ?Sized> AmbiguousIfClone<u8> for T {}
+
+        trait AmbiguousIfSerialize<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+        impl<T: serde::Serialize + ?Sized> AmbiguousIfSerialize<u8> for T {}
+
+        let _ = <VerifiedReviewedFootstepPresetPostPackV1 as AmbiguousIfClone<_>>::marker as fn();
+        let _ =
+            <VerifiedReviewedFootstepPresetPostPackV1 as AmbiguousIfSerialize<_>>::marker as fn();
     }
 
     #[test]

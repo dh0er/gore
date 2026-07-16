@@ -1143,6 +1143,14 @@ fn synthetic_wolf_extract_inspect_patch_pack_is_closed_and_offline() {
         .find(|leaf| leaf["editable"] == true && leaf["selector"]["kind"] == "vector4_f64x4")
         .expect("synthetic Wolf must expose its Vector4 leaf")
         .clone();
+    let original_selector: gore_asset::FixedLeafSelector =
+        serde_json::from_value(leaf["selector"].clone()).unwrap();
+    let reviewed = gore_asset::prepare_reviewed_footstep_preset_size_v1(
+        SYNTHETIC_WOLF_ASSET,
+        &original_selector,
+        gore_asset::ReviewedFootstepPresetSizeV1::try_new(125.0, 200.0).unwrap(),
+    )
+    .unwrap();
     let expected_hex = leaf["selector"]["expected_hex"].as_str().unwrap();
     let mut replacement_bytes = decode_hex(expected_hex);
     assert_eq!(replacement_bytes.len(), 32);
@@ -1391,6 +1399,150 @@ fn synthetic_wolf_extract_inspect_patch_pack_is_closed_and_offline() {
         },
     )
     .unwrap();
+    let readback = gore_tex::container::reopen_primary_asset_with_game_fallback_to_memory_v1(
+        &final_utoc,
+        &game,
+        SYNTHETIC_WOLF_ASSET,
+    )
+    .unwrap();
+    let rebuilt_pair = gore_asset::PackageCarrier::from_bytes(
+        readback.uasset().to_vec(),
+        readback.uexp().to_vec(),
+        gore_asset::dataasset_workflow::asset_package_limits(),
+    )
+    .unwrap();
+    let copied_usmap_bytes = fs::read(&copied_usmap).unwrap();
+    let rebuilt_schemas = gore_asset::SchemaDb::from_usmap_bounded(
+        &copied_usmap_bytes,
+        gore_asset::UsmapLimits::default(),
+    )
+    .unwrap();
+    let postpack = gore_asset::verify_reviewed_footstep_preset_post_pack_v1(
+        &reviewed,
+        &copied_usmap_bytes,
+        &reopened,
+        readback,
+    )
+    .unwrap();
+    let mut expected_postpack_bytes = [0u8; 32];
+    for (lane, component) in [125.0_f64, 200.0, 300.0, 400.0].into_iter().enumerate() {
+        expected_postpack_bytes[lane * 8..lane * 8 + 8].copy_from_slice(&component.to_le_bytes());
+    }
+    assert_eq!(
+        postpack.target(),
+        gore_asset::ReviewedFootstepPresetTargetV1::Wolf
+    );
+    assert_eq!(postpack.requested().x(), 125.0);
+    assert_eq!(postpack.requested().y(), 200.0);
+    assert_eq!(postpack.replacement_bytes(), &expected_postpack_bytes);
+    assert_eq!(
+        &postpack.replacement_bytes()[16..],
+        &original_selector.expected_bytes().unwrap()[16..]
+    );
+    assert_eq!(
+        postpack.reviewed_binding_sha256(),
+        reviewed.binding_sha256()
+    );
+    assert_eq!(
+        postpack.package_seal(),
+        &postpack.fresh_selector().package_seal
+    );
+    assert_eq!(
+        encode_hex_bytes(postpack.usmap_sha256()),
+        original_selector.usmap_sha256
+    );
+    assert_eq!(
+        postpack.fresh_selector().expected_bytes().unwrap(),
+        expected_postpack_bytes
+    );
+    assert_eq!(
+        postpack
+            .source_seals()
+            .iter()
+            .filter(|seal| {
+                seal.role() == gore_tex::container::VerifiedReadbackSourceRoleV1::Primary
+            })
+            .count(),
+        1
+    );
+    assert!(postpack.chunk_seals().iter().any(|seal| {
+        seal.source_role() == gore_tex::container::VerifiedReadbackSourceRoleV1::Primary
+            && seal.chunk_type() == "ExportBundleData"
+    }));
+    let rebuilt_package =
+        gore_asset::LegacyPackageEnvelope::parse_g1r_ue5_4(&rebuilt_pair).unwrap();
+    let rebuilt_export = rebuilt_package.export(0).unwrap();
+    assert!(matches!(
+        original_selector.resolve(&rebuilt_pair, &rebuilt_export, &rebuilt_schemas),
+        Err(gore_asset::FixedLeafSelectorError::PackageDrift { .. })
+    ));
+    postpack
+        .fresh_selector()
+        .resolve(&rebuilt_pair, &rebuilt_export, &rebuilt_schemas)
+        .unwrap();
+
+    let mut different_usmap_selector = original_selector.clone();
+    let replacement_nibble = if different_usmap_selector.usmap_sha256.starts_with('0') {
+        "1"
+    } else {
+        "0"
+    };
+    different_usmap_selector
+        .usmap_sha256
+        .replace_range(..1, replacement_nibble);
+    let different_usmap_reviewed = gore_asset::prepare_reviewed_footstep_preset_size_v1(
+        SYNTHETIC_WOLF_ASSET,
+        &different_usmap_selector,
+        gore_asset::ReviewedFootstepPresetSizeV1::try_new(125.0, 200.0).unwrap(),
+    )
+    .unwrap();
+    let different_usmap_readback =
+        gore_tex::container::reopen_primary_asset_with_game_fallback_to_memory_v1(
+            &final_utoc,
+            &game,
+            SYNTHETIC_WOLF_ASSET,
+        )
+        .unwrap();
+    assert!(matches!(
+        gore_asset::verify_reviewed_footstep_preset_post_pack_v1(
+            &different_usmap_reviewed,
+            &copied_usmap_bytes,
+            &reopened,
+            different_usmap_readback,
+        ),
+        Err(gore_asset::ReviewedFootstepPresetPostPackErrorV1::UsmapSealMismatch)
+    ));
+
+    let scavenger_target = gore_asset::ReviewedFootstepPresetTargetV1::Scavenger;
+    let mut scavenger_selector = original_selector.clone();
+    scavenger_selector.object_name = scavenger_target.object_name().to_owned();
+    let scavenger_reviewed = gore_asset::prepare_reviewed_footstep_preset_size_v1(
+        scavenger_target.target_path(),
+        &scavenger_selector,
+        gore_asset::ReviewedFootstepPresetSizeV1::try_new(125.0, 200.0).unwrap(),
+    )
+    .unwrap();
+    let scavenger_readback =
+        gore_tex::container::reopen_primary_asset_with_game_fallback_to_memory_v1(
+            &final_utoc,
+            &game,
+            SYNTHETIC_WOLF_ASSET,
+        )
+        .unwrap();
+    assert!(matches!(
+        gore_asset::verify_reviewed_footstep_preset_post_pack_v1(
+            &scavenger_reviewed,
+            &copied_usmap_bytes,
+            &reopened,
+            scavenger_readback,
+        ),
+        Err(
+            gore_asset::ReviewedFootstepPresetPostPackErrorV1::ReadbackTargetMismatch {
+                expected,
+                actual,
+            }
+        ) if expected == scavenger_target.target_path() && actual == SYNTHETIC_WOLF_ASSET
+    ));
     let strict = &pack_receipt["output"]["strict_reopen"];
     assert_eq!(strict["package"], SYNTHETIC_WOLF_ASSET);
     assert_eq!(strict["export_path"], SYNTHETIC_WOLF_COOKED_PATH);
