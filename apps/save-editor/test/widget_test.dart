@@ -417,6 +417,50 @@ void main() {
     expect(find.text('nativeStruct'), findsOneWidget);
     expect(find.text('12 children'), findsOneWidget);
     expect(find.widgetWithText(TextFormField, 'X'), findsOneWidget);
+    final titleBottom = tester
+        .getBottomLeft(find.text('Transform › Location'))
+        .dy;
+    final badgeTop = tester.getTopLeft(find.text('nativeStruct')).dy;
+    expect(
+      badgeTop - titleBottom,
+      lessThan(20),
+      reason: 'single-line titles must not reserve three lines above badges',
+    );
+    final containerRow = find.byKey(const ValueKey('private:2'));
+    final containerTitle = find.descendant(
+      of: containerRow,
+      matching: find.text('Events'),
+    );
+    final containerBadge = find.descendant(
+      of: containerRow,
+      matching: find.text('array'),
+    );
+    expect(
+      tester.getTopLeft(containerBadge).dy -
+          tester.getBottomLeft(containerTitle).dy,
+      lessThan(20),
+      reason: 'read-only container cards use the same compact title layout',
+    );
+    final containerCard = find.descendant(
+      of: containerRow,
+      matching: find.byType(AnimatedContainer),
+    );
+    expect(
+      tester.getSize(containerCard).height,
+      lessThan(110),
+      reason: 'a one-line read-only value must not reserve four text lines',
+    );
+    final containerValue = find.descendant(
+      of: containerRow,
+      matching: find.text('12 elements'),
+    );
+    expect(
+      (tester.getTopLeft(containerTitle).dy -
+              tester.getTopLeft(containerValue).dy)
+          .abs(),
+      lessThan(3),
+      reason: 'card information and its value must share the top alignment',
+    );
 
     final queryField = find.byWidgetPredicate(
       (widget) =>
@@ -610,6 +654,54 @@ void main() {
     );
     expect(editableText.controller.text, originalName);
   });
+
+  testWidgets(
+    'invalid-only draft enables Reset, blocks Save, and guards rescan',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(_FakeCoreService()),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(GoresaveApp)),
+      );
+      container.read(editorProvider.notifier).setStoryStateEditInvalid(true);
+      await tester.pump();
+
+      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
+      final saveFinder = find.widgetWithText(FilledButton, 'Save (1)');
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(saveFinder).onPressed, isNull);
+
+      await tester.tap(find.byTooltip('Rescan save folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('Discard unsaved changes?'), findsOneWidget);
+      expect(
+        find.text(
+          'Rescanning reloads every save and discards your 1 unsaved change.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(resetFinder);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
+    },
+  );
 
   testWidgets('shows loading spinner in main editor view', (tester) async {
     final core = _SlowInspectCoreService();

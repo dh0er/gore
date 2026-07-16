@@ -902,7 +902,7 @@ class _EditorWorkspace extends StatelessWidget {
                       onPressed:
                           pendingCount > 0 &&
                               !state.isLoading &&
-                              !state.hasInvalidNpcEdit
+                              !state.hasInvalidEdits
                           ? notifier.saveAllPending
                           : null,
                     ),
@@ -2788,7 +2788,13 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              SelectableText(hit.display, maxLines: 3),
+              SelectionArea(
+                child: Text(
+                  hit.display,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
               const SizedBox(height: 4),
               Wrap(
                 spacing: 5,
@@ -2848,7 +2854,7 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
             );
           }
           return Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(child: info),
               const SizedBox(width: 18),
@@ -2863,14 +2869,20 @@ class _TypedPropertyRowState extends State<_TypedPropertyRow> {
   Widget _buildValueEditor(ThemeData theme) {
     final hit = widget.hit;
     if (!widget.editable) {
-      return SelectableText(
-        hit.value.isEmpty && hit.childCount > 0
-            ? AppLocalizations.of(context).allDataChildren(hit.childCount)
-            : hit.value,
-        maxLines: 4,
-        style: theme.textTheme.bodyMedium?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-          fontFamily: hit.kind == 'opaque' ? 'monospace' : null,
+      // SelectableText reserves its maxLines as field height. SelectionArea
+      // keeps the value copyable while a regular Text grows only for lines
+      // that are actually present.
+      return SelectionArea(
+        child: Text(
+          hit.value.isEmpty && hit.childCount > 0
+              ? AppLocalizations.of(context).allDataChildren(hit.childCount)
+              : hit.value,
+          maxLines: 4,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+            fontFamily: hit.kind == 'opaque' ? 'monospace' : null,
+          ),
         ),
       );
     }

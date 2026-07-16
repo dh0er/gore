@@ -23,6 +23,183 @@ class AppLocalizationsEs extends AppLocalizations {
       'Muestra los ID técnicos de objetos, conocimientos de diálogo, misiones y actores huérfanos. Los ID de NPC se muestran siempre.';
 
   @override
+  String get storyStateSidebar => 'Estado de la historia';
+
+  @override
+  String get storyStateDescription =>
+      'Catálogo autoritativo de estados persistentes declarados por los scripts distribuidos con el juego. Las entradas guardadas muestran su valor bruto; los campos del catálogo ausentes de esta partida se marcan como no establecidos. Las marcas de tiempo declaradas en el código se muestran como tiempo de juego; los demás enteros pueden ser booleanos, contadores o estados de varios niveles.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Solo lectura hasta conocer el significado de los valores en los scripts y disponer de escrituras seguras del mapa. El texto de glosario relacionado aporta contexto; no es una traducción directa del ID técnico.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'No se pudo identificar de forma inequívoca y segura la estructura StoryPropertyValues de esta partida guardada. Los valores de historia seguirán siendo de solo lectura para esta partida.';
+
+  @override
+  String get storyStateSearch => 'Buscar estados de historia';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown de $total valores de historia';
+  }
+
+  @override
+  String get storyStateInteger => 'Entero';
+
+  @override
+  String get storyStateTimeMarker => 'Marca de tiempo';
+
+  @override
+  String get storyStateChapter => 'Capítulo';
+
+  @override
+  String get storyStateUnknown => 'Tipo de origen desconocido';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'Este ID guardado no figura en el catálogo de scripts actual (por ejemplo, por un mod o una versión más reciente del juego). El valor almacenado es int32, pero no se infiere su significado.';
+
+  @override
+  String get storyStateStored => 'Guardado';
+
+  @override
+  String get storyStateUnset => 'No establecido';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'Este campo del catálogo no está serializado en esta partida; por tanto, el juego usa su estado no establecido o predeterminado.';
+
+  @override
+  String get storyStateRawValue => 'Valor bruto';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Tiempo transcurrido al guardar: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'Tiempo futuro al guardar: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days días',
+      one: '1 día',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Entrada de glosario relacionada';
+
+  @override
+  String get storyStateTechnicalPath => 'Ruta técnica';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Todas las entradas se pueden editar en todo el intervalo de int32 con signo. Los indicadores y las sugerencias de valores respaldados por los scripts son solo orientativos; la entrada sin procesar siempre está disponible. Los cambios en el estado de la historia pueden omitir transiciones de diálogos, misiones o del mundo, así que guárdalos con cuidado; se crea una copia de seguridad automáticamente.';
+
+  @override
+  String get storyStatePending => 'Pendiente';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Se guardará como $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Se eliminará de la partida guardada';
+
+  @override
+  String get storyStateEditValue => 'Editar valor';
+
+  @override
+  String get storyStateSetValue => 'Establecer valor';
+
+  @override
+  String get storyStateRemoveValue => 'Eliminar de la partida guardada';
+
+  @override
+  String get storyStateUndoChange => 'Deshacer cambio de historia';
+
+  @override
+  String get storyStateResetChanges => 'Restablecer cambios de historia';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return 'Editar $id';
+  }
+
+  @override
+  String get storyStateRawInput => 'Valor int32 con signo';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Introduce un número entero entre -2147483648 y 2147483647.';
+
+  @override
+  String get storyStateQueueChange => 'Añadir cambio a la cola';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Valores constatados en los scripts distribuidos: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Las sugerencias no son límites de validación; el código nativo, los mods o las versiones posteriores del juego pueden usar otros valores.';
+
+  @override
+  String get storyStateUseCurrentTime => 'Usar la hora actual de la partida';
+
+  @override
+  String get storyStateStructuredTime => 'Día / hora';
+
+  @override
+  String get storyStateRawMode => 'int32 sin procesar';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Cambiar solo el capítulo no sincroniza las misiones, los PNJ, el inventario ni el estado del mundo.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'No se encontró ninguna lectura ni escritura activa de este campo en la caché de scripts distribuida. Puede ser heredado, estar controlado por código nativo o estar reservado.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'Los scripts distribuidos leen este campo, pero no contienen ninguna escritura mediante scripts. Es posible que el código nativo siga controlándolo.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'Este ID de un mod o de una versión posterior no tiene semántica de código fuente incluida. Edita únicamente su valor int32 sin procesar.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Indicador binario',
+      'finiteState': 'Valor multiestado',
+      'counterOrScore': 'Contador / puntuación',
+      'calendarDay': 'Día natural',
+      'derivedOrOpaqueInteger': 'Entero derivado / opaco',
+      'readOnlyInSourceInteger': 'Solo lectura en los scripts distribuidos',
+      'dormantOrLegacyInteger': 'Sin uso en los scripts distribuidos',
+      'other': 'Entero',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'Un 0 guardado y una entrada ausente del mapa son estados de archivo distintos. «Eliminar de la partida guardada» restaura el estado del constructor o predeterminado.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

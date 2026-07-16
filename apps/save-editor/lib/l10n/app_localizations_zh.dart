@@ -21,6 +21,174 @@ class AppLocalizationsZh extends AppLocalizations {
   String get showObjectIdsSubtitle => '显示物品、对话知识、任务和孤立角色的技术 ID。NPC ID 始终显示。';
 
   @override
+  String get storyStateSidebar => '剧情状态';
+
+  @override
+  String get storyStateDescription =>
+      '游戏随附脚本中声明的持久剧情状态权威目录。已保存条目显示原始值；此存档中缺少的目录字段会标记为未设置。源码声明的时间标记会格式化为游戏时间，其他整数可能表示布尔值、计数器或多阶段状态。';
+
+  @override
+  String get storyStateReadOnly =>
+      '在确认脚本含义和安全的映射写入方式前保持只读。关联的词条文本仅提供上下文，并非技术 ID 的直接翻译。';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      '无法唯一且安全地确定此存档中的 StoryPropertyValues 结构。此存档的剧情值将保持只读。';
+
+  @override
+  String get storyStateSearch => '搜索剧情状态';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '已显示 $shown 个，共 $total 个剧情值';
+  }
+
+  @override
+  String get storyStateInteger => '整数';
+
+  @override
+  String get storyStateTimeMarker => '时间标记';
+
+  @override
+  String get storyStateChapter => '章节';
+
+  @override
+  String get storyStateUnknown => '未知源码类型';
+
+  @override
+  String get storyStateUnknownDetail =>
+      '当前脚本目录中没有此已保存 ID（例如来自模组或更新的游戏版本）。其存档线值为 int32，但不会推断其含义。';
+
+  @override
+  String get storyStateStored => '已保存';
+
+  @override
+  String get storyStateUnset => '未设置';
+
+  @override
+  String get storyStateUnsetDetail => '此目录字段未序列化到该存档中，因此游戏会使用未设置或默认状态。';
+
+  @override
+  String get storyStateRawValue => '原始值';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return '保存时已过去：$duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return '保存时尚在未来：$duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    return '$days 天 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => '关联词条';
+
+  @override
+  String get storyStateTechnicalPath => '技术路径';
+
+  @override
+  String get storyStateEditingGuidance =>
+      '所有条目在整个有符号 int32 范围内都可编辑。根据脚本确定的标志和建议值仅供参考；始终可以直接输入原始值。更改剧情状态可能会跳过对话、任务或世界的正常转换，因此请谨慎保存。系统会自动创建备份。';
+
+  @override
+  String get storyStatePending => '待处理';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return '将保存为 $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => '将从存档中移除';
+
+  @override
+  String get storyStateEditValue => '编辑值';
+
+  @override
+  String get storyStateSetValue => '设置值';
+
+  @override
+  String get storyStateRemoveValue => '从存档中移除';
+
+  @override
+  String get storyStateUndoChange => '撤销剧情更改';
+
+  @override
+  String get storyStateResetChanges => '重置剧情更改';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return '编辑 $id';
+  }
+
+  @override
+  String get storyStateRawInput => '有符号 int32 值';
+
+  @override
+  String get storyStateInvalidInt32 => '请输入 -2147483648 到 2147483647 之间的整数。';
+
+  @override
+  String get storyStateQueueChange => '将更改加入队列';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return '随游戏提供的脚本中已确认的值：$values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      '建议值不是验证限制；原生代码、模组或后续游戏版本可能会使用其他值。';
+
+  @override
+  String get storyStateUseCurrentTime => '使用当前存档时间';
+
+  @override
+  String get storyStateStructuredTime => '天数 / 时间';
+
+  @override
+  String get storyStateRawMode => '原始 int32';
+
+  @override
+  String get storyStateChapterWarning => '仅更改章节不会同步任务、NPC、物品栏或世界状态。';
+
+  @override
+  String get storyStateDormantWarning =>
+      '在随游戏提供的脚本缓存中未找到对此字段的有效读取或写入。它可能是旧字段、由原生代码控制，或为保留字段。';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      '随游戏提供的脚本会读取此字段，但没有通过脚本写入。它仍可能由原生代码管理。';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      '这个来自模组或后续版本的 ID 没有内置的源码语义。请仅编辑其原始 int32 值。';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': '二进制标志',
+      'finiteState': '多状态值',
+      'counterOrScore': '计数器 / 分数',
+      'calendarDay': '日历日',
+      'derivedOrOpaqueInteger': '派生 / 不透明整数',
+      'readOnlyInSourceInteger': '随附脚本中只读',
+      'dormantOrLegacyInteger': '随附脚本中未使用',
+      'other': '整数',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      '已保存的 0 与映射中没有该条目是两种不同的文件状态。“从存档中移除”会恢复构造函数或默认状态。';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override
@@ -2373,6 +2541,174 @@ class AppLocalizationsZhHans extends AppLocalizationsZh {
 
   @override
   String get showObjectIdsSubtitle => '显示物品、对话知识、任务和孤立角色的技术 ID。NPC ID 始终显示。';
+
+  @override
+  String get storyStateSidebar => '剧情状态';
+
+  @override
+  String get storyStateDescription =>
+      '游戏随附脚本中声明的持久剧情状态权威目录。已保存条目显示原始值；此存档中缺少的目录字段会标记为未设置。源码声明的时间标记会格式化为游戏时间，其他整数可能表示布尔值、计数器或多阶段状态。';
+
+  @override
+  String get storyStateReadOnly =>
+      '在确认脚本含义和安全的映射写入方式前保持只读。关联的词条文本仅提供上下文，并非技术 ID 的直接翻译。';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      '无法唯一且安全地确定此存档中的 StoryPropertyValues 结构。此存档的剧情值将保持只读。';
+
+  @override
+  String get storyStateSearch => '搜索剧情状态';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '已显示 $shown 个，共 $total 个剧情值';
+  }
+
+  @override
+  String get storyStateInteger => '整数';
+
+  @override
+  String get storyStateTimeMarker => '时间标记';
+
+  @override
+  String get storyStateChapter => '章节';
+
+  @override
+  String get storyStateUnknown => '未知源码类型';
+
+  @override
+  String get storyStateUnknownDetail =>
+      '当前脚本目录中没有此已保存 ID（例如来自模组或更新的游戏版本）。其存档线值为 int32，但不会推断其含义。';
+
+  @override
+  String get storyStateStored => '已保存';
+
+  @override
+  String get storyStateUnset => '未设置';
+
+  @override
+  String get storyStateUnsetDetail => '此目录字段未序列化到该存档中，因此游戏会使用未设置或默认状态。';
+
+  @override
+  String get storyStateRawValue => '原始值';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return '保存时已过去：$duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return '保存时尚在未来：$duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    return '$days 天 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => '关联词条';
+
+  @override
+  String get storyStateTechnicalPath => '技术路径';
+
+  @override
+  String get storyStateEditingGuidance =>
+      '所有条目在整个有符号 int32 范围内都可编辑。根据脚本确定的标志和建议值仅供参考；始终可以直接输入原始值。更改剧情状态可能会跳过对话、任务或世界的正常转换，因此请谨慎保存。系统会自动创建备份。';
+
+  @override
+  String get storyStatePending => '待处理';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return '将保存为 $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => '将从存档中移除';
+
+  @override
+  String get storyStateEditValue => '编辑值';
+
+  @override
+  String get storyStateSetValue => '设置值';
+
+  @override
+  String get storyStateRemoveValue => '从存档中移除';
+
+  @override
+  String get storyStateUndoChange => '撤销剧情更改';
+
+  @override
+  String get storyStateResetChanges => '重置剧情更改';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return '编辑 $id';
+  }
+
+  @override
+  String get storyStateRawInput => '有符号 int32 值';
+
+  @override
+  String get storyStateInvalidInt32 => '请输入 -2147483648 到 2147483647 之间的整数。';
+
+  @override
+  String get storyStateQueueChange => '将更改加入队列';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return '随游戏提供的脚本中已确认的值：$values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      '建议值不是验证限制；原生代码、模组或后续游戏版本可能会使用其他值。';
+
+  @override
+  String get storyStateUseCurrentTime => '使用当前存档时间';
+
+  @override
+  String get storyStateStructuredTime => '天数 / 时间';
+
+  @override
+  String get storyStateRawMode => '原始 int32';
+
+  @override
+  String get storyStateChapterWarning => '仅更改章节不会同步任务、NPC、物品栏或世界状态。';
+
+  @override
+  String get storyStateDormantWarning =>
+      '在随游戏提供的脚本缓存中未找到对此字段的有效读取或写入。它可能是旧字段、由原生代码控制，或为保留字段。';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      '随游戏提供的脚本会读取此字段，但没有通过脚本写入。它仍可能由原生代码管理。';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      '这个来自模组或后续版本的 ID 没有内置的源码语义。请仅编辑其原始 int32 值。';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': '二进制标志',
+      'finiteState': '多状态值',
+      'counterOrScore': '计数器 / 分数',
+      'calendarDay': '日历日',
+      'derivedOrOpaqueInteger': '派生 / 不透明整数',
+      'readOnlyInSourceInteger': '随附脚本中只读',
+      'dormantOrLegacyInteger': '随附脚本中未使用',
+      'other': '整数',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      '已保存的 0 与映射中没有该条目是两种不同的文件状态。“从存档中移除”会恢复构造函数或默认状态。';
 
   @override
   String get appTitle => 'GORE Save Editor';

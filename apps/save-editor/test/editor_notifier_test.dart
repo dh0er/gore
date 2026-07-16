@@ -11,6 +11,7 @@ import 'package:goresave/features/editor/domain/glossary_models.dart';
 import 'package:goresave/features/editor/domain/npc_actors_page.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
+import 'package:goresave/features/editor/domain/story_state_models.dart';
 import 'package:goresave/l10n/app_localizations_de.dart';
 import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/providers/data_providers.dart';
@@ -365,6 +366,19 @@ void main() {
       const Actor.npc(id: 'Lizard-2', name: 'L2', uniqueName: 'Lizard'),
     );
     expect(notifier.state.hasInvalidNpcEdit, isFalse);
+  });
+
+  test('legacy invalidNpcEditKey remains a compatible state channel', () {
+    final state = EditorState(
+      saveDir: r'C:\tmp\saves',
+      invalidNpcEditKey: 'legacy-npc-draft',
+    );
+
+    expect(state.invalidNpcEditKey, 'legacy-npc-draft');
+    expect(state.invalidEditKeys, {'legacy-npc-draft'});
+    final cleared = state.copyWith(invalidNpcEditKey: null);
+    expect(cleared.invalidNpcEditKey, isNull);
+    expect(cleared.invalidEditKeys, isEmpty);
   });
 
   test(
@@ -733,9 +747,24 @@ void main() {
   });
 
   test('saveAllPending keeps pending edits on failure', () async {
-    final core = _FailingWriteCoreService();
+    final core = _FailingWriteCoreService(
+      scanData: {
+        'saves': [
+          {
+            'path': r'C:\tmp\saves\G1R-001.sav',
+            'slot': 'G1R-001',
+            'format': 'GSAV',
+            'fileSize': 914367,
+            'sha1': 'abc',
+            'status': 'ok',
+            'playerSaveName': 'Auto',
+          },
+        ],
+      },
+    );
     final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
     await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+    await pumpEventQueue();
     notifier.setPendingEdit(
       'publicName',
       const PendingSaveEdit(
@@ -744,10 +773,17 @@ void main() {
         ],
       ),
     );
+    final scansBefore = core.commandCount('scan_save_dir');
+    final inspectionsBefore = core.commandCount('inspect_save');
+    final backupsBefore = core.commandCount('list_backups');
 
     final ok = await notifier.saveAllPending();
 
     expect(ok, isFalse);
+    expect(notifier.state.error, contains('write failed'));
+    expect(core.commandCount('scan_save_dir'), scansBefore + 1);
+    expect(core.commandCount('inspect_save'), inspectionsBefore + 1);
+    expect(core.commandCount('list_backups'), backupsBefore + 1);
     // Pending edits must be preserved so the user can retry.
     expect(notifier.state.pendingEdits.containsKey('publicName'), isTrue);
   });
@@ -2678,6 +2714,38 @@ void main() {
     },
   );
 
+  test('loadStoryState honors a pinned save path', () async {
+    final core = _RecordingCoreService(
+      progressionData: {
+        'section': 'story',
+        'total': 0,
+        'offset': 0,
+        'limit': 1000,
+        'count': 0,
+        'catalogTotal': 470,
+        'storedTotal': 0,
+        'unsetTotal': 470,
+        'unknownStoredTotal': 0,
+        'entries': <Object?>[],
+      },
+    );
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-002.sav');
+
+    final page = await notifier.loadStoryState(
+      includeUnset: true,
+      path: r'C:\tmp\saves\G1R-001.sav',
+    );
+
+    expect(page.error, isNull);
+    final call = core.requests.lastWhere(
+      (request) => request.command == 'query_progression',
+    );
+    expect(call.payload['section'], 'story');
+    expect(call.payload['includeUnset'], isTrue);
+    expect(call.payload['path'], r'C:\tmp\saves\G1R-001.sav');
+  });
+
   test('progression loaders surface core errors inline', () async {
     // The default _RecordingCoreService returns ok:false for query_progression
     // (no progressionData set), so the loader should surface the error inline.
@@ -4357,6 +4425,178 @@ void main() {
     notifier.clearPendingGlossarySegment(document, segment);
     expect(notifier.pendingGlossarySegment(document, segment), isNull);
   });
+
+  test('story changes aggregate case-insensitively and remove on revert', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    const stone = StoryStateEdit(
+      id: 'Stone_OreArmor',
+      present: true,
+      rawValue: 123,
+      expectedStored: true,
+      expectedRawValue: 100,
+    );
+    const chapter = StoryStateEdit(
+      id: 'Chapter',
+      present: true,
+      rawValue: 3,
+      expectedStored: false,
+      expectedRawValue: null,
+    );
+
+    notifier.setStoryStateEdit(stone);
+    notifier.setStoryStateEdit(chapter);
+
+    expect(notifier.pendingEditCount, 2);
+    expect(notifier.state.pendingEdits.keys, [storyStatePendingKey]);
+    expect(notifier.allStoryStateEdits().map((edit) => edit.id), [
+      'Chapter',
+      'Stone_OreArmor',
+    ]);
+    expect(notifier.storyStateEditFor(' stone_orearmor '), stone);
+    final wire = notifier.pendingEditFor(storyStatePendingKey)!.edits.single;
+    expect(wire['path'], storyStateApplyPath);
+    expect(((wire['value'] as Map)['changes'] as List), hasLength(2));
+
+    // Same normalized ID, restored to its original snapshot: remove only Stone.
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'stone_orearmor',
+        present: true,
+        rawValue: 100,
+        expectedStored: true,
+        expectedRawValue: 100,
+      ),
+    );
+    expect(notifier.storyStateEditFor('Stone_OreArmor'), isNull);
+    expect(notifier.pendingEditCount, 1);
+
+    notifier.clearStoryStateEdit('CHAPTER');
+    expect(notifier.pendingEditFor(storyStatePendingKey), isNull);
+  });
+
+  test('story apply gets an exclusive structural sub-write', () async {
+    final core = _RecordingCoreService();
+    final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+    await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+
+    notifier.setPendingEdit(
+      'publicName',
+      const PendingSaveEdit(
+        edits: [
+          {'path': 'public.m_PlayerSaveName', 'value': 'After story edit'},
+        ],
+      ),
+    );
+    notifier.setStoryStateEdit(
+      const StoryStateEdit(
+        id: 'Chapter',
+        present: true,
+        rawValue: 3,
+        expectedStored: true,
+        expectedRawValue: 2,
+      ),
+    );
+
+    expect(await notifier.saveAllPending(), isTrue);
+    final writes = core.requests
+        .where((request) => request.command == 'write_save')
+        .toList();
+    expect(writes, hasLength(2));
+    expect(
+      (writes[0].payload['edits'] as List).single['path'],
+      'public.m_PlayerSaveName',
+    );
+    expect(
+      (writes[1].payload['edits'] as List).single['path'],
+      storyStateApplyPath,
+    );
+    expect(writes[0].payload['backup'], isTrue);
+    expect(writes[1].payload['backup'], isFalse);
+  });
+
+  test(
+    'story CAS failure refreshes disk and preserves the pending target',
+    () async {
+      final core = _StoryCasFailureCoreService();
+      final notifier = EditorNotifier(core, saveDir: r'C:\tmp\saves');
+      await notifier.inspect(r'C:\tmp\saves\G1R-001.sav');
+      await pumpEventQueue();
+
+      final initialPage = await notifier.loadStoryState(includeUnset: true);
+      final initialRow = initialPage.values.single;
+      expect(initialRow.value, 100);
+      notifier.setStoryStateEdit(
+        StoryStateEdit.fromValue(initialRow, present: true, rawValue: 123),
+      );
+      final scansBefore = core.commandCount('scan_save_dir');
+      final inspectionsBefore = core.commandCount('inspect_save');
+      final backupsBefore = core.commandCount('list_backups');
+
+      final ok = await notifier.saveAllPending();
+
+      expect(ok, isFalse);
+      expect(notifier.state.error, contains('story CAS mismatch'));
+      expect(notifier.state.selectedPath, r'C:\tmp\saves\G1R-001.sav');
+      expect(core.commandCount('scan_save_dir'), scansBefore + 1);
+      expect(core.commandCount('inspect_save'), inspectionsBefore + 1);
+      expect(core.commandCount('list_backups'), backupsBefore + 1);
+      final writeIndex = core.requests.lastIndexWhere(
+        (request) => request.command == 'write_save',
+      );
+      expect(
+        core.requests
+            .skip(writeIndex + 1)
+            .take(3)
+            .map((request) => request.command),
+        ['scan_save_dir', 'inspect_save', 'list_backups'],
+      );
+
+      final preserved = notifier.storyStateEditFor('Stone_OreArmor');
+      expect(preserved, isNotNull);
+      expect(preserved!.rawValue, 123);
+      expect(preserved.expectedRawValue, 100);
+
+      // The failed CAS fake changes the disk value before returning its error.
+      // Re-loading and re-queuing against that row must advance the expected
+      // snapshot while retaining the user's desired target.
+      final freshPage = await notifier.loadStoryState(includeUnset: true);
+      final freshRow = freshPage.values.single;
+      expect(freshRow.value, 200);
+      notifier.setStoryStateEdit(
+        StoryStateEdit.fromValue(freshRow, present: true, rawValue: 123),
+      );
+      final requeued = notifier.storyStateEditFor('stone_orearmor');
+      expect(requeued, isNotNull);
+      expect(requeued!.rawValue, 123);
+      expect(requeued.expectedRawValue, 200);
+    },
+  );
+
+  test('generic invalid edits block save and survive NPC actor switching', () {
+    final notifier = EditorNotifier(
+      _RecordingCoreService(),
+      saveDir: r'C:\tmp\saves',
+    );
+    notifier.setStoryStateEditInvalid(true);
+
+    expect(notifier.state.hasInvalidEdits, isTrue);
+    expect(notifier.state.hasUnsavedEdits, isTrue);
+    expect(notifier.pendingEditCount, 1);
+    expect(notifier.state.hasInvalidNpcEdit, isTrue);
+
+    notifier.setNpcEditInvalid('npc.attributes:Lizard-1');
+    notifier.selectActor(
+      const Actor.npc(id: 'Lizard-2', name: 'L2', uniqueName: 'Lizard'),
+    );
+    expect(notifier.state.invalidEditKeys, {storyStatePendingKey});
+
+    notifier.clearAllPendingEdits();
+    expect(notifier.state.hasInvalidEdits, isFalse);
+    expect(notifier.state.hasUnsavedEdits, isFalse);
+  });
 }
 
 class _MemoryEditorSettingsStore implements EditorSettingsStore {
@@ -4410,6 +4650,9 @@ class _RecordingCoreService implements GoresaveCoreService {
   final Map<String, Object?>? factionsData;
 
   final requests = <_RecordedRequest>[];
+
+  int commandCount(String command) =>
+      requests.where((request) => request.command == command).length;
 
   @override
   String get description => 'recording-core';
@@ -4714,6 +4957,8 @@ class _FailingAssignProfileCoreService extends _RecordingCoreService {
 
 /// write_save always fails.
 class _FailingWriteCoreService extends _RecordingCoreService {
+  _FailingWriteCoreService({super.scanData});
+
   @override
   Future<Map<String, Object?>> execute(
     String command, {
@@ -4726,6 +4971,82 @@ class _FailingWriteCoreService extends _RecordingCoreService {
       return {
         'ok': false,
         'error': {'message': 'write failed'},
+      };
+    }
+    return super.execute(command, payload: payload);
+  }
+}
+
+/// Mimics an optimistic-concurrency failure where another writer changes the
+/// sole story value before the core rejects our stale expectedRawValue.
+class _StoryCasFailureCoreService extends _RecordingCoreService {
+  _StoryCasFailureCoreService()
+    : super(
+        scanData: {
+          'saves': [
+            {
+              'path': r'C:\tmp\saves\G1R-001.sav',
+              'slot': 'G1R-001',
+              'format': 'GSAV',
+              'fileSize': 914367,
+              'sha1': 'abc',
+              'status': 'ok',
+              'playerSaveName': 'Auto',
+            },
+          ],
+        },
+      );
+
+  var storyRawValue = 100;
+
+  @override
+  Future<Map<String, Object?>> execute(
+    String command, {
+    Map<String, Object?> payload = const {},
+  }) async {
+    if (command == 'query_progression' && payload['section'] == 'story') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      return {
+        'ok': true,
+        'data': {
+          'section': 'story',
+          'total': 1,
+          'storedTotal': 1,
+          'catalogTotal': 470,
+          'unsetTotal': 469,
+          'unknownStoredTotal': 0,
+          'offset': payload['offset'] ?? 0,
+          'limit': payload['limit'] ?? 1000,
+          'count': 1,
+          'entries': [
+            {
+              'id': 'Stone_OreArmor',
+              'rawValue': storyRawValue,
+              'stored': true,
+              'catalogKnown': true,
+              'path': ['StoryPropertyValues', '{Stone_OreArmor}'],
+              'semanticType': 'timeMarker',
+              'declaredType': 'FInGameTime',
+            },
+          ],
+          'currentGameTimeSeconds': 300.0,
+          'writable': true,
+        },
+      };
+    }
+    if (command == 'write_save') {
+      requests.add(
+        _RecordedRequest(command, Map<String, Object?>.from(payload)),
+      );
+      storyRawValue = 200;
+      return {
+        'ok': false,
+        'error': {
+          'code': 'story_value_conflict',
+          'message': 'story CAS mismatch: Stone_OreArmor changed on disk',
+        },
       };
     }
     return super.execute(command, payload: payload);

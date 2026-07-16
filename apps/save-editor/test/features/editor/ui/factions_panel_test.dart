@@ -186,7 +186,9 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets('Fraktionen entry sits in the World sidebar', (tester) async {
+  testWidgets('World sidebar keeps its requested section order', (
+    tester,
+  ) async {
     final core = _FactionsCore(guilds: []);
     final notifier = await _notifier(tester, core);
 
@@ -201,8 +203,14 @@ void main() {
     );
     await _settle(tester);
 
-    // English label for factionsSidebar is "Factions".
-    expect(find.text('Factions'), findsOneWidget);
+    final questsY = tester.getTopLeft(find.text('Quests').first).dy;
+    final glossaryY = tester.getTopLeft(find.text('Glossary').first).dy;
+    final factionsY = tester.getTopLeft(find.text('Factions').first).dy;
+    final storyStateY = tester.getTopLeft(find.text('Story state').first).dy;
+
+    expect(questsY, lessThan(glossaryY));
+    expect(glossaryY, lessThan(factionsY));
+    expect(factionsY, lessThan(storyStateY));
   });
 
   testWidgets('Factions pane lists guilds with a Forgive button', (

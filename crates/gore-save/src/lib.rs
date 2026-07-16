@@ -5,6 +5,7 @@ pub mod npc;
 pub mod properties;
 pub mod skills;
 pub mod startsaves;
+pub mod story;
 
 use base64::{Engine as _, engine::general_purpose};
 use serde::{Deserialize, Serialize};
@@ -12,9 +13,11 @@ use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::{CStr, CString, c_char};
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -1652,6 +1655,17 @@ fn list_persistent_data_list_backups_for_save(
 }
 
 fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
+    restore_backup_with_before_replace(path, backup_path, |_| Ok(()))
+}
+
+fn restore_backup_with_before_replace<F>(
+    path: &Path,
+    backup_path: &Path,
+    before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+{
     ensure_backup_belongs_to_save(path, backup_path)?;
     let backup_data = fs::read(backup_path)?;
     inspect_bytes(&backup_data, Some(backup_path), false)?;
@@ -1694,26 +1708,37 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     // the safety backup must avoid existing slot-backup suffixes too — otherwise
     // it could land on a slot's suffix and be wrongly paired as that slot's
     // companion on a later slot restore (same hazard as the write path).
-    let current_backup_path = if target_is_profile {
-        create_unique_backup_avoiding(path, &existing_foreign_backup_suffixes(path))?
-    } else {
-        create_backup_copy(path)?
-    };
-    let companion_safety_backup = match &companion_plan {
-        Some(plan) => Some(create_backup_copy(&plan.persistent_path)?),
-        None => None,
+    let (current_backup_path, companion_safety_backup) = match &companion_plan {
+        Some(plan) => {
+            let (slot_backup, companion_backup) = create_paired_backup_bytes(
+                path,
+                &original,
+                &plan.persistent_path,
+                &plan.original_data,
+            )?;
+            (slot_backup, Some(companion_backup))
+        }
+        None if target_is_profile => (
+            create_backup_bytes_avoiding(path, &original, &existing_foreign_backup_suffixes(path))?,
+            None,
+        ),
+        None => (create_backup_bytes_avoiding(path, &original, &[])?, None),
     };
 
-    // Stage both writes to temp files and validate before committing either.
-    let slot_tmp = path.with_extension("sav.tmp-goresave-restore");
-    fs::write(&slot_tmp, &backup_data)?;
-    inspect_save(&slot_tmp, false)?;
+    // Stage both writes in unique same-directory files and validate before
+    // committing either. Fixed temp names let concurrent restores overwrite
+    // each other's already-validated bytes.
+    let slot_tmp = ScratchFile::create(path, "tmp-restore", &backup_data)?;
+    inspect_save(slot_tmp.path(), false)?;
     let companion_tmp = match &companion_plan {
         Some(plan) => {
-            let tmp = plan
-                .persistent_path
-                .with_extension("sav.tmp-goresave-restore");
-            fs::write(&tmp, &plan.companion_data)?;
+            let tmp =
+                ScratchFile::create(&plan.persistent_path, "tmp-restore", &plan.companion_data)?;
+            if !fs::read(tmp.path())?.starts_with(b"GVAS") {
+                return Err(CoreError::Validation(
+                    "staged PersistentDataList.sav restore lost its GVAS header".to_string(),
+                ));
+            }
             Some(tmp)
         }
         None => None,
@@ -1722,16 +1747,29 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
     // Commit: both files are validated and staged. Replace the slot first, then
     // the companion; if the companion replace fails, roll the slot back so they
     // never end up restored to different edits.
-    let slot_pending = begin_replace(path, &slot_tmp)?;
+    before_replace(path)?;
+    let slot_pending = begin_replace_if_unchanged(
+        path,
+        slot_tmp.path(),
+        &FileSnapshot::Present(original.clone()),
+    )?;
     if let (Some(plan), Some(tmp)) = (&companion_plan, &companion_tmp) {
-        match begin_replace(&plan.persistent_path, tmp) {
+        match begin_replace_if_unchanged(
+            &plan.persistent_path,
+            tmp.path(),
+            &FileSnapshot::Present(plan.original_data.clone()),
+        ) {
             Ok(companion_pending) => {
                 companion_pending.commit();
                 slot_pending.commit();
             }
             Err(err) => {
-                slot_pending.rollback();
-                return Err(err);
+                return match slot_pending.rollback() {
+                    Ok(()) => Err(err),
+                    Err(rollback_error) => Err(CoreError::Update(format!(
+                        "{err}; slot rollback also failed safely: {rollback_error}"
+                    ))),
+                };
             }
         }
     } else {
@@ -1752,7 +1790,7 @@ fn restore_backup(path: &Path, backup_path: &Path) -> Result<Value, CoreError> {
         "persistentBackupPath": companion_safety_backup
             .as_ref()
             .map(|p| p.display().to_string()),
-        "persistentBytesChanged": companion_plan.is_some(),
+        "persistentBytesChanged": companion_plan.as_ref().is_some_and(|plan| plan.bytes_changed),
         // Whether a PersistentDataList.sav sits next to the save. When this is
         // true but persistentRestoredFrom is null, no paired companion backup
         // matched the slot backup, so the list was left unchanged and the caller
@@ -1768,6 +1806,8 @@ struct CompanionRestorePlan {
     persistent_path: PathBuf,
     companion_backup_path: PathBuf,
     companion_data: Vec<u8>,
+    original_data: Vec<u8>,
+    bytes_changed: bool,
 }
 
 /// Locate and validate the paired `PersistentDataList.sav` backup that
@@ -1776,8 +1816,9 @@ struct CompanionRestorePlan {
 /// `123` or `123.1`), so two edits within the same second still match the right
 /// companion. This performs no mutations: it only reads and validates so the
 /// caller can abort the restore before touching any file. Returns `None` when
-/// there is no companion to roll back (no PersistentDataList.sav, no matching
-/// backup, or already identical).
+/// there is no companion to coordinate (no PersistentDataList.sav or no
+/// matching backup). An already-identical companion still produces a plan so
+/// it is CAS-verified during the two-file restore.
 fn prepare_paired_persistent_data_list_restore(
     save_path: &Path,
     slot_backup_path: &Path,
@@ -1852,14 +1893,14 @@ fn prepare_paired_persistent_data_list_restore(
         ));
     }
     let current = fs::read(&persistent_path)?;
-    if current == companion_data {
-        return Ok(None);
-    }
+    let bytes_changed = current != companion_data;
 
     Ok(Some(CompanionRestorePlan {
         persistent_path,
         companion_backup_path,
         companion_data,
+        original_data: current,
+        bytes_changed,
     }))
 }
 
@@ -1903,6 +1944,27 @@ struct PendingReplace {
     /// The moved-aside previous file, kept until [`PendingReplace::commit`]. If
     /// `None`, the target was newly created and rollback just removes it.
     aside: Option<PathBuf>,
+    /// Exact bytes installed by this transaction. Rollback first claims the
+    /// current target and compares it with these bytes, so it never blindly
+    /// deletes a save another writer installed after us.
+    installed: Vec<u8>,
+}
+
+/// Exact target state captured before an edit is prepared. Comparing bytes,
+/// rather than only timestamps/lengths, prevents a same-size or coarse-mtime
+/// concurrent save from being mistaken for the original.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum FileSnapshot {
+    Missing,
+    Present(Vec<u8>),
+}
+
+fn snapshot_file(path: &Path) -> Result<FileSnapshot, CoreError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(FileSnapshot::Present(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(FileSnapshot::Missing),
+        Err(error) => Err(CoreError::Io(error.to_string())),
+    }
 }
 
 impl PendingReplace {
@@ -1915,16 +1977,262 @@ impl PendingReplace {
 
     /// Undo the replacement, restoring the original file (or removing a
     /// newly-created target) so the path returns to its pre-commit contents.
-    fn rollback(self) {
-        match self.aside {
-            Some(aside) => {
-                let _ = fs::remove_file(&self.target);
-                let _ = fs::rename(&aside, &self.target);
+    fn rollback(self) -> Result<(), CoreError> {
+        let current_claim = match claim_existing_target(&self.target, "rollback") {
+            Ok(path) => Some(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(map_locked_file_error(
+                    error,
+                    &format!("claiming {} for rollback", self.target.display()),
+                ));
             }
-            None => {
-                let _ = fs::remove_file(&self.target);
+        };
+
+        let Some(current_claim) = current_claim else {
+            if let Some(aside) = self.aside {
+                return restore_claim_noclobber(&aside, &self.target).map_err(|error| {
+                    recovery_error(
+                        &self.target,
+                        &aside,
+                        "the edited target disappeared before rollback",
+                        error,
+                    )
+                });
             }
+            return Ok(());
+        };
+
+        let current = match fs::read(&current_claim) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return Err(abort_claim_with_restore(
+                    &self.target,
+                    &current_claim,
+                    CoreError::Io(format!(
+                        "could not verify {} during rollback: {error}",
+                        self.target.display()
+                    )),
+                ));
+            }
+        };
+        if current != self.installed {
+            return Err(abort_claim_with_restore(
+                &self.target,
+                &current_claim,
+                CoreError::Update(format!(
+                    "{} changed again before rollback; the newer target was preserved",
+                    self.target.display()
+                )),
+            ));
         }
+
+        match self.aside {
+            Some(aside) => match restore_claim_noclobber(&aside, &self.target) {
+                Ok(()) => fs::remove_file(&current_claim).map_err(CoreError::from),
+                Err(error) => {
+                    // `current_claim` is exactly our installed payload, so it
+                    // is safe to discard. The original remains at `aside` and
+                    // any racing target remains untouched.
+                    let _ = fs::remove_file(&current_claim);
+                    Err(recovery_error(
+                        &self.target,
+                        &aside,
+                        "a concurrent writer won while rollback was restoring the original",
+                        error,
+                    ))
+                }
+            },
+            None => fs::remove_file(&current_claim).map_err(CoreError::from),
+        }
+    }
+}
+
+static UNIQUE_SIDECAR_ID: AtomicU64 = AtomicU64::new(0);
+
+fn unique_sidecar_candidate(target: &Path, label: &str) -> PathBuf {
+    let mut file_name = target
+        .file_name()
+        .map(ToOwned::to_owned)
+        .unwrap_or_default();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let sequence = UNIQUE_SIDECAR_ID.fetch_add(1, Ordering::Relaxed);
+    file_name.push(format!(
+        ".{label}-goresave-{}-{nanos}-{sequence}",
+        std::process::id()
+    ));
+    target.with_file_name(file_name)
+}
+
+/// Unique same-directory staging file. `Drop` removes it on every error path;
+/// after a successful atomic rename the old staging path simply no longer
+/// exists. Same-directory placement is required by the no-replace rename
+/// primitives and avoids cross-volume publication.
+struct ScratchFile {
+    path: PathBuf,
+}
+
+impl ScratchFile {
+    fn create(target: &Path, label: &str, bytes: &[u8]) -> Result<Self, CoreError> {
+        for _ in 0..1024 {
+            let path = unique_sidecar_candidate(target, label);
+            let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(CoreError::Io(error.to_string())),
+            };
+            if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+                drop(file);
+                let _ = fs::remove_file(&path);
+                return Err(CoreError::Io(error.to_string()));
+            }
+            drop(file);
+            return Ok(Self { path });
+        }
+        Err(CoreError::Io(format!(
+            "could not create a unique staging file next to {}",
+            target.display()
+        )))
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for ScratchFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Atomically move `source` to `destination` only when `destination` does not
+/// exist. Unsupported platforms fail closed instead of falling back to the
+/// check-then-rename pattern (which overwrites on Unix).
+#[cfg(windows)]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_WRITE_THROUGH, MoveFileExW};
+
+    let source: Vec<u16> = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // Deliberately omit MOVEFILE_REPLACE_EXISTING: a racing creator owns the
+    // destination and wins.
+    let moved = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if moved == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let destination = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let renamed = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if renamed == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let source = CString::new(source.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let destination = CString::new(destination.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let renamed =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    if renamed == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "this platform has no supported atomic no-replace rename primitive",
+    ))
+}
+
+fn claim_existing_target(target: &Path, label: &str) -> std::io::Result<PathBuf> {
+    for _ in 0..1024 {
+        let candidate = unique_sidecar_candidate(target, label);
+        match rename_noreplace(target, &candidate) {
+            Ok(()) => return Ok(candidate),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!(
+            "could not reserve a unique {label} sidecar for {}",
+            target.display()
+        ),
+    ))
+}
+
+fn restore_claim_noclobber(claim: &Path, target: &Path) -> std::io::Result<()> {
+    rename_noreplace(claim, target)
+}
+
+fn recovery_error(
+    target: &Path,
+    recovery: &Path,
+    context: &str,
+    error: std::io::Error,
+) -> CoreError {
+    CoreError::Update(format!(
+        "{context}: {} was not overwritten; the displaced bytes remain at {} ({error})",
+        target.display(),
+        recovery.display()
+    ))
+}
+
+fn abort_claim_with_restore(target: &Path, claim: &Path, original: CoreError) -> CoreError {
+    match restore_claim_noclobber(claim, target) {
+        Ok(()) => original,
+        Err(error) => recovery_error(target, claim, &format!("{original}"), error),
     }
 }
 
@@ -1952,45 +2260,111 @@ fn map_locked_file_error(err: std::io::Error, context: &str) -> CoreError {
     }
 }
 
-/// Replace `target` with the staged file at `staged` without ever leaving
-/// `target` missing on failure. Windows `rename` cannot overwrite, so the
-/// current file is moved aside first; if renaming the staged file in fails, the
-/// aside copy is moved back so the slot is never lost. The returned
-/// [`PendingReplace`] must be either committed or rolled back.
-fn begin_replace(target: &Path, staged: &Path) -> Result<PendingReplace, CoreError> {
-    if !target.exists() {
-        fs::rename(staged, target)
-            .map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
-        return Ok(PendingReplace {
-            target: target.to_path_buf(),
-            aside: None,
-        });
-    }
-    let aside = target.with_extension("sav.replaced-goresave");
-    // Clear any leftover aside from a previously interrupted write.
-    let _ = fs::remove_file(&aside);
-    fs::rename(target, &aside)
-        .map_err(|e| map_locked_file_error(e, &target.display().to_string()))?;
-    match fs::rename(staged, target) {
+/// Compare-and-replace guard for writes prepared from an earlier snapshot. For
+/// an existing file it atomically claims the path first, verifies the claimed
+/// bytes, then installs the staged file with an atomic no-clobber rename. Thus
+/// there is no check/rename gap in which another writer can be overwritten.
+fn begin_replace_if_unchanged(
+    target: &Path,
+    staged: &Path,
+    expected: &FileSnapshot,
+) -> Result<PendingReplace, CoreError> {
+    begin_replace_if_unchanged_with_after_verify(target, staged, expected, |_| Ok(()))
+}
+
+fn begin_replace_if_unchanged_with_after_verify<F>(
+    target: &Path,
+    staged: &Path,
+    expected: &FileSnapshot,
+    mut after_verify: F,
+) -> Result<PendingReplace, CoreError>
+where
+    F: FnMut(&Path) -> Result<(), CoreError>,
+{
+    let installed = fs::read(staged)?;
+    let aside = match expected {
+        FileSnapshot::Missing => {
+            match fs::symlink_metadata(target) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(CoreError::Update(format!(
+                        "{} was created while the edit was being prepared; the new file was preserved",
+                        target.display()
+                    )));
+                }
+                Err(error) => return Err(CoreError::Io(error.to_string())),
+            }
+            after_verify(target)?;
+            None
+        }
+        FileSnapshot::Present(expected_bytes) => {
+            let claim = claim_existing_target(target, "claim").map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    CoreError::Update(format!(
+                        "{} disappeared while the edit was being prepared; no file was installed",
+                        target.display()
+                    ))
+                } else {
+                    map_locked_file_error(
+                        error,
+                        &format!("claiming {} for compare-and-replace", target.display()),
+                    )
+                }
+            })?;
+            let claimed = fs::read(&claim).map_err(|error| {
+                abort_claim_with_restore(
+                    target,
+                    &claim,
+                    CoreError::Io(format!(
+                        "could not verify claimed save {}: {error}",
+                        target.display()
+                    )),
+                )
+            })?;
+            if &claimed != expected_bytes {
+                return Err(abort_claim_with_restore(
+                    target,
+                    &claim,
+                    CoreError::Update(format!(
+                        "{} changed on disk while the edit was being prepared; reload the save and try again",
+                        target.display()
+                    )),
+                ));
+            }
+            if let Err(error) = after_verify(target) {
+                return Err(abort_claim_with_restore(target, &claim, error));
+            }
+            Some(claim)
+        }
+    };
+
+    match rename_noreplace(staged, target) {
         Ok(()) => Ok(PendingReplace {
             target: target.to_path_buf(),
-            aside: Some(aside),
+            aside,
+            installed,
         }),
-        Err(err) => {
-            // Roll back so the target path is never left absent.
-            let _ = fs::rename(&aside, target);
-            Err(map_locked_file_error(err, &target.display().to_string()))
+        Err(error) => {
+            let base = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                CoreError::Update(format!(
+                    "{} was created after verification; the concurrent file was preserved",
+                    target.display()
+                ))
+            } else {
+                map_locked_file_error(error, &format!("installing {}", target.display()))
+            };
+            match aside {
+                Some(claim) => Err(abort_claim_with_restore(target, &claim, base)),
+                None => Err(base),
+            }
         }
     }
 }
 
+#[cfg(test)]
 fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
-    let backup_path = unique_backup_path(path);
-    if let Some(parent) = backup_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::copy(path, &backup_path)?;
-    Ok(backup_path)
+    let bytes = fs::read(path)?;
+    create_backup_bytes_avoiding(path, &bytes, &[])
 }
 
 /// Back up `path` with a suffix that is free on disk for this file AND not in
@@ -1999,27 +2373,44 @@ fn create_backup_copy(path: &Path) -> Result<PathBuf, CoreError> {
 /// ([`prepare_paired_persistent_data_list_restore`]) never auto-couples them,
 /// even when their names differ (a per-file existence check alone would not
 /// stop two differently-named files from sharing the same timestamp suffix).
-fn create_unique_backup_avoiding(path: &Path, avoid: &[String]) -> Result<PathBuf, CoreError> {
+fn create_backup_bytes_avoiding(
+    path: &Path,
+    bytes: &[u8],
+    avoid: &[String],
+) -> Result<PathBuf, CoreError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let mut suffix = format!("{timestamp}");
-    let mut attempt = 0u32;
-    while avoid.iter().any(|s| s == &suffix) || backup_path_with_suffix(path, &suffix).exists() {
-        attempt += 1;
-        suffix = format!("{timestamp}.{attempt}");
-        if attempt >= 1_000_000 {
-            suffix = format!("{timestamp}.overflow");
-            break;
-        }
-    }
-    create_backup_with_suffix(path, &suffix)
+    create_backup_bytes_avoiding_at_epoch(path, bytes, avoid, timestamp)
 }
 
-fn unique_backup_path(path: &Path) -> PathBuf {
-    let suffix = shared_backup_suffix(std::slice::from_ref(&path));
-    backup_path_with_suffix(path, &suffix)
+fn create_backup_bytes_avoiding_at_epoch(
+    path: &Path,
+    bytes: &[u8],
+    avoid: &[String],
+    timestamp: u64,
+) -> Result<PathBuf, CoreError> {
+    for attempt in 0..1_000_000u32 {
+        let suffix = backup_suffix(timestamp, attempt);
+        if avoid.iter().any(|candidate| candidate == &suffix) {
+            continue;
+        }
+        let (backup_path, file) = match reserve_backup_file(path, &suffix) {
+            Ok(reservation) => reservation,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(CoreError::Io(error.to_string())),
+        };
+        if let Err(error) = write_reserved_backup(file, bytes) {
+            let _ = fs::remove_file(&backup_path);
+            return Err(CoreError::Io(error.to_string()));
+        }
+        return Ok(backup_path);
+    }
+    Err(CoreError::Io(format!(
+        "could not atomically reserve a backup path for {}",
+        path.display()
+    )))
 }
 
 /// Suffixes of backups in `path`'s backup locations that belong to a DIFFERENT
@@ -2068,37 +2459,93 @@ fn backup_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
         .join(format!("{file_name}.bak.{suffix}"))
 }
 
-fn create_backup_with_suffix(path: &Path, suffix: &str) -> Result<PathBuf, CoreError> {
+fn reserve_backup_file(path: &Path, suffix: &str) -> std::io::Result<(PathBuf, File)> {
     let backup_path = backup_path_with_suffix(path, suffix);
     if let Some(parent) = backup_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(path, &backup_path)?;
-    Ok(backup_path)
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup_path)?;
+    Ok((backup_path, file))
 }
 
-/// Pick a single `.bak` suffix that is free for every target, so paired backups
-/// (slot + companion PersistentDataList) share one suffix and restore can match
-/// them even when their creation straddles a one-second boundary.
-fn shared_backup_suffix(targets: &[&Path]) -> String {
+fn write_reserved_backup(mut file: File, bytes: &[u8]) -> std::io::Result<()> {
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+fn backup_suffix(timestamp: u64, attempt: u32) -> String {
+    if attempt == 0 {
+        timestamp.to_string()
+    } else {
+        format!("{timestamp}.{attempt}")
+    }
+}
+
+/// Reserve both names before writing either backup. If a concurrent process
+/// owns either name, release only this call's empty reservation and retry with
+/// a fresh shared suffix. `first_bytes`/`second_bytes` are the exact CAS bases,
+/// never a second read of mutable live files.
+fn create_paired_backup_bytes(
+    first: &Path,
+    first_bytes: &[u8],
+    second: &Path,
+    second_bytes: &[u8],
+) -> Result<(PathBuf, PathBuf), CoreError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    for attempt in 0..1000 {
-        let suffix = if attempt == 0 {
-            format!("{timestamp}")
-        } else {
-            format!("{timestamp}.{attempt}")
+    create_paired_backup_bytes_at_epoch(first, first_bytes, second, second_bytes, timestamp)
+}
+
+fn create_paired_backup_bytes_at_epoch(
+    first: &Path,
+    first_bytes: &[u8],
+    second: &Path,
+    second_bytes: &[u8],
+    timestamp: u64,
+) -> Result<(PathBuf, PathBuf), CoreError> {
+    for attempt in 0..1_000_000u32 {
+        let suffix = backup_suffix(timestamp, attempt);
+        let (first_path, first_file) = match reserve_backup_file(first, &suffix) {
+            Ok(reservation) => reservation,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(CoreError::Io(error.to_string())),
         };
-        if targets
-            .iter()
-            .all(|target| !backup_path_with_suffix(target, &suffix).exists())
-        {
-            return suffix;
+        let (second_path, second_file) = match reserve_backup_file(second, &suffix) {
+            Ok(reservation) => reservation,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                drop(first_file);
+                let _ = fs::remove_file(&first_path);
+                continue;
+            }
+            Err(error) => {
+                drop(first_file);
+                let _ = fs::remove_file(&first_path);
+                return Err(CoreError::Io(error.to_string()));
+            }
+        };
+        if let Err(error) = write_reserved_backup(first_file, first_bytes) {
+            drop(second_file);
+            let _ = fs::remove_file(&first_path);
+            let _ = fs::remove_file(&second_path);
+            return Err(CoreError::Io(error.to_string()));
         }
+        if let Err(error) = write_reserved_backup(second_file, second_bytes) {
+            let _ = fs::remove_file(&first_path);
+            let _ = fs::remove_file(&second_path);
+            return Err(CoreError::Io(error.to_string()));
+        }
+        return Ok((first_path, second_path));
     }
-    format!("{timestamp}.overflow")
+    Err(CoreError::Io(format!(
+        "could not atomically reserve paired backup paths for {} and {}",
+        first.display(),
+        second.display()
+    )))
 }
 
 /// Default save directory used when a caller omits `payload.path`. Derived from
@@ -3296,14 +3743,42 @@ fn assign_save_profile(
     profile_id: i32,
     backup: bool,
 ) -> Result<Value, CoreError> {
+    assign_save_profile_with_before_replace(
+        save_path,
+        destination_path,
+        persistent_path,
+        profile_id,
+        backup,
+        |_| Ok(()),
+    )
+}
+
+fn assign_save_profile_with_before_replace<F>(
+    save_path: &Path,
+    destination_path: Option<&Path>,
+    persistent_path: &Path,
+    profile_id: i32,
+    backup: bool,
+    before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+{
     let target_path = destination_path.unwrap_or(save_path);
     let importing = target_path != save_path;
-    if importing && target_path.exists() {
-        return Err(CoreError::InvalidRequest(format!(
-            "refusing to overwrite existing destination {}",
-            target_path.display()
-        )));
-    }
+    let expected_import_target = if importing {
+        match snapshot_file(target_path)? {
+            FileSnapshot::Missing => Some(FileSnapshot::Missing),
+            FileSnapshot::Present(_) => {
+                return Err(CoreError::InvalidRequest(format!(
+                    "refusing to overwrite existing destination {}",
+                    target_path.display()
+                )));
+            }
+        }
+    } else {
+        None
+    };
     let slot = target_path
         .file_stem()
         .and_then(|value| value.to_str())
@@ -3454,42 +3929,54 @@ fn assign_save_profile(
         if importing {
             (
                 None,
-                Some(create_unique_backup_avoiding(
+                Some(create_backup_bytes_avoiding(
                     persistent_path,
+                    &persistent_original,
                     &existing_foreign_backup_suffixes(persistent_path),
                 )?),
             )
         } else {
-            let suffix = shared_backup_suffix(&[target_path, persistent_path]);
-            (
-                Some(create_backup_with_suffix(target_path, &suffix)?),
-                Some(create_backup_with_suffix(persistent_path, &suffix)?),
-            )
+            let (save_backup, persistent_backup) = create_paired_backup_bytes(
+                target_path,
+                &save_original,
+                persistent_path,
+                &persistent_original,
+            )?;
+            (Some(save_backup), Some(persistent_backup))
         }
     } else {
         (None, None)
     };
 
-    let save_tmp = target_path.with_extension("sav.tmp-goresave");
-    let persistent_tmp = persistent_path.with_extension("sav.tmp-goresave");
-    fs::write(&save_tmp, &save_edited)?;
-    fs::write(&persistent_tmp, &persistent_edited)?;
-    inspect_save(&save_tmp, false)?;
-    parse_profile_file(&fs::read(&persistent_tmp)?).map_err(|error| {
+    let save_tmp = ScratchFile::create(target_path, "tmp-assign", &save_edited)?;
+    let persistent_tmp = ScratchFile::create(persistent_path, "tmp-assign", &persistent_edited)?;
+    inspect_save(save_tmp.path(), false)?;
+    parse_profile_file(&fs::read(persistent_tmp.path())?).map_err(|error| {
         CoreError::Validation(format!(
             "staged PersistentDataList.sav did not validate: {error}"
         ))
     })?;
 
-    let save_pending = begin_replace(target_path, &save_tmp)?;
-    match begin_replace(persistent_path, &persistent_tmp) {
+    before_replace(target_path)?;
+    let expected_save =
+        expected_import_target.unwrap_or_else(|| FileSnapshot::Present(save_original.clone()));
+    let save_pending = begin_replace_if_unchanged(target_path, save_tmp.path(), &expected_save)?;
+    match begin_replace_if_unchanged(
+        persistent_path,
+        persistent_tmp.path(),
+        &FileSnapshot::Present(persistent_original.clone()),
+    ) {
         Ok(persistent_pending) => {
             persistent_pending.commit();
             save_pending.commit();
         }
         Err(error) => {
-            save_pending.rollback();
-            return Err(error);
+            return match save_pending.rollback() {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(CoreError::Update(format!(
+                    "{error}; save rollback also failed safely: {rollback_error}"
+                ))),
+            };
         }
     }
     invalidate_decoded_payload_cache(target_path);
@@ -3519,6 +4006,21 @@ fn remove_save_from_profile(
     profile_id: i32,
     backup: bool,
 ) -> Result<Value, CoreError> {
+    remove_save_from_profile_with_before_replace(persistent_path, slot, profile_id, backup, |_| {
+        Ok(())
+    })
+}
+
+fn remove_save_from_profile_with_before_replace<F>(
+    persistent_path: &Path,
+    slot: &str,
+    profile_id: i32,
+    backup: bool,
+    before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+{
     if !persistent_path.exists() {
         return Err(CoreError::Validation(format!(
             "PersistentDataList.sav was not found at {}",
@@ -3602,22 +4104,28 @@ fn remove_save_from_profile(
     // by slot files so the paired-restore heuristic can never couple this
     // standalone profile backup to an unrelated save backup.
     let persistent_backup_path = if backup {
-        Some(create_unique_backup_avoiding(
+        Some(create_backup_bytes_avoiding(
             persistent_path,
+            &persistent_original,
             &existing_foreign_backup_suffixes(persistent_path),
         )?)
     } else {
         None
     };
 
-    let persistent_tmp = persistent_path.with_extension("sav.tmp-goresave");
-    fs::write(&persistent_tmp, &persistent_edited)?;
-    parse_profile_file(&fs::read(&persistent_tmp)?).map_err(|error| {
+    let persistent_tmp =
+        ScratchFile::create(persistent_path, "tmp-remove-profile", &persistent_edited)?;
+    parse_profile_file(&fs::read(persistent_tmp.path())?).map_err(|error| {
         CoreError::Validation(format!(
             "staged PersistentDataList.sav did not validate: {error}"
         ))
     })?;
-    let pending = begin_replace(persistent_path, &persistent_tmp)?;
+    before_replace(persistent_path)?;
+    let pending = begin_replace_if_unchanged(
+        persistent_path,
+        persistent_tmp.path(),
+        &FileSnapshot::Present(persistent_original.clone()),
+    )?;
     pending.commit();
 
     Ok(json!({
@@ -3893,6 +4401,13 @@ fn inspect_private_payload(
                     // missing map entry and set member atomically.
                     "private.knowledge.setEntry",
                 ]);
+                if typed_result
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .is_some_and(|root| story::is_writable(root))
+                {
+                    writable.push("private.story.apply");
+                }
                 // Hero skill edits (retarget / unlearn / learn a GameplayEffect
                 // in the hero's ActiveEffects array) — only when that target
                 // array exists, else apply_skill_set would reject the write.
@@ -4336,7 +4851,6 @@ fn search_typed_properties(
         .and_then(Value::as_u64)
         .map(|v| v as usize)
         .unwrap_or(0);
-
     // Keep the original scalar-only contract for curated consumers such as
     // hero attributes and GameTime. The All-data panel opts into the richer
     // source-aware node model explicitly, so existing callers and pagination
@@ -5035,6 +5549,15 @@ fn query_progression(
         .and_then(Value::as_u64)
         .map(|v| v as usize)
         .unwrap_or(0);
+    let include_unset = payload
+        .get("includeUnset")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let semantic_type_filter = payload
+        .get("semanticType")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     let character = payload.get("character").and_then(Value::as_str);
     let state_filter = payload
         .get("state")
@@ -5083,6 +5606,14 @@ fn query_progression(
         ),
         "knowledge" => progression_knowledge(&root, &query, character, offset, limit),
         "events" => progression_events(&root, &query, character, offset, limit),
+        "story" => story::query_story(
+            &root,
+            &query,
+            semantic_type_filter,
+            offset,
+            limit,
+            include_unset,
+        ),
         other => Err(CoreError::InvalidRequest(format!(
             "unknown progression section {other:?}"
         ))),
@@ -6896,6 +7427,9 @@ fn summarize_private_progression_overview(root: Option<&properties::RootObject>)
         "private.knowledge.addCharacter",
         "private.knowledge.setEntry",
     ];
+    if story::is_writable(root) {
+        writable.push("private.story.apply");
+    }
     if glossary_set_segment_writable(root) {
         writable.push("private.glossary.setSegment");
     }
@@ -7388,18 +7922,83 @@ fn write_save_internal(
     codec_backend: Option<&dyn codec_backend::CodecBackend>,
     sync_persistent_data_list: bool,
 ) -> Result<Value, CoreError> {
+    write_save_internal_with_before_replace(
+        path,
+        raw_edits,
+        backup,
+        output_path,
+        codec_backend,
+        sync_persistent_data_list,
+        |_| Ok(()),
+    )
+}
+
+fn write_save_internal_with_before_replace<F>(
+    path: &Path,
+    raw_edits: &[Value],
+    backup: bool,
+    output_path: Option<&Path>,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+    sync_persistent_data_list: bool,
+    before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+{
+    write_save_internal_with_replace_hooks(
+        path,
+        raw_edits,
+        backup,
+        output_path,
+        codec_backend,
+        sync_persistent_data_list,
+        before_replace,
+        |_| Ok(()),
+    )
+}
+
+fn write_save_internal_with_replace_hooks<F, G>(
+    path: &Path,
+    raw_edits: &[Value],
+    backup: bool,
+    output_path: Option<&Path>,
+    codec_backend: Option<&dyn codec_backend::CodecBackend>,
+    sync_persistent_data_list: bool,
+    before_replace: F,
+    mut after_verify: G,
+) -> Result<Value, CoreError>
+where
+    F: FnOnce(&Path) -> Result<(), CoreError>,
+    G: FnMut(&Path) -> Result<(), CoreError>,
+{
     if sync_persistent_data_list && output_path.is_some() {
         return Err(CoreError::InvalidRequest(
             "syncPersistentDataList cannot be used with outputPath".to_string(),
         ));
     }
     let original = fs::read(path)?;
+    let target = output_path.unwrap_or(path);
+    let expected_target = if target == path {
+        FileSnapshot::Present(original.clone())
+    } else {
+        snapshot_file(target)?
+    };
     let mut edited = original.clone();
     let edits = raw_edits
         .iter()
         .map(|v| serde_json::from_value::<Edit>(v.clone()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| CoreError::InvalidRequest(e.to_string()))?;
+
+    // StoryApply is a self-contained transaction whose changes may splice the
+    // private map. It must be the sole outer edit, including relative to PUBLIC
+    // edits (which are otherwise applied before private edits below).
+    if edits.iter().any(|edit| edit.path == "private.story.apply") && edits.len() != 1 {
+        return Err(CoreError::UnsupportedEdit(
+            "private.story.apply must be the only edit in a write; place all story-id changes in its value.changes array"
+                .to_string(),
+        ));
+    }
 
     for edit in edits
         .iter()
@@ -7430,7 +8029,6 @@ fn write_save_internal(
     } else {
         None
     };
-    let target = output_path.unwrap_or(path);
     let companion_backup_target = match &persistent_sync {
         Some(plan) if backup && output_path.is_none() && plan.original != plan.edited => {
             Some(plan.path.as_path())
@@ -7442,27 +8040,29 @@ fn write_save_internal(
             // Back up both files under one shared suffix so restore can pair
             // them by suffix even if creation straddles a one-second boundary.
             Some(companion) => {
-                let suffix = shared_backup_suffix(&[path, companion]);
-                (
-                    Some(create_backup_with_suffix(path, &suffix)?),
-                    Some(create_backup_with_suffix(companion, &suffix)?),
-                )
+                let plan = persistent_sync
+                    .as_ref()
+                    .expect("companion backup target implies a persistent sync plan");
+                let (slot_backup, companion_backup) =
+                    create_paired_backup_bytes(path, &original, companion, &plan.original)?;
+                (Some(slot_backup), Some(companion_backup))
             }
-            None => (Some(create_backup_copy(path)?), None),
+            None => (
+                Some(create_backup_bytes_avoiding(path, &original, &[])?),
+                None,
+            ),
         }
     } else {
         (None, None)
     };
 
-    let tmp_path = target.with_extension("sav.tmp-goresave");
-    fs::write(&tmp_path, &edited)?;
-    inspect_save(&tmp_path, false)?;
-    let persistent_tmp_path = if let Some(plan) = &persistent_sync {
+    let tmp = ScratchFile::create(target, "tmp", &edited)?;
+    inspect_save(tmp.path(), false)?;
+    let persistent_tmp = if let Some(plan) = &persistent_sync {
         if plan.original != plan.edited {
-            let tmp_path = plan.path.with_extension("sav.tmp-goresave");
-            fs::write(&tmp_path, &plan.edited)?;
-            validate_persistent_data_list_sync(plan, &tmp_path)?;
-            Some(tmp_path)
+            let tmp = ScratchFile::create(&plan.path, "tmp", &plan.edited)?;
+            validate_persistent_data_list_sync(plan, tmp.path())?;
+            Some(tmp)
         } else {
             None
         }
@@ -7472,19 +8072,35 @@ fn write_save_internal(
     // Replace the slot first, then the synced PersistentDataList; if the
     // companion replace fails, roll the slot write back so the two files never
     // diverge.
-    let slot_pending = begin_replace(target, &tmp_path)?;
-    if let Some(tmp_path) = &persistent_tmp_path {
+    before_replace(target)?;
+    let slot_pending = begin_replace_if_unchanged_with_after_verify(
+        target,
+        tmp.path(),
+        &expected_target,
+        |path| after_verify(path),
+    )?;
+    if let Some(tmp) = &persistent_tmp {
         let plan = persistent_sync
             .as_ref()
-            .expect("persistent_tmp_path implies a sync plan");
-        match begin_replace(&plan.path, tmp_path) {
+            .expect("persistent_tmp implies a sync plan");
+        let expected_persistent = FileSnapshot::Present(plan.original.clone());
+        match begin_replace_if_unchanged_with_after_verify(
+            &plan.path,
+            tmp.path(),
+            &expected_persistent,
+            |path| after_verify(path),
+        ) {
             Ok(companion_pending) => {
                 companion_pending.commit();
                 slot_pending.commit();
             }
             Err(err) => {
-                slot_pending.rollback();
-                return Err(err);
+                return match slot_pending.rollback() {
+                    Ok(()) => Err(err),
+                    Err(rollback_error) => Err(CoreError::Update(format!(
+                        "{err}; slot rollback also encountered a concurrent change: {rollback_error}"
+                    ))),
+                };
             }
         }
     } else {
@@ -7671,6 +8287,9 @@ fn apply_private_edits(
             "private.inventory.reset" => {
                 parse_private_inventory_reset_edit(edit).map(PrivateEdit::InventoryReset)
             }
+            "private.story.apply" => {
+                parse_private_story_apply_edit(edit).map(PrivateEdit::StoryApply)
+            }
             "private.typed.setValue" => {
                 parse_private_typed_set_value_edit(edit).map(PrivateEdit::TypedSetValue)
             }
@@ -7724,6 +8343,20 @@ fn apply_private_edits(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // One StoryApply may contain many value-addressed story changes and applies
+    // them transactionally on its own scratch payload. Keep that transaction
+    // isolated from peer outer edits: its insert/remove branches can splice the
+    // StoryPropertyValues map and invalidate offsets/indices held by a peer.
+    if edit_specs
+        .iter()
+        .any(|edit| matches!(edit, PrivateEdit::StoryApply(_)))
+        && edit_specs.len() != 1
+    {
+        return Err(CoreError::UnsupportedEdit(
+            "private.story.apply must be the only edit in a write; place all story-id changes in its value.changes array"
+                .to_string(),
+        ));
+    }
     // Structural edits (arrayRemove, arrayDuplicate, addItem, removeItem) change
     // the length of array or set data; a second such edit in the same batch
     // would silently target shifted offsets/indices.  Reject the batch
@@ -7955,6 +8588,7 @@ enum PrivateEdit {
     InventoryAddItem(PrivateInventoryAddItemEdit),
     InventoryRemoveItem(PrivateInventoryRemoveItemEdit),
     InventoryReset(PrivateInventoryResetEdit),
+    StoryApply(Vec<story::StoryChange>),
     TypedSetValue(PrivateTypedSetValueEdit),
     TypedContainer(PrivateTypedContainerEdit),
     NpcRevive(PrivateNpcReviveEdit),
@@ -7964,6 +8598,137 @@ enum PrivateEdit {
     KnowledgeSetEntry(PrivateKnowledgeSetEntryEdit),
     FactionsForgive(PrivateFactionsForgiveEdit),
     SkillSet(skills::SkillSetEdit),
+}
+
+fn parse_private_story_apply_edit(edit: &Edit) -> Result<Vec<story::StoryChange>, CoreError> {
+    let value = edit.value.as_object().ok_or_else(|| {
+        CoreError::InvalidRequest("private.story.apply value must be an object".to_string())
+    })?;
+    let changes = value
+        .get("changes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            CoreError::InvalidRequest(
+                "private.story.apply requires value.changes as an array".to_string(),
+            )
+        })?;
+    if changes.is_empty() {
+        return Err(CoreError::InvalidRequest(
+            "private.story.apply requires at least one value.changes entry".to_string(),
+        ));
+    }
+
+    let parse_optional_i32 = |object: &serde_json::Map<String, Value>,
+                              field: &str,
+                              context: &str|
+     -> Result<Option<i32>, CoreError> {
+        let Some(value) = object.get(field) else {
+            return Ok(None);
+        };
+        if value.is_null() {
+            return Ok(None);
+        }
+        let raw = value.as_i64().ok_or_else(|| {
+            CoreError::InvalidRequest(format!(
+                "private.story.apply {context}.{field} must be an int32"
+            ))
+        })?;
+        i32::try_from(raw).map(Some).map_err(|_| {
+            CoreError::InvalidRequest(format!(
+                "private.story.apply {context}.{field} is outside the int32 range"
+            ))
+        })
+    };
+
+    changes
+        .iter()
+        .enumerate()
+        .map(|(index, change)| {
+            let context = format!("value.changes[{index}]");
+            let change = change.as_object().ok_or_else(|| {
+                CoreError::InvalidRequest(format!(
+                    "private.story.apply {context} must be an object"
+                ))
+            })?;
+            let id = change
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "private.story.apply {context}.id must be a string"
+                    ))
+                })?
+                .to_string();
+            let present = change
+                .get("present")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "private.story.apply {context}.present must be a boolean"
+                    ))
+                })?;
+            let raw_value = parse_optional_i32(change, "rawValue", &context)?;
+            let expected = change
+                .get("expected")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "private.story.apply {context}.expected must be an object"
+                    ))
+                })?;
+            let expected_stored = expected
+                .get("stored")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "private.story.apply {context}.expected.stored must be a boolean"
+                    ))
+                })?;
+            let expected_raw_value =
+                parse_optional_i32(expected, "rawValue", &format!("{context}.expected"))?;
+            let allow_unknown_create = match change.get("allowUnknownCreate") {
+                None => false,
+                Some(value) => value.as_bool().ok_or_else(|| {
+                    CoreError::InvalidRequest(format!(
+                        "private.story.apply {context}.allowUnknownCreate must be a boolean"
+                    ))
+                })?,
+            };
+            let parsed = story::StoryChange {
+                id,
+                present,
+                raw_value,
+                expected: story::StoryExpectedValue {
+                    stored: expected_stored,
+                    raw_value: expected_raw_value,
+                },
+                allow_unknown_create,
+            };
+            // Validate request-shape invariants before the codec is invoked.
+            // apply_changes repeats these checks at its trust boundary.
+            if parsed.id.is_empty() || parsed.id.trim() != parsed.id {
+                return Err(CoreError::InvalidRequest(format!(
+                    "private.story.apply {context}.id must be non-empty and have no surrounding whitespace"
+                )));
+            }
+            if parsed.id.len() > 1024 || parsed.id.contains('\0') {
+                return Err(CoreError::InvalidRequest(format!(
+                    "private.story.apply {context}.id is not a valid bounded FString"
+                )));
+            }
+            if parsed.present != parsed.raw_value.is_some() {
+                return Err(CoreError::InvalidRequest(format!(
+                    "private.story.apply {context} must provide rawValue exactly when present=true"
+                )));
+            }
+            if parsed.expected.stored != parsed.expected.raw_value.is_some() {
+                return Err(CoreError::InvalidRequest(format!(
+                    "private.story.apply {context} must provide expected.rawValue exactly when expected.stored=true"
+                )));
+            }
+            Ok(parsed)
+        })
+        .collect()
 }
 
 /// Value-addressed dialog-knowledge intent. Unlike the generic typed set op,
@@ -9176,6 +9941,7 @@ fn apply_private_edit_to_payload(
         PrivateEdit::InventoryReset(edit) => {
             apply_private_inventory_reset_to_payload(payload, edit)
         }
+        PrivateEdit::StoryApply(changes) => story::apply_changes(payload, changes),
         PrivateEdit::TypedSetValue(edit) => {
             apply_private_typed_set_value_edit_to_payload(payload, edit)
         }
@@ -11743,6 +12509,18 @@ fn write_difficulty_internal(
     targets: &Value,
     backup: bool,
 ) -> Result<Value, CoreError> {
+    write_difficulty_internal_with_before_replace(req, targets, backup, |_| Ok(()))
+}
+
+fn write_difficulty_internal_with_before_replace<F>(
+    req: &DifficultyRequest,
+    targets: &Value,
+    backup: bool,
+    mut before_replace: F,
+) -> Result<Value, CoreError>
+where
+    F: FnMut(&Path) -> Result<(), CoreError>,
+{
     let mut plans: Vec<DifficultyWritePlan> = Vec::new();
 
     // Difficulty is written ONLY to the profile's `ProfileData`. The profile
@@ -11798,7 +12576,7 @@ fn write_difficulty_internal(
             // otherwise wrongly treat as that slot's companion.
             let mut avoid = used_suffixes.clone();
             avoid.extend(existing_foreign_backup_suffixes(&p.path));
-            let backup_path = create_unique_backup_avoiding(&p.path, &avoid)?;
+            let backup_path = create_backup_bytes_avoiding(&p.path, &p.original, &avoid)?;
             if let Some(name) = backup_path.file_name().and_then(|n| n.to_str()) {
                 if let Ok(prefix) = backup_file_prefix(&p.path) {
                     if let Some(suffix) = name.strip_prefix(&prefix) {
@@ -11809,14 +12587,13 @@ fn write_difficulty_internal(
         }
     }
 
-    // Stage every edited buffer to a tmp file and validate it on disk before
-    // any target is replaced.
-    let mut tmps: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // Stage every edited buffer in a unique same-directory file and validate it
+    // on disk before any target is replaced.
+    let mut tmps: Vec<(&DifficultyWritePlan, ScratchFile)> = Vec::new();
     for p in &changed {
-        let tmp = p.path.with_extension("sav.tmp-goresave");
-        fs::write(&tmp, &p.edited)?;
-        inspect_save(&tmp, false)?;
-        tmps.push((p.path.clone(), tmp));
+        let tmp = ScratchFile::create(&p.path, "tmp-difficulty", &p.edited)?;
+        inspect_save(tmp.path(), false)?;
+        tmps.push((p, tmp));
     }
 
     // Atomic replace: begin each (move-aside + rename-in). If any begin_replace
@@ -11824,12 +12601,40 @@ fn write_difficulty_internal(
     // Mirrors write_save_internal's PendingReplace ownership: commit/rollback
     // each consume the value, so we collect by value and drain.
     let mut committed: Vec<PendingReplace> = Vec::new();
-    for (target, tmp) in &tmps {
-        match begin_replace(target, tmp) {
+    for (plan, tmp) in &tmps {
+        if let Err(err) = before_replace(&plan.path) {
+            let mut rollback_errors = Vec::new();
+            for pending in committed.drain(..) {
+                if let Err(error) = pending.rollback() {
+                    rollback_errors.push(error.to_string());
+                }
+            }
+            if !rollback_errors.is_empty() {
+                return Err(CoreError::Update(format!(
+                    "{err}; one or more safe rollbacks encountered concurrent changes: {}",
+                    rollback_errors.join("; ")
+                )));
+            }
+            return Err(err);
+        }
+        match begin_replace_if_unchanged(
+            &plan.path,
+            tmp.path(),
+            &FileSnapshot::Present(plan.original.clone()),
+        ) {
             Ok(pending) => committed.push(pending),
             Err(err) => {
-                for pending in committed {
-                    pending.rollback();
+                let mut rollback_errors = Vec::new();
+                for pending in committed.drain(..) {
+                    if let Err(error) = pending.rollback() {
+                        rollback_errors.push(error.to_string());
+                    }
+                }
+                if !rollback_errors.is_empty() {
+                    return Err(CoreError::Update(format!(
+                        "{err}; one or more safe rollbacks encountered concurrent changes: {}",
+                        rollback_errors.join("; ")
+                    )));
                 }
                 return Err(err);
             }
@@ -11840,8 +12645,8 @@ fn write_difficulty_internal(
     }
 
     // The bytes on disk changed; drop any cached decoded payloads.
-    for (target, _) in &tmps {
-        invalidate_decoded_payload_cache(target);
+    for (plan, _) in &tmps {
+        invalidate_decoded_payload_cache(&plan.path);
     }
 
     Ok(json!({
@@ -12487,6 +13292,169 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_profile_assignments_publish_only_their_own_staging_bytes() {
+        let dir = tempdir().unwrap();
+        let save_path = dir.path().join("G1R-099.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent = assignment_persistent_data_list("G1R-006", 0);
+        fs::write(&save_path, &save).unwrap();
+        fs::write(&persistent_path, &persistent).unwrap();
+
+        let (a_ready_tx, a_ready_rx) = std::sync::mpsc::channel();
+        let (a_go_tx, a_go_rx) = std::sync::mpsc::channel();
+        let save_a = save_path.clone();
+        let persistent_a = persistent_path.clone();
+        let writer_a = std::thread::spawn(move || {
+            assign_save_profile_with_before_replace(
+                &save_a,
+                None,
+                &persistent_a,
+                0,
+                false,
+                move |_| {
+                    a_ready_tx.send(()).unwrap();
+                    a_go_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        a_ready_rx.recv().unwrap();
+
+        let (b_ready_tx, b_ready_rx) = std::sync::mpsc::channel();
+        let (b_go_tx, b_go_rx) = std::sync::mpsc::channel();
+        let save_b = save_path.clone();
+        let persistent_b = persistent_path.clone();
+        let writer_b = std::thread::spawn(move || {
+            assign_save_profile_with_before_replace(
+                &save_b,
+                None,
+                &persistent_b,
+                1,
+                false,
+                move |_| {
+                    b_ready_tx.send(()).unwrap();
+                    b_go_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        b_ready_rx.recv().unwrap();
+
+        // B staged after A. A must still install its profile-0 save/PDL pair.
+        a_go_tx.send(()).unwrap();
+        assert!(writer_a.join().unwrap().is_ok());
+        b_go_tx.send(()).unwrap();
+        assert!(matches!(
+            writer_b.join().unwrap().unwrap_err(),
+            CoreError::Update(_)
+        ));
+
+        let written_save = fs::read(&save_path).unwrap();
+        let parts = split_gsav(&written_save).unwrap();
+        assert_eq!(
+            summarize_public_payload(parts.public_payload).profile_id,
+            Some(0)
+        );
+        let written_persistent = fs::read(&persistent_path).unwrap();
+        let root = parse_profile_file(&written_persistent).unwrap();
+        let path = persistent_slot_profile_path(&root, "G1R-099").unwrap();
+        let property =
+            properties::resolve(&root.properties, &properties::parse_path(&path).unwrap()).unwrap();
+        assert_eq!(property.value, properties::PropertyValue::Int(0));
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            !name.contains(".tmp-assign-goresave-") && !name.contains(".claim-goresave-")
+        }));
+    }
+
+    #[test]
+    fn profile_import_never_clobbers_destination_created_after_initial_missing_snapshot() {
+        let dir = tempdir().unwrap();
+        let game_dir = dir.path().join("SaveGames");
+        fs::create_dir_all(&game_dir).unwrap();
+        let source = dir.path().join("detached.sav");
+        let destination = game_dir.join("G1R-007.sav");
+        let persistent = game_dir.join("PersistentDataList.sav");
+        let source_bytes = build_gsav(
+            2,
+            &public_payload_with_profile("Detached", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent_bytes = assignment_persistent_data_list("G1R-006", 0);
+        let concurrent_destination = minimal_gsav("Concurrent destination");
+        fs::write(&source, &source_bytes).unwrap();
+        fs::write(&persistent, &persistent_bytes).unwrap();
+
+        let error = assign_save_profile_with_before_replace(
+            &source,
+            Some(&destination),
+            &persistent,
+            1,
+            false,
+            |target| {
+                assert_eq!(target, destination);
+                fs::write(target, &concurrent_destination)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&destination).unwrap(), concurrent_destination);
+        assert_eq!(fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(fs::read(&persistent).unwrap(), persistent_bytes);
+    }
+
+    #[test]
+    fn profile_assignment_companion_cas_rolls_save_back_and_preserves_newer_pdl() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let save_path = dir.path().join(format!("{slot}.sav"));
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let save_original = build_gsav(
+            2,
+            &public_payload_with_profile("Assignment test", 0),
+            &minimal_stream(),
+            &[0, 0, 0, 0],
+        );
+        let persistent_original = assignment_persistent_data_list(slot, 0);
+        let persistent_newer = assignment_persistent_data_list(slot, 1);
+        fs::write(&save_path, &save_original).unwrap();
+        fs::write(&persistent_path, &persistent_original).unwrap();
+
+        let error = assign_save_profile_with_before_replace(
+            &save_path,
+            None,
+            &persistent_path,
+            1,
+            true,
+            |_| {
+                fs::write(&persistent_path, &persistent_newer)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&save_path).unwrap(), save_original);
+        assert_eq!(fs::read(&persistent_path).unwrap(), persistent_newer);
+        let safety_bytes = fs::read_dir(dir.path().join("goresave_backups"))
+            .unwrap()
+            .flatten()
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(safety_bytes.contains(&save_original));
+        assert!(safety_bytes.contains(&persistent_original));
+    }
+
+    #[test]
     fn remove_save_from_profile_keeps_save_and_cleans_registry_with_backup() {
         let dir = tempdir().unwrap();
         let slot = "G1R-006";
@@ -12541,6 +13509,43 @@ mod tests {
                 .iter()
                 .all(|profile| !profile.saved_slots.iter().any(|saved| saved == slot))
         );
+    }
+
+    #[test]
+    fn remove_save_profile_cas_preserves_newer_pdl_and_backs_up_initial_snapshot() {
+        let dir = tempdir().unwrap();
+        let slot = "G1R-006";
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original = assignment_persistent_data_list(slot, 0);
+        let newer = assignment_persistent_data_list(slot, 1);
+        fs::write(&persistent_path, &original).unwrap();
+
+        let error = remove_save_from_profile_with_before_replace(
+            &persistent_path,
+            slot,
+            0,
+            true,
+            |target| {
+                fs::write(target, &newer)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&persistent_path).unwrap(), newer);
+        let backups = fs::read_dir(dir.path().join("goresave_backups"))
+            .unwrap()
+            .flatten()
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(backups, vec![original]);
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-remove-profile-goresave-")
+        }));
     }
 
     #[test]
@@ -12967,6 +13972,47 @@ mod tests {
         assert!(presets.iter().any(|p| p.ends_with("DifficultyPreset_Hard")));
         assert!(!presets.iter().any(|p| p.ends_with("DifficultyPreset_Easy")));
         assert!(dir.path().join("goresave_backups").exists());
+    }
+
+    #[test]
+    fn difficulty_write_cas_preserves_newer_profile_and_backs_up_initial_snapshot() {
+        let dir = tempdir().unwrap();
+        let profile_path = dir.path().join("PersistentDataList.sav");
+        let original = difficulty_persistent_profiles();
+        let newer = difficulty_persistent_profiles_bare();
+        fs::write(&profile_path, &original).unwrap();
+        let req = DifficultyRequest {
+            preset: Some("Hard".into()),
+            combat: None,
+            resources: None,
+            progression: None,
+            flow_helper: None,
+            permadeath: None,
+        };
+        let targets = json!({
+            "profile": { "path": profile_path.display().to_string(), "profileId": 1 },
+        });
+
+        let error = write_difficulty_internal_with_before_replace(&req, &targets, true, |target| {
+            fs::write(target, &newer)?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&profile_path).unwrap(), newer);
+        let backups = fs::read_dir(dir.path().join("goresave_backups"))
+            .unwrap()
+            .flatten()
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(backups, vec![original]);
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-difficulty-goresave-")
+        }));
     }
 
     #[test]
@@ -14041,6 +15087,265 @@ mod tests {
     }
 
     #[test]
+    fn write_save_refuses_to_replace_a_target_changed_after_edit_preparation() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        fs::write(&path, minimal_gsav("Loaded version")).unwrap();
+        let newer = minimal_gsav("Cloud newer");
+
+        let error = write_save_internal_with_before_replace(
+            &path,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Editor change"
+            })],
+            false,
+            None,
+            None,
+            false,
+            |target| {
+                // Deterministically simulate the game/cloud sync writing after
+                // parsing/validation/staging but before the guarded replace.
+                fs::write(target, &newer)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert!(error.to_string().contains("changed on disk"));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            newer,
+            "the concurrent newer save must remain byte-identical"
+        );
+        assert!(
+            !path.with_extension("sav.replaced-goresave").exists(),
+            "the newer target must never be moved aside"
+        );
+    }
+
+    #[test]
+    fn write_save_never_clobbers_a_target_created_after_claim_verification() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let original = minimal_gsav("Loaded version");
+        let newer = minimal_gsav("Cloud after claim");
+        fs::write(&path, &original).unwrap();
+
+        let error = write_save_internal_with_replace_hooks(
+            &path,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Editor change"
+            })],
+            false,
+            None,
+            None,
+            false,
+            |_| Ok(()),
+            |claimed_target| {
+                assert!(
+                    !claimed_target.exists(),
+                    "the after-verify hook must run after the old target was atomically claimed"
+                );
+                fs::write(claimed_target, &newer)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&path).unwrap(), newer);
+        let claims = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".claim-goresave-"))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            claims.len(),
+            1,
+            "the displaced original must be recoverable"
+        );
+        assert_eq!(fs::read(&claims[0]).unwrap(), original);
+        assert!(
+            fs::read_dir(dir.path())
+                .unwrap()
+                .flatten()
+                .all(|entry| !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".tmp-goresave-")),
+            "failed publication must clean its unique staging file"
+        );
+    }
+
+    #[test]
+    fn write_save_missing_output_uses_atomic_no_clobber_publication() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("G1R-source.sav");
+        let output = dir.path().join("G1R-output.sav");
+        let concurrent = minimal_gsav("Concurrent creator");
+        fs::write(&source, minimal_gsav("Source")).unwrap();
+
+        let error = write_save_internal_with_replace_hooks(
+            &source,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Editor output"
+            })],
+            false,
+            Some(&output),
+            None,
+            false,
+            |_| Ok(()),
+            |verified_target| {
+                assert_eq!(verified_target, output);
+                assert!(!verified_target.exists());
+                fs::write(verified_target, &concurrent)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&output).unwrap(), concurrent);
+        assert_eq!(
+            inspect_save(&source, false).unwrap()["public"]["playerSaveName"],
+            "Source"
+        );
+    }
+
+    #[test]
+    fn concurrent_writers_install_only_their_own_unique_staging_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        fs::write(&path, minimal_gsav("Original")).unwrap();
+
+        let (a_ready_tx, a_ready_rx) = std::sync::mpsc::channel();
+        let (a_go_tx, a_go_rx) = std::sync::mpsc::channel();
+        let path_a = path.clone();
+        let writer_a = std::thread::spawn(move || {
+            write_save_internal_with_before_replace(
+                &path_a,
+                &[json!({
+                    "path": "public.m_PlayerSaveName",
+                    "value": "Writer A"
+                })],
+                false,
+                None,
+                None,
+                false,
+                move |_| {
+                    a_ready_tx.send(()).unwrap();
+                    a_go_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        a_ready_rx.recv().unwrap();
+
+        let (b_ready_tx, b_ready_rx) = std::sync::mpsc::channel();
+        let (b_go_tx, b_go_rx) = std::sync::mpsc::channel();
+        let path_b = path.clone();
+        let writer_b = std::thread::spawn(move || {
+            write_save_internal_with_before_replace(
+                &path_b,
+                &[json!({
+                    "path": "public.m_PlayerSaveName",
+                    "value": "Writer B"
+                })],
+                false,
+                None,
+                None,
+                false,
+                move |_| {
+                    b_ready_tx.send(()).unwrap();
+                    b_go_rx.recv().unwrap();
+                    Ok(())
+                },
+            )
+        });
+        b_ready_rx.recv().unwrap();
+
+        // B has now staged after A. With the old fixed `.tmp-goresave` path it
+        // deterministically overwrote A's staging bytes before A published.
+        a_go_tx.send(()).unwrap();
+        let a_result = writer_a.join().unwrap();
+        assert!(a_result.is_ok(), "writer A must win: {a_result:?}");
+        b_go_tx.send(()).unwrap();
+        let b_error = writer_b.join().unwrap().unwrap_err();
+        assert!(matches!(b_error, CoreError::Update(_)));
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Writer A",
+            "the winner must publish its own staging bytes, never the loser's"
+        );
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            !name.contains(".tmp-goresave-") && !name.contains(".claim-goresave-")
+        }));
+    }
+
+    #[test]
+    fn write_save_output_target_keeps_overwrite_semantics_but_rejects_a_race() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("G1R-source.sav");
+        let output = dir.path().join("G1R-output.sav");
+        fs::write(&source, minimal_gsav("Source")).unwrap();
+        fs::write(&output, minimal_gsav("Old output")).unwrap();
+
+        write_save(
+            &source,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Normal overwrite"
+            })],
+            false,
+            Some(&output),
+        )
+        .unwrap();
+        assert_eq!(
+            inspect_save(&output, false).unwrap()["public"]["playerSaveName"],
+            "Normal overwrite"
+        );
+        assert_eq!(
+            inspect_save(&source, false).unwrap()["public"]["playerSaveName"],
+            "Source",
+            "outputPath writes must not mutate the source"
+        );
+
+        let concurrent = minimal_gsav("Concurrent output");
+        let error = write_save_internal_with_before_replace(
+            &source,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Losing edit"
+            })],
+            false,
+            Some(&output),
+            None,
+            false,
+            |target| {
+                fs::write(target, &concurrent)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&output).unwrap(), concurrent);
+        assert_eq!(
+            inspect_save(&source, false).unwrap()["public"]["playerSaveName"],
+            "Source"
+        );
+    }
+
+    #[test]
     fn write_save_applies_length_changing_public_name_and_preserves_stream() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("G1R-001.sav");
@@ -14140,6 +15445,128 @@ mod tests {
             metadata["G1R-002"].player_save_name.as_deref(),
             Some("Other slot")
         );
+    }
+
+    #[test]
+    fn write_save_rolls_back_slot_when_persistent_companion_changed_concurrently() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original_slot = minimal_gsav("Public name");
+        let original_persistent = persistent_data_list(&[(
+            "G1R-001",
+            "Persistent old",
+            1,
+            "MainMap",
+            3600.0,
+            false,
+            true,
+        )]);
+        let concurrent_persistent =
+            persistent_data_list(&[("G1R-001", "Cloud newer", 1, "MainMap", 3601.0, false, true)]);
+        fs::write(&path, &original_slot).unwrap();
+        fs::write(&persistent_path, &original_persistent).unwrap();
+
+        let error = write_save_internal_with_before_replace(
+            &path,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Editor change"
+            })],
+            false,
+            None,
+            None,
+            true,
+            |_| {
+                fs::write(&persistent_path, &concurrent_persistent)?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            original_slot,
+            "slot replacement must roll back when the companion CAS fails"
+        );
+        assert_eq!(
+            fs::read(&persistent_path).unwrap(),
+            concurrent_persistent,
+            "the concurrently newer PersistentDataList must remain untouched"
+        );
+    }
+
+    #[test]
+    fn companion_conflict_and_slot_rollback_never_delete_newer_targets() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let persistent_path = dir.path().join("PersistentDataList.sav");
+        let original_slot = minimal_gsav("Original slot");
+        let original_persistent = persistent_data_list(&[(
+            "G1R-001",
+            "Original profile",
+            1,
+            "MainMap",
+            3600.0,
+            false,
+            true,
+        )]);
+        let newer_slot = minimal_gsav("Game newer slot");
+        let newer_persistent = persistent_data_list(&[(
+            "G1R-001",
+            "Cloud newer profile",
+            1,
+            "MainMap",
+            3601.0,
+            false,
+            true,
+        )]);
+        fs::write(&path, &original_slot).unwrap();
+        fs::write(&persistent_path, &original_persistent).unwrap();
+
+        let error = write_save_internal_with_replace_hooks(
+            &path,
+            &[json!({
+                "path": "public.m_PlayerSaveName",
+                "value": "Editor change"
+            })],
+            false,
+            None,
+            None,
+            true,
+            |_| Ok(()),
+            |verified_target| {
+                if verified_target == persistent_path {
+                    assert!(!persistent_path.exists());
+                    // Both writes occur after the slot was installed and after
+                    // the companion was claimed+verified, exactly at the two
+                    // dangerous rollback/publication boundaries.
+                    fs::write(&path, &newer_slot)?;
+                    fs::write(&persistent_path, &newer_persistent)?;
+                }
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert!(error.to_string().contains("rollback"));
+        assert_eq!(fs::read(&path).unwrap(), newer_slot);
+        assert_eq!(fs::read(&persistent_path).unwrap(), newer_persistent);
+        let recovery_bytes = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|candidate| {
+                candidate
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().contains(".claim-goresave-"))
+            })
+            .map(|candidate| fs::read(candidate).unwrap())
+            .collect::<Vec<_>>();
+        assert!(recovery_bytes.contains(&original_slot));
+        assert!(recovery_bytes.contains(&original_persistent));
     }
 
     #[test]
@@ -14275,6 +15702,122 @@ mod tests {
         assert!(
             b2.starts_with(&subfolder),
             "second backup must be in goresave_backups subfolder"
+        );
+    }
+
+    #[test]
+    fn concurrent_same_suffix_backup_reservations_never_overwrite_snapshot_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let snapshot_a = minimal_gsav("Snapshot A");
+        let snapshot_b = minimal_gsav("Snapshot B");
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+
+        let path_a = path.clone();
+        let barrier_a = Arc::clone(&barrier);
+        let bytes_a = snapshot_a.clone();
+        let writer_a = std::thread::spawn(move || {
+            barrier_a.wait();
+            let backup =
+                create_backup_bytes_avoiding_at_epoch(&path_a, &bytes_a, &[], 123_456).unwrap();
+            (backup, bytes_a)
+        });
+        let path_b = path.clone();
+        let barrier_b = Arc::clone(&barrier);
+        let bytes_b = snapshot_b.clone();
+        let writer_b = std::thread::spawn(move || {
+            barrier_b.wait();
+            let backup =
+                create_backup_bytes_avoiding_at_epoch(&path_b, &bytes_b, &[], 123_456).unwrap();
+            (backup, bytes_b)
+        });
+
+        let (backup_a, expected_a) = writer_a.join().unwrap();
+        let (backup_b, expected_b) = writer_b.join().unwrap();
+        assert_ne!(backup_a, backup_b);
+        assert_eq!(fs::read(backup_a).unwrap(), expected_a);
+        assert_eq!(fs::read(backup_b).unwrap(), expected_b);
+    }
+
+    #[test]
+    fn concurrent_paired_backups_reserve_both_paths_under_one_distinct_suffix() {
+        let dir = tempdir().unwrap();
+        let slot = dir.path().join("G1R-001.sav");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let slot_a = minimal_gsav("Slot snapshot A");
+        let slot_b = minimal_gsav("Slot snapshot B");
+        let persistent_a = persistent_data_list(&[(
+            "G1R-001",
+            "Profile snapshot A",
+            1,
+            "MainMap",
+            1.0,
+            false,
+            true,
+        )]);
+        let persistent_b = persistent_data_list(&[(
+            "G1R-001",
+            "Profile snapshot B",
+            1,
+            "MainMap",
+            2.0,
+            false,
+            true,
+        )]);
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+
+        let run = |slot_bytes: Vec<u8>, persistent_bytes: Vec<u8>| {
+            let slot = slot.clone();
+            let persistent = persistent.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                let paths = create_paired_backup_bytes_at_epoch(
+                    &slot,
+                    &slot_bytes,
+                    &persistent,
+                    &persistent_bytes,
+                    654_321,
+                )
+                .unwrap();
+                (paths, slot_bytes, persistent_bytes)
+            })
+        };
+        let writer_a = run(slot_a, persistent_a);
+        let writer_b = run(slot_b, persistent_b);
+        let ((slot_backup_a, persistent_backup_a), slot_expected_a, persistent_expected_a) =
+            writer_a.join().unwrap();
+        let ((slot_backup_b, persistent_backup_b), slot_expected_b, persistent_expected_b) =
+            writer_b.join().unwrap();
+
+        assert_ne!(slot_backup_a, slot_backup_b);
+        assert_ne!(persistent_backup_a, persistent_backup_b);
+        let suffix = |path: &Path, marker: &str| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .split(marker)
+                .nth(1)
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            suffix(&slot_backup_a, "G1R-001.sav.bak."),
+            suffix(&persistent_backup_a, "PersistentDataList.sav.bak.")
+        );
+        assert_eq!(
+            suffix(&slot_backup_b, "G1R-001.sav.bak."),
+            suffix(&persistent_backup_b, "PersistentDataList.sav.bak.")
+        );
+        assert_eq!(fs::read(slot_backup_a).unwrap(), slot_expected_a);
+        assert_eq!(
+            fs::read(persistent_backup_a).unwrap(),
+            persistent_expected_a
+        );
+        assert_eq!(fs::read(slot_backup_b).unwrap(), slot_expected_b);
+        assert_eq!(
+            fs::read(persistent_backup_b).unwrap(),
+            persistent_expected_b
         );
     }
 
@@ -14563,6 +16106,155 @@ mod tests {
             persistent_second.to_string_lossy()
         );
         assert_eq!(fs::read(&persistent).unwrap(), b"GVAS-second");
+    }
+
+    #[test]
+    fn restore_backup_rejects_slot_changed_after_staging_and_backs_up_initial_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let backup = dir.path().join("G1R-001.sav.bak.700");
+        let original = minimal_gsav("Initial live");
+        let restore_bytes = minimal_gsav("Selected backup");
+        let newer = minimal_gsav("Game changed live");
+        fs::write(&path, &original).unwrap();
+        fs::write(&backup, &restore_bytes).unwrap();
+
+        let error = restore_backup_with_before_replace(&path, &backup, |target| {
+            fs::write(target, &newer)?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&path).unwrap(), newer);
+        let safety_bytes = fs::read_dir(dir.path().join("goresave_backups"))
+            .unwrap()
+            .flatten()
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(safety_bytes.contains(&original));
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            !entry
+                .file_name()
+                .to_string_lossy()
+                .contains(".tmp-restore-goresave-")
+        }));
+    }
+
+    #[test]
+    fn restore_backup_companion_cas_preserves_newer_profile_and_rolls_slot_back() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let backup_dir = dir.path().join("goresave_backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let slot_backup = backup_dir.join("G1R-001.sav.bak.701");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let persistent_backup = backup_dir.join("PersistentDataList.sav.bak.701");
+        let original_slot = minimal_gsav("Initial slot");
+        let restore_slot = minimal_gsav("Restore slot");
+        let original_persistent = b"GVAS-initial-profile".to_vec();
+        let restore_persistent = b"GVAS-restore-profile".to_vec();
+        let newer_persistent = b"GVAS-cloud-newer-profile".to_vec();
+        fs::write(&path, &original_slot).unwrap();
+        fs::write(&slot_backup, &restore_slot).unwrap();
+        fs::write(&persistent, &original_persistent).unwrap();
+        fs::write(&persistent_backup, &restore_persistent).unwrap();
+
+        let error = restore_backup_with_before_replace(&path, &slot_backup, |_| {
+            fs::write(&persistent, &newer_persistent)?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&path).unwrap(), original_slot);
+        assert_eq!(fs::read(&persistent).unwrap(), newer_persistent);
+        let safety_bytes = fs::read_dir(&backup_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| fs::read(entry.path()).unwrap())
+            .collect::<Vec<_>>();
+        assert!(safety_bytes.contains(&original_slot));
+        assert!(safety_bytes.contains(&original_persistent));
+    }
+
+    #[test]
+    fn restore_backup_rechecks_an_initially_identical_companion_before_committing_slot() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let backup_dir = dir.path().join("goresave_backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+        let slot_backup = backup_dir.join("G1R-001.sav.bak.702");
+        let persistent = dir.path().join("PersistentDataList.sav");
+        let persistent_backup = backup_dir.join("PersistentDataList.sav.bak.702");
+        let original_slot = minimal_gsav("Initial slot");
+        let shared_persistent = b"GVAS-already-restored-profile".to_vec();
+        let newer_persistent = b"GVAS-cloud-write-after-prepare".to_vec();
+        fs::write(&path, &original_slot).unwrap();
+        fs::write(&slot_backup, minimal_gsav("Restore slot")).unwrap();
+        fs::write(&persistent, &shared_persistent).unwrap();
+        fs::write(&persistent_backup, &shared_persistent).unwrap();
+
+        let error = restore_backup_with_before_replace(&path, &slot_backup, |_| {
+            fs::write(&persistent, &newer_persistent)?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(matches!(error, CoreError::Update(_)));
+        assert_eq!(fs::read(&path).unwrap(), original_slot);
+        assert_eq!(fs::read(&persistent).unwrap(), newer_persistent);
+    }
+
+    #[test]
+    fn concurrent_restores_publish_only_their_own_unique_staging_bytes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-001.sav");
+        let backup_a = dir.path().join("G1R-001.sav.bak.710");
+        let backup_b = dir.path().join("G1R-001.sav.bak.711");
+        fs::write(&path, minimal_gsav("Original")).unwrap();
+        fs::write(&backup_a, minimal_gsav("Restore A")).unwrap();
+        fs::write(&backup_b, minimal_gsav("Restore B")).unwrap();
+
+        let (a_ready_tx, a_ready_rx) = std::sync::mpsc::channel();
+        let (a_go_tx, a_go_rx) = std::sync::mpsc::channel();
+        let path_a = path.clone();
+        let restore_a = std::thread::spawn(move || {
+            restore_backup_with_before_replace(&path_a, &backup_a, move |_| {
+                a_ready_tx.send(()).unwrap();
+                a_go_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        a_ready_rx.recv().unwrap();
+
+        let (b_ready_tx, b_ready_rx) = std::sync::mpsc::channel();
+        let (b_go_tx, b_go_rx) = std::sync::mpsc::channel();
+        let path_b = path.clone();
+        let restore_b = std::thread::spawn(move || {
+            restore_backup_with_before_replace(&path_b, &backup_b, move |_| {
+                b_ready_tx.send(()).unwrap();
+                b_go_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        b_ready_rx.recv().unwrap();
+
+        a_go_tx.send(()).unwrap();
+        assert!(restore_a.join().unwrap().is_ok());
+        b_go_tx.send(()).unwrap();
+        assert!(matches!(
+            restore_b.join().unwrap().unwrap_err(),
+            CoreError::Update(_)
+        ));
+        assert_eq!(
+            inspect_save(&path, false).unwrap()["public"]["playerSaveName"],
+            "Restore A"
+        );
+        assert!(fs::read_dir(dir.path()).unwrap().flatten().all(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            !name.contains(".tmp-restore-goresave-") && !name.contains(".claim-goresave-")
+        }));
     }
 
     #[test]
@@ -18593,6 +20285,14 @@ mod tests {
     }
 
     fn name_keyed_struct_map(map_name: &str, entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        name_keyed_struct_map_of(map_name, "KnowledgeSet", entries)
+    }
+
+    fn name_keyed_struct_map_of(
+        map_name: &str,
+        struct_type: &str,
+        entries: &[(&str, Vec<u8>)],
+    ) -> Vec<u8> {
         let mut map_body = 0u32.to_le_bytes().to_vec();
         map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
         for (key, value_props) in entries {
@@ -18607,7 +20307,7 @@ mod tests {
         out.extend_from_slice(&0u32.to_le_bytes());
         out.extend_from_slice(&fstring("StructProperty"));
         out.extend_from_slice(&1u32.to_le_bytes());
-        out.extend_from_slice(&fstring("KnowledgeSet"));
+        out.extend_from_slice(&fstring(struct_type));
         out.extend_from_slice(&1u32.to_le_bytes());
         out.extend_from_slice(&fstring("/Script/G1R"));
         out.extend_from_slice(&0u32.to_le_bytes());
@@ -18615,6 +20315,632 @@ mod tests {
         out.push(0);
         out.extend_from_slice(&map_body);
         out
+    }
+
+    fn string_keyed_instanced_struct_map(
+        map_name: &str,
+        actual_type: &str,
+        entries: &[(&str, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (key, value_props) in entries {
+            map_body.extend_from_slice(&fstring(key));
+            let mut instance_body = value_props.clone();
+            instance_body.extend_from_slice(&fstring("None"));
+            map_body.extend_from_slice(&fstring(actual_type));
+            map_body.extend_from_slice(&(instance_body.len() as u32).to_le_bytes());
+            map_body.extend_from_slice(&instance_body);
+        }
+        let mut out = fstring(map_name);
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StrProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("InstancedStruct"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/StructUtils"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&map_body);
+        out
+    }
+
+    fn name_keyed_int_map(map_name: &str, entries: &[(&str, i32)]) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (key, value) in entries {
+            map_body.extend_from_slice(&fstring(key));
+            map_body.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut out = fstring(map_name);
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&fstring("NameProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&fstring("IntProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&map_body);
+        out
+    }
+
+    fn object_keyed_struct_map(
+        map_name: &str,
+        struct_type: &str,
+        entries: &[(&str, Vec<u8>)],
+    ) -> Vec<u8> {
+        let mut map_body = 0u32.to_le_bytes().to_vec();
+        map_body.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (key, value_props) in entries {
+            map_body.extend_from_slice(&fstring(key));
+            map_body.extend_from_slice(value_props);
+            map_body.extend_from_slice(&fstring("None"));
+        }
+        let mut out = fstring(map_name);
+        out.extend_from_slice(&fstring("MapProperty"));
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&fstring("ObjectProperty"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&fstring("StructProperty"));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring(struct_type));
+        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&fstring("/Script/G1R"));
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&(map_body.len() as u32).to_le_bytes());
+        out.push(0);
+        out.extend_from_slice(&map_body);
+        out
+    }
+
+    fn story_progression_payload() -> Vec<u8> {
+        let values = name_keyed_int_map(
+            "StoryPropertyValues",
+            &[
+                ("Stone_OreArmor", 1_767_047),
+                ("Chapter", 2),
+                ("Unknown_Timer_Name", 17),
+            ],
+        );
+        let by_class = object_keyed_struct_map(
+            "SaveDataByStoryClass",
+            "SingleStorySaveGameData",
+            &[("/Script/Angelscript.StoryG1R", values)],
+        );
+        let mut time_body = private_double_property("TotalSeconds", 1_875_587.943_7);
+        time_body.extend_from_slice(&fstring("None"));
+        let current_time = private_struct_property("CurrentTime", "InGameTime", &time_body, 0);
+        let generic = string_keyed_instanced_struct_map(
+            "m_GenericData",
+            "/Script/G1R.StorySaveGameData",
+            &[("Story", by_class), ("GameTime", current_time)],
+        );
+
+        let mut payload = fstring("/Script/Angelscript.GothicFinalDataGame");
+        payload.push(0);
+        payload.extend_from_slice(&generic);
+        payload.extend_from_slice(&fstring("None"));
+        payload.extend_from_slice(&0u32.to_le_bytes());
+        payload
+    }
+
+    #[test]
+    fn query_progression_story_and_all_data_surface_scalar_story_map_entries() {
+        let (_dir, path, backend) =
+            progression_fixture("G1R-story.sav", story_progression_payload());
+
+        let story = query_progression(
+            &path,
+            &json!({ "section": "story", "query": "Stone" }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(story["section"], "story");
+        assert_eq!(story["includeUnset"], false);
+        assert_eq!(story["total"], 1);
+        assert_eq!(story["storedTotal"], 3);
+        assert_eq!(story["catalogTotal"], 470);
+        assert_eq!(story["unsetTotal"], 468);
+        assert_eq!(story["unknownStoredTotal"], 1);
+        assert_eq!(story["writable"], true);
+        assert_eq!(story["entries"][0]["id"], "Stone_OreArmor");
+        assert_eq!(story["entries"][0]["rawValue"], 1_767_047);
+        assert_eq!(story["entries"][0]["stored"], true);
+        assert_eq!(story["entries"][0]["semanticType"], "timeMarker");
+        assert_eq!(story["entries"][0]["declaredType"], "FInGameTime");
+        assert_eq!(story["currentGameTimeSeconds"], 1_875_587.943_7);
+        assert_eq!(
+            story["entries"][0]["path"],
+            json!([
+                "m_GenericData",
+                "{Story}",
+                "SaveDataByStoryClass",
+                "{/Script/Angelscript.StoryG1R}",
+                "StoryPropertyValues",
+                "{Stone_OreArmor}",
+            ])
+        );
+
+        let unknown_story = query_progression(
+            &path,
+            &json!({
+                "section": "story",
+                "semanticType": "unknown",
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(unknown_story["semanticType"], "unknown");
+        assert_eq!(unknown_story["total"], 1);
+        assert_eq!(unknown_story["entries"][0]["id"], "Unknown_Timer_Name");
+        assert_eq!(unknown_story["entries"][0]["semanticType"], "unknown");
+        assert_eq!(unknown_story["entries"][0]["declaredType"], "unknown");
+        assert_eq!(unknown_story["semanticTypeCounts"]["unknown"], 1);
+        assert_eq!(unknown_story["storedSemanticTypeCounts"]["unknown"], 1);
+
+        let exact_type_filter = query_progression(
+            &path,
+            &json!({
+                "section": "story",
+                "semanticType": "timemarker",
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(exact_type_filter["semanticType"], "timemarker");
+        assert_eq!(exact_type_filter["total"], 0);
+
+        let catalog = query_progression(
+            &path,
+            &json!({
+                "section": "story",
+                "includeUnset": true,
+                "offset": 0,
+                "limit": 1000,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(catalog["includeUnset"], true);
+        assert_eq!(catalog["total"], 471);
+        assert_eq!(catalog["count"], 471);
+        assert_eq!(catalog["catalogTotal"], 470);
+        assert_eq!(catalog["unsetTotal"], 468);
+        assert_eq!(catalog["unknownStoredTotal"], 1);
+        let unset = catalog["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "AfterCinematic_Nyras")
+            .unwrap();
+        assert_eq!(unset["stored"], false);
+        assert_eq!(unset["rawValue"], Value::Null);
+        assert_eq!(unset["path"], json!([]));
+
+        // The All-data UI sends the explicit `all` kind value. Pin that exact
+        // request shape as well as the scalar facet below, so a map-entry hit
+        // cannot disappear merely because the kind selector is at its default.
+        let all_kinds = search_typed_properties(
+            &path,
+            &json!({
+                "query": "Stone_OreArmor",
+                "includeNodes": true,
+                "source": "private",
+                "kind": "all",
+                "offset": 0,
+                "limit": 20,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(all_kinds["total"], 1);
+        assert_eq!(all_kinds["results"][0]["kind"], "mapEntry");
+        assert_eq!(all_kinds["results"][0]["editable"], false);
+
+        let scalar = search_typed_properties(
+            &path,
+            &json!({
+                "query": "Stone_OreArmor",
+                "includeNodes": true,
+                "source": "private",
+                "kind": "scalar",
+                "offset": 0,
+                "limit": 20,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(scalar["total"], 1);
+        let row = &scalar["results"][0];
+        assert_eq!(row["kind"], "mapEntry");
+        assert_eq!(row["type"], "IntProperty");
+        assert_eq!(row["childCount"], 0);
+        assert_eq!(row["editable"], false);
+        assert_eq!(row["editValue"], Value::Null);
+        assert_eq!(
+            row["path"],
+            json!([
+                "m_GenericData",
+                "{Story}",
+                "SaveDataByStoryClass",
+                "{/Script/Angelscript.StoryG1R}",
+                "StoryPropertyValues",
+                "{Stone_OreArmor}",
+            ])
+        );
+
+        let editable = search_typed_properties(
+            &path,
+            &json!({
+                "query": "Stone_OreArmor",
+                "includeNodes": true,
+                "source": "private",
+                "kind": "scalar",
+                "editable": true,
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(editable["total"], 0);
+
+        let container = search_typed_properties(
+            &path,
+            &json!({
+                "query": "Stone_OreArmor",
+                "includeNodes": true,
+                "source": "private",
+                "kind": "container",
+            }),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(container["total"], 1);
+        assert_eq!(container["results"][0]["kind"], "mapEntry");
+        assert_eq!(container["results"][0]["editable"], false);
+    }
+
+    #[test]
+    fn write_save_applies_atomic_story_batch_and_advertises_exact_capability() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-story-write.sav");
+        let output_path = dir.path().join("G1R-story-written.sav");
+        let private_payload = story_progression_payload();
+        let seed_compressed = b"seed-story-write".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let inspected = inspect_save_with_codec_backend(&path, true, Some(&backend), None).unwrap();
+        assert!(
+            inspected["private"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.story.apply"))
+        );
+        assert!(
+            inspected["private"]["progression"]["writable"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("private.story.apply"))
+        );
+
+        let response = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.story.apply",
+                "value": {
+                    "changes": [
+                        {
+                            "id": "stone_orearmor",
+                            "present": true,
+                            "rawValue": 1_875_588,
+                            "expected": { "stored": true, "rawValue": 1_767_047 }
+                        },
+                        {
+                            "id": "aftercinematic_nyras",
+                            "present": true,
+                            "rawValue": 1,
+                            "expected": { "stored": false }
+                        },
+                        {
+                            "id": "Unknown_Timer_Name",
+                            "present": false,
+                            "expected": { "stored": true, "rawValue": 17 }
+                        }
+                    ]
+                }
+            })],
+            false,
+            Some(&output_path),
+            Some(&backend),
+        )
+        .unwrap();
+        assert_eq!(response["editsApplied"], 1);
+
+        let written = fs::read(&output_path).unwrap();
+        let parts = split_gsav(&written).unwrap();
+        let compressed =
+            parse_compressed_stream(&written, 13 + parts.public_payload.len()).unwrap();
+        let decoded = decompress_private_payload(&written, &compressed, &backend).unwrap();
+        let root = properties::parse_private_root(&decoded).unwrap();
+        assert_eq!(root.consumed, decoded.len());
+        let story = story::query_story(&root, "", None, 0, 1000, true).unwrap();
+        let rows = story["entries"].as_array().unwrap();
+        let row = |id: &str| rows.iter().find(|entry| entry["id"] == id).unwrap();
+        assert_eq!(row("Stone_OreArmor")["rawValue"], 1_875_588);
+        assert_eq!(row("AfterCinematic_Nyras")["rawValue"], 1);
+        assert_eq!(row("AfterCinematic_Nyras")["stored"], true);
+        assert!(
+            rows.iter().all(|entry| entry["id"] != "Unknown_Timer_Name"),
+            "removed unknown ids are absent because they are not catalog rows"
+        );
+    }
+
+    #[test]
+    fn story_apply_rejects_stale_cas_unknown_creation_and_outer_peers_without_output() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("G1R-story-guards.sav");
+        let private_payload = story_progression_payload();
+        let seed_compressed = b"seed-story-guards".to_vec();
+        let stream = compressed_stream_with_one_chunk(&seed_compressed, private_payload.len());
+        fs::write(
+            &path,
+            build_gsav(2, &public_payload("Slot"), &stream, &[0, 0, 0, 0]),
+        )
+        .unwrap();
+        let backend = PrefixCodecBackend {
+            seed_compressed,
+            seed_uncompressed: private_payload,
+        };
+
+        let stale_output = dir.path().join("stale.sav");
+        let error = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.story.apply",
+                "value": { "changes": [{
+                    "id": "Chapter",
+                    "present": true,
+                    "rawValue": 3,
+                    "expected": { "stored": true, "rawValue": 1 }
+                }] }
+            })],
+            false,
+            Some(&stale_output),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::Validation(_)));
+        assert!(!stale_output.exists());
+
+        let unknown_output = dir.path().join("unknown.sav");
+        let error = write_save_with_codec_backend(
+            &path,
+            &[json!({
+                "path": "private.story.apply",
+                "value": { "changes": [{
+                    "id": "Mod_NewFlag",
+                    "present": true,
+                    "rawValue": -7,
+                    "expected": { "stored": false }
+                }] }
+            })],
+            false,
+            Some(&unknown_output),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::UnsupportedEdit(_)));
+        assert!(!unknown_output.exists());
+
+        let peer_output = dir.path().join("peer.sav");
+        let error = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.story.apply",
+                    "value": { "changes": [{
+                        "id": "Chapter",
+                        "present": true,
+                        "rawValue": 3,
+                        "expected": { "stored": true, "rawValue": 2 }
+                    }] }
+                }),
+                json!({
+                    "path": "private.typed.setValue",
+                    "value": { "path": ["m_GenericData"], "value": 0 }
+                }),
+            ],
+            false,
+            Some(&peer_output),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::UnsupportedEdit(_)));
+        assert!(error.to_string().contains("must be the only edit"));
+        assert!(!peer_output.exists());
+
+        let public_peer_output = dir.path().join("public-peer.sav");
+        let error = write_save_with_codec_backend(
+            &path,
+            &[
+                json!({
+                    "path": "private.story.apply",
+                    "value": { "changes": [{
+                        "id": "Chapter",
+                        "present": true,
+                        "rawValue": 3,
+                        "expected": { "stored": true, "rawValue": 2 }
+                    }] }
+                }),
+                json!({
+                    "path": "public.m_PlayerSaveName",
+                    "value": "Changed"
+                }),
+            ],
+            false,
+            Some(&public_peer_output),
+            Some(&backend),
+        )
+        .unwrap_err();
+        assert!(matches!(error, CoreError::UnsupportedEdit(_)));
+        assert!(error.to_string().contains("must be the only edit"));
+        assert!(!public_peer_output.exists());
+    }
+
+    #[test]
+    fn parse_story_apply_requires_exact_cas_shape_and_full_i32_values() {
+        let parse = |value: Value| {
+            parse_private_story_apply_edit(&Edit {
+                path: "private.story.apply".to_string(),
+                value,
+            })
+        };
+
+        let valid = parse(json!({ "changes": [{
+            "id": "Chapter",
+            "present": true,
+            "rawValue": -2147483648i64,
+            "expected": { "stored": true, "rawValue": 2147483647i64 }
+        }] }))
+        .unwrap();
+        assert_eq!(valid[0].raw_value, Some(i32::MIN));
+        assert_eq!(valid[0].expected.raw_value, Some(i32::MAX));
+
+        for invalid in [
+            json!({}),
+            json!({ "changes": [] }),
+            json!({ "changes": [null] }),
+            json!({ "changes": [{
+                "id": "Chapter", "present": true, "rawValue": 1
+            }] }),
+            json!({ "changes": [{
+                "id": "Chapter", "present": true, "rawValue": 2147483648i64,
+                "expected": { "stored": true, "rawValue": 2 }
+            }] }),
+            json!({ "changes": [{
+                "id": "Chapter", "present": false, "rawValue": 0,
+                "expected": { "stored": true, "rawValue": 2 }
+            }] }),
+            json!({ "changes": [{
+                "id": "Chapter", "present": true, "rawValue": 3,
+                "expected": { "stored": false, "rawValue": 2 }
+            }] }),
+            json!({ "changes": [{
+                "id": "Chapter", "present": true, "rawValue": 3,
+                "expected": { "stored": true, "rawValue": 2 },
+                "allowUnknownCreate": "yes"
+            }] }),
+        ] {
+            assert!(
+                matches!(parse(invalid), Err(CoreError::InvalidRequest(_))),
+                "invalid story request unexpectedly parsed"
+            );
+        }
+    }
+
+    #[test]
+    fn story_apply_roundtrips_real_save_when_configured() {
+        let Ok(path) = std::env::var("GORE_SAVE") else {
+            eprintln!("GORE_SAVE not set; skipping real story-write roundtrip");
+            return;
+        };
+        let path = Path::new(&path);
+        let backend = codec_backend::KrakenBackend::default();
+        let original_bytes = fs::read(path).unwrap();
+        let original_payload =
+            decode_private_payload_from_bytes(&original_bytes, &backend).unwrap();
+        let original_root = properties::parse_private_root(&original_payload).unwrap();
+        let original_story = story::query_story(&original_root, "", None, 0, 2000, true).unwrap();
+        let rows = original_story["entries"].as_array().unwrap();
+        let stored = rows
+            .iter()
+            .filter(|entry| entry["stored"] == true)
+            .take(2)
+            .collect::<Vec<_>>();
+        let absent = rows
+            .iter()
+            .find(|entry| entry["catalogKnown"] == true && entry["stored"] == false)
+            .expect("real save must have an unset catalog story id");
+        assert!(
+            stored.len() >= 2,
+            "real save must have two stored story ids"
+        );
+
+        let edit_id = stored[0]["id"].as_str().unwrap();
+        let edit_old = stored[0]["rawValue"].as_i64().unwrap() as i32;
+        let edit_new = if edit_old == i32::MAX {
+            i32::MIN
+        } else {
+            edit_old + 1
+        };
+        let remove_id = stored[1]["id"].as_str().unwrap();
+        let remove_old = stored[1]["rawValue"].as_i64().unwrap() as i32;
+        let insert_id = absent["id"].as_str().unwrap();
+
+        let dir = tempdir().unwrap();
+        let output = dir.path().join("real-story-roundtrip.sav");
+        write_save_with_codec_backend(
+            path,
+            &[json!({
+                "path": "private.story.apply",
+                "value": { "changes": [
+                    {
+                        "id": edit_id,
+                        "present": true,
+                        "rawValue": edit_new,
+                        "expected": { "stored": true, "rawValue": edit_old }
+                    },
+                    {
+                        "id": insert_id,
+                        "present": true,
+                        "rawValue": i32::MAX,
+                        "expected": { "stored": false }
+                    },
+                    {
+                        "id": remove_id,
+                        "present": false,
+                        "expected": { "stored": true, "rawValue": remove_old }
+                    }
+                ] }
+            })],
+            false,
+            Some(&output),
+            Some(&backend),
+        )
+        .unwrap();
+
+        let written = fs::read(&output).unwrap();
+        let payload = decode_private_payload_from_bytes(&written, &backend).unwrap();
+        let root = properties::parse_private_root(&payload).unwrap();
+        assert_eq!(root.consumed, payload.len());
+        let after = story::query_story(&root, "", None, 0, 2000, true).unwrap();
+        let rows = after["entries"].as_array().unwrap();
+        let value = |id: &str| {
+            rows.iter()
+                .find(|entry| {
+                    entry["id"]
+                        .as_str()
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(id))
+                })
+                .and_then(|entry| entry["rawValue"].as_i64())
+                .map(|raw| raw as i32)
+        };
+        assert_eq!(value(edit_id), Some(edit_new));
+        assert_eq!(value(insert_id), Some(i32::MAX));
+        assert_eq!(value(remove_id), None);
     }
 
     #[test]

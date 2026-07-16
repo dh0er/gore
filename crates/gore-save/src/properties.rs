@@ -765,12 +765,14 @@ struct BrowseCtx {
 impl BrowseCtx {
     /// Return the stable node ordinal when this match belongs to the requested
     /// page, or `None` when it is filtered/outside the page.
+    #[allow(clippy::too_many_arguments)]
     fn slot(
         &mut self,
         display: &str,
         type_name: &str,
         struct_type: Option<&str>,
         kind: &str,
+        scalar_map_entry: bool,
         value_display: &str,
         addressable_editable: bool,
     ) -> Option<usize> {
@@ -792,7 +794,7 @@ impl BrowseCtx {
         if self
             .kind_filter
             .as_deref()
-            .is_some_and(|wanted| !kind_filter_matches(wanted, kind))
+            .is_some_and(|wanted| !kind_filter_matches(wanted, kind, scalar_map_entry))
         {
             return None;
         }
@@ -833,7 +835,7 @@ fn increment_count(counts: &mut BTreeMap<String, usize>, key: &str) {
     }
 }
 
-fn kind_filter_matches(filter: &str, kind: &str) -> bool {
+fn kind_filter_matches(filter: &str, kind: &str, scalar_map_entry: bool) -> bool {
     match filter {
         "container" => matches!(
             kind,
@@ -847,6 +849,11 @@ fn kind_filter_matches(filter: &str, kind: &str) -> bool {
                 | "objectInstance"
         ),
         "struct" => matches!(kind, "struct" | "nativeStruct" | "instancedStruct"),
+        // A map entry remains a `mapEntry` node (and therefore read-only), but
+        // when its value has no children it is also a scalar leaf for filtering
+        // purposes. This makes primitive TMap values discoverable alongside
+        // tagged scalars without misrepresenting their kind or writability.
+        "scalar" => kind == "scalar" || scalar_map_entry,
         other => kind.eq_ignore_ascii_case(other),
     }
 }
@@ -882,11 +889,13 @@ fn walk_browse_properties(
             .map(|(name, _)| name.as_str());
         let value_display = browse_value_preview(&property.value);
         let addressable_editable = addressable && browse_value_editable(&property.value);
+        let child_count = browse_child_count(&property.value);
         if let Some(ordinal) = ctx.slot(
             display,
             &property.type_name,
             struct_type,
             kind,
+            false,
             &value_display,
             addressable_editable,
         ) {
@@ -902,7 +911,7 @@ fn walk_browse_properties(
                     .then(|| browse_value_json(&property.value))
                     .flatten(),
                 editable: ctx.allow_edits && addressable_editable,
-                child_count: browse_child_count(&property.value),
+                child_count,
                 depth: path.len().saturating_sub(1),
             });
         }
@@ -945,6 +954,7 @@ fn walk_browse_value_children(
                         instance.properties.len()
                     ),
                     instance.properties.len(),
+                    false,
                     None,
                     path,
                     display,
@@ -992,6 +1002,7 @@ fn walk_browse_value_children(
                     "mapEntry",
                     &preview,
                     child_count,
+                    scalar_display(entry_value).is_some(),
                     inline_struct_type(entry_value),
                     path,
                     display,
@@ -1014,6 +1025,7 @@ fn walk_browse_value_children(
                     if is_set { "setElement" } else { "arrayElement" },
                     &preview,
                     browse_child_count(element),
+                    false,
                     inline_struct_type(element),
                     path,
                     display,
@@ -1036,6 +1048,7 @@ fn descend_browse_inline<F>(
     kind: &str,
     value_display: &str,
     child_count: usize,
+    scalar_map_entry: bool,
     struct_type: Option<&str>,
     path: &mut Vec<String>,
     display: &mut String,
@@ -1048,7 +1061,15 @@ fn descend_browse_inline<F>(
     let display_len = display.len();
     display.push_str(segment);
     path.push(segment.to_string());
-    if let Some(ordinal) = ctx.slot(display, type_name, struct_type, kind, value_display, false) {
+    if let Some(ordinal) = ctx.slot(
+        display,
+        type_name,
+        struct_type,
+        kind,
+        scalar_map_entry,
+        value_display,
+        false,
+    ) {
         ctx.nodes.push(PropertyNode {
             ordinal,
             path: path.clone(),

@@ -22,6 +22,177 @@ class AppLocalizationsJa extends AppLocalizations {
       'アイテム、会話知識、クエスト、孤立アクターの技術 ID を表示します。NPC ID は常に表示されます。';
 
   @override
+  String get storyStateSidebar => 'ストーリー状態';
+
+  @override
+  String get storyStateDescription =>
+      '製品版ゲームスクリプトで宣言された永続ストーリー状態の正式なカタログです。保存済み項目には生の値を表示し、このセーブにないカタログ項目は未設定として示します。ソースで宣言された時刻はゲーム内時刻として表示します。その他の整数は真偽値、カウンター、多段階状態などの場合があります。';
+
+  @override
+  String get storyStateReadOnly =>
+      'スクリプト上の意味と安全なマップ書き込みが確認できるまでは読み取り専用です。関連する用語集テキストは文脈であり、技術 ID の直接翻訳ではありません。';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'このセーブデータの StoryPropertyValues 構造を一意かつ安全に特定できませんでした。このセーブデータではストーリー値は読み取り専用のままです。';
+
+  @override
+  String get storyStateSearch => 'ストーリー状態を検索';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return 'ストーリー値 $total 件中 $shown 件';
+  }
+
+  @override
+  String get storyStateInteger => '整数';
+
+  @override
+  String get storyStateTimeMarker => '時刻マーカー';
+
+  @override
+  String get storyStateChapter => 'チャプター';
+
+  @override
+  String get storyStateUnknown => '不明なソース型';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'この保存済み ID は現在のスクリプトカタログに存在しません（Mod または新しいゲーム版など）。保存形式の値は int32 ですが、その意味は推測しません。';
+
+  @override
+  String get storyStateStored => '保存済み';
+
+  @override
+  String get storyStateUnset => '未設定';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'このカタログ項目はセーブにシリアライズされていないため、ゲームは未設定または既定の状態を使用します。';
+
+  @override
+  String get storyStateRawValue => '生の値';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'セーブ時の経過時間: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'セーブ時点から先: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    return '$days日 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => '関連する用語集項目';
+
+  @override
+  String get storyStateTechnicalPath => '技術パス';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'すべての項目は、符号付き int32 の全範囲で編集できます。スクリプトに基づくフラグや値の候補は参考情報であり、生の値はいつでも入力できます。ストーリー状態を変更すると、会話、クエスト、ワールドの遷移が飛ばされる場合があります。内容を確認して保存してください。バックアップは自動的に作成されます。';
+
+  @override
+  String get storyStatePending => '保留中';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return '$value として保存されます';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'セーブデータから削除されます';
+
+  @override
+  String get storyStateEditValue => '値を編集';
+
+  @override
+  String get storyStateSetValue => '値を設定';
+
+  @override
+  String get storyStateRemoveValue => 'セーブデータから削除';
+
+  @override
+  String get storyStateUndoChange => 'ストーリー変更を元に戻す';
+
+  @override
+  String get storyStateResetChanges => 'ストーリー変更をリセット';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return '$id を編集';
+  }
+
+  @override
+  String get storyStateRawInput => '符号付き int32 値';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      '-2147483648 から 2147483647 までの整数を入力してください。';
+
+  @override
+  String get storyStateQueueChange => '変更を保留';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return '製品版スクリプトで確認された値: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      '候補は検証上の制限ではありません。ネイティブコード、MOD、または新しいゲームバージョンでは別の値が使われる場合があります。';
+
+  @override
+  String get storyStateUseCurrentTime => '現在のセーブ時刻を使用';
+
+  @override
+  String get storyStateStructuredTime => '日 / 時刻';
+
+  @override
+  String get storyStateRawMode => '生の int32';
+
+  @override
+  String get storyStateChapterWarning =>
+      'チャプターだけを変更しても、クエスト、NPC、インベントリ、ワールド状態は同期されません。';
+
+  @override
+  String get storyStateDormantWarning =>
+      '製品版のスクリプトキャッシュでは、このフィールドを実際に読み書きする箇所が見つかりませんでした。旧仕様、ネイティブコードによる制御、または予約済みのフィールドである可能性があります。';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      '製品版スクリプトはこのフィールドを読み取りますが、スクリプトから書き込む箇所はありません。ネイティブコードが管理している可能性があります。';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'この ID は MOD または新しいバージョン由来であり、同梱ソースから意味を判定できません。生の int32 値だけを編集してください。';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'バイナリフラグ',
+      'finiteState': '多段階の値',
+      'counterOrScore': 'カウンター / スコア',
+      'calendarDay': '暦日',
+      'derivedOrOpaqueInteger': '派生 / 不透明な整数',
+      'readOnlyInSourceInteger': '製品版スクリプトでは読み取り専用',
+      'dormantOrLegacyInteger': '製品版スクリプトでは未使用',
+      'other': '整数',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      '保存された 0 とマップ項目が存在しない状態は、ファイル上では異なります。「セーブデータから削除」を選ぶと、コンストラクターまたは既定の状態に戻ります。';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

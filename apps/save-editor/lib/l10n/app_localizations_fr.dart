@@ -24,6 +24,185 @@ class AppLocalizationsFr extends AppLocalizations {
       'Affiche les identifiants techniques des objets, connaissances de dialogue, quêtes et acteurs orphelins. Les identifiants des PNJ sont toujours affichés.';
 
   @override
+  String get storyStateSidebar => 'État de l’histoire';
+
+  @override
+  String get storyStateDescription =>
+      'Catalogue de référence des états persistants déclarés par les scripts livrés avec le jeu. Les entrées enregistrées affichent leur valeur brute ; les champs du catalogue absents de cette sauvegarde sont marqués comme non définis. Les repères temporels déclarés dans le code sont affichés en temps de jeu ; les autres entiers peuvent être des booléens, compteurs ou états à plusieurs niveaux.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Lecture seule tant que la signification des valeurs dans les scripts et l’écriture sûre de la map ne sont pas établies. Le texte de glossaire associé donne du contexte ; ce n’est pas une traduction directe de l’ID technique.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'La structure StoryPropertyValues de cette sauvegarde n’a pas pu être identifiée de manière univoque et sûre. Les valeurs d’histoire restent en lecture seule pour cette sauvegarde.';
+
+  @override
+  String get storyStateSearch => 'Rechercher dans l’état de l’histoire';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown valeurs d’histoire sur $total';
+  }
+
+  @override
+  String get storyStateInteger => 'Entier';
+
+  @override
+  String get storyStateTimeMarker => 'Repère temporel';
+
+  @override
+  String get storyStateChapter => 'Chapitre';
+
+  @override
+  String get storyStateUnknown => 'Type source inconnu';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'Cet ID enregistré est absent du catalogue de scripts actuel (par exemple à cause d’un mod ou d’une version plus récente du jeu). Sa valeur sérialisée est un int32, mais sa signification n’est pas déduite.';
+
+  @override
+  String get storyStateStored => 'Enregistré';
+
+  @override
+  String get storyStateUnset => 'Non défini';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'Ce champ du catalogue n’est pas sérialisé dans cette sauvegarde ; le jeu utilise donc son état non défini ou sa valeur par défaut.';
+
+  @override
+  String get storyStateRawValue => 'Valeur brute';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Temps écoulé à la sauvegarde : $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'Dans le futur à la sauvegarde : $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days jours',
+      one: '1 jour',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Entrée de glossaire associée';
+
+  @override
+  String get storyStateTechnicalPath => 'Chemin technique';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Chaque entrée reste modifiable sur toute la plage int32 signée. Les indicateurs et suggestions de valeurs issus des scripts sont fournis à titre indicatif ; la saisie brute reste toujours disponible. Les changements d’état de l’histoire peuvent court-circuiter des transitions de dialogue, de quête ou du monde : enregistrez-les avec précaution. Une sauvegarde de sécurité est créée automatiquement.';
+
+  @override
+  String get storyStatePending => 'En attente';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Sera enregistré sous la valeur $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Sera supprimé de la sauvegarde';
+
+  @override
+  String get storyStateEditValue => 'Modifier la valeur';
+
+  @override
+  String get storyStateSetValue => 'Définir la valeur';
+
+  @override
+  String get storyStateRemoveValue => 'Supprimer de la sauvegarde';
+
+  @override
+  String get storyStateUndoChange => 'Annuler le changement d’histoire';
+
+  @override
+  String get storyStateResetChanges =>
+      'Réinitialiser les changements d’histoire';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return 'Modifier $id';
+  }
+
+  @override
+  String get storyStateRawInput => 'Valeur int32 signée';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Saisissez un nombre entier compris entre -2147483648 et 2147483647.';
+
+  @override
+  String get storyStateQueueChange => 'Mettre le changement en attente';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Valeurs attestées dans les scripts fournis : $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Les suggestions ne sont pas des limites de validation ; le code natif, les mods ou les versions ultérieures du jeu peuvent utiliser d’autres valeurs.';
+
+  @override
+  String get storyStateUseCurrentTime =>
+      'Utiliser l’heure actuelle de la sauvegarde';
+
+  @override
+  String get storyStateStructuredTime => 'Jour / heure';
+
+  @override
+  String get storyStateRawMode => 'int32 brut';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Modifier uniquement le chapitre ne synchronise ni les quêtes, ni les PNJ, ni l’inventaire, ni l’état du monde.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'Aucune lecture ni écriture active de ce champ n’a été trouvée dans le cache des scripts fournis. Il peut être ancien, contrôlé par le code natif ou réservé.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'Les scripts fournis lisent ce champ, mais ne contiennent aucune écriture par script. Le code natif peut néanmoins en être responsable.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'Cet ID provenant d’un mod ou d’une version ultérieure ne possède aucune sémantique source intégrée. Modifiez uniquement sa valeur int32 brute.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Indicateur binaire',
+      'finiteState': 'Valeur à plusieurs états',
+      'counterOrScore': 'Compteur / score',
+      'calendarDay': 'Jour calendaire',
+      'derivedOrOpaqueInteger': 'Entier dérivé / opaque',
+      'readOnlyInSourceInteger': 'Lecture seule dans les scripts fournis',
+      'dormantOrLegacyInteger': 'Inutilisé dans les scripts fournis',
+      'other': 'Entier',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'Un 0 enregistré et une entrée absente de la table sont deux états de fichier distincts. « Supprimer de la sauvegarde » restaure l’état défini par le constructeur ou l’état par défaut.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

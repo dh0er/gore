@@ -140,6 +140,270 @@ abstract class AppLocalizations {
   /// **'Show technical item, dialogue knowledge, quest, and orphan actor IDs in the editor. NPC IDs are always shown.'**
   String get showObjectIdsSubtitle;
 
+  /// No description provided for @storyStateSidebar.
+  ///
+  /// In en, this message translates to:
+  /// **'Story state'**
+  String get storyStateSidebar;
+
+  /// No description provided for @storyStateDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.'**
+  String get storyStateDescription;
+
+  /// No description provided for @storyStateReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Read-only until the script meaning of values and safe map writes are established. Related glossary text is context, not a direct translation of the technical ID.'**
+  String get storyStateReadOnly;
+
+  /// No description provided for @storyStateStructureReadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'The StoryPropertyValues structure in this save could not be resolved uniquely and safely. Story values remain read-only for this save.'**
+  String get storyStateStructureReadOnly;
+
+  /// No description provided for @storyStateSearch.
+  ///
+  /// In en, this message translates to:
+  /// **'Search story state'**
+  String get storyStateSearch;
+
+  /// No description provided for @storyStateValuesCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{shown} of {total} story values'**
+  String storyStateValuesCount(int shown, int total);
+
+  /// No description provided for @storyStateInteger.
+  ///
+  /// In en, this message translates to:
+  /// **'Integer'**
+  String get storyStateInteger;
+
+  /// No description provided for @storyStateTimeMarker.
+  ///
+  /// In en, this message translates to:
+  /// **'Time marker'**
+  String get storyStateTimeMarker;
+
+  /// No description provided for @storyStateChapter.
+  ///
+  /// In en, this message translates to:
+  /// **'Chapter'**
+  String get storyStateChapter;
+
+  /// No description provided for @storyStateUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown source type'**
+  String get storyStateUnknown;
+
+  /// No description provided for @storyStateUnknownDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'This stored ID is absent from the current script catalog (for example, from a mod or newer game version). Its save wire value is int32, but its meaning is not inferred.'**
+  String get storyStateUnknownDetail;
+
+  /// No description provided for @storyStateStored.
+  ///
+  /// In en, this message translates to:
+  /// **'Stored'**
+  String get storyStateStored;
+
+  /// No description provided for @storyStateUnset.
+  ///
+  /// In en, this message translates to:
+  /// **'Not set'**
+  String get storyStateUnset;
+
+  /// No description provided for @storyStateUnsetDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'This catalog field is not serialized in this save; the game therefore uses its unset or default state.'**
+  String get storyStateUnsetDetail;
+
+  /// No description provided for @storyStateRawValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Raw value'**
+  String get storyStateRawValue;
+
+  /// No description provided for @storyStateElapsed.
+  ///
+  /// In en, this message translates to:
+  /// **'Elapsed at save time: {duration}'**
+  String storyStateElapsed(String duration);
+
+  /// No description provided for @storyStateAhead.
+  ///
+  /// In en, this message translates to:
+  /// **'Ahead of save time: {duration}'**
+  String storyStateAhead(String duration);
+
+  /// No description provided for @storyStateDurationDays.
+  ///
+  /// In en, this message translates to:
+  /// **'{days, plural, =1{1 day} other{{days} days}} {time}'**
+  String storyStateDurationDays(int days, String time);
+
+  /// No description provided for @storyStateRelatedGlossary.
+  ///
+  /// In en, this message translates to:
+  /// **'Related glossary entry'**
+  String get storyStateRelatedGlossary;
+
+  /// No description provided for @storyStateTechnicalPath.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical path'**
+  String get storyStateTechnicalPath;
+
+  /// No description provided for @storyStateEditingGuidance.
+  ///
+  /// In en, this message translates to:
+  /// **'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.'**
+  String get storyStateEditingGuidance;
+
+  /// No description provided for @storyStatePending.
+  ///
+  /// In en, this message translates to:
+  /// **'Pending'**
+  String get storyStatePending;
+
+  /// No description provided for @storyStatePendingValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Will be stored as {value}'**
+  String storyStatePendingValue(String value);
+
+  /// No description provided for @storyStatePendingRemoval.
+  ///
+  /// In en, this message translates to:
+  /// **'Will be removed from the save'**
+  String get storyStatePendingRemoval;
+
+  /// No description provided for @storyStateEditValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit value'**
+  String get storyStateEditValue;
+
+  /// No description provided for @storyStateSetValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Set value'**
+  String get storyStateSetValue;
+
+  /// No description provided for @storyStateRemoveValue.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from save'**
+  String get storyStateRemoveValue;
+
+  /// No description provided for @storyStateUndoChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo story change'**
+  String get storyStateUndoChange;
+
+  /// No description provided for @storyStateResetChanges.
+  ///
+  /// In en, this message translates to:
+  /// **'Reset story changes'**
+  String get storyStateResetChanges;
+
+  /// No description provided for @storyStateDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Edit {id}'**
+  String storyStateDialogTitle(String id);
+
+  /// No description provided for @storyStateRawInput.
+  ///
+  /// In en, this message translates to:
+  /// **'Signed int32 value'**
+  String get storyStateRawInput;
+
+  /// No description provided for @storyStateInvalidInt32.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a whole number from -2147483648 to 2147483647.'**
+  String get storyStateInvalidInt32;
+
+  /// No description provided for @storyStateQueueChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Queue change'**
+  String get storyStateQueueChange;
+
+  /// No description provided for @storyStateSuggestedValues.
+  ///
+  /// In en, this message translates to:
+  /// **'Values evidenced in the shipped scripts: {values}'**
+  String storyStateSuggestedValues(String values);
+
+  /// No description provided for @storyStateSuggestionsNotLimits.
+  ///
+  /// In en, this message translates to:
+  /// **'Suggestions are not validation limits; native code, mods, or later game versions may use other values.'**
+  String get storyStateSuggestionsNotLimits;
+
+  /// No description provided for @storyStateUseCurrentTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Use current save time'**
+  String get storyStateUseCurrentTime;
+
+  /// No description provided for @storyStateStructuredTime.
+  ///
+  /// In en, this message translates to:
+  /// **'Day / time'**
+  String get storyStateStructuredTime;
+
+  /// No description provided for @storyStateRawMode.
+  ///
+  /// In en, this message translates to:
+  /// **'Raw int32'**
+  String get storyStateRawMode;
+
+  /// No description provided for @storyStateChapterWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'Changing the chapter alone does not synchronize quests, NPCs, inventory, or world state.'**
+  String get storyStateChapterWarning;
+
+  /// No description provided for @storyStateDormantWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'No live read or write was found for this field in the shipped script cache. It may be legacy, native-controlled, or reserved.'**
+  String get storyStateDormantWarning;
+
+  /// No description provided for @storyStateReadOnlySourceWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'The shipped scripts read this field but contain no script write. Native code may still own it.'**
+  String get storyStateReadOnlySourceWarning;
+
+  /// No description provided for @storyStateUnknownEditWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This modded or newer-version ID has no bundled source semantics. Edit only its raw int32 value.'**
+  String get storyStateUnknownEditWarning;
+
+  /// No description provided for @storyStateIntegerKind.
+  ///
+  /// In en, this message translates to:
+  /// **'{kind, select, binaryFlag{Binary flag} finiteState{Multi-state value} counterOrScore{Counter / score} calendarDay{Calendar day} derivedOrOpaqueInteger{Derived / opaque integer} readOnlyInSourceInteger{Read-only in shipped scripts} dormantOrLegacyInteger{Unused in shipped scripts} other{Integer}}'**
+  String storyStateIntegerKind(String kind);
+
+  /// No description provided for @storyStateZeroVsUnset.
+  ///
+  /// In en, this message translates to:
+  /// **'A stored 0 and a missing map entry are distinct file states. “Remove from save” restores the constructor/default state.'**
+  String get storyStateZeroVsUnset;
+
   /// No description provided for @appTitle.
   ///
   /// In en, this message translates to:
