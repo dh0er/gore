@@ -14,6 +14,7 @@ import 'package:goresave/features/editor/domain/npc_attributes.dart';
 import 'package:goresave/features/editor/domain/pending_edits.dart';
 import 'package:goresave/features/editor/domain/progression_models.dart';
 import 'package:goresave/features/editor/domain/skills_models.dart';
+import 'package:goresave/features/editor/domain/story_state_models.dart';
 import 'package:goresave/l10n/app_localizations.dart';
 import 'package:goresave/l10n/app_localizations_en.dart';
 import 'package:goresave/utils/default_paths.dart';
@@ -99,7 +100,7 @@ bool _sameSavePathList(List<String> a, List<String> b) {
 }
 
 class EditorState {
-  const EditorState({
+  EditorState({
     required this.saveDir,
     this.isLoading = false,
     this.saves = const [],
@@ -119,11 +120,14 @@ class EditorState {
     this.lastWriteMessage,
     this.pendingEdits = const {},
     this.selectedActor = const Actor.player(),
-    this.invalidNpcEditKey,
+    Set<String> invalidEditKeys = const {},
+    String? invalidNpcEditKey,
     this.heroGlobalId,
     this.heroGlobalIdSettled = false,
     this.saveProgress,
-  });
+  }) : invalidEditKeys = invalidNpcEditKey == null
+           ? invalidEditKeys
+           : <String>{...invalidEditKeys, invalidNpcEditKey};
 
   final String saveDir;
   final bool isLoading;
@@ -172,16 +176,31 @@ class EditorState {
   /// True when there are any unsaved edits. The profile-switch guard blocks on
   /// this. Difficulty is edited separately (a profile-level dialog that writes
   /// immediately) and is never part of the pending set.
-  bool get hasUnsavedEdits => pendingEdits.isNotEmpty;
+  bool get hasUnsavedEdits =>
+      pendingEdits.isNotEmpty || invalidEditKeys.isNotEmpty;
 
-  /// Pending-edit key of the NPC whose attribute panel currently has an invalid
-  /// (empty/non-numeric) field, or null. Its stored draft is KEPT (so switching
-  /// actors does not lose earlier valid edits) but Save is blocked while set, so
-  /// the now-stale stored value is never written behind an invalid field.
-  final String? invalidNpcEditKey;
+  /// Keys of editor surfaces with invalid local text. Their last valid pending
+  /// values remain registered, but global Save is blocked until every field is
+  /// valid or the edits are reset.
+  final Set<String> invalidEditKeys;
+
+  bool get hasInvalidEdits => invalidEditKeys.isNotEmpty;
+
+  /// Compatibility view for the NPC attribute editor. New surfaces should use
+  /// [invalidEditKeys]/[hasInvalidEdits] instead.
+  String? get invalidNpcEditKey {
+    String? legacyFallback;
+    for (final key in invalidEditKeys) {
+      if (key.startsWith('npc.attributes:')) return key;
+      // Older callers were allowed to use an arbitrary pending key. Preserve
+      // that round-trip while excluding the one known non-NPC validation key.
+      if (key != storyStatePendingKey) legacyFallback ??= key;
+    }
+    return legacyFallback;
+  }
 
   /// True while an NPC attribute field is invalid — global Save is disabled.
-  bool get hasInvalidNpcEdit => invalidNpcEditKey != null;
+  bool get hasInvalidNpcEdit => hasInvalidEdits;
 
   /// GlobalId of the save's own "Hero" ACTOR row (the player's avatar),
   /// stashed when the character index loads (see
@@ -210,10 +229,12 @@ class EditorState {
   final String? codecError;
   final String? lastWriteMessage;
 
-  /// Total number of edit objects across all pending keys, driving the global
-  /// "Unsaved (N)" badge and the Save/Reset buttons.
+  /// User-visible changes across all pending keys, driving the global
+  /// "Unsaved (N)" badge and the Save/Reset buttons. An invalid-only draft
+  /// contributes one so Reset stays reachable.
   int get pendingEditCount =>
-      pendingEdits.values.fold(0, (n, e) => n + e.edits.length);
+      pendingEdits.values.fold(0, (n, e) => n + e.pendingCount) +
+      invalidEditKeys.where((key) => !pendingEdits.containsKey(key)).length;
 
   SaveSlot? get selectedSave {
     for (final save in saves) {
@@ -319,6 +340,7 @@ class EditorState {
     String? lastWriteMessage,
     Map<String, PendingSaveEdit>? pendingEdits,
     Actor? selectedActor,
+    Set<String>? invalidEditKeys,
     Object? invalidNpcEditKey = _unchanged,
     Object? heroGlobalId = _unchanged,
     bool? heroGlobalIdSettled,
@@ -332,6 +354,22 @@ class EditorState {
     bool clearWriteMessage = false,
     bool clearPendingEdits = false,
   }) {
+    var resolvedInvalidEditKeys = clearPendingEdits
+        ? <String>{}
+        : Set<String>.from(invalidEditKeys ?? this.invalidEditKeys);
+    // Backward-compatible copyWith channel used by the NPC attribute editor.
+    // Replacing it must leave an invalid story-state draft intact.
+    if (!identical(invalidNpcEditKey, _unchanged)) {
+      final previousNpcKey = this.invalidNpcEditKey;
+      if (previousNpcKey != null) {
+        resolvedInvalidEditKeys.remove(previousNpcKey);
+      }
+      resolvedInvalidEditKeys.removeWhere(
+        (key) => key.startsWith('npc.attributes:'),
+      );
+      final legacyKey = invalidNpcEditKey as String?;
+      if (legacyKey != null) resolvedInvalidEditKeys.add(legacyKey);
+    }
     return EditorState(
       saveDir: saveDir ?? this.saveDir,
       isLoading: isLoading ?? this.isLoading,
@@ -364,13 +402,9 @@ class EditorState {
           ? const {}
           : pendingEdits ?? this.pendingEdits,
       selectedActor: selectedActor ?? this.selectedActor,
-      // A fresh inspection re-seed (clearPendingEdits) also drops any standing
+      // A fresh inspection re-seed (clearPendingEdits) drops all standing
       // NPC validation block — the invalid in-progress field is gone with it.
-      invalidNpcEditKey: clearPendingEdits
-          ? null
-          : identical(invalidNpcEditKey, _unchanged)
-          ? this.invalidNpcEditKey
-          : invalidNpcEditKey as String?,
+      invalidEditKeys: Set.unmodifiable(resolvedInvalidEditKeys),
       heroGlobalId: identical(heroGlobalId, _unchanged)
           ? this.heroGlobalId
           : heroGlobalId as String?,
@@ -812,7 +846,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     if (state.selectedActor == actor) return;
     // Switching actor abandons any in-progress invalid NPC field, so drop the
     // validation block — the previous NPC's stored (valid) draft survives.
-    state = state.copyWith(selectedActor: actor, invalidNpcEditKey: null);
+    final invalid = Set<String>.from(state.invalidEditKeys)
+      ..remove(state.invalidNpcEditKey)
+      ..removeWhere((key) => key.startsWith('npc.attributes:'));
+    state = state.copyWith(selectedActor: actor, invalidEditKeys: invalid);
   }
 
   /// Mark (`pendingKey`) or clear (`null`) the NPC attribute panel's invalid
@@ -821,7 +858,30 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// stored draft itself is left intact.
   void setNpcEditInvalid(String? pendingKey) {
     if (state.invalidNpcEditKey == pendingKey) return;
-    state = state.copyWith(invalidNpcEditKey: pendingKey);
+    final invalid = Set<String>.from(state.invalidEditKeys)
+      ..remove(state.invalidNpcEditKey)
+      ..removeWhere((key) => key.startsWith('npc.attributes:'));
+    if (pendingKey != null) invalid.add(pendingKey);
+    state = state.copyWith(invalidEditKeys: invalid);
+  }
+
+  /// Mark or clear invalid local text for any editor surface. [key] should be
+  /// the same central key as its pending edit so the global counter does not
+  /// double-count a stored valid draft plus its invalid text successor.
+  void setEditInvalid(String key, {required bool invalid}) {
+    final normalized = key.trim();
+    if (normalized.isEmpty) return;
+    final updated = Set<String>.from(state.invalidEditKeys);
+    final changed = invalid
+        ? updated.add(normalized)
+        : updated.remove(normalized);
+    if (!changed) return;
+    state = state.copyWith(invalidEditKeys: updated);
+  }
+
+  /// Story editor convenience wrapper for its one aggregated pending surface.
+  void setStoryStateEditInvalid(bool invalid) {
+    setEditInvalid(storyStatePendingKey, invalid: invalid);
   }
 
   // ---------------------------------------------------------------------------
@@ -845,8 +905,82 @@ class EditorNotifier extends StateNotifier<EditorState> {
 
   /// Clear all pending edits.
   void clearAllPendingEdits() {
-    if (state.pendingEdits.isEmpty) return;
+    if (state.pendingEdits.isEmpty && state.invalidEditKeys.isEmpty) return;
     state = state.copyWith(clearPendingEdits: true);
+  }
+
+  /// All value-addressed story changes currently stored in the one atomic
+  /// `private.story.apply` pending edit, sorted case-insensitively by ID.
+  List<StoryStateEdit> allStoryStateEdits() {
+    final pending = pendingEditFor(storyStatePendingKey);
+    if (pending == null || pending.edits.isEmpty) return const [];
+    // This surface deliberately owns exactly one aggregate edit. A malformed
+    // registry entry is treated as no readable draft, never partially decoded.
+    if (pending.edits.length != 1) return const [];
+    try {
+      return parseStoryStateApplyEdit(pending.edits.single);
+    } on FormatException {
+      return const [];
+    }
+  }
+
+  /// Pending story change for [id], using the map's case-insensitive identity.
+  StoryStateEdit? storyStateEditFor(String id) {
+    final target = normalizeStoryStateId(id);
+    if (target.isEmpty) return null;
+    for (final edit in allStoryStateEdits()) {
+      if (edit.normalizedId == target) return edit;
+    }
+    return null;
+  }
+
+  /// Upsert one story value into the aggregate. Reverting to the inspection
+  /// snapshot removes it; when the last change disappears the central pending
+  /// key disappears as well.
+  void setStoryStateEdit(StoryStateEdit edit) {
+    final normalizedId = edit.normalizedId;
+    if (normalizedId.isEmpty) return;
+    final byId = <String, StoryStateEdit>{
+      for (final current in allStoryStateEdits()) current.normalizedId: current,
+    };
+    if (edit.isNoop) {
+      byId.remove(normalizedId);
+    } else {
+      byId[normalizedId] = edit;
+    }
+    _setStoryStateEdits(byId.values);
+  }
+
+  /// Remove one pending story change without changing the other rows.
+  void clearStoryStateEdit(String id) {
+    final normalizedId = normalizeStoryStateId(id);
+    if (normalizedId.isEmpty) return;
+    final remaining = allStoryStateEdits()
+        .where((edit) => edit.normalizedId != normalizedId)
+        .toList();
+    _setStoryStateEdits(remaining);
+  }
+
+  /// Remove the complete story-state aggregate and its validation block.
+  void clearAllStoryStateEdits() {
+    clearPendingEdit(storyStatePendingKey);
+    setStoryStateEditInvalid(false);
+  }
+
+  void _setStoryStateEdits(Iterable<StoryStateEdit> edits) {
+    final sorted = edits.toList()
+      ..sort((a, b) => a.normalizedId.compareTo(b.normalizedId));
+    if (sorted.isEmpty) {
+      clearPendingEdit(storyStatePendingKey);
+      return;
+    }
+    setPendingEdit(
+      storyStatePendingKey,
+      PendingSaveEdit(
+        edits: [storyStateApplyEdit(sorted)],
+        displayCount: sorted.length,
+      ),
+    );
   }
 
   /// Save all pending slot edits in one `write_save`, then refresh ONCE.
@@ -857,6 +991,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
   /// Difficulty is NOT part of this path — it is a profile-level edit written
   /// directly by [writeProfileDifficulty] from the profile-header dialog.
   Future<bool> saveAllPending() async {
+    if (state.hasInvalidEdits) return false;
     if (state.pendingEdits.isEmpty) return true;
     if (state.isLoading) return false;
     final savePath = state.selectedPath;
@@ -875,8 +1010,10 @@ class EditorNotifier extends StateNotifier<EditorState> {
     // committed (and keep the rest pending for retry).
     final allEdits = <_KeyedEdit>[];
     var syncPersistent = false;
+    var displayEditCount = 0;
     for (final key in snapshotKeys) {
       final entry = state.pendingEdits[key]!;
+      displayEditCount += entry.pendingCount;
       for (final edit in entry.edits) {
         allEdits.add(_KeyedEdit(key, edit));
       }
@@ -1098,6 +1235,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
       'private.glossary.setSegment',
       'private.npc.revive',
       'private.npc.setRelationship',
+      storyStateApplyPath,
     };
     // A skill edit can learn/unlearn — splicing the hero's ActiveEffects array —
     // and the core rejects a write that mixes it with an index-addressed edit
@@ -1243,7 +1381,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         _SubWrite(edits: [for (final keyed in skillEdits) keyed.edit]),
     ];
 
-    final n = allEdits.length;
+    final n = displayEditCount;
     // Edit objects that committed bytes to disk, captured BEFORE the trailing
     // refresh() so we still converge even if that refresh fails. Tracked per-EDIT,
     // not per-key: one pending key can span several sequential sub-writes (e.g.
@@ -1318,25 +1456,19 @@ class EditorNotifier extends StateNotifier<EditorState> {
           return;
         }
 
-        // A sub-write failed AFTER an earlier one already committed bytes to disk.
-        // The panes are still seeded from the pre-save inspection, so refresh to
-        // show the new on-disk state — but PRESERVE the still-unsaved (uncommitted)
-        // pending edits so the user can retry them. refresh() clears every pending
-        // edit AND the error, so snapshot the uncommitted ones, refresh, re-apply
-        // them, then re-surface the error. With nothing committed yet, the panes
-        // already match disk, so skip the refresh and just surface the error.
-        if (committedEdits.isNotEmpty) {
-          final preserved = _pendingMinusCommitted(committedEdits);
-          // Refresh from disk and restore the still-unsaved edits ATOMICALLY with
-          // the new inspection — but only if we land back on the same save they
-          // target. refresh() may clear/auto-switch selectedPath (this save
-          // vanished, or another slot was auto-selected); the preserved edits
-          // target the ORIGINAL file, so they are dropped in that case rather than
-          // re-targeted at the wrong save. Restoring inside the inspection re-seed
-          // (vs. re-adding afterward) means the kept-alive editors rehydrate WITH
-          // them, so a preserved inventory add/remove is shown, not just counted.
-          await refresh(preservedEdits: preserved, preservedForPath: savePath);
-        }
+        // Any failed sub-write requires a fresh inspection. Even when no local
+        // write committed, an optimistic-concurrency failure means another writer
+        // may already have changed the file. Preserve every still-unwritten draft
+        // across that refresh so the user can compare/retry it against fresh disk
+        // state. refresh() clears the error, so restore the write failure afterward.
+        final preserved = _pendingMinusCommitted(committedEdits);
+        // Restore the drafts ATOMICALLY with the new inspection — but only if we
+        // land back on the same save they target. refresh() may clear/auto-switch
+        // selectedPath (this save vanished, or another slot was auto-selected);
+        // the preserved edits target the ORIGINAL file, so they are dropped in
+        // that case rather than re-targeted at the wrong save. Restoring inside
+        // the inspection re-seed means kept-alive editors rehydrate WITH them.
+        await refresh(preservedEdits: preserved, preservedForPath: savePath);
         state = state.copyWith(error: failureError);
       } finally {
         // A thrown _execute (e.g. CoreWorkerException from the persistent worker
@@ -1368,6 +1500,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
             PendingSaveEdit(
               edits: remaining,
               syncPersistentDataList: entry.value.syncPersistentDataList,
+              displayCount: entry.value.displayCount,
             ),
           );
         }
@@ -1392,6 +1525,7 @@ class EditorNotifier extends StateNotifier<EditorState> {
         result[entry.key] = PendingSaveEdit(
           edits: remaining,
           syncPersistentDataList: entry.value.syncPersistentDataList,
+          displayCount: entry.value.displayCount,
         );
       }
     }
@@ -2408,16 +2542,17 @@ class EditorNotifier extends StateNotifier<EditorState> {
   Future<Map<String, Object?>?> _queryProgression(
     Map<String, Object?> params, {
     required void Function(String message) onError,
+    String? path,
   }) async {
-    final path = state.selectedPath;
-    if (path == null) {
+    final resolvedPath = path ?? state.selectedPath;
+    if (resolvedPath == null) {
       onError(_l10n.editorNoSaveSelected);
       return null;
     }
     try {
       final response = await _execute(
         'query_progression',
-        payload: {'path': path, ...params},
+        payload: {'path': resolvedPath, ...params},
       );
       if (response['ok'] != true) {
         onError(_l10n.editorProgressionQueryFailed(_errorDetails(response)));
@@ -2468,6 +2603,37 @@ class EditorNotifier extends StateNotifier<EditorState> {
     }, onError: (message) => error = message);
     if (data == null) return ProgressionQuestPage(error: error);
     return ProgressionQuestPage.fromJson(data);
+  }
+
+  /// Load one page of the sparse save-backed story-property map and,
+  /// optionally, the source-declared catalog entries absent from that map.
+  /// The core enriches serialized int32 values with their declared game-script
+  /// type, allowing the UI to distinguish in-game timestamps from integers.
+  /// [path] lets a multi-page caller pin every page to the save where its load
+  /// began, even if the active selection changes before the last page arrives.
+  Future<StoryStatePage> loadStoryState({
+    String query = '',
+    int offset = 0,
+    int limit = 1000,
+    StorySemanticType? semanticType,
+    bool includeUnset = false,
+    String? path,
+  }) async {
+    String? error;
+    final data = await _queryProgression(
+      {
+        'section': 'story',
+        'query': query,
+        'offset': offset,
+        'limit': limit,
+        if (includeUnset) 'includeUnset': true,
+        if (semanticType != null) 'semanticType': semanticType.name,
+      },
+      path: path,
+      onError: (message) => error = message,
+    );
+    if (data == null) return StoryStatePage(error: error);
+    return StoryStatePage.fromJson(data);
   }
 
   /// Load the complete save-backed glossary in one query. Creature and

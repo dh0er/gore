@@ -611,6 +611,54 @@ void main() {
     expect(editableText.controller.text, originalName);
   });
 
+  testWidgets(
+    'invalid-only draft enables Reset, blocks Save, and guards rescan',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1400, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            coreServiceProvider.overrideWithValue(_FakeCoreService()),
+            editorSettingsStoreProvider.overrideWithValue(
+              const NoopEditorSettingsStore(),
+            ),
+          ],
+          child: const GoresaveApp(),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(GoresaveApp)),
+      );
+      container.read(editorProvider.notifier).setStoryStateEditInvalid(true);
+      await tester.pump();
+
+      final resetFinder = find.widgetWithText(OutlinedButton, 'Reset');
+      final saveFinder = find.widgetWithText(FilledButton, 'Save (1)');
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(saveFinder).onPressed, isNull);
+
+      await tester.tap(find.byTooltip('Rescan save folder'));
+      await tester.pumpAndSettle();
+      expect(find.text('Discard unsaved changes?'), findsOneWidget);
+      expect(
+        find.text(
+          'Rescanning reloads every save and discards your 1 unsaved change.',
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(resetFinder);
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(FilledButton, 'Save'), findsOneWidget);
+      expect(tester.widget<OutlinedButton>(resetFinder).onPressed, isNull);
+    },
+  );
+
   testWidgets('shows loading spinner in main editor view', (tester) async {
     final core = _SlowInspectCoreService();
     await tester.pumpWidget(

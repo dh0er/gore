@@ -13,12 +13,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added an "Other saves" view for persistent management of profileless and
   external savegames.
 - Savegames can now be assigned or removed from a profile.
+- Added a searchable and filterable "Story state" section to the World tab. It
+  combines values stored in the save with the complete catalog of persistent
+  fields declared by the shipped game scripts, including fields that are not
+  yet set.
+- Story-state entries can be set, edited, removed, and undone before saving.
+  Source-backed classifications and value suggestions, structured day/time
+  editing, elapsed-time context, and exact Glossary matches help explain known
+  values; unknown IDs from mods or newer game versions remain available as raw
+  signed integers.
 
 ### Changed
 
+- Reworked "All data" into a source-aware GSAV browser for metadata and the
+  complete typed PUBLIC and PRIVATE property trees.
+- Memory events now use localized, categorized cards with readable actions and
+  subjects. Expandable details retain timing, participants, positions, payload
+  fields, tags, and technical IDs, and multiple removals can be queued and
+  individually undone before saving.
 - Improved the quest layout and hierarchy.
 - Moved tutorials to the Glossary.
-- General improvements of UI and translations.
+- Improved UI consistency and translations across the editor.
 
 ## [1.1.0] - 2026-07-14
 

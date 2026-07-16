@@ -22,6 +22,183 @@ class AppLocalizationsDe extends AppLocalizations {
       'Technische IDs von Gegenständen, Dialogwissen, Quests und verwaisten Akteuren im Editor anzeigen. NPC-IDs werden immer angezeigt.';
 
   @override
+  String get storyStateSidebar => 'Story-Zustände';
+
+  @override
+  String get storyStateDescription =>
+      'Autoritativer Katalog der in den ausgelieferten Spielscripts deklarierten, persistenten Story-Zustände. Gespeicherte Einträge zeigen ihren Rohwert; im Save fehlende Katalogfelder sind als nicht gesetzt markiert. Im Source deklarierte Zeitpunkte werden als Spielzeit formatiert. Andere Ganzzahlen können Ja/Nein-Werte, Zähler oder mehrstufige Zustände sein.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Schreibgeschützt, bis die Skriptbedeutung der Werte und sichere Map-Schreibvorgänge belegt sind. Zugeordneter Glossartext ist Kontext, keine direkte Übersetzung der technischen ID.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'Die StoryPropertyValues-Struktur dieses Spielstands konnte nicht eindeutig und sicher aufgelöst werden. Story-Werte bleiben für diesen Spielstand schreibgeschützt.';
+
+  @override
+  String get storyStateSearch => 'Story-Zustände durchsuchen';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown von $total Story-Werten';
+  }
+
+  @override
+  String get storyStateInteger => 'Ganzzahl';
+
+  @override
+  String get storyStateTimeMarker => 'Zeitpunkt';
+
+  @override
+  String get storyStateChapter => 'Kapitel';
+
+  @override
+  String get storyStateUnknown => 'Unbekannter Source-Typ';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'Diese gespeicherte ID fehlt im aktuellen Script-Katalog (z. B. durch eine Mod oder neuere Spielversion). Der Save-Rohwert ist zwar int32, seine Bedeutung wird aber nicht geraten.';
+
+  @override
+  String get storyStateStored => 'Gespeichert';
+
+  @override
+  String get storyStateUnset => 'Nicht gesetzt';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'Dieses Katalogfeld ist in diesem Save nicht serialisiert; das Spiel verwendet daher den ungesetzten bzw. Standardzustand.';
+
+  @override
+  String get storyStateRawValue => 'Rohwert';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Alter beim Speichern: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'Beim Speichern noch voraus: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days Tage',
+      one: '1 Tag',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Zugehöriger Glossareintrag';
+
+  @override
+  String get storyStateTechnicalPath => 'Technischer Pfad';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Jeder Eintrag bleibt über den gesamten vorzeichenbehafteten int32-Bereich editierbar. Script-belegte Schalter und Wertvorschläge sind Hilfen; die Rohwerteingabe bleibt immer verfügbar. Story-Änderungen können Dialog-, Quest- oder Weltübergänge überspringen – beim Speichern wird automatisch ein Backup angelegt.';
+
+  @override
+  String get storyStatePending => 'Ausstehend';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Wird als $value gespeichert';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Wird aus dem Save entfernt';
+
+  @override
+  String get storyStateEditValue => 'Wert bearbeiten';
+
+  @override
+  String get storyStateSetValue => 'Wert setzen';
+
+  @override
+  String get storyStateRemoveValue => 'Aus Save entfernen';
+
+  @override
+  String get storyStateUndoChange => 'Story-Änderung zurücknehmen';
+
+  @override
+  String get storyStateResetChanges => 'Story-Änderungen zurücksetzen';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return '$id bearbeiten';
+  }
+
+  @override
+  String get storyStateRawInput => 'Vorzeichenbehafteter int32-Wert';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Gib eine ganze Zahl von -2147483648 bis 2147483647 ein.';
+
+  @override
+  String get storyStateQueueChange => 'Änderung vormerken';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Im ausgelieferten Script belegte Werte: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Vorschläge sind keine Gültigkeitsgrenzen; nativer Code, Mods oder spätere Spielversionen können weitere Werte verwenden.';
+
+  @override
+  String get storyStateUseCurrentTime => 'Aktuelle Save-Zeit verwenden';
+
+  @override
+  String get storyStateStructuredTime => 'Tag / Uhrzeit';
+
+  @override
+  String get storyStateRawMode => 'Rohwert int32';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Nur das Kapitel zu ändern synchronisiert keine Quests, NPCs, Inventare oder Weltzustände.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'Für dieses Feld wurde im ausgelieferten Script-Cache weder ein aktiver Lese- noch Schreibzugriff gefunden. Es kann veraltet, nativ gesteuert oder reserviert sein.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'Die ausgelieferten Scripts lesen dieses Feld, enthalten aber keine Script-Schreibstelle. Nativer Code kann es trotzdem verwalten.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'Für diese Mod- oder neuere Versions-ID gibt es keine mitgelieferte Quellsemantik. Bearbeite nur den int32-Rohwert.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Binärflag',
+      'finiteState': 'Mehrstufiger Zustand',
+      'counterOrScore': 'Zähler / Punkte',
+      'calendarDay': 'Kalendertag',
+      'derivedOrOpaqueInteger': 'Abgeleiteter / opaker Wert',
+      'readOnlyInSourceInteger': 'Im ausgelieferten Script nur gelesen',
+      'dormantOrLegacyInteger': 'Im ausgelieferten Script ungenutzt',
+      'other': 'Ganzzahl',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'Eine gespeicherte 0 und ein fehlender Map-Eintrag sind unterschiedliche Dateizustände. „Aus Save entfernen“ stellt den Konstruktor-/Standardzustand wieder her.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

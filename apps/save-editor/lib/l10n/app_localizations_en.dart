@@ -22,6 +22,183 @@ class AppLocalizationsEn extends AppLocalizations {
       'Show technical item, dialogue knowledge, quest, and orphan actor IDs in the editor. NPC IDs are always shown.';
 
   @override
+  String get storyStateSidebar => 'Story state';
+
+  @override
+  String get storyStateDescription =>
+      'Authoritative catalog of persisted story state declared by the shipped game scripts. Stored entries show their raw value; catalog fields missing from this save are marked as not set. Source-declared time markers are formatted as game time, while other integers may be booleans, counters, or multi-state values.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Read-only until the script meaning of values and safe map writes are established. Related glossary text is context, not a direct translation of the technical ID.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'The StoryPropertyValues structure in this save could not be resolved uniquely and safely. Story values remain read-only for this save.';
+
+  @override
+  String get storyStateSearch => 'Search story state';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown of $total story values';
+  }
+
+  @override
+  String get storyStateInteger => 'Integer';
+
+  @override
+  String get storyStateTimeMarker => 'Time marker';
+
+  @override
+  String get storyStateChapter => 'Chapter';
+
+  @override
+  String get storyStateUnknown => 'Unknown source type';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'This stored ID is absent from the current script catalog (for example, from a mod or newer game version). Its save wire value is int32, but its meaning is not inferred.';
+
+  @override
+  String get storyStateStored => 'Stored';
+
+  @override
+  String get storyStateUnset => 'Not set';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'This catalog field is not serialized in this save; the game therefore uses its unset or default state.';
+
+  @override
+  String get storyStateRawValue => 'Raw value';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Elapsed at save time: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'Ahead of save time: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days days',
+      one: '1 day',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Related glossary entry';
+
+  @override
+  String get storyStateTechnicalPath => 'Technical path';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Every entry remains editable across the full signed int32 range. Script-backed switches and value suggestions are guidance; raw input is always available. Story changes can skip dialogue, quest, or world transitions, so save them deliberately — a backup is created automatically.';
+
+  @override
+  String get storyStatePending => 'Pending';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Will be stored as $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Will be removed from the save';
+
+  @override
+  String get storyStateEditValue => 'Edit value';
+
+  @override
+  String get storyStateSetValue => 'Set value';
+
+  @override
+  String get storyStateRemoveValue => 'Remove from save';
+
+  @override
+  String get storyStateUndoChange => 'Undo story change';
+
+  @override
+  String get storyStateResetChanges => 'Reset story changes';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return 'Edit $id';
+  }
+
+  @override
+  String get storyStateRawInput => 'Signed int32 value';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Enter a whole number from -2147483648 to 2147483647.';
+
+  @override
+  String get storyStateQueueChange => 'Queue change';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Values evidenced in the shipped scripts: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Suggestions are not validation limits; native code, mods, or later game versions may use other values.';
+
+  @override
+  String get storyStateUseCurrentTime => 'Use current save time';
+
+  @override
+  String get storyStateStructuredTime => 'Day / time';
+
+  @override
+  String get storyStateRawMode => 'Raw int32';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Changing the chapter alone does not synchronize quests, NPCs, inventory, or world state.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'No live read or write was found for this field in the shipped script cache. It may be legacy, native-controlled, or reserved.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'The shipped scripts read this field but contain no script write. Native code may still own it.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'This modded or newer-version ID has no bundled source semantics. Edit only its raw int32 value.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Binary flag',
+      'finiteState': 'Multi-state value',
+      'counterOrScore': 'Counter / score',
+      'calendarDay': 'Calendar day',
+      'derivedOrOpaqueInteger': 'Derived / opaque integer',
+      'readOnlyInSourceInteger': 'Read-only in shipped scripts',
+      'dormantOrLegacyInteger': 'Unused in shipped scripts',
+      'other': 'Integer',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'A stored 0 and a missing map entry are distinct file states. “Remove from save” restores the constructor/default state.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

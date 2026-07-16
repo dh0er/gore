@@ -23,6 +23,185 @@ class AppLocalizationsPl extends AppLocalizations {
       'Pokazuje techniczne identyfikatory przedmiotów, wiedzy dialogowej, zadań i osieroconych postaci. Identyfikatory NPC są zawsze widoczne.';
 
   @override
+  String get storyStateSidebar => 'Stan fabuły';
+
+  @override
+  String get storyStateDescription =>
+      'Autorytatywny katalog trwałych stanów fabuły zadeklarowanych w skryptach dostarczonych z grą. Zapisane wpisy pokazują surową wartość; pola katalogu nieobecne w tym zapisie są oznaczone jako nieustawione. Znaczniki czasu zadeklarowane w kodzie są przedstawiane jako czas gry, a pozostałe liczby całkowite mogą być wartościami logicznymi, licznikami albo stanami wielopoziomowymi.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Tylko do odczytu, dopóki nie zostanie potwierdzone znaczenie wartości w skryptach i bezpieczny zapis mapy. Powiązany tekst glosariusza jest kontekstem, a nie bezpośrednim tłumaczeniem technicznego ID.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'Nie udało się jednoznacznie i bezpiecznie ustalić struktury StoryPropertyValues w tym zapisie. Wartości fabuły pozostają w tym zapisie tylko do odczytu.';
+
+  @override
+  String get storyStateSearch => 'Szukaj w stanie fabuły';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown z $total wartości fabularnych';
+  }
+
+  @override
+  String get storyStateInteger => 'Liczba całkowita';
+
+  @override
+  String get storyStateTimeMarker => 'Znacznik czasu';
+
+  @override
+  String get storyStateChapter => 'Rozdział';
+
+  @override
+  String get storyStateUnknown => 'Nieznany typ źródłowy';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'Tego zapisanego ID nie ma w bieżącym katalogu skryptów (np. pochodzi z moda lub nowszej wersji gry). Wartość w zapisie ma format int32, ale jej znaczenie nie jest zgadywane.';
+
+  @override
+  String get storyStateStored => 'Zapisane';
+
+  @override
+  String get storyStateUnset => 'Nieustawione';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'To pole katalogu nie jest zserializowane w tym zapisie; gra używa więc stanu nieustawionego lub domyślnego.';
+
+  @override
+  String get storyStateRawValue => 'Wartość surowa';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Czas, który upłynął przy zapisie: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'Czas przyszły przy zapisie: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days dnia',
+      many: '$days dni',
+      few: '$days dni',
+      one: '1 dzień',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Powiązany wpis glosariusza';
+
+  @override
+  String get storyStateTechnicalPath => 'Ścieżka techniczna';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Każdy wpis można edytować w pełnym zakresie wartości int32 ze znakiem. Flagi i sugerowane wartości oparte na skryptach są jedynie wskazówkami; zawsze można wprowadzić surową wartość. Zmiany stanu fabuły mogą pominąć przejścia dialogów, zadań lub świata, dlatego zapisuj je rozważnie. Kopia zapasowa zostanie utworzona automatycznie.';
+
+  @override
+  String get storyStatePending => 'Oczekuje';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Zostanie zapisane jako $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Zostanie usunięte z zapisu';
+
+  @override
+  String get storyStateEditValue => 'Edytuj wartość';
+
+  @override
+  String get storyStateSetValue => 'Ustaw wartość';
+
+  @override
+  String get storyStateRemoveValue => 'Usuń z zapisu';
+
+  @override
+  String get storyStateUndoChange => 'Cofnij zmianę fabuły';
+
+  @override
+  String get storyStateResetChanges => 'Zresetuj zmiany fabuły';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return 'Edytuj $id';
+  }
+
+  @override
+  String get storyStateRawInput => 'Wartość int32 ze znakiem';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Wprowadź liczbę całkowitą od -2147483648 do 2147483647.';
+
+  @override
+  String get storyStateQueueChange => 'Dodaj zmianę do kolejki';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Wartości potwierdzone w dostarczonych skryptach: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Sugestie nie są ograniczeniami walidacji; kod natywny, mody lub nowsze wersje gry mogą używać innych wartości.';
+
+  @override
+  String get storyStateUseCurrentTime => 'Użyj bieżącego czasu zapisu';
+
+  @override
+  String get storyStateStructuredTime => 'Dzień / czas';
+
+  @override
+  String get storyStateRawMode => 'Surowe int32';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Zmiana samego rozdziału nie synchronizuje zadań, postaci niezależnych, ekwipunku ani stanu świata.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'W pamięci podręcznej dostarczonych skryptów nie znaleziono aktywnego odczytu ani zapisu tego pola. Może być przestarzałe, sterowane przez kod natywny lub zarezerwowane.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'Dostarczone skrypty odczytują to pole, ale nie zawierają zapisu skryptowego. Nadal może być ono obsługiwane przez kod natywny.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'Ten identyfikator z moda lub nowszej wersji nie ma dołączonej semantyki źródłowej. Edytuj wyłącznie jego surową wartość int32.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Flaga binarna',
+      'finiteState': 'Wartość wielostanowa',
+      'counterOrScore': 'Licznik / wynik',
+      'calendarDay': 'Dzień kalendarzowy',
+      'derivedOrOpaqueInteger': 'Liczba pochodna / niejawna',
+      'readOnlyInSourceInteger': 'Tylko do odczytu w dostarczonych skryptach',
+      'dormantOrLegacyInteger': 'Nieużywane w dostarczonych skryptach',
+      'other': 'Liczba całkowita',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'Zapisane 0 i brak wpisu w mapie to dwa różne stany pliku. Opcja „Usuń z zapisu” przywraca stan konstruktora lub stan domyślny.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

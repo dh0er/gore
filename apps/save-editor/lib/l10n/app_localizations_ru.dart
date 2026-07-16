@@ -23,6 +23,186 @@ class AppLocalizationsRu extends AppLocalizations {
       'Показывает технические ID предметов, знаний диалогов, заданий и потерянных персонажей. ID NPC отображаются всегда.';
 
   @override
+  String get storyStateSidebar => 'Состояние сюжета';
+
+  @override
+  String get storyStateDescription =>
+      'Авторитетный каталог постоянных состояний сюжета, объявленных в поставляемых с игрой скриптах. Сохранённые записи показывают исходное значение; отсутствующие в сохранении поля каталога отмечены как незаданные. Метки времени, объявленные в коде, показываются как игровое время; остальные целые числа могут быть логическими значениями, счётчиками или многоуровневыми состояниями.';
+
+  @override
+  String get storyStateReadOnly =>
+      'Только для чтения, пока не подтверждены смысл значений в скриптах и безопасная запись карты. Связанный текст глоссария даёт контекст, а не прямой перевод технического ID.';
+
+  @override
+  String get storyStateStructureReadOnly =>
+      'Не удалось однозначно и безопасно определить структуру StoryPropertyValues в этом сохранении. Значения сюжета останутся доступными только для чтения в этом сохранении.';
+
+  @override
+  String get storyStateSearch => 'Поиск по состоянию сюжета';
+
+  @override
+  String storyStateValuesCount(int shown, int total) {
+    return '$shown из $total сюжетных значений';
+  }
+
+  @override
+  String get storyStateInteger => 'Целое число';
+
+  @override
+  String get storyStateTimeMarker => 'Метка времени';
+
+  @override
+  String get storyStateChapter => 'Глава';
+
+  @override
+  String get storyStateUnknown => 'Неизвестный исходный тип';
+
+  @override
+  String get storyStateUnknownDetail =>
+      'Этого сохранённого ID нет в текущем каталоге скриптов (например, он добавлен модом или новой версией игры). В сохранении значение имеет формат int32, но его смысл не угадывается.';
+
+  @override
+  String get storyStateStored => 'Сохранено';
+
+  @override
+  String get storyStateUnset => 'Не задано';
+
+  @override
+  String get storyStateUnsetDetail =>
+      'Это поле каталога не сериализовано в сохранении, поэтому игра использует незаданное состояние или значение по умолчанию.';
+
+  @override
+  String get storyStateRawValue => 'Исходное значение';
+
+  @override
+  String storyStateElapsed(String duration) {
+    return 'Прошло на момент сохранения: $duration';
+  }
+
+  @override
+  String storyStateAhead(String duration) {
+    return 'В будущем на момент сохранения: $duration';
+  }
+
+  @override
+  String storyStateDurationDays(int days, String time) {
+    String _temp0 = intl.Intl.pluralLogic(
+      days,
+      locale: localeName,
+      other: '$days дня',
+      many: '$days дней',
+      few: '$days дня',
+      one: '1 день',
+    );
+    return '$_temp0 $time';
+  }
+
+  @override
+  String get storyStateRelatedGlossary => 'Связанная запись глоссария';
+
+  @override
+  String get storyStateTechnicalPath => 'Технический путь';
+
+  @override
+  String get storyStateEditingGuidance =>
+      'Каждую запись можно редактировать во всём диапазоне знакового int32. Флаги и предлагаемые значения, основанные на скриптах, служат лишь подсказками; исходное значение всегда можно ввести вручную. Изменение состояния сюжета может пропустить переходы диалогов, заданий или мира, поэтому сохраняйте такие правки осознанно. Резервная копия создаётся автоматически.';
+
+  @override
+  String get storyStatePending => 'Ожидает';
+
+  @override
+  String storyStatePendingValue(String value) {
+    return 'Будет сохранено как $value';
+  }
+
+  @override
+  String get storyStatePendingRemoval => 'Будет удалено из сохранения';
+
+  @override
+  String get storyStateEditValue => 'Изменить значение';
+
+  @override
+  String get storyStateSetValue => 'Задать значение';
+
+  @override
+  String get storyStateRemoveValue => 'Удалить из сохранения';
+
+  @override
+  String get storyStateUndoChange => 'Отменить изменение сюжета';
+
+  @override
+  String get storyStateResetChanges => 'Сбросить изменения сюжета';
+
+  @override
+  String storyStateDialogTitle(String id) {
+    return 'Изменить $id';
+  }
+
+  @override
+  String get storyStateRawInput => 'Знаковое значение int32';
+
+  @override
+  String get storyStateInvalidInt32 =>
+      'Введите целое число от -2147483648 до 2147483647.';
+
+  @override
+  String get storyStateQueueChange => 'Добавить изменение в очередь';
+
+  @override
+  String storyStateSuggestedValues(String values) {
+    return 'Значения, подтверждённые поставляемыми скриптами: $values';
+  }
+
+  @override
+  String get storyStateSuggestionsNotLimits =>
+      'Предлагаемые значения не ограничивают проверку; нативный код, моды или более поздние версии игры могут использовать другие значения.';
+
+  @override
+  String get storyStateUseCurrentTime =>
+      'Использовать текущее время сохранения';
+
+  @override
+  String get storyStateStructuredTime => 'День / время';
+
+  @override
+  String get storyStateRawMode => 'Исходный int32';
+
+  @override
+  String get storyStateChapterWarning =>
+      'Изменение одного лишь номера главы не синхронизирует задания, NPC, инвентарь и состояние мира.';
+
+  @override
+  String get storyStateDormantWarning =>
+      'В кэше поставляемых скриптов не найдено активного чтения или записи этого поля. Оно может быть устаревшим, управляться нативным кодом или быть зарезервированным.';
+
+  @override
+  String get storyStateReadOnlySourceWarning =>
+      'Поставляемые скрипты читают это поле, но не записывают его. Оно по-прежнему может управляться нативным кодом.';
+
+  @override
+  String get storyStateUnknownEditWarning =>
+      'У этого ID из мода или более новой версии нет встроенного описания семантики исходного кода. Изменяйте только его исходное значение int32.';
+
+  @override
+  String storyStateIntegerKind(String kind) {
+    String _temp0 = intl.Intl.selectLogic(kind, {
+      'binaryFlag': 'Двоичный флаг',
+      'finiteState': 'Многоуровневое значение',
+      'counterOrScore': 'Счётчик / результат',
+      'calendarDay': 'Календарный день',
+      'derivedOrOpaqueInteger': 'Производное / непрозрачное целое число',
+      'readOnlyInSourceInteger': 'Только чтение в поставляемых скриптах',
+      'dormantOrLegacyInteger': 'Не используется в поставляемых скриптах',
+      'other': 'Целое число',
+    });
+    return '$_temp0';
+  }
+
+  @override
+  String get storyStateZeroVsUnset =>
+      'Сохранённый 0 и отсутствие записи в карте — разные состояния файла. Команда «Удалить из сохранения» восстанавливает состояние конструктора или состояние по умолчанию.';
+
+  @override
   String get appTitle => 'GORE Save Editor';
 
   @override

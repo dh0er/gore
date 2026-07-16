@@ -902,7 +902,7 @@ class _EditorWorkspace extends StatelessWidget {
                       onPressed:
                           pendingCount > 0 &&
                               !state.isLoading &&
-                              !state.hasInvalidNpcEdit
+                              !state.hasInvalidEdits
                           ? notifier.saveAllPending
                           : null,
                     ),
