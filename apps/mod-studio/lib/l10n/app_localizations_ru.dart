@@ -590,8 +590,110 @@ class AppLocalizationsRu extends AppLocalizations {
   String get managedWorkspaceBuildReleaseLabel => 'Сборка и выпуск';
 
   @override
+  String get managedWorkspaceHistoryLabel => 'History';
+
+  @override
   String get managedWorkspaceSettingsExpertLabel =>
       'Настройки и экспертный режим';
+
+  @override
+  String get managedProjectHistoryTitle => 'Project history';
+
+  @override
+  String get managedProjectHistoryDescription =>
+      'Return to an earlier project version without erasing the versions that came after it.';
+
+  @override
+  String get managedProjectHistoryBoundary =>
+      'History changes only this managed project. It does not modify the game installation or save files.';
+
+  @override
+  String get managedProjectHistoryRefresh => 'Refresh project history';
+
+  @override
+  String get managedProjectHistoryLoading => 'Loading project history…';
+
+  @override
+  String get managedProjectHistoryLoadFailed =>
+      'Project history could not be loaded';
+
+  @override
+  String get managedProjectHistoryRetry => 'Try again';
+
+  @override
+  String get managedProjectHistoryCurrentVersion => 'Current version';
+
+  @override
+  String get managedProjectHistoryPreviousVersions => 'Previous versions';
+
+  @override
+  String get managedProjectHistoryUndo => 'Undo last change';
+
+  @override
+  String get managedProjectHistoryRestoreVersion => 'Restore this version';
+
+  @override
+  String get managedProjectHistoryRestoreTitle => 'Restore project version?';
+
+  @override
+  String managedProjectHistoryRestoreBody(int revision, int nextRevision) {
+    return 'The content from revision $revision will be saved as new revision $nextRevision. The current version remains in history.';
+  }
+
+  @override
+  String get managedProjectHistoryRestoreBoundary =>
+      'Only the project changes. The game installation and save files remain untouched.';
+
+  @override
+  String get managedProjectHistoryCancel => 'Cancel';
+
+  @override
+  String get managedProjectHistoryRestore => 'Restore';
+
+  @override
+  String get managedProjectHistoryRestoring => 'Restoring project version…';
+
+  @override
+  String get managedProjectHistoryRestoreFailed =>
+      'The project version could not be restored safely. Refresh the history before trying again.';
+
+  @override
+  String managedProjectHistoryRestoreSucceeded(int revision) {
+    return 'Revision $revision was restored as a new project version.';
+  }
+
+  @override
+  String get managedProjectHistoryEmpty =>
+      'No previous project versions have been recorded yet.';
+
+  @override
+  String managedProjectHistoryRecordingStartsAt(int revision) {
+    return 'History recording starts at revision $revision; older versions were not guessed from storage.';
+  }
+
+  @override
+  String get managedProjectHistoryTruncated =>
+      'Older project versions have expired from history. Every version shown here is still retained and authenticated by the current project history.';
+
+  @override
+  String managedProjectHistoryRevision(int revision) {
+    return 'Revision $revision';
+  }
+
+  @override
+  String get managedProjectHistoryCurrentBadge => 'Current';
+
+  @override
+  String get managedProjectHistoryDirtyBlocked =>
+      'Finish or discard the open text edit before restoring another project version.';
+
+  @override
+  String get managedProjectHistoryBusy =>
+      'Another project action is still in progress.';
+
+  @override
+  String get managedProjectHistoryUnavailable =>
+      'This managed project session does not support authenticated history.';
 
   @override
   String get managedSectionStoryDescription => 'NPC, задания и диалоги.';

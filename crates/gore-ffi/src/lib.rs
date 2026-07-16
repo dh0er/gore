@@ -54,6 +54,12 @@
 //!   Head/project JSON crosses the outer protocol as bounded raw strings, preserving canonical-byte
 //!   CAS and duplicate-key rejection. Preparing writes immutable objects but never publishes
 //!   `gore-project.json`.
+//! - `authoring_store_list_revision3_history_v1` returns only the bounded history vector sealed by
+//!   one exact current managed head. Orphan Store objects remain invisible.
+//!   `authoring_store_prepare_revision3_history_restore_v1` prepares a fully reopened
+//!   current-plus-one checkpoint from one retained historical head while retaining the exact
+//!   current head as its direct parent. Neither route publishes the fixed head, touches a game or
+//!   save, builds, deploys, or grants runtime authority.
 //! - `authoring_store_inspect_revision3_npc_source_v1` fully opens one exact-current managed NPC
 //!   Draft and verifies its persisted NPC/ScriptModule closure, parent provenance, source seal,
 //!   input fingerprint, and exact source regeneration. It accepts no project or game bytes,
@@ -206,6 +212,7 @@ mod authoring_dialog_localization_edit_revision3;
 mod authoring_dialog_localization_revision3;
 mod authoring_dialog_revision3;
 mod authoring_drafts;
+mod authoring_history_revision3;
 mod authoring_installed_dataasset_inspection_revision3;
 mod authoring_npc_catalog;
 mod authoring_project_export_revision3;
@@ -277,6 +284,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_inspect_revision3_npc_source_v1",
     "authoring_store_inspect_revision3_quest_source_v1",
     "authoring_store_list_revision3_dataasset_stages_v1",
+    authoring_history_revision3::LIST_COMMAND,
     "authoring_store_open",
     "authoring_store_open_document",
     "authoring_store_open_head_bytes",
@@ -292,6 +300,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_dataasset_stage_v1",
     "authoring_store_prepare_revision3_dialog_line_v1",
     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
+    authoring_history_revision3::RESTORE_COMMAND,
     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_npc_draft_v1",
     authoring_story_npc_profile_revision3::COMMAND,
@@ -589,6 +598,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         "authoring_store_inspect_revision3_quest_source_v1" => Some(
             authoring_story_quest_inspection_revision3::inspect_revision3_quest_source_v1_raw,
         ),
+        authoring_history_revision3::LIST_COMMAND => {
+            Some(authoring_history_revision3::list_revision3_history_v1_raw)
+        }
         "authoring_store_open_revision3" => Some(authoring_store::open_revision3_raw),
         "authoring_store_open_revision3_head_bytes" => {
             Some(authoring_store::open_revision3_head_bytes_raw)
@@ -613,6 +625,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_prepare_revision3_dialog_localization_edit_v1" => Some(
             authoring_dialog_localization_edit_revision3::prepare_revision3_dialog_localization_edit_v1_raw,
+        ),
+        authoring_history_revision3::RESTORE_COMMAND => Some(
+            authoring_history_revision3::prepare_revision3_history_restore_v1_raw,
         ),
         "authoring_store_prepare_revision3_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_installed_dataasset_edit_v1_raw,
@@ -1724,6 +1739,7 @@ mod tests {
                     "authoring_store_inspect_revision3_npc_source_v1",
                     "authoring_store_inspect_revision3_quest_source_v1",
                     "authoring_store_list_revision3_dataasset_stages_v1",
+                    "authoring_store_list_revision3_history_v1",
                     "authoring_store_open",
                     "authoring_store_open_document",
                     "authoring_store_open_head_bytes",
@@ -1739,6 +1755,7 @@ mod tests {
                     "authoring_store_prepare_revision3_dataasset_stage_v1",
                     "authoring_store_prepare_revision3_dialog_line_v1",
                     "authoring_store_prepare_revision3_dialog_localization_edit_v1",
+                    "authoring_store_prepare_revision3_history_restore_v1",
                     "authoring_store_prepare_revision3_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_npc_draft_v1",
                     "authoring_store_prepare_revision3_npc_profile_edit_v1",

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
 
@@ -158,6 +159,64 @@ void main() {
     },
   );
 
+  test('format-2 journal canonically binds exact old and new bytes', () async {
+    await target.writeAsBytes(_oldBytes, flush: true);
+    const operationId = '10100000000000000000000000000001';
+    final helper = AtomicByteReplacement(
+      operationIdFactory: () => operationId,
+      onPhase: (phase) {
+        if (phase == AtomicSwapPhase.journalCommitted) {
+          throw _SimulatedCrash(phase);
+        }
+      },
+    );
+
+    await expectLater(
+      helper.replace(
+        target: target,
+        bytes: _newBytes,
+        validate: _validGeneration,
+      ),
+      throwsA(isA<_SimulatedCrash>()),
+    );
+
+    final journal = File(AtomicByteReplacement.journalPathFor(target));
+    final text = await journal.readAsString();
+    final envelope = (jsonDecode(text) as Map).cast<String, Object?>();
+    final record = (envelope['record'] as Map).cast<String, Object?>();
+    expect(envelope.keys, ['format', 'record', 'record_sha256']);
+    expect(envelope['format'], AtomicByteReplacement.journalFormat);
+    expect(record.keys, [
+      'operation_id',
+      'target_name',
+      'temp_name',
+      'backup_name',
+      'old_generation',
+      'new_generation',
+    ]);
+    expect(record['old_generation'], {
+      'byte_len': _oldBytes.length,
+      'sha256': crypto.sha256.convert(_oldBytes).toString(),
+    });
+    expect(record['new_generation'], {
+      'byte_len': _newBytes.length,
+      'sha256': crypto.sha256.convert(_newBytes).toString(),
+    });
+    expect(
+      envelope['record_sha256'],
+      crypto.sha256.convert(utf8.encode(jsonEncode(record))).toString(),
+    );
+    expect(text, '${jsonEncode(envelope)}\n');
+
+    expect(
+      await AtomicByteReplacement().repair(
+        target: target,
+        validate: _validGeneration,
+      ),
+      AtomicRepairOutcome.keptTarget,
+    );
+  });
+
   test('crash while staging the journal leaves no untracked content', () async {
     await target.writeAsBytes(_oldBytes);
     final helper = AtomicByteReplacement(
@@ -296,6 +355,123 @@ void main() {
   }
 
   test(
+    'repair rejects a semantically valid target outside the exact binding',
+    () async {
+      await target.writeAsBytes(_oldBytes, flush: true);
+      const operationId = '31000000000000000000000000000001';
+      final helper = AtomicByteReplacement(
+        operationIdFactory: () => operationId,
+        onPhase: (phase) {
+          if (phase == AtomicSwapPhase.journalCommitted) {
+            throw _SimulatedCrash(phase);
+          }
+        },
+      );
+      await expectLater(
+        helper.replace(
+          target: target,
+          bytes: _newBytes,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<_SimulatedCrash>()),
+      );
+      await target.writeAsBytes(_newerBytes, flush: true);
+      final journal = File(AtomicByteReplacement.journalPathFor(target));
+
+      await expectLater(
+        AtomicByteReplacement().repair(
+          target: target,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+
+      expect(await target.readAsBytes(), _newerBytes);
+      expect(await journal.exists(), isTrue);
+    },
+  );
+
+  test(
+    'repair rejects a semantically valid temporary outside the exact binding',
+    () async {
+      await target.writeAsBytes(_oldBytes, flush: true);
+      const operationId = '32000000000000000000000000000001';
+      final helper = AtomicByteReplacement(
+        operationIdFactory: () => operationId,
+        onPhase: (phase) {
+          if (phase == AtomicSwapPhase.tempFlushed) {
+            throw _SimulatedCrash(phase);
+          }
+        },
+      );
+      await expectLater(
+        helper.replace(
+          target: target,
+          bytes: _newBytes,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<_SimulatedCrash>()),
+      );
+      final temp = File('${target.path}.gore-swap-$operationId.tmp');
+      await temp.writeAsBytes(_newerBytes, flush: true);
+      final journal = File(AtomicByteReplacement.journalPathFor(target));
+
+      await expectLater(
+        AtomicByteReplacement().repair(
+          target: target,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+
+      expect(await target.readAsBytes(), _oldBytes);
+      expect(await temp.readAsBytes(), _newerBytes);
+      expect(await journal.exists(), isTrue);
+    },
+  );
+
+  test(
+    'repair rejects a semantically valid backup outside the exact binding',
+    () async {
+      await target.writeAsBytes(_oldBytes, flush: true);
+      const operationId = '33000000000000000000000000000001';
+      final helper = AtomicByteReplacement(
+        operationIdFactory: () => operationId,
+        onPhase: (phase) {
+          if (phase == AtomicSwapPhase.targetBackedUp) {
+            throw _SimulatedCrash(phase);
+          }
+        },
+      );
+      await expectLater(
+        helper.replace(
+          target: target,
+          bytes: _newBytes,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<_SimulatedCrash>()),
+      );
+      final temp = File('${target.path}.gore-swap-$operationId.tmp');
+      final backup = File('${target.path}.gore-swap-$operationId.bak');
+      await backup.writeAsBytes(_newerBytes, flush: true);
+      final journal = File(AtomicByteReplacement.journalPathFor(target));
+
+      await expectLater(
+        AtomicByteReplacement().repair(
+          target: target,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+
+      expect(await target.exists(), isFalse);
+      expect(await temp.readAsBytes(), _newBytes);
+      expect(await backup.readAsBytes(), _newerBytes);
+      expect(await journal.exists(), isTrue);
+    },
+  );
+
+  test(
     'failed post-promotion validation restores the validated backup',
     () async {
       await target.writeAsBytes(_oldBytes);
@@ -421,6 +597,101 @@ void main() {
   );
 
   test(
+    'legacy journal preserves two different valid generations as ambiguous',
+    () async {
+      await target.writeAsBytes(_oldBytes, flush: true);
+      const operationId = '61000000000000000000000000000001';
+      final temp = File('${target.path}.gore-swap-$operationId.tmp');
+      final journal = File(AtomicByteReplacement.journalPathFor(target));
+      await temp.writeAsBytes(_newBytes, flush: true);
+      await journal.writeAsString(
+        jsonEncode({
+          'format': AtomicByteReplacement.legacyJournalFormat,
+          'operation_id': operationId,
+          'target_name': 'project.bin',
+          'temp_name': 'project.bin.gore-swap-$operationId.tmp',
+          'backup_name': 'project.bin.gore-swap-$operationId.bak',
+          'target_existed': true,
+        }),
+        flush: true,
+      );
+
+      await expectLater(
+        AtomicByteReplacement().repair(
+          target: target,
+          validate: _validGeneration,
+        ),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+      expect(await target.readAsBytes(), _oldBytes);
+      expect(await temp.readAsBytes(), _newBytes);
+      expect(await journal.exists(), isTrue);
+
+      // A legacy journal has no byte binding. Once only one valid generation
+      // remains, conservative backward recovery can retain it.
+      await temp.delete();
+      expect(
+        await AtomicByteReplacement().repair(
+          target: target,
+          validate: _validGeneration,
+        ),
+        AtomicRepairOutcome.keptTarget,
+      );
+      expect(await journal.exists(), isFalse);
+    },
+  );
+
+  test('format-2 checksum and canonical JSON corruption fail closed', () async {
+    await target.writeAsBytes(_oldBytes, flush: true);
+    const operationId = '62000000000000000000000000000001';
+    final helper = AtomicByteReplacement(
+      operationIdFactory: () => operationId,
+      onPhase: (phase) {
+        if (phase == AtomicSwapPhase.journalCommitted) {
+          throw _SimulatedCrash(phase);
+        }
+      },
+    );
+    await expectLater(
+      helper.replace(
+        target: target,
+        bytes: _newBytes,
+        validate: _validGeneration,
+      ),
+      throwsA(isA<_SimulatedCrash>()),
+    );
+    final journal = File(AtomicByteReplacement.journalPathFor(target));
+    final canonical = await journal.readAsString();
+    final envelope = (jsonDecode(canonical) as Map).cast<String, Object?>();
+    envelope['record_sha256'] = List.filled(64, '0').join();
+    await journal.writeAsString('${jsonEncode(envelope)}\n', flush: true);
+
+    await expectLater(
+      AtomicByteReplacement().repair(
+        target: target,
+        validate: _validGeneration,
+      ),
+      throwsA(isA<AtomicSwapRecoveryException>()),
+    );
+    expect(await target.readAsBytes(), _oldBytes);
+    expect(await journal.exists(), isTrue);
+
+    final originalEnvelope = jsonDecode(canonical);
+    await journal.writeAsString(
+      const JsonEncoder.withIndent('  ').convert(originalEnvelope),
+      flush: true,
+    );
+    await expectLater(
+      AtomicByteReplacement().repair(
+        target: target,
+        validate: _validGeneration,
+      ),
+      throwsA(isA<AtomicSwapRecoveryException>()),
+    );
+    expect(await journal.exists(), isTrue);
+  });
+
+  test(
     'oversized or unknown-version journal is preserved and rejected',
     () async {
       await target.writeAsBytes(_oldBytes);
@@ -441,7 +712,7 @@ void main() {
 
       await journal.writeAsString(
         jsonEncode({
-          'format': 2,
+          'format': 3,
           'operation_id': '70000000000000000000000000000001',
           'target_name': 'project.bin',
           'temp_name':

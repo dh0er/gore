@@ -23,10 +23,12 @@ use crate::{
     ProjectDocument, ProjectId, ProjectMeta, ProjectRevision2, ProjectRevision3, ProjectV2,
     Revision3QuestCollisionSourceErrorV2, SchemaRevisionV1, SchemaRevisionV2, SchemaRevisionV3,
     Sha256Digest, ValidationProfile, MAX_QUEST_COLLISION_ARTIFACT_BYTES,
+    MAX_REVISION3_BASE_SNAPSHOT_BYTES, MAX_REVISION3_SNAPSHOT_BYTES,
     QUEST_COLLISION_ARTIFACT_MEDIA_TYPE, QUEST_COLLISION_ARTIFACT_MEDIA_TYPE_V2,
 };
 
 mod revision3_export;
+mod revision3_history;
 
 pub use revision3_export::{
     Revision3ExactSnapshotClosureV1, Revision3ExactSnapshotExportErrorV1,
@@ -35,11 +37,20 @@ pub use revision3_export::{
     REVISION3_EXACT_SNAPSHOT_EXPORT_FORMAT_V1, REVISION3_EXACT_SNAPSHOT_MANIFEST_FILE_V1,
     REVISION3_EXACT_SNAPSHOT_MANIFEST_MARKER_V1, REVISION3_EXACT_SNAPSHOT_RESTORE_STATUS_V1,
 };
+pub use revision3_history::{
+    PreparedRevision3HistoryRestoreV1, Revision3CheckpointHistoryV1, Revision3CheckpointParentV1,
+    Revision3HistoryEntryV1, Revision3HistoryErrorV1, Revision3HistoryV1,
+    MAX_REVISION3_HISTORY_ENTRIES_V1, MAX_REVISION3_HISTORY_MANIFEST_BYTES_V1,
+    MAX_REVISION3_HISTORY_PARENT_RECORDS_V1, REVISION3_HISTORY_AUTHORITY_V1,
+};
 
 const HEAD_FILE_NAME: &str = "gore-project.json";
 const STORE_FORMAT: u32 = 1;
 const MAX_HEAD_BYTES_HARD: usize = 64 * 1024;
-const MAX_SNAPSHOT_BYTES_HARD: usize = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES_HARD: usize = MAX_REVISION3_BASE_SNAPSHOT_BYTES as usize;
+/// Default format reserve between the history-free and final R3 Store snapshot ceilings.
+pub const REVISION3_HISTORY_SNAPSHOT_RESERVE_BYTES_V1: usize =
+    (MAX_REVISION3_SNAPSHOT_BYTES - MAX_REVISION3_BASE_SNAPSHOT_BYTES) as usize;
 const MAX_ENTITY_BYTES_HARD: usize = 1024 * 1024;
 const MAX_REFERENCED_ENTITY_BYTES_HARD: u64 = 512 * 1024 * 1024;
 const MAX_ENTITIES_HARD: usize = 100_000;
@@ -60,6 +71,8 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkingStoreLimits {
     pub max_head_bytes: usize,
+    /// Legacy snapshot and history-free R3 manifest ceiling. Final R3 snapshots receive the fixed
+    /// bounded-history reserve in addition; making this value stricter still lowers both caps.
     pub max_snapshot_bytes: usize,
     pub max_entity_bytes: usize,
     pub max_referenced_entity_bytes: u64,
@@ -134,6 +147,13 @@ impl WorkingStoreLimits {
         }
         Ok(self)
     }
+}
+
+fn revision3_total_snapshot_limit(limits: &WorkingStoreLimits) -> usize {
+    limits
+        .max_snapshot_bytes
+        .saturating_add(REVISION3_HISTORY_SNAPSHOT_RESERVE_BYTES_V1)
+        .min(MAX_REVISION3_SNAPSHOT_BYTES as usize)
 }
 
 /// Exact immutable-store format marker. Only integer `1` is accepted.
@@ -515,6 +535,10 @@ pub struct Revision3SnapshotManifest {
     #[serde(default, deserialize_with = "deserialize_unique_map")]
     pub entities: BTreeMap<EntityId, ContentSeal>,
     pub asset_store: AssetStoreIndex,
+    /// Complete bounded retained timeline, when this snapshot was prepared as a successor by a
+    /// history-aware revision-3 Store. Legacy/root snapshots omit this field byte-for-byte.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<Revision3CheckpointHistoryV1>,
 }
 
 impl SnapshotManifestRevision2 {
@@ -549,7 +573,11 @@ impl SnapshotManifestRevision2 {
 }
 
 impl Revision3SnapshotManifest {
-    fn from_project(project: &ProjectRevision3, entities: BTreeMap<EntityId, ContentSeal>) -> Self {
+    fn from_project_with_history(
+        project: &ProjectRevision3,
+        entities: BTreeMap<EntityId, ContentSeal>,
+        history: Option<Revision3CheckpointHistoryV1>,
+    ) -> Self {
         Self {
             store_format: WorkingStoreFormat,
             format: project.format,
@@ -561,6 +589,7 @@ impl Revision3SnapshotManifest {
             authoring_locales: project.authoring_locales.clone(),
             entities,
             asset_store: project.asset_store.clone(),
+            history,
         }
     }
 
@@ -577,6 +606,35 @@ impl Revision3SnapshotManifest {
             asset_store: self.asset_store,
         }
     }
+}
+
+fn encode_revision3_snapshot(
+    project: &ProjectRevision3,
+    entities: BTreeMap<EntityId, ContentSeal>,
+    history: Option<Revision3CheckpointHistoryV1>,
+    limits: &WorkingStoreLimits,
+) -> Result<Vec<u8>, WorkingStoreError> {
+    let mut snapshot =
+        Revision3SnapshotManifest::from_project_with_history(project, entities, None);
+    let base_bytes = canonical_json(&snapshot)?;
+    enforce_limit(
+        "revision-3 base snapshot bytes",
+        base_bytes.len(),
+        limits.max_snapshot_bytes,
+    )?;
+
+    let Some(history) = history else {
+        return Ok(base_bytes);
+    };
+    snapshot.history = Some(history);
+    revision3_history::validate_revision3_checkpoint_history_v1(&snapshot, limits)?;
+    let snapshot_bytes = canonical_json(&snapshot)?;
+    enforce_limit(
+        "revision-3 snapshot bytes",
+        snapshot_bytes.len(),
+        revision3_total_snapshot_limit(limits),
+    )?;
+    Ok(snapshot_bytes)
 }
 
 impl SnapshotManifest {
@@ -667,7 +725,11 @@ impl WorkingProjectStore {
             return Ok(None);
         };
         let head: WorkingHead = parse_canonical_json(&bytes, "head")?;
-        validate_nonzero_seal(&head.snapshot, self.limits.max_snapshot_bytes, "snapshot")?;
+        validate_nonzero_seal(
+            &head.snapshot,
+            revision3_total_snapshot_limit(&self.limits),
+            "snapshot",
+        )?;
         Ok(Some(head))
     }
 
@@ -774,8 +836,12 @@ impl WorkingProjectStore {
     ///
     /// The fixed `gore-project.json` head is never created or replaced. The project is validated
     /// structurally, every referenced asset is fully length/hash verified, and Quest source is
-    /// never regenerated. `expected_head` uses the same strict two-check CAS contract as the
-    /// frozen revision-1 and revision-2 preparation paths.
+    /// never regenerated. With `Some(expected_head)`, an exact unchanged project deterministically
+    /// reproduces the same head and parent; every changed candidate must retain the exact project
+    /// identity and target and advance its project revision by one, sealing that expected head as
+    /// the immediate history parent. `None` creates a legacy-compatible lineage root.
+    /// `expected_head` uses the same strict two-check CAS contract as the frozen revision-1 and
+    /// revision-2 preparation paths.
     pub fn prepare_revision3_checkpoint(
         &self,
         expected_head: Option<&WorkingHead>,
@@ -799,6 +865,18 @@ impl WorkingProjectStore {
         self.ensure_root_safe()?;
         self.check_expected_head(expected_head)?;
         validate_revision3_persistability(project, &self.limits)?;
+        let history = match self.prepare_revision3_checkpoint_history_v1(expected_head, project)? {
+            revision3_history::Revision3CheckpointHistoryPlanV1::Root => None,
+            revision3_history::Revision3CheckpointHistoryPlanV1::Successor { history } => {
+                Some(history)
+            }
+            revision3_history::Revision3CheckpointHistoryPlanV1::ExactNoOp { head } => {
+                self.check_expected_head(expected_head)?;
+                let head_bytes = canonical_json(&head)?;
+                enforce_limit("head bytes", head_bytes.len(), self.limits.max_head_bytes)?;
+                return Ok(Revision3CheckpointPreparation { head_bytes, head });
+            }
+        };
 
         // Complete all cheap, filesystem-free entity work before hashing external assets or
         // installing immutable objects.
@@ -825,13 +903,8 @@ impl WorkingProjectStore {
             entity_seals.insert(id, seal);
         }
 
-        let snapshot = Revision3SnapshotManifest::from_project(project, entity_seals);
-        let snapshot_bytes = canonical_json(&snapshot)?;
-        enforce_limit(
-            "revision-3 snapshot bytes",
-            snapshot_bytes.len(),
-            self.limits.max_snapshot_bytes,
-        )?;
+        let snapshot_bytes =
+            encode_revision3_snapshot(project, entity_seals, history, &self.limits)?;
         let snapshot_seal = seal_bytes(&snapshot_bytes);
         let snapshot_path = self.snapshot_path(snapshot_seal.sha256);
         self.install_checkpoint_bytes_with_write_guard(
@@ -959,7 +1032,7 @@ impl WorkingProjectStore {
     ) -> Result<PreparedRevision3QuestCollisionSourceV2, Revision3QuestCollisionSourceErrorV2> {
         validate_nonzero_seal(
             &source_head.snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "revision-3 Quest collision source snapshot",
         )?;
 
@@ -967,7 +1040,7 @@ impl WorkingProjectStore {
         let snapshot_bytes = self.read_sealed_object(
             &snapshot_path,
             &source_head.snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "revision-3 Quest collision source snapshot",
             AssetVerification::Full,
         )?;
@@ -1025,8 +1098,14 @@ impl WorkingProjectStore {
             entity_seals.insert(*id, seal.clone());
         }
         let original_manifest = snapshot.clone();
+        let original_history = snapshot.history.clone();
         let project = snapshot.into_project(entities);
-        if Revision3SnapshotManifest::from_project(&project, entity_seals) != original_manifest {
+        if Revision3SnapshotManifest::from_project_with_history(
+            &project,
+            entity_seals,
+            original_history,
+        ) != original_manifest
+        {
             return Err(Revision3QuestCollisionSourceErrorV2::CurrentSnapshotDrift);
         }
 
@@ -1320,14 +1399,14 @@ impl WorkingProjectStore {
     ) -> Result<OpenedRevision3Checkpoint, WorkingStoreError> {
         validate_nonzero_seal(
             &head.snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "revision-3 snapshot",
         )?;
         let snapshot_path = self.snapshot_path(head.snapshot.sha256);
         let snapshot_bytes = self.read_sealed_object(
             &snapshot_path,
             &head.snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "revision-3 snapshot",
             AssetVerification::Full,
         )?;
@@ -1594,18 +1673,23 @@ impl WorkingProjectStore {
     ) -> Result<(), WorkingStoreError> {
         self.ensure_root_safe()?;
         validate_revision3_persistability(project, &self.limits)?;
+        let expected_head = self.current_head()?;
+        let history = match self
+            .prepare_revision3_checkpoint_history_v1(expected_head.as_ref(), project)?
+        {
+            revision3_history::Revision3CheckpointHistoryPlanV1::Root => None,
+            revision3_history::Revision3CheckpointHistoryPlanV1::Successor { history } => {
+                Some(history)
+            }
+            revision3_history::Revision3CheckpointHistoryPlanV1::ExactNoOp { .. } => return Ok(()),
+        };
         let mut entity_seals = BTreeMap::new();
         for (id, entity) in &project.entities {
             let bytes = canonical_json(entity)?;
             entity_seals.insert(*id, seal_bytes(&bytes));
         }
-        let snapshot = Revision3SnapshotManifest::from_project(project, entity_seals);
-        let snapshot_bytes = canonical_json(&snapshot)?;
-        enforce_limit(
-            "revision-3 snapshot bytes",
-            snapshot_bytes.len(),
-            self.limits.max_snapshot_bytes,
-        )?;
+        let snapshot_bytes =
+            encode_revision3_snapshot(project, entity_seals, history, &self.limits)?;
         let head = WorkingHead {
             store_format: WorkingStoreFormat,
             snapshot: seal_bytes(&snapshot_bytes),
@@ -1624,13 +1708,13 @@ impl WorkingProjectStore {
         self.ensure_root_safe()?;
         validate_nonzero_seal(
             snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "DataAsset historical basis snapshot",
         )?;
         let bytes = self.read_sealed_object(
             &self.snapshot_path(snapshot.sha256),
             snapshot,
-            self.limits.max_snapshot_bytes,
+            revision3_total_snapshot_limit(&self.limits),
             "DataAsset historical basis snapshot",
             AssetVerification::Full,
         )?;
@@ -1678,7 +1762,7 @@ impl WorkingProjectStore {
                 )
             })?;
         let nested_basis_bytes = entity_count
-            .checked_mul(self.limits.max_snapshot_bytes as u64)
+            .checked_mul(revision3_total_snapshot_limit(&self.limits) as u64)
             .ok_or_else(|| {
                 WorkingStoreError::Invariant(
                     "DataAsset historical nested-basis work overflowed".to_owned(),
@@ -2141,6 +2225,15 @@ impl WorkingProjectStore {
         &self,
         snapshot: &Revision3SnapshotManifest,
     ) -> Result<(), WorkingStoreError> {
+        let mut base_snapshot = snapshot.clone();
+        base_snapshot.history = None;
+        let base_snapshot_bytes = canonical_json(&base_snapshot)?;
+        enforce_limit(
+            "revision-3 base snapshot bytes",
+            base_snapshot_bytes.len(),
+            self.limits.max_snapshot_bytes,
+        )?;
+        revision3_history::validate_revision3_checkpoint_history_v1(snapshot, &self.limits)?;
         enforce_limit(
             "entity count",
             snapshot.entities.len(),
@@ -2401,7 +2494,7 @@ impl WorkingProjectStore {
             let bytes = self.read_sealed_object(
                 &self.snapshot_path(sha256),
                 &seal,
-                self.limits.max_snapshot_bytes,
+                revision3_total_snapshot_limit(&self.limits),
                 "revision-3 basis snapshot",
                 AssetVerification::Full,
             )?;
@@ -3492,6 +3585,8 @@ fn is_link_or_reparse(metadata: &fs::Metadata) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
 
     fn published_revision3_basis(
@@ -3534,6 +3629,35 @@ mod tests {
             Err(WorkingStoreError::StagingCleanup { .. })
         ));
         assert!(require_preinstall_collision(NoClobberInstallError::AlreadyExists).is_ok());
+    }
+
+    #[test]
+    fn exact_revision3_no_op_preserves_head_without_entering_a_write_boundary() {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "gore-authoring-revision3-history-no-op-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let store = WorkingProjectStore::at(&root, WorkingStoreLimits::default()).unwrap();
+        let basis = published_revision3_basis(&store, 0x71);
+        let project = store
+            .open_current_revision3(AssetVerification::Full)
+            .unwrap()
+            .project;
+        let write_guards = Cell::new(0usize);
+
+        let prepared = store
+            .prepare_revision3_checkpoint_with_write_guard(Some(&basis.head), &project, || {
+                write_guards.set(write_guards.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(prepared, basis);
+        assert_eq!(write_guards.get(), 0);
+        assert_eq!(store.current_head().unwrap(), Some(basis.head));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

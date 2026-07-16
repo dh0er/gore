@@ -23,6 +23,7 @@ import 'revision3_quest_context_authoring.dart';
 import 'revision3_quest_outline_authoring.dart';
 import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
+import 'revision3_project_history.dart';
 import 'revision3_voice_authoring.dart';
 import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
@@ -133,6 +134,36 @@ final class Revision3RecoveryNotRequiredException
     extends CurrentProjectCoordinatorException {
   const Revision3RecoveryNotRequiredException()
     : super('the current managed project does not require recovery');
+}
+
+final class Revision3ProjectHistoryStaleCheckpointException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectHistoryStaleCheckpointException()
+    : super('the managed project changed before the history operation started');
+}
+
+final class Revision3ProjectHistoryRequiresReopenException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectHistoryRequiresReopenException()
+    : super(
+        'the managed project must be recovered or reopened before history can change it',
+      );
+}
+
+final class Revision3ProjectHistoryUnsupportedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectHistoryUnsupportedException()
+    : super(
+        'this managed project session has no authenticated history capability',
+      );
+}
+
+final class Revision3ProjectHistoryFailedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3ProjectHistoryFailedException()
+    : super(
+        'the history result could not be bound to the current managed project',
+      );
 }
 
 final class Revision3ProjectExportStaleCheckpointException
@@ -641,6 +672,22 @@ abstract interface class ManagedRevision3RecoveryLease {
   void markRequiresReopenAfterRecoveryUncertainty();
 }
 
+/// Optional authenticated-history authority. It remains separate from normal
+/// editing so unrelated leases and fakes cannot accidentally offer restore.
+abstract interface class ManagedRevision3ProjectHistoryLease {
+  bool get supportsProjectHistory;
+
+  Future<Revision3ProjectHistorySnapshot> readProjectHistoryV1();
+
+  Future<ManagedRevision3ProjectHistoryRestoreCheckpoint>
+  prepareAndPublishProjectHistoryRestoreV1({
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  });
+
+  void markRequiresReopenAfterHistoryUncertainty();
+}
+
 /// Optional immutable-build capability. It is separate from checkpoint editing
 /// so unrelated lease fakes do not accidentally claim artifact authority.
 abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
@@ -800,6 +847,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3VoiceTakeStatusLease,
         ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3RecoveryLease,
+        ManagedRevision3ProjectHistoryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
         ManagedRevision3ProjectExportLease,
         ManagedRevision3StoryDraftRemovalLease {
@@ -834,6 +882,27 @@ final class _ManagedRevision3SessionLease
   Future<ManagedRevision3RecoveryCheckpoint>
   recoverAfterUncertainPublication() =>
       _session.recoverAfterUncertainPublication();
+
+  @override
+  bool get supportsProjectHistory => _session.supportsProjectHistory;
+
+  @override
+  Future<Revision3ProjectHistorySnapshot> readProjectHistoryV1() =>
+      _session.readProjectHistoryV1();
+
+  @override
+  Future<ManagedRevision3ProjectHistoryRestoreCheckpoint>
+  prepareAndPublishProjectHistoryRestoreV1({
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  }) => _session.prepareAndPublishProjectHistoryRestoreV1(
+    expectedHistory: expectedHistory,
+    target: target,
+  );
+
+  @override
+  void markRequiresReopenAfterHistoryUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
   bool get supportsReviewedDataAssetBuild =>
@@ -2107,6 +2176,168 @@ final class CurrentProjectCoordinator
         const Revision3RecoveryFailedException(),
         stackTrace,
       );
+    }
+  });
+
+  /// Read a bounded authenticated history for the exact visibly current R3
+  /// checkpoint. No Store directory scan or project mutation is authorized.
+  Future<Revision3ProjectHistorySnapshot> readCurrentRevision3ProjectHistory({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3ProjectHistoryUnsupportedException();
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectHistoryRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3ProjectHistoryStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ProjectHistoryLease ||
+        !(lease as ManagedRevision3ProjectHistoryLease)
+            .supportsProjectHistory) {
+      throw const Revision3ProjectHistoryUnsupportedException();
+    }
+    final historyLease = lease as ManagedRevision3ProjectHistoryLease;
+    try {
+      final history = await historyLease.readProjectHistoryV1();
+      if (lease.requiresReopen ||
+          lease.root.path != expectedRoot ||
+          lease.projectId != expectedProjectId ||
+          lease.projectRevision != expectedProjectRevision ||
+          lease.head.canonicalJson != expectedHead.canonicalJson ||
+          history.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          history.projectId != expectedProjectId ||
+          history.currentRevision != expectedProjectRevision) {
+        historyLease.markRequiresReopenAfterHistoryUncertainty();
+        throw const Revision3ProjectHistoryFailedException();
+      }
+      return history;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen &&
+          error is! Revision3ProjectHistoryFailedException) {
+        Error.throwWithStackTrace(
+          const Revision3ProjectHistoryRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Restore one selected authenticated ancestor as a new current+1 project
+  /// generation. The old current generation remains in the lineage.
+  Future<Revision3ProjectHistoryRestorePublication>
+  restoreCurrentRevision3ProjectHistory({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3ProjectHistoryUnsupportedException();
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3ProjectHistoryRequiresReopenException();
+    }
+    final targetIsListed = expectedHistory.entries.any(
+      (entry) =>
+          !entry.isCurrent &&
+          entry.projectRevision == target.projectRevision &&
+          entry.head.canonicalJson == target.head.canonicalJson,
+    );
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson ||
+        expectedHistory.basisHead.canonicalJson != expectedHead.canonicalJson ||
+        expectedHistory.projectId != expectedProjectId ||
+        expectedHistory.currentRevision != expectedProjectRevision ||
+        target.projectId != expectedProjectId ||
+        target.isCurrent ||
+        target.projectRevision >= expectedProjectRevision ||
+        !targetIsListed) {
+      throw const Revision3ProjectHistoryStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3ProjectHistoryLease ||
+        !(lease as ManagedRevision3ProjectHistoryLease)
+            .supportsProjectHistory) {
+      throw const Revision3ProjectHistoryUnsupportedException();
+    }
+    final historyLease = lease as ManagedRevision3ProjectHistoryLease;
+    final previousProjectJson = lease.canonicalProjectJson;
+    try {
+      final checkpoint = await historyLease
+          .prepareAndPublishProjectHistoryRestoreV1(
+            expectedHistory: expectedHistory,
+            target: target,
+          );
+      final previousTarget = _managedRevision3CanonicalTargetForCheckpoint(
+        projectJson: previousProjectJson,
+        projectId: expectedProjectId,
+        projectRevision: expectedProjectRevision,
+        head: expectedHead,
+      );
+      final restoredTarget = _managedRevision3CanonicalTargetForCheckpoint(
+        projectJson: checkpoint.projectJson,
+        projectId: expectedProjectId,
+        projectRevision: checkpoint.projectRevision,
+        head: checkpoint.head,
+      );
+      if (lease.requiresReopen ||
+          lease.root.path != expectedRoot ||
+          lease.projectId != expectedProjectId ||
+          lease.projectRevision != expectedProjectRevision + 1 ||
+          lease.head.canonicalJson != checkpoint.head.canonicalJson ||
+          lease.canonicalProjectJson != checkpoint.projectJson ||
+          checkpoint.previousHead.canonicalJson != expectedHead.canonicalJson ||
+          checkpoint.projectId != expectedProjectId ||
+          checkpoint.previousProjectRevision != expectedProjectRevision ||
+          checkpoint.projectRevision != expectedProjectRevision + 1 ||
+          checkpoint.restoredFromHead.canonicalJson !=
+              target.head.canonicalJson ||
+          checkpoint.restoredFromRevision != target.projectRevision ||
+          checkpoint.head.canonicalJson == expectedHead.canonicalJson ||
+          previousTarget == null ||
+          restoredTarget == null ||
+          restoredTarget != previousTarget) {
+        historyLease.markRequiresReopenAfterHistoryUncertainty();
+        throw const Revision3ProjectHistoryFailedException();
+      }
+      return Revision3ProjectHistoryRestorePublication(
+        previousHead: checkpoint.previousHead,
+        head: checkpoint.head,
+        projectId: checkpoint.projectId,
+        previousProjectRevision: checkpoint.previousProjectRevision,
+        projectRevision: checkpoint.projectRevision,
+        restoredFromHead: checkpoint.restoredFromHead,
+        restoredFromRevision: checkpoint.restoredFromRevision,
+      );
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen &&
+          error is! Revision3ProjectHistoryFailedException) {
+        Error.throwWithStackTrace(
+          const Revision3ProjectHistoryRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
     }
   });
 

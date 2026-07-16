@@ -1194,6 +1194,7 @@ mod tests {
         let working =
             WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
         let mut rival = store.project.clone();
+        rival.revision += 1;
         rival.meta.name = name.to_owned();
         working
             .prepare_revision3_checkpoint(Some(&store.head), &rival)
@@ -1613,6 +1614,7 @@ mod tests {
         let working =
             WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
         let mut project = store.project.clone();
+        project.revision += 1;
         project
             .entities
             .get_mut(&id(SLOT_ID_BYTE))

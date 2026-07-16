@@ -1234,7 +1234,7 @@ mod tests {
     ) -> PublishedStore {
         let temp = TempDir::new().unwrap();
         let store = WorkingProjectStore::at(temp.path(), ffi_store_limits()).unwrap();
-        let initial = empty_project(0);
+        let initial = empty_project(project.revision - 1);
         let initial_checkpoint = store.prepare_revision3_checkpoint(None, &initial).unwrap();
         fs::write(
             temp.path().join("gore-project.json"),

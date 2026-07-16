@@ -972,6 +972,7 @@ mod tests {
         let root = PathBuf::from(store.temp.path());
         let basis_head = store.head.clone();
         let mut external_project = store.project.clone();
+        external_project.revision += 1;
         external_project.meta.name = "External publisher".to_owned();
 
         let result = prepare_revision3_dialog_line_v1_inner_with_post_prepare_guard(&raw, || {
@@ -999,6 +1000,7 @@ mod tests {
         let root = PathBuf::from(store.temp.path());
         let basis_head = store.head.clone();
         let mut external_project = store.project.clone();
+        external_project.revision += 1;
         external_project.meta.name = "Late external publisher".to_owned();
 
         let result = prepare_revision3_dialog_line_v1_inner_with_final_guard(&raw, || {

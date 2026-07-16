@@ -3,7 +3,9 @@
 //! Export is deliberately not an importer, clone, Save As, build, or backup/restore operation.
 //! It copies the exact current Store closure into a portable, reviewable ZIP without changing the
 //! Store head or adopting the output path. Historical Quest basis snapshots are traversed
-//! transitively; unrelated immutable or staging objects are excluded.
+//! transitively. The current manifest's directly retained bounded-history checkpoints are also
+//! included, but history embedded in any queued snapshot is never followed. Unrelated immutable
+//! or staging objects are excluded.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -702,6 +704,32 @@ impl WorkingProjectStore {
                     self.limits.max_entities as u64,
                     self.limits.max_referenced_entity_bytes,
                 )?;
+            }
+            if digest == expected_head.snapshot.sha256 {
+                if let Some(history) = &manifest.history {
+                    for retained in &history.prior_checkpoints {
+                        let retained_preflight =
+                            self.inspect_revision3_dataasset_basis(&retained.head.snapshot)?;
+                        if retained_preflight.head != retained.head
+                            || retained_preflight.project_id != retained.project_id
+                            || retained_preflight.revision != retained.project_revision
+                            || retained_preflight.target != retained.target
+                        {
+                            return Err(Revision3ExactSnapshotExportErrorV1::InvalidClosure(
+                                "retained history record disagrees with its sealed snapshot"
+                                    .to_owned(),
+                            ));
+                        }
+                        enqueue_snapshot(
+                            &mut pending,
+                            &mut known_snapshot_lengths,
+                            &mut known_snapshot_bytes,
+                            retained.head.snapshot.clone(),
+                            self.limits.max_entities as u64,
+                            self.limits.max_referenced_entity_bytes,
+                        )?;
+                    }
+                }
             }
             if digest == expected_head.snapshot.sha256
                 && current_project.replace(opened.project).is_some()

@@ -91,7 +91,7 @@ void main() {
     );
   });
 
-  testWidgets('narrow shell menu exposes and selects all eight destinations', (
+  testWidgets('narrow shell menu exposes and selects all nine destinations', (
     tester,
   ) async {
     _setSurface(tester, const Size(600, 700));
@@ -362,6 +362,7 @@ String _sectionKey(Revision3ProjectWorkspaceSection section) =>
         'localization-voice',
       Revision3ProjectWorkspaceSection.validateTest => 'validate-test',
       Revision3ProjectWorkspaceSection.buildRelease => 'build-release',
+      Revision3ProjectWorkspaceSection.history => 'history',
       Revision3ProjectWorkspaceSection.settingsExpert => 'settings-expert',
     };
 
@@ -374,6 +375,7 @@ String _label(Revision3ProjectWorkspaceSection section) => switch (section) {
     'Localization & Voice fixture',
   Revision3ProjectWorkspaceSection.validateTest => 'Validate & Test fixture',
   Revision3ProjectWorkspaceSection.buildRelease => 'Build & Release fixture',
+  Revision3ProjectWorkspaceSection.history => 'History fixture',
   Revision3ProjectWorkspaceSection.settingsExpert =>
     'Settings / Expert fixture',
 };
@@ -387,6 +389,7 @@ IconData _icon(Revision3ProjectWorkspaceSection section) => switch (section) {
     Icons.translate_outlined,
   Revision3ProjectWorkspaceSection.validateTest => Icons.fact_check_outlined,
   Revision3ProjectWorkspaceSection.buildRelease => Icons.inventory_2_outlined,
+  Revision3ProjectWorkspaceSection.history => Icons.history_outlined,
   Revision3ProjectWorkspaceSection.settingsExpert => Icons.settings_outlined,
 };
 
@@ -399,6 +402,7 @@ IconData _selectedIcon(Revision3ProjectWorkspaceSection section) =>
       Revision3ProjectWorkspaceSection.localizationVoice => Icons.translate,
       Revision3ProjectWorkspaceSection.validateTest => Icons.fact_check,
       Revision3ProjectWorkspaceSection.buildRelease => Icons.inventory_2,
+      Revision3ProjectWorkspaceSection.history => Icons.history,
       Revision3ProjectWorkspaceSection.settingsExpert => Icons.settings,
     };
 

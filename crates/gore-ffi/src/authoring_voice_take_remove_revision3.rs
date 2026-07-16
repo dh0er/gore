@@ -1473,11 +1473,32 @@ mod tests {
             .project
     }
 
-    fn republish(store: &mut PublishedStore, project: ProjectRevision3) {
+    fn republish(store: &mut PublishedStore, mut project: ProjectRevision3) {
         let working =
             WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
+        if project.revision == store.project.revision {
+            project.revision += 1;
+        }
         let published = working
             .prepare_revision3_checkpoint(Some(&store.head), &project)
+            .unwrap();
+        fs::write(
+            store.temp.path().join("gore-project.json"),
+            &published.head_bytes,
+        )
+        .unwrap();
+        store.project_json = project.to_canonical_json().unwrap();
+        store.project = project;
+        store.head = published.head;
+        store.fixed_head_bytes = published.head_bytes;
+    }
+
+    fn republish_root(store: &mut PublishedStore, project: ProjectRevision3) {
+        let working =
+            WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
+        fs::remove_file(store.temp.path().join("gore-project.json")).unwrap();
+        let published = working
+            .prepare_revision3_checkpoint(None, &project)
             .unwrap();
         fs::write(
             store.temp.path().join("gore-project.json"),
@@ -1494,6 +1515,7 @@ mod tests {
         let working =
             WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
         let mut rival = store.project.clone();
+        rival.revision += 1;
         rival.meta.name = name.to_owned();
         working
             .prepare_revision3_checkpoint(Some(&store.head), &rival)
@@ -1929,7 +1951,7 @@ mod tests {
         let mut store = published_store();
         let mut project = store.project.clone();
         project.revision = MAX_INCREMENTABLE_REVISION + 1;
-        republish(&mut store, project);
+        republish_root(&mut store, project);
         let before = snapshot_regular_files(store.temp.path());
         let response = call(&store, &removal_request(&store, id(UNIQUE_TAKE_ID_BYTE)));
         assert_eq!(

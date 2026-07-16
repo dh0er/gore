@@ -1499,6 +1499,7 @@ mod tests {
         let working =
             WorkingProjectStore::open_existing(store.temp.path(), ffi_store_limits()).unwrap();
         let mut rival = store.project.clone();
+        rival.revision += 1;
         rival.meta.name = "External publisher won".to_owned();
         let rival = working
             .prepare_revision3_checkpoint(Some(&store.head), &rival)

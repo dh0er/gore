@@ -1130,11 +1130,179 @@ abstract class AppLocalizations {
   /// **'Build & Release'**
   String get managedWorkspaceBuildReleaseLabel;
 
+  /// No description provided for @managedWorkspaceHistoryLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'History'**
+  String get managedWorkspaceHistoryLabel;
+
   /// No description provided for @managedWorkspaceSettingsExpertLabel.
   ///
   /// In en, this message translates to:
   /// **'Settings & Expert'**
   String get managedWorkspaceSettingsExpertLabel;
+
+  /// No description provided for @managedProjectHistoryTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Project history'**
+  String get managedProjectHistoryTitle;
+
+  /// No description provided for @managedProjectHistoryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Return to an earlier project version without erasing the versions that came after it.'**
+  String get managedProjectHistoryDescription;
+
+  /// No description provided for @managedProjectHistoryBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'History changes only this managed project. It does not modify the game installation or save files.'**
+  String get managedProjectHistoryBoundary;
+
+  /// No description provided for @managedProjectHistoryRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh project history'**
+  String get managedProjectHistoryRefresh;
+
+  /// No description provided for @managedProjectHistoryLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Loading project history…'**
+  String get managedProjectHistoryLoading;
+
+  /// No description provided for @managedProjectHistoryLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Project history could not be loaded'**
+  String get managedProjectHistoryLoadFailed;
+
+  /// No description provided for @managedProjectHistoryRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get managedProjectHistoryRetry;
+
+  /// No description provided for @managedProjectHistoryCurrentVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Current version'**
+  String get managedProjectHistoryCurrentVersion;
+
+  /// No description provided for @managedProjectHistoryPreviousVersions.
+  ///
+  /// In en, this message translates to:
+  /// **'Previous versions'**
+  String get managedProjectHistoryPreviousVersions;
+
+  /// No description provided for @managedProjectHistoryUndo.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo last change'**
+  String get managedProjectHistoryUndo;
+
+  /// No description provided for @managedProjectHistoryRestoreVersion.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore this version'**
+  String get managedProjectHistoryRestoreVersion;
+
+  /// No description provided for @managedProjectHistoryRestoreTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore project version?'**
+  String get managedProjectHistoryRestoreTitle;
+
+  /// No description provided for @managedProjectHistoryRestoreBody.
+  ///
+  /// In en, this message translates to:
+  /// **'The content from revision {revision} will be saved as new revision {nextRevision}. The current version remains in history.'**
+  String managedProjectHistoryRestoreBody(int revision, int nextRevision);
+
+  /// No description provided for @managedProjectHistoryRestoreBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the project changes. The game installation and save files remain untouched.'**
+  String get managedProjectHistoryRestoreBoundary;
+
+  /// No description provided for @managedProjectHistoryCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedProjectHistoryCancel;
+
+  /// No description provided for @managedProjectHistoryRestore.
+  ///
+  /// In en, this message translates to:
+  /// **'Restore'**
+  String get managedProjectHistoryRestore;
+
+  /// No description provided for @managedProjectHistoryRestoring.
+  ///
+  /// In en, this message translates to:
+  /// **'Restoring project version…'**
+  String get managedProjectHistoryRestoring;
+
+  /// No description provided for @managedProjectHistoryRestoreFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The project version could not be restored safely. Refresh the history before trying again.'**
+  String get managedProjectHistoryRestoreFailed;
+
+  /// No description provided for @managedProjectHistoryRestoreSucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Revision {revision} was restored as a new project version.'**
+  String managedProjectHistoryRestoreSucceeded(int revision);
+
+  /// No description provided for @managedProjectHistoryEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No previous project versions have been recorded yet.'**
+  String get managedProjectHistoryEmpty;
+
+  /// No description provided for @managedProjectHistoryRecordingStartsAt.
+  ///
+  /// In en, this message translates to:
+  /// **'History recording starts at revision {revision}; older versions were not guessed from storage.'**
+  String managedProjectHistoryRecordingStartsAt(int revision);
+
+  /// No description provided for @managedProjectHistoryTruncated.
+  ///
+  /// In en, this message translates to:
+  /// **'Older project versions have expired from history. Every version shown here is still retained and authenticated by the current project history.'**
+  String get managedProjectHistoryTruncated;
+
+  /// No description provided for @managedProjectHistoryRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Revision {revision}'**
+  String managedProjectHistoryRevision(int revision);
+
+  /// No description provided for @managedProjectHistoryCurrentBadge.
+  ///
+  /// In en, this message translates to:
+  /// **'Current'**
+  String get managedProjectHistoryCurrentBadge;
+
+  /// No description provided for @managedProjectHistoryDirtyBlocked.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish or discard the open text edit before restoring another project version.'**
+  String get managedProjectHistoryDirtyBlocked;
+
+  /// No description provided for @managedProjectHistoryBusy.
+  ///
+  /// In en, this message translates to:
+  /// **'Another project action is still in progress.'**
+  String get managedProjectHistoryBusy;
+
+  /// No description provided for @managedProjectHistoryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'This managed project session does not support authenticated history.'**
+  String get managedProjectHistoryUnavailable;
 
   /// No description provided for @managedSectionStoryDescription.
   ///

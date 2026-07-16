@@ -49,7 +49,10 @@ pub const MAX_REVISION3_ENTITY_JSON_BYTES: usize = 1024 * 1024;
 pub const MAX_REVISION3_ENTITIES: usize = 100_000;
 pub const MAX_REVISION3_ASSETS: usize = 100_000;
 pub const MAX_REVISION3_REFERENCED_ASSET_BYTES: u64 = 64 * 1024 * 1024 * 1024;
-pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum history-free Store manifest projection for one revision-3 project.
+pub const MAX_REVISION3_BASE_SNAPSHOT_BYTES: u64 = 16 * 1024 * 1024;
+/// Maximum final revision-3 Store snapshot, including its bounded retained-history envelope.
+pub const MAX_REVISION3_SNAPSHOT_BYTES: u64 = 17 * 1024 * 1024;
 pub const REVISION3_QUEST_GENERATOR_ID: &str = "gore-authoring.draft-quest-skeleton";
 pub const REVISION3_QUEST_GENERATOR_VERSION: u32 = 2;
 pub const REVISION3_MULTI_OBJECTIVE_QUEST_GENERATOR_VERSION: u32 = 3;

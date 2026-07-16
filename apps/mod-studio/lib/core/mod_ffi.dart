@@ -33,6 +33,7 @@ part '../project/revision3_quest_outline_v2.dart';
 part '../project/revision3_quest_source_inspection.dart';
 part '../project/revision3_quest_transitions.dart';
 part '../project/revision3_project_export.dart';
+part '../project/revision3_project_history_wire.dart';
 part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
@@ -52,6 +53,8 @@ const _maxDataAssetExportIndex = 0x7fffffff;
 const _maxAuthoringStorePathBytes = 32 * 1024;
 const _maxAuthoringHeadJsonBytes = 64 * 1024;
 const _maxAuthoringProjectJsonBytes = 16 * 1024 * 1024;
+const _maxAuthoringRevision3SnapshotBytes =
+    _maxAuthoringProjectJsonBytes + 1024 * 1024;
 const _maxAuthoringRevision3ContentIndexJsonBytes = 32 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetResponseBytes = 64 * 1024 * 1024;
 const _maxAuthoringRevision3DataAssetPackageIndexJsonBytes = 64 * 1024 * 1024;
@@ -748,6 +751,66 @@ class ModFfi {
       'project_json': projectJson,
     });
     return AuthoringRevision3CheckpointPreparation.fromJson(response);
+  }
+
+  /// Read a bounded authenticated lineage rooted at the exact current R3 head.
+  ///
+  /// Native code follows only parent records sealed by the published snapshot;
+  /// it never scans physical CAS directories or grants mutation authority.
+  Future<AuthoringRevision3ProjectHistoryResult>
+  authoringStoreListRevision3HistoryV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_list_revision3_history_v1';
+    _authoringRevision3StorePath(root);
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3ProjectHistoryResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Prepare an append-only restore candidate from one authenticated ancestor.
+  ///
+  /// This installs immutable objects only. The managed session still owns full
+  /// candidate reopen, exact fixed-head CAS publication, and published reopen.
+  Future<AuthoringRevision3ProjectHistoryRestorePreparation>
+  authoringStorePrepareRevision3HistoryRestoreV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringWorkingHead targetHead,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_history_restore_v1';
+    _authoringRevision3StorePath(root);
+    if (targetHead.canonicalJson == expectedHead.canonicalJson) {
+      throw ArgumentError.value(
+        targetHead,
+        'targetHead',
+        'must name an older authenticated checkpoint',
+      );
+    }
+    final response = await _call(command, <String, Object?>{
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+      'target_head_json': targetHead.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3ProjectHistoryRestorePreparation.fromJson(
+        response,
+        expectedHead: expectedHead,
+        targetHead: targetHead,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
   }
 
   /// Prepare one revision-3 Quest Draft checkpoint without publishing the fixed head.
@@ -9013,7 +9076,7 @@ class AuthoringWorkingHead {
       snapshot,
       'byte_len',
       min: 1,
-      max: _maxAuthoringProjectJsonBytes,
+      max: _maxAuthoringRevision3SnapshotBytes,
     );
     final sha256 = _authoringRequiredString(snapshot, 'sha256', maxBytes: 64);
     if (!_authoringSha256Pattern.hasMatch(sha256)) {

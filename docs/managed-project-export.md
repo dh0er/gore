@@ -55,6 +55,29 @@ schema-revision-3 snapshots. For every snapshot V1 includes and fully verifies:
 3. every asset named by that manifest's asset index; and
 4. every historical basis snapshot retained by a Quest Draft, recursively.
 
+The current snapshot may additionally authenticate a bounded, newest-first
+history vector of at most 255 prior checkpoints. Export includes each checkpoint
+named directly by that one current vector, together with its entity, asset, and
+Quest-basis closure. It deliberately does **not** follow a history vector found
+inside a retained checkpoint or a Quest-basis snapshot. This keeps the exported
+history closure bounded by the current authority instead of reviving older
+checkpoints that the current snapshot has already truncated. Legacy/root
+snapshots omit the history field and therefore add no historical checkpoints.
+
+The history-free revision-3 Store manifest remains capped at 16 MiB. A separate
+1 MiB history-envelope reserve raises only the final revision-3 snapshot ceiling
+to 17 MiB; legacy revision-1/revision-2 snapshots retain their 16 MiB ceiling.
+A stricter custom Store base limit also lowers the effective revision-3 total
+limit to that base plus the fixed reserve, so deliberately constrained stores
+may reject otherwise format-valid projects.
+
+Existing history-free revision-3 snapshots keep their exact canonical bytes and
+remain readable by current Studio versions. Once a history-aware writer creates
+a snapshot containing the optional history field, older Studio binaries whose
+closed revision-3 parser rejects unknown fields cannot reopen that newer head;
+opening it requires a current reader. This is a reader-version compatibility
+boundary, not evidence of project corruption.
+
 Objects are deduplicated by their derived Store path and content seal. The same
 digest with conflicting lengths, a path collision, cycle/resource overflow,
 missing object, non-canonical manifest/entity, embedded-identity mismatch,
@@ -126,7 +149,8 @@ terminal "output may exist" warning.
 The V1 gate requires native, FFI, session, coordinator and widget tests for:
 
 - byte-identical repeated exports;
-- recursive historical closure and orphan exclusion;
+- recursive Quest-basis closure, bounded direct-history closure, truncation, and
+  orphan exclusion;
 - byte-exact ZIP64 local headers, central directory, footer and strict reopen;
 - stale-head, corrupted-object and resource-bound failures before publication;
 - bounded recursive fan-out and repeated full-verification work;

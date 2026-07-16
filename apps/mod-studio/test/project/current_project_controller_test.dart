@@ -20,6 +20,7 @@ import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
+import 'package:gore_mod/project/revision3_project_history.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
@@ -6189,6 +6190,154 @@ void main() {
     },
   );
 
+  test(
+    'authenticated history read and restore advance the visible project',
+    () async {
+      const projectId = '71717171717171717171717171717171';
+      final projectJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 7,
+      );
+      final currentHead = _recoveryHead(projectJson);
+      late final _FakeHistoryManagedLease managed;
+      final history = Revision3ProjectHistorySnapshot(
+        basisHead: currentHead,
+        projectId: projectId,
+        currentRevision: 7,
+        entries: <Revision3ProjectHistoryEntry>[
+          Revision3ProjectHistoryEntry(
+            head: currentHead,
+            projectId: projectId,
+            projectRevision: 7,
+            isCurrent: true,
+          ),
+          Revision3ProjectHistoryEntry(
+            head: _head(6),
+            projectId: projectId,
+            projectRevision: 6,
+            isCurrent: false,
+          ),
+        ],
+        historyTruncated: false,
+      );
+      managed = _FakeHistoryManagedLease(
+        root: Directory('managed-history'),
+        projectIdValue: projectId,
+        projectRevision: 7,
+        head: currentHead,
+        canonicalProjectJson: projectJson,
+        history: history,
+        onRestore: (lease, expected, target) {
+          expect(identical(expected, history), isTrue);
+          expect(target.projectRevision, 6);
+          final nextJson = _recoveryProjectJson(
+            projectId: projectId,
+            revision: 8,
+          );
+          final nextHead = _recoveryHead(nextJson);
+          lease
+            ..projectRevision = 8
+            ..canonicalProjectJson = nextJson
+            ..head = nextHead;
+          return ManagedRevision3ProjectHistoryRestoreCheckpoint(
+            previousHead: currentHead,
+            head: nextHead,
+            projectJson: nextJson,
+            projectId: projectId,
+            previousProjectRevision: 7,
+            projectRevision: 8,
+            restoredFromHead: target.head,
+            restoredFromRevision: target.projectRevision,
+          );
+        },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final loaded = await coordinator.readCurrentRevision3ProjectHistory(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+      );
+      expect(identical(loaded, history), isTrue);
+      final publication = await coordinator
+          .restoreCurrentRevision3ProjectHistory(
+            expectedRoot: visible.root.path,
+            expectedProjectId: visible.projectId,
+            expectedProjectRevision: visible.projectRevision,
+            expectedHead: visible.head,
+            expectedHistory: loaded,
+            target: loaded.entries[1],
+          );
+
+      expect(publication.projectRevision, 8);
+      expect(publication.restoredFromRevision, 6);
+      expect(managed.historyReadCalls, 1);
+      expect(managed.historyRestoreCalls, 1);
+      final refreshed =
+          coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(refreshed.projectRevision, 8);
+      expect(refreshed.head.canonicalJson, managed.head.canonicalJson);
+      expect(refreshed.requiresReopen, isFalse);
+    },
+  );
+
+  test('stale history tuple reaches no lease capability', () async {
+    const projectId = '72727272727272727272727272727272';
+    final projectJson = _recoveryProjectJson(projectId: projectId, revision: 3);
+    final currentHead = _recoveryHead(projectJson);
+    final history = Revision3ProjectHistorySnapshot(
+      basisHead: currentHead,
+      projectId: projectId,
+      currentRevision: 3,
+      entries: <Revision3ProjectHistoryEntry>[
+        Revision3ProjectHistoryEntry(
+          head: currentHead,
+          projectId: projectId,
+          projectRevision: 3,
+          isCurrent: true,
+        ),
+      ],
+      historyTruncated: false,
+    );
+    final managed = _FakeHistoryManagedLease(
+      root: Directory('managed-history-stale'),
+      projectIdValue: projectId,
+      projectRevision: 3,
+      head: currentHead,
+      canonicalProjectJson: projectJson,
+      history: history,
+      onRestore: (_, _, _) => throw StateError('must not restore'),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.readCurrentRevision3ProjectHistory(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision + 1,
+        expectedHead: visible.head,
+      ),
+      throwsA(isA<Revision3ProjectHistoryStaleCheckpointException>()),
+    );
+    expect(managed.historyReadCalls, 0);
+    expect(managed.historyRestoreCalls, 0);
+  });
+
   test('content read rejects absent and legacy current projects', () async {
     final empty = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => throw UnimplementedError(),
@@ -6661,6 +6810,12 @@ typedef _ProjectExportHook =
     FutureOr<AuthoringRevision3ExactSnapshotExportResult> Function(
       _FakeExportManagedLease lease,
       String output,
+    );
+typedef _HistoryRestoreHook =
+    FutureOr<ManagedRevision3ProjectHistoryRestoreCheckpoint> Function(
+      _FakeHistoryManagedLease lease,
+      Revision3ProjectHistorySnapshot expectedHistory,
+      Revision3ProjectHistoryEntry target,
     );
 
 class _FakeManagedLease
@@ -7529,6 +7684,50 @@ final class _FakeRecoveryManagedLease extends _FakeManagedLease
   @override
   void markRequiresReopenAfterRecoveryUncertainty() {
     recoveryRelatchCalls++;
+    requiresReopenValue = true;
+  }
+}
+
+final class _FakeHistoryManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectHistoryLease {
+  _FakeHistoryManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required super.canonicalProjectJson,
+    required this.history,
+    required this.onRestore,
+  });
+
+  final Revision3ProjectHistorySnapshot history;
+  final _HistoryRestoreHook onRestore;
+  int historyReadCalls = 0;
+  int historyRestoreCalls = 0;
+  int historyRelatchCalls = 0;
+
+  @override
+  bool get supportsProjectHistory => true;
+
+  @override
+  Future<Revision3ProjectHistorySnapshot> readProjectHistoryV1() async {
+    historyReadCalls++;
+    return history;
+  }
+
+  @override
+  Future<ManagedRevision3ProjectHistoryRestoreCheckpoint>
+  prepareAndPublishProjectHistoryRestoreV1({
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  }) async {
+    historyRestoreCalls++;
+    return onRestore(this, expectedHistory, target);
+  }
+
+  @override
+  void markRequiresReopenAfterHistoryUncertainty() {
+    historyRelatchCalls++;
     requiresReopenValue = true;
   }
 }

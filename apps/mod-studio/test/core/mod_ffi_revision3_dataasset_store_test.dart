@@ -88,6 +88,29 @@ void _expectPrepareRejected(
 }
 
 void main() {
+  test('DataAsset manifest accepts the exact revision-3 snapshot limit', () {
+    final basisHead = AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': 17 * 1024 * 1024,
+          'sha256': List<String>.filled(64, 'a').join(),
+        },
+      }),
+    );
+    final fixture = Revision3DataAssetFixture.fromBasis(
+      basisHead: basisHead,
+      basisProjectJson: _basisProjectJson(),
+    );
+
+    final prepared = AuthoringRevision3DataAssetStagePreparation.fromJson(
+      fixture.prepareResponse(),
+      expectedHead: basisHead,
+    );
+
+    expect(prepared.stage.basisHead.snapshotByteLength, 17 * 1024 * 1024);
+  });
+
   test(
     'frozen native stage/list/removal golden preserves split JSON ordering',
     () {

@@ -64,6 +64,8 @@ import 'project/revision3_quest_wizard.dart';
 import 'project/revision3_project_create_dialog.dart';
 import 'project/revision3_project_dashboard.dart';
 import 'project/revision3_project_export_dialog.dart';
+import 'project/revision3_project_history.dart';
+import 'project/revision3_project_history_page.dart';
 import 'project/revision3_project_problems.dart';
 import 'project/revision3_project_problems_view.dart';
 import 'project/revision3_project_section_page.dart';
@@ -428,6 +430,41 @@ class _HomePageState extends ConsumerState<HomePage>
             expectedProjectId: expected.projectId,
             expectedProjectRevision: expected.projectRevision,
             expectedHead: expected.head,
+          );
+    } finally {
+      if (mounted) setState(() => _projectActionBusy = false);
+    }
+  }
+
+  Future<Revision3ProjectHistoryRestorePublication>
+  _restoreManagedRevision3ProjectHistory(
+    ManagedRevision3CurrentProjectState expected,
+    Revision3ProjectHistorySnapshot expectedHistory,
+    Revision3ProjectHistoryEntry target,
+  ) async {
+    if (_projectActionBusy || _managedWorkspaceDirty) {
+      throw const Revision3ProjectHistoryStaleCheckpointException();
+    }
+    final current = ref.read(currentProjectCoordinatorProvider);
+    if (current is! ManagedRevision3CurrentProjectState ||
+        current.requiresReopen ||
+        current.root.path != expected.root.path ||
+        current.projectId != expected.projectId ||
+        current.projectRevision != expected.projectRevision ||
+        current.head.canonicalJson != expected.head.canonicalJson) {
+      throw const Revision3ProjectHistoryStaleCheckpointException();
+    }
+    setState(() => _projectActionBusy = true);
+    try {
+      return await ref
+          .read(currentProjectCoordinatorProvider.notifier)
+          .restoreCurrentRevision3ProjectHistory(
+            expectedRoot: expected.root.path,
+            expectedProjectId: expected.projectId,
+            expectedProjectRevision: expected.projectRevision,
+            expectedHead: expected.head,
+            expectedHistory: expectedHistory,
+            target: target,
           );
     } finally {
       if (mounted) setState(() => _projectActionBusy = false);
@@ -1055,6 +1092,29 @@ class _HomePageState extends ConsumerState<HomePage>
           loadContentIndex: () => ref
               .read(currentProjectCoordinatorProvider.notifier)
               .readCurrentRevision3ContentIndex(),
+          loadProjectHistory: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .readCurrentRevision3ProjectHistory(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+              ),
+          restoreProjectHistory: (expectedHistory, target) =>
+              _restoreManagedRevision3ProjectHistory(
+                currentProject,
+                expectedHistory,
+                target,
+              ),
+          canRestoreProjectHistory:
+              !_projectActionBusy &&
+              !currentProject.requiresReopen &&
+              !_managedWorkspaceDirty,
+          historyRestoreDisabledReason: _managedWorkspaceDirty
+              ? l10n.managedProjectHistoryDirtyBlocked
+              : _projectActionBusy
+              ? l10n.managedProjectHistoryBusy
+              : null,
           removeStoryDraft: _projectActionBusy || currentProject.requiresReopen
               ? null
               : ({
@@ -1842,6 +1902,10 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
+    required this.loadProjectHistory,
+    required this.restoreProjectHistory,
+    required this.canRestoreProjectHistory,
+    required this.historyRestoreDisabledReason,
     required this.removeStoryDraft,
     required this.removeStoryDraftDisabledReason,
     required this.loadBaseGameCatalog,
@@ -1898,6 +1962,10 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
+  final Revision3ProjectHistoryLoader loadProjectHistory;
+  final Revision3ProjectHistoryRestorer restoreProjectHistory;
+  final bool canRestoreProjectHistory;
+  final String? historyRestoreDisabledReason;
   final Revision3StoryWorkspaceRemoveDraftAction? removeStoryDraft;
   final String? removeStoryDraftDisabledReason;
   final Revision3BaseGameContentCatalogLoader loadBaseGameCatalog;
@@ -2493,6 +2561,13 @@ class _ManagedRevision3ProjectViewState
                           _buildReleaseSection(workspaceContext, l10n),
                     ),
                     Revision3ProjectWorkspaceDestination(
+                      section: Revision3ProjectWorkspaceSection.history,
+                      label: l10n.managedWorkspaceHistoryLabel,
+                      icon: Icons.history_outlined,
+                      selectedIcon: Icons.history,
+                      pageBuilder: (_, _) => _buildHistorySection(l10n),
+                    ),
+                    Revision3ProjectWorkspaceDestination(
                       section: Revision3ProjectWorkspaceSection.settingsExpert,
                       label: l10n.managedWorkspaceSettingsExpertLabel,
                       icon: Icons.settings_outlined,
@@ -2513,6 +2588,44 @@ class _ManagedRevision3ProjectViewState
       ],
     );
   }
+
+  Widget _buildHistorySection(AppLocalizations l10n) =>
+      Revision3ProjectHistoryPage(
+        checkpointIdentity: (
+          project.projectRevision,
+          project.head.canonicalJson,
+        ),
+        load: widget.loadProjectHistory,
+        restore: widget.restoreProjectHistory,
+        canRestore: widget.canRestoreProjectHistory,
+        restoreDisabledReason: widget.historyRestoreDisabledReason,
+        copy: Revision3ProjectHistoryPageCopy(
+          title: l10n.managedProjectHistoryTitle,
+          description: l10n.managedProjectHistoryDescription,
+          projectOnlyBoundary: l10n.managedProjectHistoryBoundary,
+          refresh: l10n.managedProjectHistoryRefresh,
+          loading: l10n.managedProjectHistoryLoading,
+          loadFailedTitle: l10n.managedProjectHistoryLoadFailed,
+          retry: l10n.managedProjectHistoryRetry,
+          currentVersion: l10n.managedProjectHistoryCurrentVersion,
+          previousVersions: l10n.managedProjectHistoryPreviousVersions,
+          undoLastChange: l10n.managedProjectHistoryUndo,
+          restoreVersion: l10n.managedProjectHistoryRestoreVersion,
+          restoreDialogTitle: l10n.managedProjectHistoryRestoreTitle,
+          restoreDialogBody: l10n.managedProjectHistoryRestoreBody,
+          restoreProjectOnlyBoundary: l10n.managedProjectHistoryRestoreBoundary,
+          cancel: l10n.managedProjectHistoryCancel,
+          restore: l10n.managedProjectHistoryRestore,
+          restoring: l10n.managedProjectHistoryRestoring,
+          restoreFailed: l10n.managedProjectHistoryRestoreFailed,
+          restoreSucceeded: l10n.managedProjectHistoryRestoreSucceeded,
+          noPreviousVersions: l10n.managedProjectHistoryEmpty,
+          recordingStartsAt: l10n.managedProjectHistoryRecordingStartsAt,
+          olderVersionsExpired: l10n.managedProjectHistoryTruncated,
+          revisionLabel: l10n.managedProjectHistoryRevision,
+          currentBadge: l10n.managedProjectHistoryCurrentBadge,
+        ),
+      );
 
   Widget _buildContentWorkspace(
     BuildContext context,

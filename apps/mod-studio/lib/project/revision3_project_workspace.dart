@@ -12,6 +12,7 @@ enum Revision3ProjectWorkspaceSection {
   localizationVoice,
   validateTest,
   buildRelease,
+  history,
   settingsExpert,
 }
 
@@ -377,5 +378,6 @@ String _sectionKey(Revision3ProjectWorkspaceSection section) =>
         'localization-voice',
       Revision3ProjectWorkspaceSection.validateTest => 'validate-test',
       Revision3ProjectWorkspaceSection.buildRelease => 'build-release',
+      Revision3ProjectWorkspaceSection.history => 'history',
       Revision3ProjectWorkspaceSection.settingsExpert => 'settings-expert',
     };

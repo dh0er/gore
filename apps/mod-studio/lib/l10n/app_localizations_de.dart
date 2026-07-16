@@ -594,8 +594,113 @@ class AppLocalizationsDe extends AppLocalizations {
   String get managedWorkspaceBuildReleaseLabel => 'Bauen & Veröffentlichen';
 
   @override
+  String get managedWorkspaceHistoryLabel => 'Verlauf';
+
+  @override
   String get managedWorkspaceSettingsExpertLabel =>
       'Einstellungen & Expertenmodus';
+
+  @override
+  String get managedProjectHistoryTitle => 'Projektverlauf';
+
+  @override
+  String get managedProjectHistoryDescription =>
+      'Kehre zu einer früheren Projektversion zurück, ohne die danach entstandenen Versionen zu löschen.';
+
+  @override
+  String get managedProjectHistoryBoundary =>
+      'Der Verlauf ändert nur dieses verwaltete Projekt. Spielinstallation und Spielstände bleiben unverändert.';
+
+  @override
+  String get managedProjectHistoryRefresh => 'Projektverlauf aktualisieren';
+
+  @override
+  String get managedProjectHistoryLoading => 'Projektverlauf wird geladen…';
+
+  @override
+  String get managedProjectHistoryLoadFailed =>
+      'Der Projektverlauf konnte nicht geladen werden';
+
+  @override
+  String get managedProjectHistoryRetry => 'Erneut versuchen';
+
+  @override
+  String get managedProjectHistoryCurrentVersion => 'Aktuelle Version';
+
+  @override
+  String get managedProjectHistoryPreviousVersions => 'Frühere Versionen';
+
+  @override
+  String get managedProjectHistoryUndo => 'Letzte Änderung rückgängig machen';
+
+  @override
+  String get managedProjectHistoryRestoreVersion =>
+      'Diese Version wiederherstellen';
+
+  @override
+  String get managedProjectHistoryRestoreTitle =>
+      'Projektversion wiederherstellen?';
+
+  @override
+  String managedProjectHistoryRestoreBody(int revision, int nextRevision) {
+    return 'Der Inhalt aus Revision $revision wird als neue Revision $nextRevision gespeichert. Der aktuelle Stand bleibt im Verlauf erhalten.';
+  }
+
+  @override
+  String get managedProjectHistoryRestoreBoundary =>
+      'Nur das Projekt wird geändert. Spielinstallation und Spielstände bleiben unverändert.';
+
+  @override
+  String get managedProjectHistoryCancel => 'Abbrechen';
+
+  @override
+  String get managedProjectHistoryRestore => 'Wiederherstellen';
+
+  @override
+  String get managedProjectHistoryRestoring =>
+      'Projektversion wird wiederhergestellt…';
+
+  @override
+  String get managedProjectHistoryRestoreFailed =>
+      'Die Projektversion konnte nicht sicher wiederhergestellt werden. Aktualisiere den Verlauf vor einem neuen Versuch.';
+
+  @override
+  String managedProjectHistoryRestoreSucceeded(int revision) {
+    return 'Revision $revision wurde als neue Projektversion wiederhergestellt.';
+  }
+
+  @override
+  String get managedProjectHistoryEmpty =>
+      'Es wurden noch keine früheren Projektversionen aufgezeichnet.';
+
+  @override
+  String managedProjectHistoryRecordingStartsAt(int revision) {
+    return 'Die Verlaufsaufzeichnung beginnt bei Revision $revision; ältere Stände wurden nicht aus dem Speicher geraten.';
+  }
+
+  @override
+  String get managedProjectHistoryTruncated =>
+      'Ältere Projektversionen sind aus dem Verlauf abgelaufen. Jeder hier angezeigte Stand wird vom aktuellen Projektverlauf weiterhin aufbewahrt und authentifiziert.';
+
+  @override
+  String managedProjectHistoryRevision(int revision) {
+    return 'Revision $revision';
+  }
+
+  @override
+  String get managedProjectHistoryCurrentBadge => 'Aktuell';
+
+  @override
+  String get managedProjectHistoryDirtyBlocked =>
+      'Beende oder verwirf die offene Textbearbeitung, bevor du eine andere Projektversion wiederherstellst.';
+
+  @override
+  String get managedProjectHistoryBusy =>
+      'Eine andere Projektaktion läuft noch.';
+
+  @override
+  String get managedProjectHistoryUnavailable =>
+      'Diese verwaltete Projektsitzung unterstützt keinen authentifizierten Verlauf.';
 
   @override
   String get managedSectionStoryDescription => 'NPCs, Quests und Dialoge.';

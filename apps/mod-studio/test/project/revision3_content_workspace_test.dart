@@ -146,6 +146,13 @@ class _Harness extends StatelessWidget {
             pageBuilder: (_, _) => const SizedBox(),
           ),
           Revision3ProjectWorkspaceDestination(
+            section: Revision3ProjectWorkspaceSection.history,
+            label: 'History',
+            icon: Icons.history_outlined,
+            selectedIcon: Icons.history,
+            pageBuilder: (_, _) => const SizedBox(),
+          ),
+          Revision3ProjectWorkspaceDestination(
             section: Revision3ProjectWorkspaceSection.settingsExpert,
             label: 'Settings / Expert',
             icon: Icons.settings_outlined,

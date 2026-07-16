@@ -22,6 +22,7 @@ import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
 import 'package:gore_mod/project/project_atomic_io.dart';
+import 'package:gore_mod/project/revision3_project_history.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
@@ -1363,11 +1364,33 @@ void main() {
     'canonical managed workspace hosts real tools with honest availability',
     (tester) async {
       await _setDesktopTestSurface(tester);
-      final managed = _FakeManagedLease(
+      final currentHead = _head(3);
+      const projectId = 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd';
+      final managed = _FakeHistoryManagedLease(
         root: Directory(r'C:\mods\canonical-workspace'),
-        projectId: 'cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd',
+        projectId: projectId,
         projectRevision: 3,
-        head: _head(3),
+        head: currentHead,
+        history: Revision3ProjectHistorySnapshot(
+          basisHead: currentHead,
+          projectId: projectId,
+          currentRevision: 3,
+          entries: <Revision3ProjectHistoryEntry>[
+            Revision3ProjectHistoryEntry(
+              head: currentHead,
+              projectId: projectId,
+              projectRevision: 3,
+              isCurrent: true,
+            ),
+            Revision3ProjectHistoryEntry(
+              head: _head(2),
+              projectId: projectId,
+              projectRevision: 2,
+              isCurrent: false,
+            ),
+          ],
+          historyTruncated: false,
+        ),
         contentIndexBuilder: (lease) => _contentIndex(
           projectId: lease.projectId,
           revision: lease.projectRevision,
@@ -1531,6 +1554,24 @@ void main() {
         actionId: 'build-playable-mod',
         enabled: false,
       );
+
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-history'),
+      );
+      expect(
+        find.byKey(const Key('revision3-project-history-page')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-history-entry-3')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-history-entry-2')),
+        findsOneWidget,
+      );
+      expect(managed.historyReadCalls, 1);
 
       await _navigateManagedWorkspace(
         tester,
@@ -5414,6 +5455,7 @@ const _managedPrimaryNavigationKeys = <Key>[
   Key('revision3-project-workspace-nav-localization-voice'),
   Key('revision3-project-workspace-nav-validate-test'),
   Key('revision3-project-workspace-nav-build-release'),
+  Key('revision3-project-workspace-nav-history'),
   Key('revision3-project-workspace-nav-settings-expert'),
 ];
 
@@ -6316,6 +6358,42 @@ class _FakeManagedLease
       requiresReopenValue = true;
       throw error;
     }
+  }
+}
+
+final class _FakeHistoryManagedLease extends _FakeManagedLease
+    implements ManagedRevision3ProjectHistoryLease {
+  _FakeHistoryManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required this.history,
+    super.contentIndexBuilder,
+  });
+
+  final Revision3ProjectHistorySnapshot history;
+  int historyReadCalls = 0;
+
+  @override
+  bool get supportsProjectHistory => true;
+
+  @override
+  Future<Revision3ProjectHistorySnapshot> readProjectHistoryV1() async {
+    historyReadCalls++;
+    return history;
+  }
+
+  @override
+  Future<ManagedRevision3ProjectHistoryRestoreCheckpoint>
+  prepareAndPublishProjectHistoryRestoreV1({
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  }) => throw StateError('history restore is not configured for this fake');
+
+  @override
+  void markRequiresReopenAfterHistoryUncertainty() {
+    requiresReopenValue = true;
   }
 }
 

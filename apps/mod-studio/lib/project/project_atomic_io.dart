@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 
 /// Validates one complete candidate file.
@@ -102,7 +103,8 @@ class AtomicByteReplacement {
     }
   }
 
-  static const int journalFormat = 1;
+  static const int legacyJournalFormat = 1;
+  static const int journalFormat = 2;
   static const int maxJournalBytes = 4096;
   static const int maxPendingJournals = 32;
   static const int defaultDirectoryScanLimit = 16384;
@@ -133,7 +135,13 @@ class AtomicByteReplacement {
     final snapshot = Uint8List.fromList(bytes);
     return _serialized(normalizedTarget, () async {
       await _repairUnlocked(normalizedTarget, validate);
-      await _replaceUnlocked(normalizedTarget, snapshot, validate);
+      final oldGeneration = await _sealedGeneration(normalizedTarget);
+      await _replaceUnlocked(
+        normalizedTarget,
+        snapshot,
+        oldGeneration,
+        validate,
+      );
     });
   }
 
@@ -163,7 +171,15 @@ class AtomicByteReplacement {
           '${normalizedTarget.path}',
         );
       }
-      await _replaceUnlocked(normalizedTarget, snapshot, validate);
+      final oldGeneration = expectedSnapshot == null
+          ? null
+          : _GenerationSeal.fromBytes(expectedSnapshot);
+      await _replaceUnlocked(
+        normalizedTarget,
+        snapshot,
+        oldGeneration,
+        validate,
+      );
     });
   }
 
@@ -182,10 +198,9 @@ class AtomicByteReplacement {
   Future<void> _replaceUnlocked(
     File target,
     Uint8List bytes,
+    _GenerationSeal? oldGeneration,
     AtomicFileValidator validate,
   ) async {
-    final targetExisted =
-        await _safeType(target, label: 'target') == FileSystemEntityType.file;
     await target.parent.create(recursive: true);
 
     final operationId = _operationIdFactory();
@@ -212,14 +227,15 @@ class AtomicByteReplacement {
     // Commit the bounded ownership record before creating even the temporary
     // content generation. From this point onward every content artifact is
     // named by the journal, so a crash or failed validation is repairable.
-    final record = _SwapJournal(
+    final record = _SwapJournalV2(
       operationId: operationId,
       targetName: p.basename(target.path),
       tempName: names.tempName,
       backupName: names.backupName,
-      targetExisted: targetExisted,
+      oldGeneration: oldGeneration,
+      newGeneration: _GenerationSeal.fromBytes(bytes),
     );
-    final journalBytes = utf8.encode('${jsonEncode(record.toJson())}\n');
+    final journalBytes = record.canonicalBytes();
     if (journalBytes.length > maxJournalBytes) {
       throw const AtomicSwapException('generated swap journal is too large');
     }
@@ -230,7 +246,7 @@ class AtomicByteReplacement {
 
     await temp.writeAsBytes(bytes, flush: true);
     await _phase(AtomicSwapPhase.tempFlushed);
-    if (!await _isValidRegularFile(temp, validate)) {
+    if (!await _isExactValidGeneration(temp, record.newGeneration, validate)) {
       throw AtomicSwapException(
         'temporary generation failed validation: ${temp.path}',
       );
@@ -238,6 +254,16 @@ class AtomicByteReplacement {
     await _phase(AtomicSwapPhase.tempValidated);
 
     final targetType = await _safeType(target, label: 'target');
+    final targetStillExact = oldGeneration == null
+        ? targetType == FileSystemEntityType.notFound
+        : targetType == FileSystemEntityType.file &&
+              await _matchesGeneration(target, oldGeneration);
+    if (!targetStillExact) {
+      throw AtomicSwapRecoveryException(
+        'target changed after the exact old generation was journaled; '
+        'preserving swap evidence for ${target.path}',
+      );
+    }
     if (targetType == FileSystemEntityType.file) {
       await target.rename(backup.path);
       await _phase(AtomicSwapPhase.targetBackedUp);
@@ -245,7 +271,11 @@ class AtomicByteReplacement {
 
     await temp.rename(target.path);
     await _phase(AtomicSwapPhase.tempPromoted);
-    if (!await _isValidRegularFile(target, validate)) {
+    if (!await _isExactValidGeneration(
+      target,
+      record.newGeneration,
+      validate,
+    )) {
       throw AtomicSwapException(
         'promoted target failed validation: ${target.path}',
       );
@@ -285,6 +315,203 @@ class AtomicByteReplacement {
     final backup = File(p.join(target.parent.path, record.backupName));
     await _requireRegularOrMissing(temp, label: 'journal temporary');
     await _requireRegularOrMissing(backup, label: 'journal backup');
+
+    return switch (record) {
+      _SwapJournalV2() => _repairBoundV2(
+        target: target,
+        temp: temp,
+        backup: backup,
+        journal: journal,
+        record: record,
+        validate: validate,
+      ),
+      _SwapJournalV1() => _repairLegacyV1(
+        target: target,
+        temp: temp,
+        backup: backup,
+        journal: journal,
+        record: record,
+        validate: validate,
+      ),
+    };
+  }
+
+  Future<AtomicRepairOutcome> _repairBoundV2({
+    required File target,
+    required File temp,
+    required File backup,
+    required File journal,
+    required _SwapJournalV2 record,
+    required AtomicFileValidator validate,
+  }) async {
+    final targetGeneration = await _inspectRecoveryGeneration(target, validate);
+    final tempGeneration = await _inspectRecoveryGeneration(temp, validate);
+    final backupGeneration = await _inspectRecoveryGeneration(backup, validate);
+    final oldGeneration = record.oldGeneration;
+    final newGeneration = record.newGeneration;
+
+    void rejectUnexpectedValid(
+      _RecoveryGeneration generation,
+      bool expected,
+      String label,
+    ) {
+      if (generation.semanticValid && !expected) {
+        throw AtomicSwapRecoveryException(
+          '$label contains semantically valid bytes outside its exact journal '
+          'binding; preserving all swap evidence for ${target.path}',
+        );
+      }
+    }
+
+    final targetIsOld =
+        oldGeneration != null && targetGeneration.isExactValid(oldGeneration);
+    final targetIsNew = targetGeneration.isExactValid(newGeneration);
+    final tempIsNew = tempGeneration.isExactValid(newGeneration);
+    final backupIsOld =
+        oldGeneration != null && backupGeneration.isExactValid(oldGeneration);
+
+    rejectUnexpectedValid(
+      targetGeneration,
+      targetIsOld || targetIsNew,
+      'target',
+    );
+    rejectUnexpectedValid(tempGeneration, tempIsNew, 'journal temporary');
+    rejectUnexpectedValid(backupGeneration, backupIsOld, 'journal backup');
+
+    final sameGeneration = oldGeneration == newGeneration;
+    if (sameGeneration && targetIsNew) {
+      await _requireExactValidRecoveryGeneration(
+        target,
+        newGeneration,
+        validate,
+        label: 'retained target',
+      );
+      await _deleteOwnedFileIfPresent(temp, label: 'duplicate temporary');
+      await _deleteOwnedFileIfPresent(backup, label: 'duplicate backup');
+      await _deleteOwnedFileIfPresent(journal, label: 'repaired swap journal');
+      return AtomicRepairOutcome.keptTarget;
+    }
+
+    if (tempIsNew) {
+      final targetType = targetGeneration.type;
+      final backupType = backupGeneration.type;
+      final expectedLayout = oldGeneration == null
+          ? targetType == FileSystemEntityType.notFound &&
+                backupType == FileSystemEntityType.notFound
+          : (targetIsOld && backupType == FileSystemEntityType.notFound) ||
+                (targetType == FileSystemEntityType.notFound && backupIsOld);
+      if (!expectedLayout) {
+        throw AtomicSwapRecoveryException(
+          'ambiguous bound recovery has an impossible target/temporary/backup '
+          'combination; preserving all swap evidence for ${target.path}',
+        );
+      }
+      if (targetIsOld) {
+        await target.rename(backup.path);
+      }
+      await temp.rename(target.path);
+      if (!await _isExactValidGeneration(target, newGeneration, validate)) {
+        throw AtomicSwapRecoveryException(
+          'promoted temporary generation no longer matches the exact journal '
+          'binding; preserving swap evidence for ${target.path}',
+        );
+      }
+      await _deleteOwnedFileIfPresent(backup, label: 'repaired backup');
+      await _deleteOwnedFileIfPresent(journal, label: 'repaired swap journal');
+      return AtomicRepairOutcome.promotedTemp;
+    }
+
+    if (targetIsNew) {
+      await _requireExactValidRecoveryGeneration(
+        target,
+        newGeneration,
+        validate,
+        label: 'retained target',
+      );
+      await _deleteOwnedFileIfPresent(temp, label: 'invalid temporary');
+      await _deleteOwnedFileIfPresent(backup, label: 'validated old backup');
+      await _deleteOwnedFileIfPresent(journal, label: 'repaired swap journal');
+      return AtomicRepairOutcome.keptTarget;
+    }
+
+    if (targetIsOld && backupGeneration.type == FileSystemEntityType.notFound) {
+      await _requireExactValidRecoveryGeneration(
+        target,
+        oldGeneration,
+        validate,
+        label: 'retained old target',
+      );
+      await _deleteOwnedFileIfPresent(temp, label: 'invalid temporary');
+      await _deleteOwnedFileIfPresent(journal, label: 'repaired swap journal');
+      return AtomicRepairOutcome.keptTarget;
+    }
+
+    if (backupIsOld) {
+      final targetType = targetGeneration.type;
+      if (targetType == FileSystemEntityType.file) {
+        final quarantine = File('${target.path}.invalid-${record.operationId}');
+        _validateQuarantinePath(target, quarantine, record.operationId);
+        await _requireMissing(quarantine, label: 'invalid target quarantine');
+        await target.rename(quarantine.path);
+      }
+      await backup.rename(target.path);
+      if (!await _isExactValidGeneration(target, oldGeneration, validate)) {
+        throw AtomicSwapRecoveryException(
+          'restored backup no longer matches the exact old journal binding; '
+          'preserving swap evidence for ${target.path}',
+        );
+      }
+      await _deleteOwnedFileIfPresent(temp, label: 'invalid temporary');
+      await _deleteOwnedFileIfPresent(journal, label: 'repaired swap journal');
+      return AtomicRepairOutcome.restoredBackup;
+    }
+
+    if (oldGeneration == null &&
+        targetGeneration.type == FileSystemEntityType.notFound &&
+        tempGeneration.type == FileSystemEntityType.notFound &&
+        backupGeneration.type == FileSystemEntityType.notFound) {
+      await _deleteOwnedFileIfPresent(
+        journal,
+        label: 'empty fresh-target swap journal',
+      );
+      return AtomicRepairOutcome.clean;
+    }
+
+    throw AtomicSwapRecoveryException(
+      'no exact semantically valid bound generation can be selected; '
+      'preserving all swap evidence for ${target.path}',
+    );
+  }
+
+  /// Version-1 journals named owned siblings but did not bind either content
+  /// generation. Backward repair is therefore intentionally limited: if two
+  /// different semantically valid byte generations survive, no choice is made.
+  /// This preserves old evidence instead of upgrading a plausible foreign head.
+  Future<AtomicRepairOutcome> _repairLegacyV1({
+    required File target,
+    required File temp,
+    required File backup,
+    required File journal,
+    required _SwapJournalV1 record,
+    required AtomicFileValidator validate,
+  }) async {
+    final inspected = <_RecoveryGeneration>[
+      await _inspectRecoveryGeneration(target, validate),
+      await _inspectRecoveryGeneration(temp, validate),
+      await _inspectRecoveryGeneration(backup, validate),
+    ];
+    final distinctValid = inspected
+        .where((generation) => generation.semanticValid)
+        .map((generation) => generation.seal)
+        .whereType<_GenerationSeal>()
+        .toSet();
+    if (distinctValid.length > 1) {
+      throw AtomicSwapRecoveryException(
+        'legacy format-1 journal has multiple different semantically valid '
+        'generations and cannot prove which one was intended; preserving all '
+        'swap evidence for ${target.path}',
+      );
+    }
 
     var targetValid = await _isValidRegularFile(target, validate);
     final tempValid = await _isValidRegularFile(temp, validate);
@@ -373,11 +600,16 @@ class AtomicByteReplacement {
       );
     }
     try {
-      final decoded = jsonDecode(await journal.readAsString());
+      final bytes = await journal.readAsBytes();
+      final text = utf8.decode(bytes, allowMalformed: false);
+      final decoded = jsonDecode(text);
       if (decoded is! Map) {
         throw const FormatException('journal root is not an object');
       }
-      return _SwapJournal.fromJson(decoded.cast<String, Object?>());
+      return _SwapJournal.fromJson(
+        decoded.cast<String, Object?>(),
+        canonicalBytes: bytes,
+      );
     } on AtomicSwapRecoveryException {
       rethrow;
     } catch (error) {
@@ -471,6 +703,66 @@ class AtomicByteReplacement {
     } catch (_) {
       return false;
     }
+  }
+
+  static Future<_RecoveryGeneration> _inspectRecoveryGeneration(
+    File file,
+    AtomicFileValidator validate,
+  ) async {
+    final type = await _safeType(file, label: 'recovery generation');
+    if (type == FileSystemEntityType.notFound) {
+      return const _RecoveryGeneration.absent();
+    }
+    final seal = await _sealedGeneration(file);
+    return _RecoveryGeneration(
+      type: type,
+      seal: seal,
+      semanticValid: await _isValidRegularFile(file, validate),
+    );
+  }
+
+  static Future<bool> _isExactValidGeneration(
+    File file,
+    _GenerationSeal expected,
+    AtomicFileValidator validate,
+  ) async =>
+      await _matchesGeneration(file, expected) &&
+      await _isValidRegularFile(file, validate);
+
+  static Future<void> _requireExactValidRecoveryGeneration(
+    File file,
+    _GenerationSeal expected,
+    AtomicFileValidator validate, {
+    required String label,
+  }) async {
+    if (!await _isExactValidGeneration(file, expected, validate)) {
+      throw AtomicSwapRecoveryException(
+        '$label changed before recovery completed; preserving all swap '
+        'evidence for ${file.path}',
+      );
+    }
+  }
+
+  static Future<bool> _matchesGeneration(
+    File file,
+    _GenerationSeal expected,
+  ) async {
+    final actual = await _sealedGeneration(file);
+    return actual == expected;
+  }
+
+  static Future<_GenerationSeal?> _sealedGeneration(File file) async {
+    final type = await _safeType(file, label: 'sealed generation');
+    if (type == FileSystemEntityType.notFound) return null;
+    final lengthBefore = await file.length();
+    final digest = await crypto.sha256.bind(file.openRead()).single;
+    final lengthAfter = await file.length();
+    if (lengthBefore != lengthAfter) {
+      throw AtomicSwapRecoveryException(
+        'generation length changed while it was sealed: ${file.path}',
+      );
+    }
+    return _GenerationSeal(byteLen: lengthBefore, sha256: digest.toString());
   }
 
   static Future<bool> _hasExpectedBytes(File file, Uint8List? expected) async {
@@ -627,16 +919,48 @@ class _SwapNames {
   final String pendingJournalName;
 }
 
-class _SwapJournal {
+sealed class _SwapJournal {
   const _SwapJournal({
     required this.operationId,
     required this.targetName,
     required this.tempName,
     required this.backupName,
+  });
+
+  factory _SwapJournal.fromJson(
+    Map<String, Object?> json, {
+    required List<int> canonicalBytes,
+  }) {
+    return switch (json['format']) {
+      AtomicByteReplacement.legacyJournalFormat => _SwapJournalV1.fromJson(
+        json,
+      ),
+      AtomicByteReplacement.journalFormat => _SwapJournalV2.fromJson(
+        json,
+        canonicalBytes: canonicalBytes,
+      ),
+      final format => throw AtomicSwapRecoveryException(
+        'unsupported swap journal format: $format',
+      ),
+    };
+  }
+
+  final String operationId;
+  final String targetName;
+  final String tempName;
+  final String backupName;
+}
+
+final class _SwapJournalV1 extends _SwapJournal {
+  const _SwapJournalV1({
+    required super.operationId,
+    required super.targetName,
+    required super.tempName,
+    required super.backupName,
     required this.targetExisted,
   });
 
-  factory _SwapJournal.fromJson(Map<String, Object?> json) {
+  factory _SwapJournalV1.fromJson(Map<String, Object?> json) {
     const keys = {
       'format',
       'operation_id',
@@ -651,9 +975,9 @@ class _SwapJournal {
         'swap journal fields do not match format 1',
       );
     }
-    if (json['format'] != AtomicByteReplacement.journalFormat) {
-      throw AtomicSwapRecoveryException(
-        'unsupported swap journal format: ${json['format']}',
+    if (json['format'] != AtomicByteReplacement.legacyJournalFormat) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal is not legacy format 1',
       );
     }
     final operationId = json['operation_id'];
@@ -671,7 +995,7 @@ class _SwapJournal {
         'swap journal has invalid field types or operation ID',
       );
     }
-    return _SwapJournal(
+    return _SwapJournalV1(
       operationId: operationId,
       targetName: targetName,
       tempName: tempName,
@@ -680,18 +1004,196 @@ class _SwapJournal {
     );
   }
 
-  final String operationId;
-  final String targetName;
-  final String tempName;
-  final String backupName;
   final bool targetExisted;
+}
 
-  Map<String, Object?> toJson() => {
-    'format': AtomicByteReplacement.journalFormat,
+final class _SwapJournalV2 extends _SwapJournal {
+  const _SwapJournalV2({
+    required super.operationId,
+    required super.targetName,
+    required super.tempName,
+    required super.backupName,
+    required this.oldGeneration,
+    required this.newGeneration,
+  });
+
+  factory _SwapJournalV2.fromJson(
+    Map<String, Object?> json, {
+    required List<int> canonicalBytes,
+  }) {
+    const keys = {'format', 'record', 'record_sha256'};
+    if (json.keys.toSet().difference(keys).isNotEmpty ||
+        keys.difference(json.keys.toSet()).isNotEmpty ||
+        json['format'] != AtomicByteReplacement.journalFormat) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal envelope fields do not match format 2',
+      );
+    }
+    final rawRecord = json['record'];
+    final checksum = json['record_sha256'];
+    if (rawRecord is! Map ||
+        checksum is! String ||
+        !_GenerationSeal.sha256Pattern.hasMatch(checksum)) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal format-2 envelope has invalid field types',
+      );
+    }
+    final record = _SwapJournalV2.fromRecordJson(
+      rawRecord.cast<String, Object?>(),
+    );
+    final expectedChecksum = record._recordChecksum();
+    if (checksum != expectedChecksum) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal format-2 record checksum does not match',
+      );
+    }
+    final expectedCanonical = record.canonicalBytes();
+    if (!_sameByteLists(canonicalBytes, expectedCanonical)) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal format-2 JSON is not canonical',
+      );
+    }
+    return record;
+  }
+
+  factory _SwapJournalV2.fromRecordJson(Map<String, Object?> json) {
+    const keys = {
+      'operation_id',
+      'target_name',
+      'temp_name',
+      'backup_name',
+      'old_generation',
+      'new_generation',
+    };
+    if (json.keys.toSet().difference(keys).isNotEmpty ||
+        keys.difference(json.keys.toSet()).isNotEmpty) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal record fields do not match format 2',
+      );
+    }
+    final operationId = json['operation_id'];
+    final targetName = json['target_name'];
+    final tempName = json['temp_name'];
+    final backupName = json['backup_name'];
+    final rawOldGeneration = json['old_generation'];
+    final rawNewGeneration = json['new_generation'];
+    if (operationId is! String ||
+        targetName is! String ||
+        tempName is! String ||
+        backupName is! String ||
+        !AtomicByteReplacement._operationIdPattern.hasMatch(operationId) ||
+        (rawOldGeneration != null && rawOldGeneration is! Map) ||
+        rawNewGeneration is! Map) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal format-2 record has invalid field types',
+      );
+    }
+    return _SwapJournalV2(
+      operationId: operationId,
+      targetName: targetName,
+      tempName: tempName,
+      backupName: backupName,
+      oldGeneration: rawOldGeneration == null
+          ? null
+          : _GenerationSeal.fromJson(
+              (rawOldGeneration as Map).cast<String, Object?>(),
+            ),
+      newGeneration: _GenerationSeal.fromJson(
+        rawNewGeneration.cast<String, Object?>(),
+      ),
+    );
+  }
+
+  final _GenerationSeal? oldGeneration;
+  final _GenerationSeal newGeneration;
+
+  Map<String, Object?> _recordJson() => {
     'operation_id': operationId,
     'target_name': targetName,
     'temp_name': tempName,
     'backup_name': backupName,
-    'target_existed': targetExisted,
+    'old_generation': oldGeneration?.toJson(),
+    'new_generation': newGeneration.toJson(),
   };
+
+  String _recordChecksum() =>
+      crypto.sha256.convert(utf8.encode(jsonEncode(_recordJson()))).toString();
+
+  List<int> canonicalBytes() => utf8.encode(
+    '${jsonEncode({'format': AtomicByteReplacement.journalFormat, 'record': _recordJson(), 'record_sha256': _recordChecksum()})}\n',
+  );
+}
+
+final class _GenerationSeal {
+  const _GenerationSeal({required this.byteLen, required this.sha256});
+
+  factory _GenerationSeal.fromBytes(List<int> bytes) => _GenerationSeal(
+    byteLen: bytes.length,
+    sha256: crypto.sha256.convert(bytes).toString(),
+  );
+
+  factory _GenerationSeal.fromJson(Map<String, Object?> json) {
+    const keys = {'byte_len', 'sha256'};
+    if (json.keys.toSet().difference(keys).isNotEmpty ||
+        keys.difference(json.keys.toSet()).isNotEmpty) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal generation seal fields are invalid',
+      );
+    }
+    final byteLen = json['byte_len'];
+    final sha256 = json['sha256'];
+    if (byteLen is! int ||
+        byteLen < 0 ||
+        sha256 is! String ||
+        !sha256Pattern.hasMatch(sha256)) {
+      throw const AtomicSwapRecoveryException(
+        'swap journal generation seal values are invalid',
+      );
+    }
+    return _GenerationSeal(byteLen: byteLen, sha256: sha256);
+  }
+
+  static final RegExp sha256Pattern = RegExp(r'^[0-9a-f]{64}$');
+
+  final int byteLen;
+  final String sha256;
+
+  Map<String, Object?> toJson() => {'byte_len': byteLen, 'sha256': sha256};
+
+  @override
+  bool operator ==(Object other) =>
+      other is _GenerationSeal &&
+      other.byteLen == byteLen &&
+      other.sha256 == sha256;
+
+  @override
+  int get hashCode => Object.hash(byteLen, sha256);
+}
+
+final class _RecoveryGeneration {
+  const _RecoveryGeneration({
+    required this.type,
+    required this.seal,
+    required this.semanticValid,
+  });
+
+  const _RecoveryGeneration.absent()
+    : type = FileSystemEntityType.notFound,
+      seal = null,
+      semanticValid = false;
+
+  final FileSystemEntityType type;
+  final _GenerationSeal? seal;
+  final bool semanticValid;
+
+  bool isExactValid(_GenerationSeal expected) =>
+      semanticValid && seal == expected;
+}
+
+bool _sameByteLists(List<int> first, List<int> second) {
+  if (first.length != second.length) return false;
+  for (var index = 0; index < first.length; index++) {
+    if (first[index] != second[index]) return false;
+  }
+  return true;
 }

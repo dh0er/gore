@@ -2716,6 +2716,13 @@ void main() {
     );
     expect(valid.snapshotByteLength, 321);
     expect(valid.snapshotSha256, List.filled(64, 'a').join());
+    final maximumRevision3 = AuthoringWorkingHead.fromCanonicalJson(
+      _validWorkingHeadJson().replaceFirst(
+        '"byte_len":321',
+        '"byte_len":${17 * 1024 * 1024}',
+      ),
+    );
+    expect(maximumRevision3.snapshotByteLength, 17 * 1024 * 1024);
 
     final malformed = <String>[
       '{}',
@@ -2729,6 +2736,10 @@ void main() {
         '"store_format":1.0',
       ),
       _validWorkingHeadJson().replaceFirst('"byte_len":321', '"byte_len":0'),
+      _validWorkingHeadJson().replaceFirst(
+        '"byte_len":321',
+        '"byte_len":${17 * 1024 * 1024 + 1}',
+      ),
       _validWorkingHeadJson().replaceFirst(
         List.filled(64, 'a').join(),
         List.filled(64, 'A').join(),

@@ -995,7 +995,7 @@ _DataAssetManifestProjection _dataAssetManifest(
           'byte_len',
           '$context basis snapshot',
           min: 1,
-          max: _maxAuthoringProjectJsonBytes,
+          max: _maxAuthoringRevision3SnapshotBytes,
         ),
         'sha256': _dataAssetSha256(
           basisSnapshot,

@@ -1313,6 +1313,7 @@ mod tests {
         require_fixed_basis(&store, &head, &project).unwrap();
 
         let mut rival = project.clone();
+        rival.revision += 1;
         rival.meta.name = "External publisher won".to_owned();
         let rival = store
             .prepare_revision3_checkpoint(Some(&head), &rival)

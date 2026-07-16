@@ -12,6 +12,7 @@ import 'project_atomic_io.dart';
 import 'revision3_content_index.dart';
 import 'revision3_dialog_localization_authoring.dart';
 import 'revision3_dialog_line_authoring.dart';
+import 'revision3_project_history.dart';
 
 const int _maxManagedHeadBytes = 64 * 1024;
 
@@ -152,6 +153,33 @@ final class ManagedRevision3RecoveryCheckpoint {
   final String canonicalProjectJson;
 
   bool get advanced => recoveredProjectRevision == previousProjectRevision + 1;
+}
+
+/// One history restore returned only after full candidate reopen, exact
+/// fixed-head publication, and full published reopen.
+///
+/// [restoredFromHead] remains an older immutable checkpoint. The published
+/// [head] is always a fresh current+1 descendant of [previousHead].
+final class ManagedRevision3ProjectHistoryRestoreCheckpoint {
+  const ManagedRevision3ProjectHistoryRestoreCheckpoint({
+    required this.previousHead,
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.previousProjectRevision,
+    required this.projectRevision,
+    required this.restoredFromHead,
+    required this.restoredFromRevision,
+  });
+
+  final AuthoringWorkingHead previousHead;
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int previousProjectRevision;
+  final int projectRevision;
+  final AuthoringWorkingHead restoredFromHead;
+  final int restoredFromRevision;
 }
 
 /// One immutable decision produced from the exact latest project inside a managed session's
@@ -988,6 +1016,23 @@ abstract interface class ManagedRevision3ExactSnapshotExportStore {
   });
 }
 
+/// Optional authenticated-history capability. Keeping this separate prevents
+/// checkpoint-only alternate stores and test doubles from accidentally
+/// claiming restore authority.
+abstract interface class ManagedRevision3ProjectHistoryStore {
+  Future<AuthoringRevision3ProjectHistoryResult> listProjectHistoryV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  });
+
+  Future<AuthoringRevision3ProjectHistoryRestorePreparation>
+  prepareProjectHistoryRestoreV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringWorkingHead targetHead,
+  });
+}
+
 /// Narrow capability for preparing the exact removal of one Story Draft and
 /// its uniquely-owned generated ScriptModule. Keeping it separate avoids
 /// granting deletion authority to checkpoint-only alternate stores and fakes.
@@ -1028,6 +1073,7 @@ final class ModFfiManagedRevision3AuthoringStore
         ManagedRevision3AuthoringStore,
         ManagedRevision3ReviewedDataAssetBuildStore,
         ManagedRevision3ExactSnapshotExportStore,
+        ManagedRevision3ProjectHistoryStore,
         ManagedRevision3StoryDraftRemovalStore,
         ManagedRevision3VoiceTakeRemovalStore,
         ManagedRevision3NpcProfileEditStore {
@@ -1404,6 +1450,27 @@ final class ModFfiManagedRevision3AuthoringStore
   );
 
   @override
+  Future<AuthoringRevision3ProjectHistoryResult> listProjectHistoryV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStoreListRevision3HistoryV1(
+    root: root,
+    expectedHead: expectedHead,
+  );
+
+  @override
+  Future<AuthoringRevision3ProjectHistoryRestorePreparation>
+  prepareProjectHistoryRestoreV1({
+    required String root,
+    required AuthoringWorkingHead expectedHead,
+    required AuthoringWorkingHead targetHead,
+  }) => ffi.authoringStorePrepareRevision3HistoryRestoreV1(
+    root: root,
+    expectedHead: expectedHead,
+    targetHead: targetHead,
+  );
+
+  @override
   Future<AuthoringRevision3ReviewedDataAssetBuildResult>
   buildReviewedDataAssetV1({
     required String root,
@@ -1516,6 +1583,19 @@ final class _ManagedPreparedCheckpoint<T> {
   final AuthoringWorkingHead head;
   final String projectJson;
   final T value;
+}
+
+/// A History operation failed after the exact current checkpoint was independently
+/// fully reopened. The failure is therefore scoped to the retained History
+/// capability and must not poison otherwise-valid project authoring.
+final class _ManagedRevision3HistoryFailureWithVerifiedCurrent {
+  const _ManagedRevision3HistoryFailureWithVerifiedCurrent(
+    this.error,
+    this.stackTrace,
+  );
+
+  final ModFfiException error;
+  final StackTrace stackTrace;
 }
 
 abstract interface class _ManagedCheckpointStore {
@@ -1800,6 +1880,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3VoiceTakeRemovalStore;
   bool get supportsNpcProfileEdit =>
       _store is ManagedRevision3NpcProfileEditStore;
+  bool get supportsProjectHistory =>
+      _store is ManagedRevision3ProjectHistoryStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -1840,6 +1922,164 @@ class ManagedRevision3AuthoringProjectSession {
 
   Future<T> deriveAndSave<T>(ManagedProjectDeriver<T> derive) =>
       _core.deriveAndSave(derive);
+
+  /// Read one bounded newest-first lineage rooted at the exact fixed head.
+  /// Physical CAS directories are never enumerated by this capability.
+  Future<Revision3ProjectHistorySnapshot>
+  readProjectHistoryV1() => _core.readExact<Revision3ProjectHistorySnapshot>(
+    (basis) async {
+      final store = _store;
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (store is! ManagedRevision3ProjectHistoryStore ||
+          projectId == null ||
+          projectRevision == null) {
+        throw UnsupportedError(
+          'this managed revision-3 Store has no authenticated history capability',
+        );
+      }
+      final historyStore = store as ManagedRevision3ProjectHistoryStore;
+      final AuthoringRevision3ProjectHistoryResult result;
+      try {
+        result = await historyStore.listProjectHistoryV1(
+          root: root.path,
+          expectedHead: basis.head,
+        );
+      } on ModFfiException catch (error, stackTrace) {
+        if (_revision3HistoryErrorNeedsCurrentReverification(error.code)) {
+          await _core._reverifyExactCurrentAfterHistoryFailure(basis);
+          Error.throwWithStackTrace(
+            _ManagedRevision3HistoryFailureWithVerifiedCurrent(
+              error,
+              stackTrace,
+            ),
+            stackTrace,
+          );
+        }
+        rethrow;
+      }
+      if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 history disagrees with its exact session basis',
+        );
+      }
+      return Revision3ProjectHistorySnapshot(
+        basisHead: result.basisHead,
+        projectId: result.projectId,
+        currentRevision: result.projectRevision,
+        entries: [
+          for (final entry in result.entries)
+            Revision3ProjectHistoryEntry(
+              head: entry.head,
+              projectId: entry.projectId,
+              projectRevision: entry.projectRevision,
+              isCurrent: entry.current,
+            ),
+        ],
+        historyTruncated: result.historyTruncated,
+      );
+    },
+    operation: 'readProjectHistoryV1',
+    handleReadError: _core._throwRevision3HistoryReadError,
+  );
+
+  /// Copy one authenticated ancestor into a fresh current+1 checkpoint.
+  ///
+  /// Native code is prepare-only. Publication remains in the managed
+  /// full-reopen, exact-CAS, crash-recovery lane.
+  Future<ManagedRevision3ProjectHistoryRestoreCheckpoint>
+  prepareAndPublishProjectHistoryRestoreV1({
+    required Revision3ProjectHistorySnapshot expectedHistory,
+    required Revision3ProjectHistoryEntry target,
+  }) =>
+      _core._publishPreparedRevision3Checkpoint<
+        ManagedRevision3ProjectHistoryRestoreCheckpoint
+      >(
+        operation: 'prepareAndPublishProjectHistoryRestoreV1',
+        handlePrepareError: _core._throwRevision3HistoryRestorePrepareError,
+        prepare: (basis) async {
+          final store = _store;
+          final projectId = basis.projectId;
+          final projectRevision = basis.projectRevision;
+          if (store is! ManagedRevision3ProjectHistoryStore ||
+              projectId == null ||
+              projectRevision == null) {
+            throw UnsupportedError(
+              'this managed revision-3 Store has no authenticated history restore capability',
+            );
+          }
+          final historyStore = store as ManagedRevision3ProjectHistoryStore;
+          final targetIsListed = expectedHistory.entries.any(
+            (entry) =>
+                !entry.isCurrent &&
+                entry.head.canonicalJson == target.head.canonicalJson &&
+                entry.projectRevision == target.projectRevision,
+          );
+          if (expectedHistory.basisHead.canonicalJson !=
+                  basis.head.canonicalJson ||
+              expectedHistory.projectId != projectId ||
+              expectedHistory.currentRevision != projectRevision ||
+              target.projectId != projectId ||
+              target.isCurrent ||
+              target.projectRevision >= projectRevision ||
+              !targetIsListed) {
+            throw const FormatException(
+              'revision-3 history restore selection is stale or not authenticated by this view',
+            );
+          }
+          final AuthoringRevision3ProjectHistoryRestorePreparation prepared;
+          try {
+            prepared = await historyStore.prepareProjectHistoryRestoreV1(
+              root: root.path,
+              expectedHead: basis.head,
+              targetHead: target.head,
+            );
+          } on ModFfiException catch (error, stackTrace) {
+            if (_revision3HistoryErrorNeedsCurrentReverification(error.code)) {
+              await _core._reverifyExactCurrentAfterHistoryFailure(basis);
+              Error.throwWithStackTrace(
+                _ManagedRevision3HistoryFailureWithVerifiedCurrent(
+                  error,
+                  stackTrace,
+                ),
+                stackTrace,
+              );
+            }
+            rethrow;
+          }
+          if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+              prepared.directParentHead.canonicalJson !=
+                  basis.head.canonicalJson ||
+              prepared.restoredFromHead.canonicalJson !=
+                  target.head.canonicalJson ||
+              prepared.projectId != projectId ||
+              prepared.previousProjectRevision != projectRevision ||
+              prepared.revision != projectRevision + 1 ||
+              prepared.restoredFromRevision != target.projectRevision) {
+            throw const ManagedProjectVerificationException(
+              'revision-3 history restore preparation disagrees with its exact basis or target',
+            );
+          }
+          return _ManagedPreparedCheckpoint<
+            ManagedRevision3ProjectHistoryRestoreCheckpoint
+          >(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            value: ManagedRevision3ProjectHistoryRestoreCheckpoint(
+              previousHead: basis.head,
+              head: prepared.head,
+              projectJson: prepared.projectJson,
+              projectId: prepared.projectId,
+              previousProjectRevision: prepared.previousProjectRevision,
+              projectRevision: prepared.revision,
+              restoredFromHead: prepared.restoredFromHead,
+              restoredFromRevision: prepared.restoredFromRevision,
+            ),
+          );
+        },
+      );
 
   /// Prepare and publish one semantic revision-3 Quest Draft transaction.
   ///
@@ -4533,6 +4773,40 @@ class _ManagedProjectSessionCore {
     });
   }
 
+  /// Resolve whether an ambiguous History Store failure belongs to the exact
+  /// current checkpoint or only to an older retained checkpoint.
+  ///
+  /// The History command can report the same Store error code for either
+  /// location. A complete exact-current reopen is therefore required before a
+  /// retained-History failure may be treated as capability-local. Failure or
+  /// drift here poisons the session; success leaves [_opened] unchanged.
+  Future<void> _reverifyExactCurrentAfterHistoryFailure(
+    _ManagedOpenedCheckpoint basis,
+  ) async {
+    final operations = _ManagedSessionOperations(
+      root: root,
+      store: _store,
+      replacement: _replacement,
+    );
+    try {
+      await operations.openPublished(
+        expectedHead: basis.head,
+        expectedProjectJson: basis.projectJson,
+      );
+    } catch (error, stackTrace) {
+      _requiresReopen = true;
+      if (error is ManagedProjectSessionException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      Error.throwWithStackTrace(
+        const ManagedProjectVerificationException(
+          'managed revision-3 current checkpoint failed full verification after a History read error',
+        ),
+        stackTrace,
+      );
+    }
+  }
+
   /// Execute one immutable-artifact read against the exact basis checkpoint.
   ///
   /// The published head must match before native work starts. Once native code
@@ -5861,6 +6135,85 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3HistoryReadError(Object error, StackTrace stackTrace) {
+    if (error is _ManagedRevision3HistoryFailureWithVerifiedCurrent) {
+      Error.throwWithStackTrace(error.error, error.stackTrace);
+    }
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_HISTORY_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3HistoryErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is UnsupportedError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 history could not be read and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
+  Never _throwRevision3HistoryRestorePrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is _ManagedRevision3HistoryFailureWithVerifiedCurrent) {
+      Error.throwWithStackTrace(error.error, error.stackTrace);
+    }
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_HISTORY_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3HistoryErrorIsRetryable(error.code)) {
+        // Reachability, lineage, retention, and revision-overflow failures
+        // happen before fixed-head publication. They can leave only immutable
+        // CAS orphans and are safe to resolve by refreshing the timeline.
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError ||
+        error is FormatException ||
+        error is UnsupportedError) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 history restore could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Future<void> _saveCapturedInQueue(String capturedProjectJson) async {
     _requireWritableState();
     final oldHead = _opened.head;
@@ -6605,6 +6958,19 @@ bool _revision3ContentReadErrorRequiresReopen(String code) => const {
   'AUTHORING_REVISION3_CONTENT_STORE_ROOT_MISSING',
   'AUTHORING_REVISION3_CONTENT_STORE_SEAL_MISMATCH',
 }.contains(code);
+
+bool _revision3HistoryErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_HISTORY_REQUEST_INVALID',
+  'AUTHORING_REVISION3_HISTORY_INPUT_LIMIT',
+  'AUTHORING_REVISION3_HISTORY_HEAD_INVALID',
+  'AUTHORING_REVISION3_HISTORY_TARGET_NOT_REACHABLE',
+  'AUTHORING_REVISION3_HISTORY_REVISION_LIMIT',
+  'AUTHORING_REVISION3_HISTORY_RESPONSE_LIMIT',
+}.contains(code);
+
+bool _revision3HistoryErrorNeedsCurrentReverification(String code) =>
+    code != 'AUTHORING_REVISION3_HISTORY_HEAD_CONFLICT' &&
+    !_revision3HistoryErrorIsRetryable(code);
 
 bool _revision3StoryDraftRemovalErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_INPUT_LIMIT',
