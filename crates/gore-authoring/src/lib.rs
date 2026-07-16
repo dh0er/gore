@@ -5,6 +5,7 @@
 //! voice slots, and reusable voice takes. It does not imply runtime support for
 //! quests, NPCs, or new cooked identities.
 
+mod dataasset_build;
 mod dataasset_build_receipt;
 mod dataasset_stage;
 mod document;
@@ -38,6 +39,12 @@ mod validate_revision2;
 mod validate_revision3;
 mod working_store;
 
+pub use dataasset_build::{
+    PublishedRevision3ReviewedDataAssetBuildV1, Revision3ReviewedDataAssetBuildCleanupWarningV1,
+    Revision3ReviewedDataAssetBuildErrorV1, Revision3ReviewedDataAssetBuildPublicationUncertainV1,
+    Revision3ReviewedDataAssetBuildPublicationV1,
+    REVISION3_REVIEWED_DATAASSET_BUILD_RECEIPT_FILE_V1,
+};
 pub use dataasset_build_receipt::{
     ManagedDataAssetBuildAuthorityV1, ManagedDataAssetPublicationAuthorityV1,
     ManagedDataAssetRuntimeStatusV1, ManagedDataAssetTripletFileSealV1,

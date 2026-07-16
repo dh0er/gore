@@ -1626,7 +1626,7 @@ fn validate_candidate_asset_limits(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::BTreeSet;
     use std::fs;
@@ -1640,10 +1640,10 @@ mod tests {
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct TestRoot(PathBuf);
+    pub(crate) struct TestRoot(PathBuf);
 
     impl TestRoot {
-        fn new(label: &str) -> Self {
+        pub(crate) fn new(label: &str) -> Self {
             let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "gore-authoring-dataasset-{label}-{}-{sequence}",
@@ -1654,7 +1654,7 @@ mod tests {
             Self(path)
         }
 
-        fn path(&self) -> &Path {
+        pub(crate) fn path(&self) -> &Path {
             &self.0
         }
 
@@ -1685,7 +1685,7 @@ mod tests {
         }
     }
 
-    struct ProjectionFixture {
+    pub(crate) struct ProjectionFixture {
         generation: AssetGenerationReceipt,
         selector: FixedLeafSelector,
         replacement_hex: String,
@@ -1697,6 +1697,10 @@ mod tests {
     }
 
     impl ProjectionFixture {
+        pub(crate) fn target_path(&self) -> &str {
+            &self.generation.asset
+        }
+
         fn new() -> Self {
             let uasset = b"managed patched uasset".to_vec();
             let uexp = b"managed patched uexp".to_vec();
@@ -1796,13 +1800,17 @@ mod tests {
                 patched_uasset: &self.uasset,
                 patched_uexp: &self.uexp,
                 usmap: &self.usmap,
-                sidecars: vec![(SidecarRole::Bulk, &self.sidecar)],
+                sidecars: if self.sidecar.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![(SidecarRole::Bulk, &self.sidecar)]
+                },
                 executable: self.executable.clone(),
             }
         }
     }
 
-    fn reviewed_wolf_fixture() -> ProjectionFixture {
+    pub(crate) fn reviewed_wolf_fixture() -> ProjectionFixture {
         let mut fixture = ProjectionFixture::new();
         fixture.generation.asset = gore_asset::ReviewedFootstepPresetTargetV1::Wolf
             .target_path()
@@ -1859,6 +1867,16 @@ mod tests {
         fixture
     }
 
+    pub(crate) fn reviewed_wolf_fixture_without_sidecars() -> ProjectionFixture {
+        let mut fixture = reviewed_wolf_fixture();
+        fixture.sidecar.clear();
+        fixture
+            .generation
+            .target_chunks
+            .retain(|chunk| chunk.chunk_type != "BulkData");
+        fixture
+    }
+
     fn vector4_hex(components: [f64; 4]) -> String {
         components
             .into_iter()
@@ -1908,7 +1926,7 @@ mod tests {
         )
     }
 
-    fn publish_reviewed_stage(
+    pub(crate) fn publish_reviewed_stage(
         root: &TestRoot,
         store: &WorkingProjectStore,
         fixture: &ProjectionFixture,

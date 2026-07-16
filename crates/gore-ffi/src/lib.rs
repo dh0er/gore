@@ -115,6 +115,10 @@
 //!   the archive or publishing the fixed project head.
 //! - `authoring_store_build_revision3_voice_v1` prepares the bounded revision-3 Voice build
 //!   artifact route without deploying, editing the installation, or publishing the project head.
+//! - `authoring_store_build_revision3_reviewed_dataasset_v1` builds exactly one exact-current
+//!   reviewed DataAsset stage into a verified no-clobber triplet plus canonical receipt. It
+//!   accepts no package/USMAP bytes, selector, replacement, receipt path, overwrite, deployment,
+//!   or runtime authority and never writes the Store, game, save, or fixed project head.
 //! - `authoring_read_dataasset_extract_receipt_v2` exposes only the verified target and package /
 //!   USMAP content facts needed for an explicit pre-publication target confirmation. It is
 //!   read-only and returns no local path, raw package bytes, selector, or offset.
@@ -172,6 +176,7 @@
 
 mod authoring;
 mod authoring_content_revision3;
+mod authoring_dataasset_build_revision3;
 mod authoring_dataasset_package_index_revision3;
 mod authoring_dataasset_revision3;
 mod authoring_dialog_localization_edit_revision3;
@@ -234,6 +239,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_project_story_draft_insert_v1",
     "authoring_project_story_quest_draft_insert_v1",
     "authoring_read_dataasset_extract_receipt_v2",
+    "authoring_store_build_revision3_reviewed_dataasset_v1",
     "authoring_store_build_revision3_voice_v1",
     "authoring_store_check_revision3_npc_compiler_v1",
     "authoring_store_check_revision3_quest_compiler_v1",
@@ -520,6 +526,9 @@ fn skip_json_container(bytes: &[u8], start: usize) -> Result<usize, DispatchProb
 
 fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
     match command {
+        "authoring_store_build_revision3_reviewed_dataasset_v1" => Some(
+            authoring_dataasset_build_revision3::build_revision3_reviewed_dataasset_v1_raw,
+        ),
         "authoring_store_list_revision3_dataasset_stages_v1" => {
             Some(authoring_dataasset_revision3::list_raw)
         }
@@ -1657,6 +1666,7 @@ mod tests {
                     "authoring_project_story_draft_insert_v1",
                     "authoring_project_story_quest_draft_insert_v1",
                     "authoring_read_dataasset_extract_receipt_v2",
+                    "authoring_store_build_revision3_reviewed_dataasset_v1",
                     "authoring_store_build_revision3_voice_v1",
                     "authoring_store_check_revision3_npc_compiler_v1",
                     "authoring_store_check_revision3_quest_compiler_v1",
@@ -1825,6 +1835,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_target_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_build_revision3_reviewed_dataasset_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_build_revision3_voice_v1"));

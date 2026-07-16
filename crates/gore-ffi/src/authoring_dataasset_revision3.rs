@@ -855,6 +855,14 @@ pub(super) fn map_staging_error(error: Revision3DataAssetStagingErrorV1) -> Fail
             "AUTHORING_REVISION3_DATAASSET_INVARIANT",
             "the prepared DataAsset candidate did not reopen exactly",
         ),
+        Revision3DataAssetStagingErrorV1::Reviewed(_) => Failure::new(
+            "AUTHORING_REVISION3_DATAASSET_INPUT_INVALID",
+            "the DataAsset stage is outside the closed reviewed profile",
+        ),
+        Revision3DataAssetStagingErrorV1::CurrentSourceReopenMismatch => Failure::new(
+            "AUTHORING_REVISION3_DATAASSET_HEAD_CONFLICT",
+            "the exact-current DataAsset source changed while reopening",
+        ),
     }
 }
 
