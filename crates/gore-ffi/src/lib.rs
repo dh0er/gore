@@ -114,6 +114,11 @@
 //!   VoiceTake candidate or clears one exact VoiceSlot selection. It fully verifies current Ogg
 //!   assets, prepares and reopens only an immutable candidate, and never reads a game/save or
 //!   publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_voice_take_removal_v1` removes one exact candidate from
+//!   one line/locale slot and atomically clears it when selected. Shared takes remain; final-use
+//!   removal preserves every AssetStore entry and never deletes physical Ogg CAS. The route
+//!   prepares and fully reopens only an immutable candidate and accepts no game, save, source,
+//!   build, deployment, runtime, blob-deletion, or fixed-head publication authority.
 //! - `authoring_store_prepare_revision3_voice_take_status_v1` changes only one uniquely retained
 //!   VoiceTake review status plus its take/project revisions. It fully verifies current Store
 //!   assets, independently closes the exact delta, prepares and reopens an immutable candidate,
@@ -218,6 +223,7 @@ mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_build_revision3;
 mod authoring_voice_revision3;
 mod authoring_voice_selection_revision3;
+mod authoring_voice_take_remove_revision3;
 mod authoring_voice_take_status_revision3;
 mod authoring_voice_target_revision3;
 mod dataasset;
@@ -288,6 +294,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_quest_outline_edit_v2",
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
+    authoring_voice_take_remove_revision3::COMMAND,
     "authoring_store_prepare_revision3_voice_take_selection_v1",
     "authoring_store_prepare_revision3_voice_take_status_v1",
     "authoring_store_prepare_revision3_voice_take_v1",
@@ -623,6 +630,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1" => Some(
             authoring_installed_dataasset_inspection_revision3::prepare_revision3_reviewed_installed_dataasset_edit_v1_raw,
+        ),
+        authoring_voice_take_remove_revision3::COMMAND => Some(
+            authoring_voice_take_remove_revision3::prepare_revision3_voice_take_removal_v1_raw,
         ),
         "authoring_store_prepare_revision3_voice_take_selection_v1" => {
             Some(authoring_voice_selection_revision3::prepare_revision3_voice_take_selection_v1_raw)
@@ -1727,6 +1737,7 @@ mod tests {
                     "authoring_store_prepare_revision3_quest_outline_edit_v2",
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
                     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
+                    "authoring_store_prepare_revision3_voice_take_removal_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
                     "authoring_store_prepare_revision3_voice_take_status_v1",
                     "authoring_store_prepare_revision3_voice_take_v1",

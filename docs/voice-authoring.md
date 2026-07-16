@@ -33,9 +33,11 @@ remains a separate **Build & Release** action and needs that installation too.
 4. **Manage Voice takes** searches existing dialog lines, lets the author move
    a retained take through Draft/Recorded/Reviewed/Approved, and selects one
    Approved candidate for an existing locale slot or explicitly clears the
-   current selection. Status and selection are separate saved changes in the
-   same friendly dialog. It imports, removes, or rewrites no media asset, and
-   it needs no game path.
+   current selection. The same dialog can remove one take from that exact
+   line/language. If it was selected, removal clears the selection atomically;
+   a take shared by another slot remains there. Status and selection are
+   separate saved changes. No operation rewrites or physically deletes media,
+   and the workflow needs no game path.
 5. **Resolve Voice target** inspects the exact installed locale archive for one
    existing structurally intact Voice slot. It records zero, one, or multiple
    matching members as unresolved, resolved, or ambiguous. It never chooses an
@@ -216,6 +218,36 @@ Its direct result remains `blocked`, `runtime_unqualified`, and native-
 publication `not_supported`; readiness is always re-derived later by the
 sealed build planner from the complete exact-current Voice graph.
 
+## Remove a take from one line/language
+
+**Manage Voice takes** can remove one exact candidate from one exact
+`DialogLine`/locale slot. The confirmation names the take, line, and language.
+When the take is the active selection, the same transaction clears that
+selection and never guesses a replacement. The slot itself remains, including
+when its candidate list becomes empty, so target evidence and the line/locale
+relationship are not silently discarded.
+
+One `VoiceTake` may be shared by more than one slot. The transaction therefore
+removes only the requested slot edge. It retains a shared take byte-for-byte;
+only a take with no remaining permitted local use loses its project entity.
+Foreign-project references with the same opaque ID do not grant local
+ownership. Kind-mismatched, unresolved, or unexpected same-project backlinks
+fail closed instead of being guessed away.
+
+The request binds the exact head, project/revision/target, line,
+localization/LocID, locale, uniquely owned slot and revision, take and revision,
+and current selection. Only the project revision, slot revision, candidate
+list, optional selection, and—when this was the final use—the take entity may
+change. Candidate order, all surviving entities, target evidence, and the
+complete `AssetStore` remain exact. In particular, removing the final project
+reference does **not** delete or promise to reclaim the immutable Ogg CAS blob.
+
+The native route has no source path or game root, prepares and fully reopens an
+immutable candidate, repeats fixed-head guards, and never publishes the head.
+Only the serialized managed session may publish by guarded CAS and full reopen.
+The action changes neither the game installation nor a save and grants no
+build, deployment, media-quality, or runtime authority.
+
 ## Installed target resolution
 
 Target resolution accepts only an existing safe line/locale/slot identity from
@@ -320,7 +352,7 @@ The managed-R3 workflow still does not provide:
 - audible in-game qualification for the selected line, persistence, save/load,
   or clean runtime removal;
 - explicit choice among ambiguous installed archive matches;
-- Ogg preview, take removal/unlink, history/undo, recording, trimming,
+- Ogg preview, history/undo, recording, trimming,
   normalization, transcoding, loudness comparison, actor notes, or lineage;
 - folder/batch import, translation/Voice coverage, CSV/XLIFF, or review queues;
 - qualified Opus output; or

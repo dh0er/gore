@@ -2081,4 +2081,82 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get projectExportCurrentProjectUnchanged =>
       'Das aktuelle Projekt bleibt offen und unverändert. Spiel und Spielstände wurden nicht berührt.';
+
+  @override
+  String get managedVoiceTakeRemoveAction => 'Aus dieser Zeile entfernen…';
+
+  @override
+  String get managedVoiceTakeRemoveTooltip =>
+      'Diese Aufnahme aus der aktuellen Dialogzeile und Sprache entfernen';
+
+  @override
+  String get managedVoiceTakeRemoveDialogTitle => 'Voice-Take entfernen?';
+
+  @override
+  String managedVoiceTakeRemoveDialogSummary(
+    String take,
+    String line,
+    String locale,
+  ) {
+    return '„$take“ aus $line ($locale) entfernen?';
+  }
+
+  @override
+  String get managedVoiceTakeRemoveScope =>
+      'Nur die Verknüpfung für diese Dialogzeile und Sprache wird gelöst. Andere Verwendungen im Projekt bleiben unverändert.';
+
+  @override
+  String get managedVoiceTakeRemoveInternalRetention =>
+      'Die Audiodatei bleibt intern gespeichert. Diese Aktion gibt keinen Projektspeicher frei und kann noch nicht rückgängig gemacht werden.';
+
+  @override
+  String get managedVoiceTakeRemoveGameBoundary =>
+      'Spielinstallation und Spielstände werden nicht verändert.';
+
+  @override
+  String get managedVoiceTakeRemoveSelectedWarning =>
+      'Dies ist der aktive Take. Beim Entfernen wird die Auswahl atomar geleert. Es wird kein Ersatz automatisch gewählt; der Voice-Build bleibt blockiert, bis ein freigegebener Take ausgewählt wurde.';
+
+  @override
+  String get managedVoiceTakeRemoveCancel => 'Abbrechen';
+
+  @override
+  String get managedVoiceTakeRemoveConfirm => 'Aus Zeile entfernen';
+
+  @override
+  String get managedVoiceTakeRemoveUniqueSuccess =>
+      'Der Take wurde aus dieser Zeile und dem aktuellen Projektgraphen entfernt. Seine internen Audiodaten bleiben erhalten.';
+
+  @override
+  String get managedVoiceTakeRemoveSharedSuccess =>
+      'Die Verknüpfung wurde aus dieser Zeile und Sprache gelöst. Der Take bleibt für andere Verwendungen im Projekt verfügbar; seine internen Audiodaten bleiben erhalten.';
+
+  @override
+  String get managedVoiceTakeRemoveSelectionClearedSuccess =>
+      'Die aktive Auswahl wurde atomar geleert. Es wurde kein Ersatz gewählt; der Voice-Build bleibt blockiert, bis ein freigegebener Take ausgewählt wurde.';
+
+  @override
+  String get managedVoiceTakeRemoveStale =>
+      'Das Projekt wurde geändert, bevor der Take entfernt werden konnte. Lade die aktuellen Voice-Takes neu und prüfe die Aktion erneut.';
+
+  @override
+  String get managedVoiceTakeRemoveRequiresReopen =>
+      'Das Ergebnis der Entfernung konnte nicht bestätigt werden. Nicht erneut versuchen. Schließe dieses Fenster und öffne das verwaltete Projekt erneut oder stelle es wieder her.';
+
+  @override
+  String get managedVoiceTakeRemoveSavedUnconfirmed =>
+      'Die Entfernung wurde gespeichert, aber der aktuelle Projektstand konnte nicht bestätigt werden. Wiederhole die Entfernung nicht. Schließe dieses Fenster und öffne das verwaltete Projekt erneut oder stelle es wieder her.';
+
+  @override
+  String get managedVoiceTakeRemoveSavedReloadFailed =>
+      'Die Entfernung wurde gespeichert, aber die aktuellen Voice-Takes konnten nicht geladen werden. Lade die Takes neu; die Entfernung wird nicht wiederholt.';
+
+  @override
+  String managedVoiceTakeRemoveFailed(String error) {
+    return 'Der Take wurde nicht entfernt: $error';
+  }
+
+  @override
+  String get managedVoiceTakeRemoveReloadConfirmed =>
+      'Die gespeicherte Entfernung wurde im aktuellen Projektstand bestätigt.';
 }

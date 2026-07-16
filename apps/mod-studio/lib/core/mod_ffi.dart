@@ -35,6 +35,7 @@ part '../project/revision3_project_export.dart';
 part '../project/revision3_story_draft_removal.dart';
 part '../project/revision3_voice_build.dart';
 part '../project/revision3_voice_take.dart';
+part '../project/revision3_voice_take_removal.dart';
 part '../project/revision3_voice_take_selection.dart';
 part '../project/revision3_voice_take_status.dart';
 part '../project/revision3_voice_target.dart';
@@ -1531,6 +1532,43 @@ class ModFfi {
     });
     try {
       return AuthoringRevision3VoiceTakeSelectionPreparation.fromJson(
+        response,
+        currentProjectJson: currentProjectJson,
+        request: request,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
+  /// Detach one exact-current Voice take from one line/language slot and
+  /// prepare an unpublished project-only candidate. The VoiceTake entity is
+  /// removed only when no other exact slot still uses it; immutable audio CAS
+  /// metadata remains preserved in either case.
+  Future<AuthoringRevision3VoiceTakeRemovalPreparation>
+  authoringStorePrepareRevision3VoiceTakeRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
+  }) async {
+    const command = 'authoring_store_prepare_revision3_voice_take_removal_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    final current = _authoringRequireCanonicalRevision3ProjectJson(
+      currentProjectJson,
+    );
+    request._requireExactProjectBinding(current);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'root': root,
+      'voice_take_removal_request_json': request.canonicalJson,
+    });
+    try {
+      return AuthoringRevision3VoiceTakeRemovalPreparation.fromJson(
         response,
         currentProjectJson: currentProjectJson,
         request: request,

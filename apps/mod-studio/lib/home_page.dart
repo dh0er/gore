@@ -72,6 +72,7 @@ import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
+import 'project/revision3_voice_take_removal_authoring.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
 import 'project/revision3_voice_take_selection_dialog.dart';
 import 'project/revision3_voice_take_status_authoring.dart';
@@ -1251,6 +1252,28 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          publishVoiceTakeRemoval:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) {
+                final latest = ref.read(currentProjectCoordinatorProvider);
+                if (latest is! ManagedRevision3CurrentProjectState ||
+                    latest.root.path != currentProject.root.path ||
+                    latest.projectId != currentProject.projectId) {
+                  throw const Revision3VoiceTakeRemovalStaleCheckpointException();
+                }
+                return ref
+                    .read(currentProjectCoordinatorProvider.notifier)
+                    .removeCurrentRevision3VoiceTake(
+                      expectedRoot: currentProject.root.path,
+                      expectedProjectId: expectedProjectId,
+                      expectedProjectRevision: expectedProjectRevision,
+                      expectedHead: latest.head,
+                      plan: plan,
+                    );
+              },
           publishVoiceTarget:
               ({
                 required expectedProjectId,
@@ -1787,6 +1810,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceTake,
     required this.publishVoiceTakeSelection,
     required this.publishVoiceTakeStatus,
+    required this.publishVoiceTakeRemoval,
     required this.publishVoiceTarget,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
@@ -1842,6 +1866,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3VoiceTechnicalPublisher publishVoiceTake;
   final Revision3VoiceTakeSelectionTechnicalPublisher publishVoiceTakeSelection;
   final Revision3VoiceTakeStatusTechnicalPublisher publishVoiceTakeStatus;
+  final Revision3VoiceTakeRemovalTechnicalPublisher publishVoiceTakeRemoval;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
@@ -1914,6 +1939,8 @@ class _ManagedRevision3ProjectViewState
       widget.publishVoiceTakeSelection;
   Revision3VoiceTakeStatusTechnicalPublisher get publishVoiceTakeStatus =>
       widget.publishVoiceTakeStatus;
+  Revision3VoiceTakeRemovalTechnicalPublisher get publishVoiceTakeRemoval =>
+      widget.publishVoiceTakeRemoval;
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
@@ -3185,6 +3212,10 @@ class _ManagedRevision3ProjectViewState
             statusService: Revision3VoiceTakeStatusAuthoringService(
               loadContentIndex: loadContentIndex,
               publishTechnicalPlan: publishVoiceTakeStatus,
+            ),
+            removalService: Revision3VoiceTakeRemovalAuthoringService(
+              loadContentIndex: loadContentIndex,
+              publishTechnicalPlan: publishVoiceTakeRemoval,
             ),
           ),
         );

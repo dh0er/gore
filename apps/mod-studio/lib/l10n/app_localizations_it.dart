@@ -2081,4 +2081,82 @@ class AppLocalizationsIt extends AppLocalizations {
   @override
   String get projectExportCurrentProjectUnchanged =>
       'The current project remains open and unchanged. The game and saves were not touched.';
+
+  @override
+  String get managedVoiceTakeRemoveAction => 'Remove from this line…';
+
+  @override
+  String get managedVoiceTakeRemoveTooltip =>
+      'Remove this recording from the current dialog line and language';
+
+  @override
+  String get managedVoiceTakeRemoveDialogTitle => 'Remove Voice take?';
+
+  @override
+  String managedVoiceTakeRemoveDialogSummary(
+    String take,
+    String line,
+    String locale,
+  ) {
+    return 'Remove “$take” from $line ($locale)?';
+  }
+
+  @override
+  String get managedVoiceTakeRemoveScope =>
+      'Only the link for this dialog line and language is removed. Other project uses remain unchanged.';
+
+  @override
+  String get managedVoiceTakeRemoveInternalRetention =>
+      'The audio file remains stored internally. This action does not free project storage and has no undo yet.';
+
+  @override
+  String get managedVoiceTakeRemoveGameBoundary =>
+      'The game installation and save games are not changed.';
+
+  @override
+  String get managedVoiceTakeRemoveSelectedWarning =>
+      'This is the active take. Removing it also clears the selection atomically. No replacement is chosen automatically, so Voice build remains blocked until an Approved take is selected.';
+
+  @override
+  String get managedVoiceTakeRemoveCancel => 'Cancel';
+
+  @override
+  String get managedVoiceTakeRemoveConfirm => 'Remove from line';
+
+  @override
+  String get managedVoiceTakeRemoveUniqueSuccess =>
+      'The take was removed from this line and from the current project graph. Its internal audio data remains retained.';
+
+  @override
+  String get managedVoiceTakeRemoveSharedSuccess =>
+      'The link was removed from this line and language. The take remains available to its other project uses, and its internal audio data remains retained.';
+
+  @override
+  String get managedVoiceTakeRemoveSelectionClearedSuccess =>
+      'The active selection was cleared atomically. No replacement was selected; Voice build is blocked until an Approved take is selected.';
+
+  @override
+  String get managedVoiceTakeRemoveStale =>
+      'The project changed before the take could be removed. Reload the latest Voice takes and review the action again.';
+
+  @override
+  String get managedVoiceTakeRemoveRequiresReopen =>
+      'The removal result could not be confirmed. Do not retry. Close this window and reopen or recover the managed project.';
+
+  @override
+  String get managedVoiceTakeRemoveSavedUnconfirmed =>
+      'The removal was saved, but the latest project could not be confirmed. Do not repeat the removal. Close this window and reopen or recover the managed project.';
+
+  @override
+  String get managedVoiceTakeRemoveSavedReloadFailed =>
+      'The removal was saved, but the latest Voice takes could not be loaded. Reload the takes; the removal will not be repeated.';
+
+  @override
+  String managedVoiceTakeRemoveFailed(String error) {
+    return 'The take was not removed: $error';
+  }
+
+  @override
+  String get managedVoiceTakeRemoveReloadConfirmed =>
+      'The saved removal was confirmed from the latest project.';
 }

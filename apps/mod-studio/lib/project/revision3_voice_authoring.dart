@@ -176,12 +176,20 @@ final class Revision3VoiceCatalog {
     required this.lines,
     required this.suggestedLocales,
     required Set<String> entityIds,
-  }) : entityIds = Set<String>.unmodifiable(entityIds);
+    required Map<String, Set<String>> candidateSlotIdsByTake,
+  }) : entityIds = Set<String>.unmodifiable(entityIds),
+       _candidateSlotIdsByTake = Map<String, Set<String>>.unmodifiable(
+         candidateSlotIdsByTake.map(
+           (takeId, slotIds) =>
+               MapEntry(takeId, Set<String>.unmodifiable(slotIds)),
+         ),
+       );
 
   factory Revision3VoiceCatalog.fromContentIndex(Revision3ContentIndex index) {
     final projectedLines = <_Revision3VoiceProjectedLine>[];
     final locales = <String>{...index.authoringLocales};
     final slotOwners = _voiceSlotOwners(index);
+    final candidateSlotIdsByTake = _voiceCandidateSlotUses(index);
     for (final entity in index.entities) {
       if (entity.kind != Revision3ContentEntityKind.dialogLine ||
           entity.summary.dialogLine == null) {
@@ -319,6 +327,7 @@ final class Revision3VoiceCatalog {
       lines: List<Revision3VoiceDialogLineChoice>.unmodifiable(lines),
       suggestedLocales: List<String>.unmodifiable(sortedLocales),
       entityIds: index.entities.map((entity) => entity.id).toSet(),
+      candidateSlotIdsByTake: candidateSlotIdsByTake,
     );
   }
 
@@ -328,6 +337,7 @@ final class Revision3VoiceCatalog {
   final List<Revision3VoiceDialogLineChoice> lines;
   final List<String> suggestedLocales;
   final Set<String> entityIds;
+  final Map<String, Set<String>> _candidateSlotIdsByTake;
 
   Revision3VoiceDialogLineChoice? line(String lineId) {
     for (final line in lines) {
@@ -340,6 +350,15 @@ final class Revision3VoiceCatalog {
       projectId == other.projectId &&
       projectRevision == other.projectRevision &&
       checkpointFingerprint == other.checkpointFingerprint;
+
+  /// Number of distinct local VoiceSlots that retain [takeId] as a candidate
+  /// in this exact content checkpoint. `voice_selected` is deliberately not a
+  /// second use: selection always points at the same slot candidate.
+  int candidateSlotUseCount(String takeId) =>
+      _candidateSlotIdsByTake[takeId]?.length ?? 0;
+
+  bool candidateIsUsedBySlot(String takeId, String slotId) =>
+      _candidateSlotIdsByTake[takeId]?.contains(slotId) ?? false;
 }
 
 final class _Revision3VoiceProjectedLine {
@@ -411,6 +430,29 @@ Map<String, List<_Revision3VoiceSlotOwner>> _voiceSlotOwners(
     }
   }
   return owners;
+}
+
+Map<String, Set<String>> _voiceCandidateSlotUses(Revision3ContentIndex index) {
+  final uses = <String, Set<String>>{};
+  for (final entity in index.entities) {
+    if (entity.kind != Revision3ContentEntityKind.voiceSlot) continue;
+    for (final reference in entity.references.where(
+      (reference) => reference.role == 'voice_candidate',
+    )) {
+      if (reference.qualifier != null ||
+          reference.resolution !=
+              Revision3ContentReferenceResolution.resolved ||
+          reference.target.projectId != index.projectId ||
+          reference.target.expectedKind !=
+              Revision3ContentEntityKind.voiceTake) {
+        continue;
+      }
+      uses
+          .putIfAbsent(reference.target.entityId, () => <String>{})
+          .add(entity.id);
+    }
+  }
+  return uses;
 }
 
 Revision3VoiceExistingSlotSummary? _voiceExistingSlotSummary({

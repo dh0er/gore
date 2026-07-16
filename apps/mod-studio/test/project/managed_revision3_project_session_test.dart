@@ -6205,6 +6205,198 @@ void main() {
     },
   );
 
+  test(
+    'Voice take removal publishes through full reopen and preserves asset CAS',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_take_removal');
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final project = revision3VoiceFixtureProjectWithExistingSlotJson(
+        candidateCount: 2,
+      );
+      final beforeAssetStore =
+          (jsonDecode(project) as Map<String, Object?>)['asset_store'];
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: project,
+      );
+      final headOpens = store.headVerifications.length;
+
+      final removed = await _removeVoiceTake(session);
+
+      expect(session.supportsVoiceTakeRemoval, isTrue);
+      expect(store.voiceTakeRemovalCalls, 1);
+      expect(removed.projectRevision, session.projectRevision);
+      expect(removed.slotRevision, 1);
+      expect(removed.takeRevision, 0);
+      expect(removed.selectionCleared, isTrue);
+      expect(removed.takeEntityRemoved, isTrue);
+      expect(removed.remainingCandidateCount, 1);
+      final published = jsonDecode(session.projectJson) as Map<String, Object?>;
+      expect(published['asset_store'], beforeAssetStore);
+      expect(
+        (published['entities']! as Map),
+        isNot(contains(revision3VoiceFixtureTakeId)),
+      );
+      expect(
+        store.headVerifications.skip(headOpens),
+        everyElement(AuthoringAssetVerification.full),
+      );
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test(
+    'retryable Voice take removal conflict keeps session writable',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_remove_retry');
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(
+          candidateCount: 2,
+        ),
+      );
+      final exactHead = session.head.canonicalJson;
+      store.nextVoiceTakeRemovalError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+        message: 'injected closed conflict',
+      );
+
+      await expectLater(
+        _removeVoiceTake(session),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+          ),
+        ),
+      );
+      expect(session.requiresReopen, isFalse);
+      expect(session.head.canonicalJson, exactHead);
+      final removed = await _removeVoiceTake(session);
+      expect(removed.projectRevision, session.projectRevision);
+      expect(store.voiceTakeRemovalCalls, 2);
+      await session.close();
+    },
+  );
+
+  test('uncertain Voice take removal failure requires reopen', () async {
+    final root = await _projectRoot(fixture, suffix: 'voice_remove_poison');
+    final store = _FakeRevision3VoiceTakeRemovalStore()
+      ..nextVoiceTakeRemovalError = const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_STORE_IO',
+        message: 'injected uncertain Store failure',
+      );
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    final calls = store.voiceTakeRemovalCalls;
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectVerificationException>()),
+    );
+    expect(store.voiceTakeRemovalCalls, calls);
+    await session.close();
+  });
+
+  test(
+    'local Voice take removal revision limit avoids Store and keeps session usable',
+    () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'voice_remove_revision_limit',
+      );
+      final store = _FakeRevision3VoiceTakeRemovalStore();
+      final project =
+          (jsonDecode(revision3VoiceFixtureProjectWithExistingSlotJson())
+                as Map<String, Object?>)
+            ..['revision'] = 0x7fffffffffffffff;
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: jsonEncode(project),
+      );
+      final exactHead = session.head.canonicalJson;
+
+      await expectLater(
+        _removeVoiceTake(session),
+        throwsA(
+          isA<ModFfiException>().having(
+            (error) => error.code,
+            'code',
+            'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REVISION_LIMIT',
+          ),
+        ),
+      );
+      expect(store.voiceTakeRemovalCalls, 0);
+      expect(session.requiresReopen, isFalse);
+      expect(session.head.canonicalJson, exactHead);
+      await session.verifyCurrentHead();
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    },
+  );
+
+  test('Voice take removal detects post-prepare head drift', () async {
+    final root = await _projectRoot(fixture, suffix: 'voice_remove_drift');
+    final store = _FakeRevision3VoiceTakeRemovalStore();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+    final drift = store.register(
+      revision3VoiceFixtureProjectWithExistingSlotJson(candidateCount: 2),
+    );
+    store.afterVoiceTakeRemovalPrepare = (root) async {
+      await File(
+        p.join(root, 'gore-project.json'),
+      ).writeAsString(drift.canonicalJson, flush: true);
+    };
+
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<ManagedProjectHeadConflictException>()),
+    );
+    expect(session.requiresReopen, isTrue);
+    await session.close();
+  });
+
+  test('checkpoint-only store does not claim Voice take removal', () async {
+    final root = await _projectRoot(
+      fixture,
+      suffix: 'voice_remove_unsupported',
+    );
+    final store = _FakeRevision3Store();
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: revision3VoiceFixtureProjectWithExistingSlotJson(),
+    );
+
+    expect(session.supportsVoiceTakeRemoval, isFalse);
+    await expectLater(
+      _removeVoiceTake(session),
+      throwsA(isA<UnsupportedError>()),
+    );
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
   for (final kind in AuthoringStoryDraftKind.values) {
     test(
       '${kind.wireName} removal publishes only the Draft/module pair through full reopen',
@@ -6764,6 +6956,35 @@ int _voiceTakeRevision(String projectJson, String takeId) {
   final entities = (project['entities']! as Map).cast<String, Object?>();
   final take = (entities[takeId]! as Map).cast<String, Object?>();
   return take['revision']! as int;
+}
+
+Future<ManagedRevision3VoiceTakeRemovalCheckpoint> _removeVoiceTake(
+  ManagedRevision3AuthoringProjectSession session, {
+  String takeId = revision3VoiceFixtureTakeId,
+}) {
+  final project = (jsonDecode(session.projectJson) as Map)
+      .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final slot = (entities[revision3VoiceFixtureSlotId]! as Map)
+      .cast<String, Object?>();
+  final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+  final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+  final selected = slotData['selected'];
+  final selectedId = selected == null
+      ? null
+      : (selected as Map)['id']! as String;
+  final take = (entities[takeId]! as Map).cast<String, Object?>();
+  return session.prepareAndPublishVoiceTakeRemovalV1(
+    lineId: revision3VoiceFixtureLineId,
+    localizationId: revision3VoiceFixtureLocalizationId,
+    slotId: revision3VoiceFixtureSlotId,
+    expectedSlotRevision: slot['revision']! as int,
+    locale: 'de',
+    expectedLocId: 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+    takeId: takeId,
+    expectedTakeRevision: take['revision']! as int,
+    expectedSelectedTakeId: selectedId,
+  );
 }
 
 class _FakeRevision3Store implements ManagedRevision3AuthoringStore {
@@ -8858,6 +9079,90 @@ final class _FakeRevision3StoryDraftRemovalStore extends _FakeRevision3Store
         'build_status': 'blocked',
         'runtime_status': 'runtime_unqualified',
         'artifact_authority': 'not_granted',
+        'publication_status': 'not_supported',
+      },
+      currentProjectJson: currentProjectJson,
+      request: request,
+    );
+  }
+}
+
+final class _FakeRevision3VoiceTakeRemovalStore extends _FakeRevision3Store
+    implements ManagedRevision3VoiceTakeRemovalStore {
+  int voiceTakeRemovalCalls = 0;
+  Object? nextVoiceTakeRemovalError;
+  Future<void> Function(String root)? afterVoiceTakeRemovalPrepare;
+
+  @override
+  Future<AuthoringRevision3VoiceTakeRemovalPreparation>
+  prepareVoiceTakeRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
+  }) async {
+    voiceTakeRemovalCalls++;
+    final injected = nextVoiceTakeRemovalError;
+    nextVoiceTakeRemovalError = null;
+    if (injected != null) throw injected;
+
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != request.expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+        code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_HEAD_CONFLICT',
+        message: 'fake native Voice take removal basis CAS rejected',
+      );
+    }
+    final candidate = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    candidate['revision'] = request.expectedRevision + 1;
+    final entities = (candidate['entities']! as Map).cast<String, Object?>();
+    final slot = (entities[request.slotId]! as Map).cast<String, Object?>();
+    slot['revision'] = request.expectedSlotRevision + 1;
+    final slotPayload = (slot['payload']! as Map).cast<String, Object?>();
+    final slotData = (slotPayload['data']! as Map).cast<String, Object?>();
+    final candidates = (slotData['candidates']! as List)
+        .map((value) => (value as Map).cast<String, Object?>())
+        .where((reference) => reference['id'] != request.takeId)
+        .map<Object?>((reference) => reference)
+        .toList(growable: false);
+    slotData['candidates'] = candidates;
+    final selectionCleared = request.expectedSelectedTakeId == request.takeId;
+    if (selectionCleared) slotData.remove('selected');
+    slotPayload['data'] = slotData;
+    slot['payload'] = slotPayload;
+    entities[request.slotId] = slot;
+    entities.remove(request.takeId);
+    candidate['entities'] = SplayTreeMap<String, Object?>.from(entities);
+    final candidateProjectJson = jsonEncode(candidate);
+    final candidateHead = register(candidateProjectJson);
+    final hook = afterVoiceTakeRemovalPrepare;
+    afterVoiceTakeRemovalPrepare = null;
+    await hook?.call(root);
+    return AuthoringRevision3VoiceTakeRemovalPreparation.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'prepared_unpublished',
+        'basis_head_json': request.expectedHead.canonicalJson,
+        'head_json': candidateHead.canonicalJson,
+        'project_json': candidateProjectJson,
+        'project_id': request.expectedProjectId,
+        'revision': request.expectedRevision + 1,
+        'line_id': request.lineId,
+        'localization_id': request.localizationId,
+        'slot_id': request.slotId,
+        'slot_revision': request.expectedSlotRevision + 1,
+        'locale': request.locale,
+        'loc_id': request.expectedLocId,
+        'take_id': request.takeId,
+        'take_revision': request.expectedTakeRevision,
+        'previous_selected_take_id': request.expectedSelectedTakeId,
+        'selection_cleared': selectionCleared,
+        'take_entity_removed': true,
+        'remaining_candidate_count': candidates.length,
+        'build_status': 'blocked',
+        'runtime_status': 'runtime_unqualified',
         'publication_status': 'not_supported',
       },
       currentProjectJson: currentProjectJson,

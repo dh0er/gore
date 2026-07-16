@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
+import '../l10n/app_localizations.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
@@ -14,10 +16,12 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     super.key,
     required this.service,
     required this.statusService,
+    required this.removalService,
   });
 
   final Revision3VoiceTakeSelectionAuthoringService service;
   final Revision3VoiceTakeStatusAuthoringService statusService;
+  final Revision3VoiceTakeRemovalAuthoringService removalService;
 
   @override
   State<Revision3VoiceTakeSelectionDialog> createState() =>
@@ -34,10 +38,13 @@ class _Revision3VoiceTakeSelectionDialogState
   String? _error;
   String? _notice;
   String? _statusBusyTakeId;
+  String? _removalBusyTakeId;
   Revision3VoiceTakeStatusPublication? _pendingStatusPublication;
+  Revision3VoiceTakeRemovalPublication? _pendingRemovalPublication;
   bool _loading = true;
   bool _busy = false;
   bool _statusWasSaved = false;
+  bool _removalWasSaved = false;
   bool _requiresClose = false;
   bool _reloadRequired = false;
 
@@ -82,6 +89,7 @@ class _Revision3VoiceTakeSelectionDialogState
       if (!mounted) return;
       setState(() {
         _loading = false;
+        _requiresClose = true;
         _error = 'Reopen the managed project before changing Voice takes.';
       });
     } catch (error) {
@@ -309,10 +317,196 @@ class _Revision3VoiceTakeSelectionDialogState
     }
   }
 
+  Future<void> _confirmRemove(Revision3VoiceCandidateTake take) async {
+    final line = _selectedLine;
+    final locale = _locale;
+    final summary = _selectedSummary;
+    if (_interactionLocked ||
+        _hasChange ||
+        line == null ||
+        locale == null ||
+        summary == null ||
+        summary.candidate(take.id) == null) {
+      return;
+    }
+    final selected = summary.selectedTakeId == take.id;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        final copy = AppLocalizations.of(dialogContext);
+        return AlertDialog(
+          key: const Key('voice-take-remove-confirm-dialog'),
+          title: Text(copy.managedVoiceTakeRemoveDialogTitle),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    copy.managedVoiceTakeRemoveDialogSummary(
+                      take.displayLabel,
+                      line.displayLabel,
+                      locale,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(copy.managedVoiceTakeRemoveScope),
+                  const SizedBox(height: 8),
+                  Text(copy.managedVoiceTakeRemoveInternalRetention),
+                  const SizedBox(height: 8),
+                  Text(copy.managedVoiceTakeRemoveGameBoundary),
+                  if (selected) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      key: const Key('voice-take-remove-selected-warning'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          dialogContext,
+                        ).colorScheme.errorContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(
+                            Icons.warning_amber_rounded,
+                            color: Theme.of(
+                              dialogContext,
+                            ).colorScheme.onErrorContainer,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              copy.managedVoiceTakeRemoveSelectedWarning,
+                              style: TextStyle(
+                                color: Theme.of(
+                                  dialogContext,
+                                ).colorScheme.onErrorContainer,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              key: const Key('voice-take-remove-cancel'),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text(copy.managedVoiceTakeRemoveCancel),
+            ),
+            FilledButton(
+              key: const Key('voice-take-remove-confirm'),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(copy.managedVoiceTakeRemoveConfirm),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+    await _removeTake(take);
+  }
+
+  Future<void> _removeTake(Revision3VoiceCandidateTake take) async {
+    final catalog = _catalog;
+    final lineId = _lineId;
+    final locale = _locale;
+    if (_interactionLocked ||
+        _hasChange ||
+        catalog == null ||
+        lineId == null ||
+        locale == null) {
+      return;
+    }
+    var publishedThisAttempt = false;
+    Revision3VoiceTakeRemovalPublication? publication;
+    setState(() {
+      _busy = true;
+      _removalBusyTakeId = take.id;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      publication = await widget.removalService.publish(
+        checkpoint: catalog,
+        lineId: lineId,
+        locale: locale,
+        takeId: take.id,
+      );
+      publishedThisAttempt = true;
+      _removalWasSaved = true;
+      _pendingRemovalPublication = publication;
+      final refreshed = await widget.removalService.loadCatalog();
+      if (!_catalogConfirmsRemoval(refreshed, publication)) {
+        throw const Revision3VoiceTakeRemovalRequiresReopenException();
+      }
+      final refreshedLine = refreshed.line(lineId)!;
+      final refreshedSummary = refreshedLine.slotSummaryForLocale(locale)!;
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _catalog = refreshed;
+        _lineId = refreshedLine.lineId;
+        _locale = locale;
+        _selectionValue = _selectionValueFor(refreshedSummary);
+        _busy = false;
+        _removalBusyTakeId = null;
+        _pendingRemovalPublication = null;
+        final outcome = publication!.takeEntityRemoved
+            ? copy.managedVoiceTakeRemoveUniqueSuccess
+            : copy.managedVoiceTakeRemoveSharedSuccess;
+        _notice = publication.selectionCleared
+            ? '$outcome\n${copy.managedVoiceTakeRemoveSelectionClearedSuccess}'
+            : outcome;
+      });
+    } on Revision3VoiceTakeRemovalStaleCheckpointException {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _removalBusyTakeId = null;
+        _reloadRequired = true;
+        _error = copy.managedVoiceTakeRemoveStale;
+      });
+    } on Revision3VoiceTakeRemovalRequiresReopenException {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _removalBusyTakeId = null;
+        _reloadRequired = false;
+        _requiresClose = true;
+        _error = publishedThisAttempt
+            ? copy.managedVoiceTakeRemoveSavedUnconfirmed
+            : copy.managedVoiceTakeRemoveRequiresReopen;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      final copy = AppLocalizations.of(context);
+      setState(() {
+        _busy = false;
+        _removalBusyTakeId = null;
+        _reloadRequired = publishedThisAttempt;
+        _error = publishedThisAttempt
+            ? copy.managedVoiceTakeRemoveSavedReloadFailed
+            : copy.managedVoiceTakeRemoveFailed(_friendlyError(error));
+      });
+    }
+  }
+
   Future<void> _reloadTakes() async {
     if (_busy || !_reloadRequired || _requiresClose) return;
     final previous = _catalog;
     final pending = _pendingStatusPublication;
+    final pendingRemoval = _pendingRemovalPublication;
     setState(() {
       _busy = true;
       _error = null;
@@ -326,6 +520,10 @@ class _Revision3VoiceTakeSelectionDialogState
       if (pending != null &&
           !_catalogConfirmsStatusPublication(refreshed, pending)) {
         throw const Revision3VoiceTakeStatusRequiresReopenException();
+      }
+      if (pendingRemoval != null &&
+          !_catalogConfirmsRemoval(refreshed, pendingRemoval)) {
+        throw const Revision3VoiceTakeRemovalRequiresReopenException();
       }
       final line = _lineId == null ? null : refreshed.line(_lineId!);
       final locale =
@@ -344,11 +542,24 @@ class _Revision3VoiceTakeSelectionDialogState
         _locale = locale;
         _selectionValue = summary == null ? null : _selectionValueFor(summary);
         _pendingStatusPublication = null;
+        _pendingRemovalPublication = null;
         _reloadRequired = false;
         _busy = false;
-        _notice = pending == null
+        _notice = pendingRemoval != null
+            ? AppLocalizations.of(context).managedVoiceTakeRemoveReloadConfirmed
+            : pending == null
             ? 'Latest Voice takes reloaded.'
             : 'Saved status confirmed from the latest project.';
+      });
+    } on Revision3VoiceTakeRemovalRequiresReopenException {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _reloadRequired = false;
+        _requiresClose = true;
+        _error = AppLocalizations.of(
+          context,
+        ).managedVoiceTakeRemoveSavedUnconfirmed;
       });
     } on Revision3VoiceTakeStatusRequiresReopenException {
       if (!mounted) return;
@@ -372,6 +583,7 @@ class _Revision3VoiceTakeSelectionDialogState
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final copy = AppLocalizations.of(context);
     final lines = _visibleLines;
     final line = _selectedLine;
     final summary = _selectedSummary;
@@ -506,6 +718,13 @@ class _Revision3VoiceTakeSelectionDialogState
                               _statusBusyTakeId == summary.candidates[index].id,
                           onStatusChanged: (status) =>
                               _changeStatus(summary.candidates[index], status),
+                          removeLabel: copy.managedVoiceTakeRemoveAction,
+                          removeTooltip: copy.managedVoiceTakeRemoveTooltip,
+                          removeBusy:
+                              _removalBusyTakeId ==
+                              summary.candidates[index].id,
+                          onRemove: () =>
+                              _confirmRemove(summary.candidates[index]),
                         ),
                     ],
                   ),
@@ -565,7 +784,7 @@ class _Revision3VoiceTakeSelectionDialogState
         ),
       ),
       actions: [
-        if (_error != null && _catalog == null && !_loading)
+        if (_error != null && _catalog == null && !_loading && !_requiresClose)
           TextButton(
             key: const Key('voice-selection-retry'),
             onPressed: _interactionLocked ? null : _load,
@@ -581,7 +800,10 @@ class _Revision3VoiceTakeSelectionDialogState
           key: const Key('voice-selection-cancel'),
           onPressed: _busy ? null : () => Navigator.of(context).pop(),
           child: Text(
-            _statusWasSaved || _requiresClose || _reloadRequired
+            _statusWasSaved ||
+                    _removalWasSaved ||
+                    _requiresClose ||
+                    _reloadRequired
                 ? 'Close'
                 : 'Cancel',
           ),
@@ -610,6 +832,10 @@ class _TakeChoiceTile extends StatelessWidget {
     required this.statusDisabled,
     required this.statusBusy,
     required this.onStatusChanged,
+    required this.removeLabel,
+    required this.removeTooltip,
+    required this.removeBusy,
+    required this.onRemove,
   });
 
   final int index;
@@ -619,6 +845,10 @@ class _TakeChoiceTile extends StatelessWidget {
   final bool statusDisabled;
   final bool statusBusy;
   final ValueChanged<AuthoringRevision3VoiceTakeStatus> onStatusChanged;
+  final String removeLabel;
+  final String removeTooltip;
+  final bool removeBusy;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -644,6 +874,10 @@ class _TakeChoiceTile extends StatelessWidget {
         statusDisabled: statusDisabled,
         statusBusy: statusBusy,
         onStatusChanged: onStatusChanged,
+        removeLabel: removeLabel,
+        removeTooltip: removeTooltip,
+        removeBusy: removeBusy,
+        onRemove: onRemove,
       ),
     ],
   );
@@ -658,6 +892,10 @@ class _TakeStatusControl extends StatelessWidget {
     required this.statusDisabled,
     required this.statusBusy,
     required this.onStatusChanged,
+    required this.removeLabel,
+    required this.removeTooltip,
+    required this.removeBusy,
+    required this.onRemove,
   });
 
   final int index;
@@ -667,6 +905,10 @@ class _TakeStatusControl extends StatelessWidget {
   final bool statusDisabled;
   final bool statusBusy;
   final ValueChanged<AuthoringRevision3VoiceTakeStatus> onStatusChanged;
+  final String removeLabel;
+  final String removeTooltip;
+  final bool removeBusy;
+  final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
@@ -681,52 +923,80 @@ class _TakeStatusControl extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: PopupMenuButton<AuthoringRevision3VoiceTakeStatus>(
-            key: ValueKey('voice-status-change-$index'),
-            enabled: !busy && !statusDisabled && canChangeStatus,
-            tooltip:
-                isCurrent &&
-                    currentStatus == AuthoringRevision3VoiceTakeStatus.approved
-                ? 'Clear the selection before changing this status'
-                : 'Change take status',
-            onSelected: onStatusChanged,
-            itemBuilder: (context) => [
-              for (final status in AuthoringRevision3VoiceTakeStatus.values)
-                PopupMenuItem<AuthoringRevision3VoiceTakeStatus>(
-                  key: ValueKey('voice-status-option-$index-${status.name}'),
-                  value: status,
-                  enabled:
-                      status != currentStatus &&
-                      (!isCurrent ||
-                          status == AuthoringRevision3VoiceTakeStatus.approved),
-                  child: Text(_voiceTakeStatusLabel(status)),
-                ),
-            ],
-            child: Padding(
-              padding: const EdgeInsets.only(left: 12, bottom: 8),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (statusBusy) ...[
-                    const SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+        Padding(
+          padding: const EdgeInsets.only(left: 4, right: 4, bottom: 8),
+          child: Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              PopupMenuButton<AuthoringRevision3VoiceTakeStatus>(
+                key: ValueKey('voice-status-change-$index'),
+                enabled: !busy && !statusDisabled && canChangeStatus,
+                tooltip:
+                    isCurrent &&
+                        currentStatus ==
+                            AuthoringRevision3VoiceTakeStatus.approved
+                    ? 'Clear the selection before changing this status'
+                    : 'Change take status',
+                onSelected: onStatusChanged,
+                itemBuilder: (context) => [
+                  for (final status in AuthoringRevision3VoiceTakeStatus.values)
+                    PopupMenuItem<AuthoringRevision3VoiceTakeStatus>(
+                      key: ValueKey(
+                        'voice-status-option-$index-${status.name}',
+                      ),
+                      value: status,
+                      enabled:
+                          status != currentStatus &&
+                          (!isCurrent ||
+                              status ==
+                                  AuthoringRevision3VoiceTakeStatus.approved),
+                      child: Text(_voiceTakeStatusLabel(status)),
                     ),
-                    const SizedBox(width: 8),
-                  ],
-                  Text(
-                    'Change status...',
-                    style: TextStyle(
-                      color: !busy && !statusDisabled && canChangeStatus
-                          ? Theme.of(context).colorScheme.primary
-                          : Theme.of(context).disabledColor,
-                    ),
-                  ),
                 ],
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (statusBusy) ...[
+                        const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Text(
+                        'Change status...',
+                        style: TextStyle(
+                          color: !busy && !statusDisabled && canChangeStatus
+                              ? Theme.of(context).colorScheme.primary
+                              : Theme.of(context).disabledColor,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
+              Tooltip(
+                message: removeTooltip,
+                child: TextButton.icon(
+                  key: ValueKey('voice-take-remove-$index'),
+                  onPressed: busy || statusDisabled ? null : onRemove,
+                  icon: removeBusy
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.link_off_outlined, size: 18),
+                  label: Text(removeLabel),
+                ),
+              ),
+            ],
           ),
         ),
         if (isCurrent &&
@@ -770,6 +1040,34 @@ bool _catalogConfirmsStatusPublication(
       take != null &&
       take.revision == publication.takeRevision &&
       take.status.name == publication.status.name;
+}
+
+bool _catalogConfirmsRemoval(
+  Revision3VoiceCatalog catalog,
+  Revision3VoiceTakeRemovalPublication publication,
+) {
+  if (catalog.projectId != publication.projectId ||
+      catalog.projectRevision != publication.projectRevision) {
+    return false;
+  }
+  final line = catalog.line(publication.lineId);
+  final summary = line?.slotSummaryForLocale(publication.locale);
+  if (line == null ||
+      line.localizationId != publication.localizationId ||
+      line.localizationIdentity != publication.locId ||
+      line.slotIdForLocale(publication.locale) != publication.slotId ||
+      summary == null ||
+      summary.slotRevision != publication.slotRevision ||
+      summary.candidate(publication.takeId) != null ||
+      summary.candidateCount != publication.remainingCandidateCount ||
+      summary.selectedTakeId !=
+          (publication.selectionCleared
+              ? null
+              : publication.previousSelectedTakeId)) {
+    return false;
+  }
+  final takeStillExists = catalog.entityIds.contains(publication.takeId);
+  return publication.takeEntityRemoved != takeStillExists;
 }
 
 String _friendlyError(Object error) {

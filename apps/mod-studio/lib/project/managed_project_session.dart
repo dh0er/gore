@@ -454,6 +454,47 @@ final class ManagedRevision3VoiceTakeSelectionCheckpoint {
   final String? selectedTakeId;
 }
 
+/// One Voice take detached from one exact line/language slot after native
+/// preparation, full candidate reopen, fixed-head CAS publication, and a full
+/// published reopen. Immutable audio CAS metadata remains preserved.
+final class ManagedRevision3VoiceTakeRemovalCheckpoint {
+  const ManagedRevision3VoiceTakeRemovalCheckpoint._({
+    required this.head,
+    required this.projectJson,
+    required this.projectId,
+    required this.projectRevision,
+    required this.lineId,
+    required this.localizationId,
+    required this.slotId,
+    required this.slotRevision,
+    required this.locale,
+    required this.locId,
+    required this.takeId,
+    required this.takeRevision,
+    required this.previousSelectedTakeId,
+    required this.selectionCleared,
+    required this.takeEntityRemoved,
+    required this.remainingCandidateCount,
+  });
+
+  final AuthoringWorkingHead head;
+  final String projectJson;
+  final String projectId;
+  final int projectRevision;
+  final String lineId;
+  final String localizationId;
+  final String slotId;
+  final int slotRevision;
+  final String locale;
+  final String locId;
+  final String takeId;
+  final int takeRevision;
+  final String? previousSelectedTakeId;
+  final bool selectionCleared;
+  final bool takeEntityRemoved;
+  final int remainingCandidateCount;
+}
+
 /// One retained VoiceTake review-status change returned only after native
 /// preparation, full candidate reopen, fixed-head CAS publication, and a full
 /// published reopen. The VoiceSlot is unchanged; build remains blocked and
@@ -923,12 +964,25 @@ abstract interface class ManagedRevision3StoryDraftRemovalStore {
   });
 }
 
+/// Narrow capability for atomically detaching one exact VoiceTake candidate.
+/// Separate capability discovery avoids granting deletion authority to
+/// checkpoint-only alternate stores and test fakes.
+abstract interface class ManagedRevision3VoiceTakeRemovalStore {
+  Future<AuthoringRevision3VoiceTakeRemovalPreparation>
+  prepareVoiceTakeRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
+  });
+}
+
 final class ModFfiManagedRevision3AuthoringStore
     implements
         ManagedRevision3AuthoringStore,
         ManagedRevision3ReviewedDataAssetBuildStore,
         ManagedRevision3ExactSnapshotExportStore,
-        ManagedRevision3StoryDraftRemovalStore {
+        ManagedRevision3StoryDraftRemovalStore,
+        ManagedRevision3VoiceTakeRemovalStore {
   const ModFfiManagedRevision3AuthoringStore(this.ffi);
 
   final ModFfi ffi;
@@ -1220,6 +1274,18 @@ final class ModFfiManagedRevision3AuthoringStore
     required String currentProjectJson,
     required AuthoringRevision3VoiceTakeSelectionRequestV1 request,
   }) => ffi.authoringStorePrepareRevision3VoiceTakeSelectionV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceTakeRemovalPreparation>
+  prepareVoiceTakeRemovalV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringRevision3VoiceTakeRemovalRequestV1 request,
+  }) => ffi.authoringStorePrepareRevision3VoiceTakeRemovalV1(
     root: root,
     currentProjectJson: currentProjectJson,
     request: request,
@@ -1669,6 +1735,8 @@ class ManagedRevision3AuthoringProjectSession {
       _store is ManagedRevision3ExactSnapshotExportStore;
   bool get supportsStoryDraftRemoval =>
       _store is ManagedRevision3StoryDraftRemovalStore;
+  bool get supportsVoiceTakeRemoval =>
+      _store is ManagedRevision3VoiceTakeRemovalStore;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
   /// can only remove authoring authority; regain it through verified in-session
@@ -2682,6 +2750,120 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Detach one exact VoiceTake candidate from one exact line/language slot
+  /// through the project-only managed publication lane. Immutable audio CAS
+  /// metadata is retained and no game, build, runtime, or deployment authority
+  /// is accepted or produced.
+  Future<ManagedRevision3VoiceTakeRemovalCheckpoint>
+  prepareAndPublishVoiceTakeRemovalV1({
+    required String lineId,
+    required String localizationId,
+    required String slotId,
+    required int expectedSlotRevision,
+    required String locale,
+    required String expectedLocId,
+    required String takeId,
+    required int expectedTakeRevision,
+    required String? expectedSelectedTakeId,
+  }) {
+    final removalStore = _store;
+    if (removalStore is! ManagedRevision3VoiceTakeRemovalStore) {
+      return Future<ManagedRevision3VoiceTakeRemovalCheckpoint>.error(
+        UnsupportedError(
+          'this managed revision-3 Store has no Voice take removal capability',
+        ),
+      );
+    }
+    final removalCapability =
+        removalStore as ManagedRevision3VoiceTakeRemovalStore;
+    return _core._publishPreparedRevision3Checkpoint<
+      ManagedRevision3VoiceTakeRemovalCheckpoint
+    >(
+      operation: 'prepareAndPublishVoiceTakeRemovalV1',
+      handlePrepareError: _core._throwRevision3VoiceTakeRemovalPrepareError,
+      prepare: (basis) async {
+        final projectId = basis.projectId;
+        final projectRevision = basis.projectRevision;
+        if (projectId == null || projectRevision == null) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice take removal has no exact project identity',
+          );
+        }
+        // Keep the overflow rejection inside the serialized prepare lane but
+        // before the Store call. The retryable closed error leaves this exact
+        // session usable, matching ordinary compiler-like revision handling.
+        if (projectRevision >= 0x7fffffffffffffff) {
+          throw const ModFfiException(
+            command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+            code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REVISION_LIMIT',
+            message:
+                'Voice take removal cannot advance the signed wire revision',
+          );
+        }
+        final request = AuthoringRevision3VoiceTakeRemovalRequestV1.forProject(
+          expectedHead: basis.head,
+          currentProjectJson: basis.projectJson,
+          lineId: lineId,
+          localizationId: localizationId,
+          expectedLocId: expectedLocId,
+          locale: locale,
+          slotId: slotId,
+          expectedSlotRevision: expectedSlotRevision,
+          takeId: takeId,
+          expectedTakeRevision: expectedTakeRevision,
+          expectedSelectedTakeId: expectedSelectedTakeId,
+        );
+        final prepared = await removalCapability.prepareVoiceTakeRemovalV1(
+          root: root.path,
+          currentProjectJson: basis.projectJson,
+          request: request,
+        );
+        if (prepared.basisHead.canonicalJson != basis.head.canonicalJson ||
+            prepared.projectId != projectId ||
+            prepared.revision != projectRevision + 1 ||
+            prepared.lineId != request.lineId ||
+            prepared.localizationId != request.localizationId ||
+            prepared.slotId != request.slotId ||
+            prepared.slotRevision != request.expectedSlotRevision + 1 ||
+            prepared.locale != request.locale ||
+            prepared.locId != request.expectedLocId ||
+            prepared.takeId != request.takeId ||
+            prepared.takeRevision != request.expectedTakeRevision ||
+            prepared.previousSelectedTakeId != request.expectedSelectedTakeId ||
+            prepared.selectionCleared !=
+                (request.expectedSelectedTakeId == request.takeId)) {
+          throw const ManagedProjectVerificationException(
+            'revision-3 Voice take removal preparation disagrees with its exact session basis or request',
+          );
+        }
+        return _ManagedPreparedCheckpoint<
+          ManagedRevision3VoiceTakeRemovalCheckpoint
+        >(
+          head: prepared.head,
+          projectJson: prepared.projectJson,
+          value: ManagedRevision3VoiceTakeRemovalCheckpoint._(
+            head: prepared.head,
+            projectJson: prepared.projectJson,
+            projectId: prepared.projectId,
+            projectRevision: prepared.revision,
+            lineId: prepared.lineId,
+            localizationId: prepared.localizationId,
+            slotId: prepared.slotId,
+            slotRevision: prepared.slotRevision,
+            locale: prepared.locale,
+            locId: prepared.locId,
+            takeId: prepared.takeId,
+            takeRevision: prepared.takeRevision,
+            previousSelectedTakeId: prepared.previousSelectedTakeId,
+            selectionCleared: prepared.selectionCleared,
+            takeEntityRemoved: prepared.takeEntityRemoved,
+            remainingCandidateCount: prepared.remainingCandidateCount,
+          ),
+        );
+      },
+    );
+  }
 
   /// Change one exact retained VoiceTake review status through the project-only
   /// managed publication lane. No game root, media, build, or runtime authority
@@ -5068,6 +5250,43 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceTakeRemovalPrepareError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code ==
+          'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceTakeRemovalPrepareErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    if (error is ArgumentError || error is FormatException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice take removal could not be prepared and verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceTakeStatusPrepareError(
     Object error,
     StackTrace stackTrace,
@@ -5996,6 +6215,27 @@ bool _revision3VoiceSelectionPrepareErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_CONFLICT',
   'AUTHORING_REVISION3_VOICE_SELECTION_TAKE_NOT_APPROVED',
   'AUTHORING_REVISION3_VOICE_SELECTION_TARGET_CONFLICT',
+}.contains(code);
+
+bool _revision3VoiceTakeRemovalPrepareErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LOC_ID_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SELECTION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_BACKLINK_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REVISION_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_INVALID',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
 }.contains(code);
 
 bool _revision3VoiceTakeStatusPrepareErrorIsRetryable(String code) => const {

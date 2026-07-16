@@ -23,6 +23,7 @@ import 'revision3_quest_outline_authoring.dart';
 import 'revision3_quest_transitions_authoring.dart';
 import 'revision3_project_bootstrap.dart';
 import 'revision3_voice_authoring.dart';
+import 'revision3_voice_take_removal_authoring.dart';
 import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
@@ -271,6 +272,27 @@ const _revision3StoryDraftRemovalCorrectableCodes = <String>{
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_REQUEST_REJECTED',
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_RESPONSE_LIMIT',
   'AUTHORING_REVISION3_STORY_DRAFT_REMOVE_SIGNED_WIRE_LIMIT',
+};
+
+const _revision3VoiceTakeRemovalCorrectableCodes = <String>{
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_PROJECT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_TARGET_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LINE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LOCALIZATION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_LOC_ID_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_TAKE_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SELECTION_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_BACKLINK_CONFLICT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REFERENCE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REVISION_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_PROJECT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_INVALID',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_REJECTED',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_RESPONSE_LIMIT',
+  'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SIGNED_WIRE_LIMIT',
 };
 
 final class ManagedRevision3ProjectCreationException
@@ -550,6 +572,20 @@ abstract interface class ManagedRevision3VoiceTakeStatusLease {
   });
 }
 
+/// Optional exact-current capability for atomically detaching one VoiceTake
+/// candidate. Capability discovery stays explicit because this operation can
+/// remove an otherwise-unreferenced project entity.
+abstract interface class ManagedRevision3VoiceTakeRemovalLease {
+  bool get supportsVoiceTakeRemoval;
+
+  void markRequiresReopenAfterVoiceTakeRemovalUncertainty();
+
+  Future<Revision3VoiceTakeRemovalPublication>
+  prepareAndPublishVoiceTakeRemovalV1({
+    required Revision3VoiceTakeRemovalTechnicalPlan plan,
+  });
+}
+
 /// Optional authority for reconciling one managed lease after an uncertain
 /// publication. Recovery remains separate from normal editing so unrelated
 /// leases and fakes do not accidentally claim repair authority.
@@ -717,6 +753,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3VoiceTakeRemovalLease,
         ManagedRevision3RecoveryLease,
         ManagedRevision3ReviewedDataAssetBuildLease,
         ManagedRevision3ProjectExportLease,
@@ -764,7 +801,14 @@ final class _ManagedRevision3SessionLease
   bool get supportsStoryDraftRemoval => _session.supportsStoryDraftRemoval;
 
   @override
+  bool get supportsVoiceTakeRemoval => _session.supportsVoiceTakeRemoval;
+
+  @override
   void markRequiresReopenAfterStoryDraftRemovalUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterVoiceTakeRemovalUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
 
   @override
@@ -1115,6 +1159,40 @@ final class _ManagedRevision3SessionLease
       locId: checkpoint.locId,
       previousSelectedTakeId: checkpoint.previousSelectedTakeId,
       selectedTakeId: checkpoint.selectedTakeId,
+    );
+  }
+
+  @override
+  Future<Revision3VoiceTakeRemovalPublication>
+  prepareAndPublishVoiceTakeRemovalV1({
+    required Revision3VoiceTakeRemovalTechnicalPlan plan,
+  }) async {
+    final checkpoint = await _session.prepareAndPublishVoiceTakeRemovalV1(
+      lineId: plan.lineId,
+      localizationId: plan.localizationId,
+      slotId: plan.slotId,
+      expectedSlotRevision: plan.expectedSlotRevision,
+      locale: plan.locale,
+      expectedLocId: plan.locId,
+      takeId: plan.takeId,
+      expectedTakeRevision: plan.expectedTakeRevision,
+      expectedSelectedTakeId: plan.expectedSelectedTakeId,
+    );
+    return Revision3VoiceTakeRemovalPublication(
+      projectId: checkpoint.projectId,
+      projectRevision: checkpoint.projectRevision,
+      lineId: checkpoint.lineId,
+      localizationId: checkpoint.localizationId,
+      slotId: checkpoint.slotId,
+      slotRevision: checkpoint.slotRevision,
+      locale: checkpoint.locale,
+      locId: checkpoint.locId,
+      takeId: checkpoint.takeId,
+      takeRevision: checkpoint.takeRevision,
+      previousSelectedTakeId: checkpoint.previousSelectedTakeId,
+      selectionCleared: checkpoint.selectionCleared,
+      takeEntityRemoved: checkpoint.takeEntityRemoved,
+      remainingCandidateCount: checkpoint.remainingCandidateCount,
     );
   }
 
@@ -3168,6 +3246,104 @@ final class CurrentProjectCoordinator
         );
       }
       Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Detach one exact listed Voice take from one exact line/language slot.
+  /// The operation is project-only, preserves immutable audio CAS metadata,
+  /// and never gains game, build, runtime, deployment, or save authority.
+  Future<Revision3VoiceTakeRemovalPublication> removeCurrentRevision3VoiceTake({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+    required Revision3VoiceTakeRemovalTechnicalPlan plan,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice take removal is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceTakeRemovalRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceTakeRemovalStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3VoiceTakeRemovalLease) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project lease does not support Voice take removal',
+      );
+    }
+    final removalLease = lease as ManagedRevision3VoiceTakeRemovalLease;
+    if (!removalLease.supportsVoiceTakeRemoval) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'the managed project Store does not support Voice take removal',
+      );
+    }
+    try {
+      final publication = await removalLease
+          .prepareAndPublishVoiceTakeRemovalV1(plan: plan);
+      if (publication.projectId != expectedProjectId ||
+          publication.projectId != lease.projectId ||
+          publication.projectRevision != expectedProjectRevision + 1 ||
+          publication.projectRevision != lease.projectRevision ||
+          publication.lineId != plan.lineId ||
+          publication.localizationId != plan.localizationId ||
+          publication.slotId != plan.slotId ||
+          publication.slotRevision != plan.expectedSlotRevision + 1 ||
+          publication.locale != plan.locale ||
+          publication.locId != plan.locId ||
+          publication.takeId != plan.takeId ||
+          publication.takeRevision != plan.expectedTakeRevision ||
+          publication.previousSelectedTakeId != plan.expectedSelectedTakeId ||
+          publication.selectionCleared != plan.expectsSelectionCleared ||
+          publication.takeEntityRemoved != plan.expectedTakeEntityRemoved ||
+          publication.remainingCandidateCount !=
+              plan.expectedRemainingCandidateCount) {
+        removalLease.markRequiresReopenAfterVoiceTakeRemovalUncertainty();
+        throw const Revision3VoiceTakeRemovalRequiresReopenException();
+      }
+      return publication;
+    } catch (error, stackTrace) {
+      if (error is Revision3VoiceTakeRemovalRequiresReopenException) {
+        if (!lease.requiresReopen) {
+          removalLease.markRequiresReopenAfterVoiceTakeRemovalUncertainty();
+        }
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeRemovalRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      if (error is ModFfiException &&
+          _revision3VoiceTakeRemovalCorrectableCodes.contains(error.code)) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeRemovalStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      if (error is Revision3VoiceTakeRemovalStaleCheckpointException) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceTakeRemovalStaleCheckpointException(),
+          stackTrace,
+        );
+      }
+      removalLease.markRequiresReopenAfterVoiceTakeRemovalUncertainty();
+      Error.throwWithStackTrace(
+        const Revision3VoiceTakeRemovalRequiresReopenException(),
+        stackTrace,
+      );
     } finally {
       _refreshCurrentIfUnchanged(current);
     }

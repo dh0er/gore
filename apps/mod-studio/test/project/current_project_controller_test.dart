@@ -20,6 +20,7 @@ import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_take_removal_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
 
@@ -3728,6 +3729,254 @@ void main() {
   );
 
   test(
+    'Voice take removal binds exact visible checkpoint and refreshes state',
+    () async {
+      final plan = _voiceTakeRemovalPlan();
+      final managed = _FakeVoiceTakeRemovalManagedLease(
+        root: Directory('managed-voice-take-removal'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3VoiceTake(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision - 1,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakeRemovalStaleCheckpointException>()),
+      );
+      expect(managed.voiceTakeRemovalCalls, 0);
+
+      final publication = await coordinator.removeCurrentRevision3VoiceTake(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: plan,
+      );
+
+      expect(publication.takeId, plan.takeId);
+      expect(publication.takeRevision, plan.expectedTakeRevision);
+      expect(publication.selectionCleared, plan.expectsSelectionCleared);
+      expect(publication.takeEntityRemoved, plan.expectedTakeEntityRemoved);
+      expect(
+        publication.remainingCandidateCount,
+        plan.expectedRemainingCandidateCount,
+      );
+      expect(managed.voiceTakeRemovalCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 8);
+      expect(state.head.canonicalJson, _head(8).canonicalJson);
+      expect(state.requiresReopen, isFalse);
+    },
+  );
+
+  test(
+    'correctable Voice take removal conflict is stale and retryable',
+    () async {
+      final plan = _voiceTakeRemovalPlan();
+      final managed = _FakeVoiceTakeRemovalManagedLease(
+        root: Directory('managed-voice-take-removal-stale'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        nextError: const ModFfiException(
+          command: 'authoring_store_prepare_revision3_voice_take_removal_v1',
+          code: 'AUTHORING_REVISION3_VOICE_TAKE_REMOVAL_SLOT_CONFLICT',
+          message: 'injected closed conflict',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3VoiceTake(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakeRemovalStaleCheckpointException>()),
+      );
+      expect(managed.requiresReopen, isFalse);
+      expect(managed.voiceTakeRemovalRelatchCalls, 0);
+    },
+  );
+
+  test(
+    'disabled Voice take removal capability is rejected before mutation',
+    () async {
+      final plan = _voiceTakeRemovalPlan();
+      final managed = _FakeVoiceTakeRemovalManagedLease(
+        root: Directory('managed-voice-take-removal-disabled'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        supportsRemoval: false,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3VoiceTake(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<CurrentProjectOperationUnsupportedException>()),
+      );
+      expect(managed.voiceTakeRemovalCalls, 0);
+      expect(managed.requiresReopen, isFalse);
+    },
+  );
+
+  test('Voice take removal receipt mismatch latches requires-reopen', () async {
+    final plan = _voiceTakeRemovalPlan();
+    final managed = _FakeVoiceTakeRemovalManagedLease(
+      root: Directory('managed-voice-take-removal-mismatch'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      receiptMismatch: true,
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.removeCurrentRevision3VoiceTake(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+        plan: plan,
+      ),
+      throwsA(isA<Revision3VoiceTakeRemovalRequiresReopenException>()),
+    );
+    expect(managed.requiresReopen, isTrue);
+    expect(managed.voiceTakeRemovalRelatchCalls, 1);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isTrue,
+    );
+  });
+
+  test(
+    'only-wrong Voice take entity-removal receipt flag requires reopen',
+    () async {
+      final plan = _voiceTakeRemovalPlan();
+      final managed = _FakeVoiceTakeRemovalManagedLease(
+        root: Directory('managed-voice-take-removal-flag-mismatch'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        takeEntityFlagMismatch: true,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.removeCurrentRevision3VoiceTake(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        ),
+        throwsA(isA<Revision3VoiceTakeRemovalRequiresReopenException>()),
+      );
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.voiceTakeRemovalRelatchCalls, 1);
+    },
+  );
+
+  test(
+    'post-publish FormatException poisons Voice removal and cannot retry',
+    () async {
+      final plan = _voiceTakeRemovalPlan();
+      final managed = _FakeVoiceTakeRemovalManagedLease(
+        root: Directory('managed-voice-take-removal-post-format'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        postPublishError: const FormatException(
+          'injected post-publication receipt decode failure',
+        ),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      Future<void> remove() async {
+        await coordinator.removeCurrentRevision3VoiceTake(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+          plan: plan,
+        );
+      }
+
+      await expectLater(
+        remove(),
+        throwsA(isA<Revision3VoiceTakeRemovalRequiresReopenException>()),
+      );
+      expect(managed.projectRevision, 8);
+      expect(managed.requiresReopen, isTrue);
+      expect(managed.voiceTakeRemovalRelatchCalls, 1);
+      expect(managed.voiceTakeRemovalCalls, 1);
+      await expectLater(
+        remove(),
+        throwsA(isA<Revision3VoiceTakeRemovalRequiresReopenException>()),
+      );
+      expect(managed.voiceTakeRemovalCalls, 1);
+    },
+  );
+
+  test(
     'Voice take status is exact-visible-tuple bound and refreshes the published checkpoint',
     () async {
       final plan = _voiceTakeStatusPlan();
@@ -6897,6 +7146,72 @@ final class _FakeStoryDraftRemovalManagedLease extends _FakeManagedLease
   }
 }
 
+final class _FakeVoiceTakeRemovalManagedLease extends _FakeManagedLease
+    implements ManagedRevision3VoiceTakeRemovalLease {
+  _FakeVoiceTakeRemovalManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    this.supportsRemoval = true,
+    this.receiptMismatch = false,
+    this.takeEntityFlagMismatch = false,
+    this.nextError,
+    this.postPublishError,
+  });
+
+  final bool supportsRemoval;
+  final bool receiptMismatch;
+  final bool takeEntityFlagMismatch;
+  Object? nextError;
+  Object? postPublishError;
+  int voiceTakeRemovalCalls = 0;
+  int voiceTakeRemovalRelatchCalls = 0;
+
+  @override
+  bool get supportsVoiceTakeRemoval => supportsRemoval;
+
+  @override
+  void markRequiresReopenAfterVoiceTakeRemovalUncertainty() {
+    voiceTakeRemovalRelatchCalls++;
+    requiresReopenValue = true;
+  }
+
+  @override
+  Future<Revision3VoiceTakeRemovalPublication>
+  prepareAndPublishVoiceTakeRemovalV1({
+    required Revision3VoiceTakeRemovalTechnicalPlan plan,
+  }) async {
+    voiceTakeRemovalCalls++;
+    final injected = nextError;
+    nextError = null;
+    if (injected != null) throw injected;
+    projectRevision++;
+    head = _head(projectRevision);
+    final postPublish = postPublishError;
+    postPublishError = null;
+    if (postPublish != null) throw postPublish;
+    return Revision3VoiceTakeRemovalPublication(
+      projectId: projectId,
+      projectRevision: receiptMismatch ? projectRevision + 1 : projectRevision,
+      lineId: plan.lineId,
+      localizationId: plan.localizationId,
+      slotId: plan.slotId,
+      slotRevision: plan.expectedSlotRevision + 1,
+      locale: plan.locale,
+      locId: plan.locId,
+      takeId: plan.takeId,
+      takeRevision: plan.expectedTakeRevision,
+      previousSelectedTakeId: plan.expectedSelectedTakeId,
+      selectionCleared: plan.expectsSelectionCleared,
+      takeEntityRemoved: takeEntityFlagMismatch
+          ? !plan.expectedTakeEntityRemoved
+          : plan.expectedTakeEntityRemoved,
+      remainingCandidateCount: plan.expectedRemainingCandidateCount,
+    );
+  }
+}
+
 final class _FakeRecoveryManagedLease extends _FakeManagedLease
     implements ManagedRevision3RecoveryLease {
   _FakeRecoveryManagedLease({
@@ -6981,6 +7296,27 @@ Revision3VoiceTakeSelectionTechnicalPlan _voiceSelectionPlan() {
     lineId: revision3VoiceContentLineId,
     locale: 'de',
     selectedTakeId: null,
+  );
+}
+
+Revision3VoiceTakeRemovalTechnicalPlan _voiceTakeRemovalPlan() {
+  final catalog = Revision3VoiceCatalog.fromContentIndex(
+    revision3VoiceContentIndexFixture(
+      existingSlotCandidateCount: 2,
+      existingSlotHasSelectedTake: true,
+    ),
+  );
+  final takeId = catalog
+      .line(revision3VoiceContentLineId)!
+      .slotSummaryForLocale('de')!
+      .candidates
+      .first
+      .id;
+  return Revision3VoiceTakeRemovalTechnicalPlan.forCheckpoint(
+    catalog: catalog,
+    lineId: revision3VoiceContentLineId,
+    locale: 'de',
+    takeId: takeId,
   );
 }
 

@@ -3583,6 +3583,124 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The current project remains open and unchanged. The game and saves were not touched.'**
   String get projectExportCurrentProjectUnchanged;
+
+  /// No description provided for @managedVoiceTakeRemoveAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from this line…'**
+  String get managedVoiceTakeRemoveAction;
+
+  /// No description provided for @managedVoiceTakeRemoveTooltip.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove this recording from the current dialog line and language'**
+  String get managedVoiceTakeRemoveTooltip;
+
+  /// No description provided for @managedVoiceTakeRemoveDialogTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove Voice take?'**
+  String get managedVoiceTakeRemoveDialogTitle;
+
+  /// No description provided for @managedVoiceTakeRemoveDialogSummary.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove “{take}” from {line} ({locale})?'**
+  String managedVoiceTakeRemoveDialogSummary(
+    String take,
+    String line,
+    String locale,
+  );
+
+  /// No description provided for @managedVoiceTakeRemoveScope.
+  ///
+  /// In en, this message translates to:
+  /// **'Only the link for this dialog line and language is removed. Other project uses remain unchanged.'**
+  String get managedVoiceTakeRemoveScope;
+
+  /// No description provided for @managedVoiceTakeRemoveInternalRetention.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio file remains stored internally. This action does not free project storage and has no undo yet.'**
+  String get managedVoiceTakeRemoveInternalRetention;
+
+  /// No description provided for @managedVoiceTakeRemoveGameBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation and save games are not changed.'**
+  String get managedVoiceTakeRemoveGameBoundary;
+
+  /// No description provided for @managedVoiceTakeRemoveSelectedWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This is the active take. Removing it also clears the selection atomically. No replacement is chosen automatically, so Voice build remains blocked until an Approved take is selected.'**
+  String get managedVoiceTakeRemoveSelectedWarning;
+
+  /// No description provided for @managedVoiceTakeRemoveCancel.
+  ///
+  /// In en, this message translates to:
+  /// **'Cancel'**
+  String get managedVoiceTakeRemoveCancel;
+
+  /// No description provided for @managedVoiceTakeRemoveConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove from line'**
+  String get managedVoiceTakeRemoveConfirm;
+
+  /// No description provided for @managedVoiceTakeRemoveUniqueSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The take was removed from this line and from the current project graph. Its internal audio data remains retained.'**
+  String get managedVoiceTakeRemoveUniqueSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveSharedSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The link was removed from this line and language. The take remains available to its other project uses, and its internal audio data remains retained.'**
+  String get managedVoiceTakeRemoveSharedSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveSelectionClearedSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'The active selection was cleared atomically. No replacement was selected; Voice build is blocked until an Approved take is selected.'**
+  String get managedVoiceTakeRemoveSelectionClearedSuccess;
+
+  /// No description provided for @managedVoiceTakeRemoveStale.
+  ///
+  /// In en, this message translates to:
+  /// **'The project changed before the take could be removed. Reload the latest Voice takes and review the action again.'**
+  String get managedVoiceTakeRemoveStale;
+
+  /// No description provided for @managedVoiceTakeRemoveRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal result could not be confirmed. Do not retry. Close this window and reopen or recover the managed project.'**
+  String get managedVoiceTakeRemoveRequiresReopen;
+
+  /// No description provided for @managedVoiceTakeRemoveSavedUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal was saved, but the latest project could not be confirmed. Do not repeat the removal. Close this window and reopen or recover the managed project.'**
+  String get managedVoiceTakeRemoveSavedUnconfirmed;
+
+  /// No description provided for @managedVoiceTakeRemoveSavedReloadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The removal was saved, but the latest Voice takes could not be loaded. Reload the takes; the removal will not be repeated.'**
+  String get managedVoiceTakeRemoveSavedReloadFailed;
+
+  /// No description provided for @managedVoiceTakeRemoveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The take was not removed: {error}'**
+  String managedVoiceTakeRemoveFailed(String error);
+
+  /// No description provided for @managedVoiceTakeRemoveReloadConfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The saved removal was confirmed from the latest project.'**
+  String get managedVoiceTakeRemoveReloadConfirmed;
 }
 
 class _AppLocalizationsDelegate

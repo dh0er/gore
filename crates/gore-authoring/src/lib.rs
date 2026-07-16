@@ -33,6 +33,7 @@ mod story_transaction_revision3_quest_transitions;
 mod story_transaction_revision3_removal;
 mod story_transaction_revision3_voice;
 mod story_transaction_revision3_voice_selection;
+mod story_transaction_revision3_voice_take_removal;
 mod story_transaction_revision3_voice_take_status;
 mod story_transaction_revision3_voice_target;
 mod strict_json;
@@ -301,6 +302,14 @@ pub use story_transaction_revision3_voice_selection::{
     Revision3VoiceTakeSelectionRejectionV1, Revision3VoiceTakeSelectionRequestJsonErrorV1,
     Revision3VoiceTakeSelectionRequestV1, Revision3VoiceTakeSelectionRuntimeStatusV1,
     MAX_REVISION3_VOICE_TAKE_SELECTION_REQUEST_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_voice_take_removal::{
+    apply_revision3_voice_take_removal_transaction_v1, Revision3VoiceTakeRemovalBuildStatusV1,
+    Revision3VoiceTakeRemovalConflictV1, Revision3VoiceTakeRemovalErrorV1,
+    Revision3VoiceTakeRemovalEvaluationV1, Revision3VoiceTakeRemovalOutcomeV1,
+    Revision3VoiceTakeRemovalRejectionV1, Revision3VoiceTakeRemovalRequestJsonErrorV1,
+    Revision3VoiceTakeRemovalRequestV1, Revision3VoiceTakeRemovalRuntimeStatusV1,
+    MAX_REVISION3_VOICE_TAKE_REMOVAL_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_voice_take_status::{
     apply_revision3_voice_take_status_edit_transaction_v1,
