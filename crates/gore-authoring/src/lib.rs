@@ -38,11 +38,12 @@ mod validate_revision3;
 mod working_store;
 
 pub use dataasset_stage::{
-    DataAssetStageArtifactAuthorityV1, DataAssetStageBuildStatusV1, DataAssetStageConflictV1,
-    DataAssetStageManifestErrorV1, DataAssetStagePublicationStatusV1,
-    DataAssetStageRuntimeStatusV1, PreparedRevision3DataAssetStageRemovalV1,
-    PreparedRevision3DataAssetStageV1, Revision3DataAssetStageManifestV1,
-    Revision3DataAssetStageViewV1, Revision3DataAssetStagingErrorV1,
+    verify_reviewed_fixed_leaf_stage_v1, DataAssetStageArtifactAuthorityV1,
+    DataAssetStageBuildStatusV1, DataAssetStageConflictV1, DataAssetStageManifestErrorV1,
+    DataAssetStagePublicationStatusV1, DataAssetStageRuntimeStatusV1,
+    PreparedRevision3DataAssetStageRemovalV1, PreparedRevision3DataAssetStageV1,
+    Revision3DataAssetStageManifestV1, Revision3DataAssetStageViewV1,
+    Revision3DataAssetStagingErrorV1, VerifiedReviewedFixedLeafStageV1,
     DATAASSET_FIXED_LEAF_COMPONENT_MEDIA_TYPE_V1,
     DATAASSET_FIXED_LEAF_STAGE_MANIFEST_MEDIA_TYPE_V1, MAX_DATAASSET_FIXED_LEAF_STAGES_V1,
     MAX_DATAASSET_FIXED_LEAF_STAGE_MANIFEST_BYTES_V1, MAX_DATAASSET_STAGE_HISTORICAL_BASES_V1,

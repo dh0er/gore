@@ -13,8 +13,9 @@ use gore_asset::dataasset_workflow::{
     MAX_USMAP_BYTES,
 };
 use gore_asset::{
-    FixedLeafRole, FixedLeafSelector, FixedWireKind, PackageComponent, FIXED_LEAF_SELECTOR_FORMAT,
-    FIXED_LEAF_SELECTOR_PROFILE,
+    evaluate_reviewed_dataasset_stage_v1, FixedLeafRole, FixedLeafSelector, FixedWireKind,
+    PackageComponent, ReviewedDataAssetStageBlockReasonV1, ReviewedDataAssetStageEligibilityV1,
+    ReviewedFootstepPresetReplacementV1, FIXED_LEAF_SELECTOR_FORMAT, FIXED_LEAF_SELECTOR_PROFILE,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -373,6 +374,46 @@ impl Revision3DataAssetStageViewV1 {
 
     pub fn target_path(&self) -> &str {
         self.manifest.target_path()
+    }
+}
+
+/// One managed stage whose persisted intent re-derives an exact reviewed semantic edit.
+///
+/// This path-free wrapper is classification evidence only. It does not change the stage manifest's
+/// closed authority statuses and grants no build, reinspection, publication, deployment, or runtime
+/// authority.
+#[derive(Debug)]
+pub struct VerifiedReviewedFixedLeafStageV1 {
+    stage: Revision3DataAssetStageViewV1,
+    reviewed: Box<ReviewedFootstepPresetReplacementV1>,
+}
+
+impl VerifiedReviewedFixedLeafStageV1 {
+    pub fn stage(&self) -> &Revision3DataAssetStageViewV1 {
+        &self.stage
+    }
+
+    pub fn reviewed(&self) -> &ReviewedFootstepPresetReplacementV1 {
+        &self.reviewed
+    }
+}
+
+/// Re-derive reviewed semantic eligibility from one fully verified managed-stage view.
+///
+/// No reviewed flag or duplicate semantic payload is persisted: the existing `gore-asset`
+/// classifier remains the sole source of truth.
+pub fn verify_reviewed_fixed_leaf_stage_v1(
+    stage: Revision3DataAssetStageViewV1,
+) -> Result<VerifiedReviewedFixedLeafStageV1, ReviewedDataAssetStageBlockReasonV1> {
+    match evaluate_reviewed_dataasset_stage_v1(
+        stage.manifest().target_path(),
+        stage.manifest().selector(),
+        stage.manifest().replacement_hex(),
+    ) {
+        ReviewedDataAssetStageEligibilityV1::Eligible(reviewed) => {
+            Ok(VerifiedReviewedFixedLeafStageV1 { stage, reviewed })
+        }
+        ReviewedDataAssetStageEligibilityV1::Blocked(reason) => Err(reason),
     }
 }
 
@@ -1432,6 +1473,7 @@ mod tests {
     struct ProjectionFixture {
         generation: AssetGenerationReceipt,
         selector: FixedLeafSelector,
+        replacement_hex: String,
         uasset: Vec<u8>,
         uexp: Vec<u8>,
         usmap: Vec<u8>,
@@ -1518,6 +1560,7 @@ mod tests {
             Self {
                 generation,
                 selector,
+                replacement_hex: "00".to_owned(),
                 uasset,
                 uexp,
                 usmap,
@@ -1534,7 +1577,7 @@ mod tests {
                 target_path: &self.generation.asset,
                 generation: &self.generation,
                 selector: &self.selector,
-                replacement_hex: "00",
+                replacement_hex: &self.replacement_hex,
                 patched_uasset: &self.uasset,
                 patched_uexp: &self.uexp,
                 usmap: &self.usmap,
@@ -1542,6 +1585,71 @@ mod tests {
                 executable: self.executable.clone(),
             }
         }
+    }
+
+    fn reviewed_wolf_fixture() -> ProjectionFixture {
+        let mut fixture = ProjectionFixture::new();
+        fixture.generation.asset = gore_asset::ReviewedFootstepPresetTargetV1::Wolf
+            .target_path()
+            .to_owned();
+        for chunk in &mut fixture.generation.target_chunks {
+            chunk.chunk_id.replace_range(..16, "01e173a19ea374c9");
+        }
+        fixture.selector = FixedLeafSelector {
+            format: FIXED_LEAF_SELECTOR_FORMAT,
+            profile: FIXED_LEAF_SELECTOR_PROFILE.to_owned(),
+            package_seal: PackagePairSeal {
+                uasset_sha256: [0x41; 32],
+                uexp_sha256: [0x42; 32],
+            },
+            usmap_sha256: fixture.generation.usmap.sha256.clone(),
+            export_index: 0,
+            object_name: "DA_WolfFootsteps".to_owned(),
+            class_path: "/Script/G1R.FootstepTag".to_owned(),
+            component: PackageComponent::Uexp,
+            export_sha256: "55".repeat(32),
+            role: FixedLeafRole::PropertyValue,
+            kind: FixedWireKind::Vector4F64x4,
+            path: vec![
+                FixedLeafSelectorStep::Property {
+                    schema_index: 0,
+                    property_name: "BoneData".to_owned(),
+                    array_index: 0,
+                    array_dimension: 1,
+                    declaring_schema_name: "FootstepTag".to_owned(),
+                    declaring_module_path: Some("/Script/G1R".to_owned()),
+                    property_type: FixedLeafWireType::Struct {
+                        name: "BoneFeetData".to_owned(),
+                    },
+                },
+                FixedLeafSelectorStep::Struct {
+                    name: "BoneFeetData".to_owned(),
+                    schema_name: "/Script/G1R.BoneFeetData".to_owned(),
+                },
+                FixedLeafSelectorStep::Property {
+                    schema_index: 0,
+                    property_name: "FeetTextureSize".to_owned(),
+                    array_index: 0,
+                    array_dimension: 1,
+                    declaring_schema_name: "BoneFeetData".to_owned(),
+                    declaring_module_path: Some("/Script/G1R".to_owned()),
+                    property_type: FixedLeafWireType::Struct {
+                        name: "Vector4".to_owned(),
+                    },
+                },
+            ],
+            expected_hex: vector4_hex([10.0, 10.0, 0.0, 1.0]),
+        };
+        fixture.replacement_hex = vector4_hex([11.0, 12.0, 0.0, 1.0]);
+        fixture
+    }
+
+    fn vector4_hex(components: [f64; 4]) -> String {
+        components
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     fn hex_sha256(bytes: &[u8]) -> String {
@@ -1583,6 +1691,77 @@ mod tests {
             || Ok(()),
             || Ok(()),
         )
+    }
+
+    #[test]
+    fn reviewed_wrapper_preserves_the_exact_stage_and_closed_authority_contract() {
+        let root = TestRoot::new("reviewed-wrapper");
+        let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+        let fixture = reviewed_wolf_fixture();
+        let basis_project = project(&fixture.executable);
+        let basis = store
+            .prepare_revision3_checkpoint(None, &basis_project)
+            .unwrap();
+        root.publish(&basis.head_bytes);
+        let prepared = prepare_projection(&store, &basis.head, &fixture).unwrap();
+        let original = prepared.stage().clone();
+        let original_manifest_asset = original.manifest_asset().clone();
+        let original_manifest_wire = original.manifest().to_canonical_json().unwrap();
+
+        let verified = verify_reviewed_fixed_leaf_stage_v1(original.clone()).unwrap();
+
+        assert_eq!(verified.stage(), &original);
+        assert_eq!(verified.stage().manifest_asset(), &original_manifest_asset);
+        assert_eq!(
+            verified.stage().manifest().to_canonical_json().unwrap(),
+            original_manifest_wire
+        );
+        assert_eq!(
+            verified.reviewed().target(),
+            gore_asset::ReviewedFootstepPresetTargetV1::Wolf
+        );
+        assert_eq!(
+            verified.reviewed().replacement_components(),
+            [11.0, 12.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            verified.stage().manifest().build_status(),
+            DataAssetStageBuildStatusV1::Blocked
+        );
+        assert_eq!(
+            verified.stage().manifest().runtime_status(),
+            DataAssetStageRuntimeStatusV1::RuntimeUnqualified
+        );
+        assert_eq!(
+            verified.stage().manifest().artifact_authority(),
+            DataAssetStageArtifactAuthorityV1::NotGranted
+        );
+        assert_eq!(
+            verified.stage().manifest().publication_status(),
+            DataAssetStagePublicationStatusV1::NotSupported
+        );
+    }
+
+    #[test]
+    fn reviewed_wrapper_returns_the_typed_classifier_reason_for_a_near_miss() {
+        let root = TestRoot::new("reviewed-near-miss");
+        let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+        let fixture = reviewed_wolf_fixture();
+        let basis_project = project(&fixture.executable);
+        let basis = store
+            .prepare_revision3_checkpoint(None, &basis_project)
+            .unwrap();
+        root.publish(&basis.head_bytes);
+        let prepared = prepare_projection(&store, &basis.head, &fixture).unwrap();
+        let mut near_miss = prepared.stage().clone();
+        near_miss.manifest.selector.class_path = "/Script/G1R.FootstepTagNearMiss".to_owned();
+        let near_miss_wire = near_miss.manifest.to_canonical_json().unwrap();
+        near_miss.manifest_asset = seal_bytes(near_miss_wire.as_bytes());
+
+        assert!(matches!(
+            verify_reviewed_fixed_leaf_stage_v1(near_miss),
+            Err(ReviewedDataAssetStageBlockReasonV1::SelectorMismatch { fact: "class path" })
+        ));
     }
 
     #[test]
