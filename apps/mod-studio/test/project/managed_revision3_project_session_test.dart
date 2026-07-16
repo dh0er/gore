@@ -692,6 +692,232 @@ void main() {
   );
 
   test(
+    'Voice planning is an exact no-output read and leaves the checkpoint unchanged',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_plan');
+      final store = _FakeRevision3Store();
+      final projectJson = revision3VoiceFixtureProjectJson();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: projectJson,
+      );
+      final fixedHead = await session.headFile.readAsBytes();
+
+      final result = await session.planVoiceV1();
+
+      expect(result.isReady, isFalse);
+      expect(result.totalSlots, 0);
+      expect(
+        result.blockers.single.reason,
+        AuthoringRevision3VoiceBuildBlockReason.noVoiceSlots,
+      );
+      expect(store.voicePlanCalls, 1);
+      expect(store.voicePlanCurrentProjects, <String>[projectJson]);
+      expect(store.voicePlanExpectedHeads, <String>[
+        session.head.canonicalJson,
+      ]);
+      expect(store.voiceBuildCalls, 0);
+      expect(store.voiceBuildGameRoots, isEmpty);
+      expect(store.voiceBuildOutputs, isEmpty);
+      expect(session.projectJson, projectJson);
+      expect(session.projectRevision, 7);
+      expect(await session.headFile.readAsBytes(), orderedEquals(fixedHead));
+      await session.close();
+    },
+  );
+
+  test(
+    'Voice plan keeps bounded semantic failures retryable but poisons integrity failures',
+    () async {
+      final retryRoot = await _projectRoot(fixture, suffix: 'voice_plan_retry');
+      final retryStore = _FakeRevision3Store();
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: retryRoot,
+        store: retryStore,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      final retryHead = await retrySession.headFile.readAsBytes();
+      retryStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
+        message: 'fake Voice-only semantic rejection',
+      );
+
+      await expectLater(
+        retrySession.planVoiceV1(),
+        throwsA(isA<ModFfiException>()),
+      );
+      expect(retrySession.requiresReopen, isFalse);
+      expect(
+        await retrySession.headFile.readAsBytes(),
+        orderedEquals(retryHead),
+      );
+      expect((await retrySession.planVoiceV1()).isReady, isFalse);
+      expect(retryStore.voicePlanCalls, 2);
+      await retrySession.close();
+
+      final poisonRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_plan_poison',
+      );
+      final poisonStore = _FakeRevision3Store();
+      final poisonSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: poisonRoot,
+            store: poisonStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      poisonStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_INVARIANT',
+        message: 'fake planner/native invariant disagreement',
+      );
+
+      await expectLater(
+        poisonSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonSession.requiresReopen, isTrue);
+      await expectLater(
+        poisonSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(poisonStore.voicePlanCalls, 1);
+      await poisonSession.close();
+    },
+  );
+
+  test(
+    'Voice plan error classifier covers every retryable code and fails closed otherwise',
+    () async {
+      const retryableCodes = <String>{
+        'AUTHORING_REVISION3_VOICE_PLAN_INPUT_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
+        'AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT',
+      };
+      for (final code in retryableCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_plan_retry_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        store.nextVoicePlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_voice_v1',
+          code: code,
+          message: 'injected retryable Voice plan failure',
+        );
+
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(
+            isA<ModFfiException>().having((error) => error.code, 'code', code),
+          ),
+        );
+        expect(session.requiresReopen, isFalse, reason: code);
+        expect((await session.planVoiceV1()).isReady, isFalse, reason: code);
+        expect(store.voicePlanCalls, 2, reason: code);
+        await session.close();
+      }
+
+      const poisonedCodes = <String>{
+        'AUTHORING_REVISION3_VOICE_PLAN_INVARIANT',
+        'AUTHORING_REVISION3_VOICE_PLAN_STORE_LIMIT',
+        'AUTHORING_REVISION3_VOICE_PLAN_UNRECOGNIZED',
+      };
+      for (final code in poisonedCodes) {
+        final root = await _projectRoot(
+          fixture,
+          suffix: 'voice_plan_poison_${code.toLowerCase()}',
+        );
+        final store = _FakeRevision3Store();
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: revision3VoiceFixtureProjectJson(),
+        );
+        store.nextVoicePlanError = ModFfiException(
+          command: 'authoring_store_plan_revision3_voice_v1',
+          code: code,
+          message: 'injected untrusted Voice plan failure',
+        );
+
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(session.requiresReopen, isTrue, reason: code);
+        await expectLater(
+          session.planVoiceV1(),
+          throwsA(isA<ManagedProjectVerificationException>()),
+        );
+        expect(store.voicePlanCalls, 1, reason: code);
+        await session.close();
+      }
+
+      final conflictRoot = await _projectRoot(
+        fixture,
+        suffix: 'voice_plan_head_conflict_classifier',
+      );
+      final conflictStore = _FakeRevision3Store();
+      final conflictSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: conflictRoot,
+            store: conflictStore,
+            projectJson: revision3VoiceFixtureProjectJson(),
+          );
+      conflictStore.nextVoicePlanError = const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT',
+        message: 'injected Voice plan head conflict',
+      );
+
+      await expectLater(
+        conflictSession.planVoiceV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(conflictSession.requiresReopen, isTrue);
+      expect(conflictStore.voicePlanCalls, 1);
+      await conflictSession.close();
+    },
+  );
+
+  test(
+    'Voice plan uses readExact and rejects a head change after native planning',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'voice_plan_drift');
+      final store = _FakeRevision3Store();
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: revision3VoiceFixtureProjectJson(),
+      );
+      store.afterVoicePlan = (root, _) async {
+        final laterHead = store.register(
+          revision3VoiceFixtureProjectJson(revision: 8),
+        );
+        await File(
+          p.join(root, 'gore-project.json'),
+        ).writeAsString(laterHead.canonicalJson, flush: true);
+      };
+
+      await expectLater(
+        session.planVoiceV1(),
+        throwsA(isA<ManagedProjectHeadConflictException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(store.voicePlanCalls, 1);
+      expect(store.voiceBuildCalls, 0);
+      await session.close();
+    },
+  );
+
+  test(
     'Voice target publishes sealed archive evidence and build is an exact non-publishing read',
     () async {
       final root = await _projectRoot(fixture, suffix: 'voice_target_build');
@@ -7117,6 +7343,12 @@ typedef _AfterVoiceBuild =
       AuthoringRevision3VoiceBuildResult result,
     );
 
+typedef _AfterVoicePlan =
+    FutureOr<void> Function(
+      String root,
+      AuthoringRevision3VoiceBuildPlanResult result,
+    );
+
 typedef _AfterExactSnapshotExport =
     FutureOr<void> Function(
       String root,
@@ -7409,6 +7641,7 @@ class _FakeRevision3Store
   int voiceSelectionPrepareCalls = 0;
   int voiceTakeStatusPrepareCalls = 0;
   int voiceTargetPrepareCalls = 0;
+  int voicePlanCalls = 0;
   int voiceBuildCalls = 0;
   int contentReadCalls = 0;
   int dialogLocalizationReadCalls = 0;
@@ -7439,6 +7672,7 @@ class _FakeRevision3Store
   _AfterInstalledDataAssetInspection? afterInstalledDataAssetInspection;
   _AfterDataAssetPrepare? afterDataAssetPrepare;
   _AfterDataAssetList? afterDataAssetList;
+  _AfterVoicePlan? afterVoicePlan;
   _AfterVoiceBuild? afterVoiceBuild;
   final List<String> questGameRoots = <String>[];
   final List<String> questCurrentProjects = <String>[];
@@ -7467,6 +7701,8 @@ class _FakeRevision3Store
   voiceTakeStatusRequests = <AuthoringRevision3VoiceTakeStatusRequestV1>[];
   final List<AuthoringRevision3VoiceTargetRequestV1> voiceTargetRequests =
       <AuthoringRevision3VoiceTargetRequestV1>[];
+  final List<String> voicePlanCurrentProjects = <String>[];
+  final List<String> voicePlanExpectedHeads = <String>[];
   final List<String> voiceBuildOutputs = <String>[];
   final List<String> voiceBuildGameRoots = <String>[];
   String? nextQuestResponseMismatch;
@@ -7482,6 +7718,7 @@ class _FakeRevision3Store
   Object? nextVoiceSelectionError;
   Object? nextVoiceTakeStatusError;
   Object? nextVoiceTargetError;
+  Object? nextVoicePlanError;
   Object? nextVoiceBuildError;
   ModFfiException? nextContentError;
   String? nextContentResponseMismatch;
@@ -8509,6 +8746,52 @@ class _FakeRevision3Store
       currentProjectJson: currentProjectJson,
       request: request,
     );
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    voicePlanCalls++;
+    voicePlanCurrentProjects.add(currentProjectJson);
+    voicePlanExpectedHeads.add(expectedHead.canonicalJson);
+    final injectedError = nextVoicePlanError;
+    nextVoicePlanError = null;
+    if (injectedError != null) throw injectedError;
+    final actual = await File(p.join(root, 'gore-project.json')).readAsString();
+    if (actual != expectedHead.canonicalJson ||
+        _projectsByHead[actual] != currentProjectJson) {
+      throw const ModFfiException(
+        command: 'authoring_store_plan_revision3_voice_v1',
+        code: 'AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT',
+        message: 'fake native Voice plan basis CAS rejected',
+      );
+    }
+    final project = (jsonDecode(currentProjectJson) as Map)
+        .cast<String, Object?>();
+    final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'blocked',
+        'basis_head_json': expectedHead.canonicalJson,
+        'project_id': project['project_id'],
+        'project_revision': project['revision'],
+        'total_slots': 0,
+        'ready_slots': 0,
+        'blockers': <Object?>[
+          <String, Object?>{'reason': 'no_voice_slots'},
+        ],
+        'plan_authority': 'read_only_voice_build_plan_v1',
+        'build_authority': 'not_granted',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: expectedHead,
+      expectedProjectJson: currentProjectJson,
+    );
+    await afterVoicePlan?.call(root, result);
+    return result;
   }
 
   @override

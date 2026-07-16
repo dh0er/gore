@@ -4181,6 +4181,474 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{name} was saved in project revision {revision}. It remains an offline, build-blocked draft.'**
   String managedNpcProfileEditSaved(String name, int revision);
+
+  /// No description provided for @managedVoiceBuildReadinessTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness'**
+  String get managedVoiceBuildReadinessTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessRefresh.
+  ///
+  /// In en, this message translates to:
+  /// **'Refresh Voice readiness'**
+  String get managedVoiceBuildReadinessRefresh;
+
+  /// No description provided for @managedVoiceBuildReadinessChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking exact Voice readiness'**
+  String get managedVoiceBuildReadinessChecking;
+
+  /// No description provided for @managedVoiceBuildReadinessLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness could not be verified for the current project. No build is available from this result.'**
+  String get managedVoiceBuildReadinessLoadError;
+
+  /// No description provided for @managedVoiceBuildReadinessReadyTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice is ready'**
+  String get managedVoiceBuildReadinessReadyTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessBlockedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice needs attention'**
+  String get managedVoiceBuildReadinessBlockedTitle;
+
+  /// No description provided for @managedVoiceBuildReadinessCount.
+  ///
+  /// In en, this message translates to:
+  /// **'{readySlots} of {totalSlots} Voice slots are ready.'**
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots);
+
+  /// No description provided for @managedVoiceBuildReadinessBlockedBoundary.
+  ///
+  /// In en, this message translates to:
+  /// **'No bundle was created and deployment was not performed.'**
+  String get managedVoiceBuildReadinessBlockedBoundary;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildBundle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build bundle'**
+  String get managedVoiceBuildReadinessBuildBundle;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildReleaseGuidance.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice content is ready. Open Build & Release to create the offline bundle.'**
+  String get managedVoiceBuildReadinessBuildReleaseGuidance;
+
+  /// No description provided for @managedVoiceBuildReadinessConfigureGameGuidance.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice content is ready. Configure the game installation before creating an offline bundle.'**
+  String get managedVoiceBuildReadinessConfigureGameGuidance;
+
+  /// No description provided for @managedVoiceBuildReadinessHideBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide blockers'**
+  String get managedVoiceBuildReadinessHideBlockers;
+
+  /// No description provided for @managedVoiceBuildReadinessShowBlockers.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Show 1 blocker} other{Show {count} blockers}}'**
+  String managedVoiceBuildReadinessShowBlockers(int count);
+
+  /// No description provided for @managedVoiceBuildReadinessWorkflowFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice workflow could not be opened. Refresh and try again.'**
+  String get managedVoiceBuildReadinessWorkflowFailed;
+
+  /// No description provided for @managedVoiceBuildReadinessBuildWorkflowFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice build workflow could not be opened.'**
+  String get managedVoiceBuildReadinessBuildWorkflowFailed;
+
+  /// No description provided for @managedVoiceBuildReadinessExactRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Exact project revision {revision}'**
+  String managedVoiceBuildReadinessExactRevision(int revision);
+
+  /// No description provided for @managedVoiceBuildReadinessResolveTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve target'**
+  String get managedVoiceBuildReadinessResolveTarget;
+
+  /// No description provided for @managedVoiceBuildReadinessManageTakes.
+  ///
+  /// In en, this message translates to:
+  /// **'Manage takes'**
+  String get managedVoiceBuildReadinessManageTakes;
+
+  /// No description provided for @managedVoiceBuildBlockerNoSlots.
+  ///
+  /// In en, this message translates to:
+  /// **'No Voice setups exist in this project.'**
+  String get managedVoiceBuildBlockerNoSlots;
+
+  /// No description provided for @managedVoiceBuildBlockerPayloadBudget.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice recordings exceed the safe bundle memory budget.'**
+  String get managedVoiceBuildBlockerPayloadBudget;
+
+  /// No description provided for @managedVoiceBuildBlockerUnresolvedTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'Resolve this Voice target.'**
+  String get managedVoiceBuildBlockerUnresolvedTarget;
+
+  /// No description provided for @managedVoiceBuildBlockerAmbiguousTarget.
+  ///
+  /// In en, this message translates to:
+  /// **'This Voice target is ambiguous.'**
+  String get managedVoiceBuildBlockerAmbiguousTarget;
+
+  /// No description provided for @managedVoiceBuildBlockerUnqualifiedAdd.
+  ///
+  /// In en, this message translates to:
+  /// **'This target is not a sealed existing-member replacement.'**
+  String get managedVoiceBuildBlockerUnqualifiedAdd;
+
+  /// No description provided for @managedVoiceBuildBlockerMissingTake.
+  ///
+  /// In en, this message translates to:
+  /// **'Select an approved Voice take.'**
+  String get managedVoiceBuildBlockerMissingTake;
+
+  /// No description provided for @managedVoiceBuildBlockerTakeNotApproved.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice take is not approved.'**
+  String get managedVoiceBuildBlockerTakeNotApproved;
+
+  /// No description provided for @managedVoiceBuildBlockerCodecUnqualified.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice take uses an unsupported codec.'**
+  String get managedVoiceBuildBlockerCodecUnqualified;
+
+  /// No description provided for @managedVoiceBuildBlockerSlotLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'This project exceeds the 1024-slot Voice bundle limit.'**
+  String get managedVoiceBuildBlockerSlotLimit;
+
+  /// No description provided for @managedVoiceBuildOfflineNotice.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline build only. This creates a sealed existing-member Voice bundle. It does not deploy or write to the game.'**
+  String get managedVoiceBuildOfflineNotice;
+
+  /// No description provided for @managedVoiceBuildNewFolderName.
+  ///
+  /// In en, this message translates to:
+  /// **'New folder name'**
+  String get managedVoiceBuildNewFolderName;
+
+  /// No description provided for @managedVoiceBuildNewFolderHelp.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle must be written to a brand-new child folder.'**
+  String get managedVoiceBuildNewFolderHelp;
+
+  /// No description provided for @managedVoiceBuildChooseParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose parent folder'**
+  String get managedVoiceBuildChooseParent;
+
+  /// No description provided for @managedVoiceBuildNoParentSelected.
+  ///
+  /// In en, this message translates to:
+  /// **'No parent folder selected'**
+  String get managedVoiceBuildNoParentSelected;
+
+  /// No description provided for @managedVoiceBuildNewOutput.
+  ///
+  /// In en, this message translates to:
+  /// **'New output'**
+  String get managedVoiceBuildNewOutput;
+
+  /// No description provided for @managedVoiceBuildOfflineBundle.
+  ///
+  /// In en, this message translates to:
+  /// **'Build offline bundle'**
+  String get managedVoiceBuildOfflineBundle;
+
+  /// No description provided for @managedVoiceBuildParentInspectFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The parent folder could not be inspected safely. No build or deployment was attempted.'**
+  String get managedVoiceBuildParentInspectFailed;
+
+  /// No description provided for @managedVoiceBuildChooseExistingParent.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an existing parent folder.'**
+  String get managedVoiceBuildChooseExistingParent;
+
+  /// No description provided for @managedVoiceBuildTargetSymlink.
+  ///
+  /// In en, this message translates to:
+  /// **'The target path is a symlink. Choose a different new folder name.'**
+  String get managedVoiceBuildTargetSymlink;
+
+  /// No description provided for @managedVoiceBuildTargetExists.
+  ///
+  /// In en, this message translates to:
+  /// **'The target already exists. Choose a different new folder name.'**
+  String get managedVoiceBuildTargetExists;
+
+  /// No description provided for @managedVoiceBuildRequiresReopen.
+  ///
+  /// In en, this message translates to:
+  /// **'This project can no longer be verified as current. Close this window and reopen the managed project before building another Voice bundle.'**
+  String get managedVoiceBuildRequiresReopen;
+
+  /// No description provided for @managedVoiceBuildStaleCheckpoint.
+  ///
+  /// In en, this message translates to:
+  /// **'The managed project changed while this window was open. Close this build window and open it again from the current project.'**
+  String get managedVoiceBuildStaleCheckpoint;
+
+  /// No description provided for @managedVoiceBuildFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice bundle could not be built exactly. No deployment was attempted. Before retrying, choose a new folder name if output was created.'**
+  String get managedVoiceBuildFailed;
+
+  /// No description provided for @managedVoiceBuildPlanFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice readiness could not be verified for the exact current project. Output selection and build are unavailable until verification succeeds.'**
+  String get managedVoiceBuildPlanFailed;
+
+  /// No description provided for @managedVoiceBuildParentAbsolute.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose an absolute existing parent folder.'**
+  String get managedVoiceBuildParentAbsolute;
+
+  /// No description provided for @managedVoiceBuildParentSymlink.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected parent is a symlink. Choose a real existing folder.'**
+  String get managedVoiceBuildParentSymlink;
+
+  /// No description provided for @managedVoiceBuildFolderRequired.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter a new folder name.'**
+  String get managedVoiceBuildFolderRequired;
+
+  /// No description provided for @managedVoiceBuildFolderWhitespace.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name cannot start or end with whitespace.'**
+  String get managedVoiceBuildFolderWhitespace;
+
+  /// No description provided for @managedVoiceBuildFolderTooLong.
+  ///
+  /// In en, this message translates to:
+  /// **'The folder name is too long.'**
+  String get managedVoiceBuildFolderTooLong;
+
+  /// No description provided for @managedVoiceBuildFolderPortable.
+  ///
+  /// In en, this message translates to:
+  /// **'Use one portable folder name without separators or reserved characters.'**
+  String get managedVoiceBuildFolderPortable;
+
+  /// No description provided for @managedVoiceBuildFolderWindowsReserved.
+  ///
+  /// In en, this message translates to:
+  /// **'That folder name is reserved by Windows.'**
+  String get managedVoiceBuildFolderWindowsReserved;
+
+  /// No description provided for @managedVoiceBuildExecutableUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed game executable could not be read. Finish any game update and check the configured installation before trying again. No deployment was attempted.'**
+  String get managedVoiceBuildExecutableUnavailable;
+
+  /// No description provided for @managedVoiceBuildExecutableMismatch.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed game executable no longer matches this project generation. Re-import or retarget the managed project before building again. No deployment was attempted.'**
+  String get managedVoiceBuildExecutableMismatch;
+
+  /// No description provided for @managedVoiceBuildGameUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The configured Gothic 1 Remake installation is unavailable. Check it in Settings before trying again. No deployment was attempted.'**
+  String get managedVoiceBuildGameUnavailable;
+
+  /// No description provided for @managedVoiceBuildStoreGameAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'This project folder overlaps the configured game installation. Move the project outside the game folder before building. No deployment was attempted.'**
+  String get managedVoiceBuildStoreGameAlias;
+
+  /// No description provided for @managedVoiceBuildGameOutputAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle output overlaps a Gothic 1 Remake installation. Choose a parent folder outside every game installation. No deployment was attempted.'**
+  String get managedVoiceBuildGameOutputAlias;
+
+  /// No description provided for @managedVoiceBuildStoreOutputAlias.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle output overlaps the managed project. Choose a parent folder outside the project. No deployment was attempted.'**
+  String get managedVoiceBuildStoreOutputAlias;
+
+  /// No description provided for @managedVoiceBuildOutputUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected output parent is unavailable or cannot be traversed safely. Choose a real existing parent folder outside the project and game.'**
+  String get managedVoiceBuildOutputUnavailable;
+
+  /// No description provided for @managedVoiceBuildOutputFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The new bundle folder could not be written completely. Do not use any output left there; choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildOutputFailed;
+
+  /// No description provided for @managedVoiceBuildPromotionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The sealed bundle could not be promoted into the requested new output folder. A conflicting output was left untouched and owned staging was removed. Choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildPromotionFailed;
+
+  /// No description provided for @managedVoiceBuildCleanupFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice bundle was not published, but its temporary staging folder could not be removed completely. Remove the reported staging folder before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildCleanupFailed;
+
+  /// No description provided for @managedVoiceBuildPublicationUnconfirmed.
+  ///
+  /// In en, this message translates to:
+  /// **'The atomic publication may have succeeded, but its final identity or durability could not be confirmed. Do not retry, replace, or delete that exact output yet. Close this window and inspect the reported folder before deciding how to proceed. No deployment was attempted.'**
+  String get managedVoiceBuildPublicationUnconfirmed;
+
+  /// No description provided for @managedVoiceBuildStoreRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The managed project root changed while the bundle was being built. Close this window and reopen the project before building again. No deployment was attempted.'**
+  String get managedVoiceBuildStoreRootChanged;
+
+  /// No description provided for @managedVoiceBuildGameRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The game installation changed while the bundle was being built. Finish the update or file operation, then retry with a new folder name. No deployment was attempted.'**
+  String get managedVoiceBuildGameRootChanged;
+
+  /// No description provided for @managedVoiceBuildOutputRootChanged.
+  ///
+  /// In en, this message translates to:
+  /// **'The output parent changed while the bundle was being built. Finish the file operation, verify the parent, then retry with a new folder name. No deployment was attempted.'**
+  String get managedVoiceBuildOutputRootChanged;
+
+  /// No description provided for @managedVoiceBuildVerifyFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The written bundle could not be verified exactly. Do not use that output; choose a different new folder name before retrying. No deployment was attempted.'**
+  String get managedVoiceBuildVerifyFailed;
+
+  /// No description provided for @managedVoiceBuildBundleInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The selected Voice content could not be lowered into one exact sealed bundle. Reopen the project, review its Voice slots, and try again. No deployment was attempted.'**
+  String get managedVoiceBuildBundleInvalid;
+
+  /// No description provided for @managedVoiceBuildInputInvalid.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice build request or output path exceeds the safe supported limits. Choose a shorter new output path and try again. No deployment was attempted.'**
+  String get managedVoiceBuildInputInvalid;
+
+  /// No description provided for @managedVoiceBuildResponseLimit.
+  ///
+  /// In en, this message translates to:
+  /// **'The bundle was too large to return an exact build receipt. Do not use any unreceipted output; choose a new folder only after reducing the Voice build. No deployment was attempted.'**
+  String get managedVoiceBuildResponseLimit;
+
+  /// No description provided for @managedVoiceBuildBuiltTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed Voice bundle built'**
+  String get managedVoiceBuildBuiltTitle;
+
+  /// No description provided for @managedVoiceBuildOfflineReceipt.
+  ///
+  /// In en, this message translates to:
+  /// **'Offline receipt only. Deployment was not performed.'**
+  String get managedVoiceBuildOfflineReceipt;
+
+  /// No description provided for @managedVoiceBuildBasisRevision.
+  ///
+  /// In en, this message translates to:
+  /// **'Basis project revision'**
+  String get managedVoiceBuildBasisRevision;
+
+  /// No description provided for @managedVoiceBuildOutputLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Output'**
+  String get managedVoiceBuildOutputLabel;
+
+  /// No description provided for @managedVoiceBuildArchiveEdits.
+  ///
+  /// In en, this message translates to:
+  /// **'Archive edits'**
+  String get managedVoiceBuildArchiveEdits;
+
+  /// No description provided for @managedVoiceBuildBundleFiles.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundle files'**
+  String get managedVoiceBuildBundleFiles;
+
+  /// No description provided for @managedVoiceBuildSealedBytes.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed bytes'**
+  String get managedVoiceBuildSealedBytes;
+
+  /// No description provided for @managedVoiceBuildBundleSha256.
+  ///
+  /// In en, this message translates to:
+  /// **'Bundle SHA-256'**
+  String get managedVoiceBuildBundleSha256;
+
+  /// No description provided for @managedVoiceBuildParentPickerTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose Voice bundle parent'**
+  String get managedVoiceBuildParentPickerTitle;
+
+  /// No description provided for @managedVoiceBuildBuiltMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Sealed Voice bundle built at {output}. Deployment was not performed.'**
+  String managedVoiceBuildBuiltMessage(String output);
+
+  /// No description provided for @managedVoiceBuildBlockedMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Voice build blocked by {count} exact requirements. No bundle was created or deployed.'**
+  String managedVoiceBuildBlockedMessage(int count);
 }
 
 class _AppLocalizationsDelegate

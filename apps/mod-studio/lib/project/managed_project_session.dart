@@ -983,6 +983,12 @@ abstract interface class ManagedRevision3AuthoringStore {
     required AuthoringRevision3VoiceTargetRequestV1 request,
   });
 
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  });
+
   Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
     required String root,
     required String gameRoot,
@@ -1477,6 +1483,17 @@ final class ModFfiManagedRevision3AuthoringStore
     gameRoot: gameRoot,
     currentProjectJson: currentProjectJson,
     request: request,
+  );
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) => ffi.authoringStorePlanRevision3VoiceV1(
+    root: root,
+    currentProjectJson: currentProjectJson,
+    expectedHead: expectedHead,
   );
 
   @override
@@ -3631,6 +3648,38 @@ class ManagedRevision3AuthoringProjectSession {
           );
         },
       );
+
+  /// Evaluate Voice build readiness against the exact current checkpoint.
+  ///
+  /// This is a serialized exact-head read. It accepts no game or output path,
+  /// writes nothing, and grants neither build nor deployment authority.
+  Future<AuthoringRevision3VoiceBuildPlanResult>
+  planVoiceV1() => _core.readExact<AuthoringRevision3VoiceBuildPlanResult>(
+    (basis) async {
+      final projectId = basis.projectId;
+      final projectRevision = basis.projectRevision;
+      if (projectId == null || projectRevision == null) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 Voice build plan has no exact project identity',
+        );
+      }
+      final result = await _store.planVoiceV1(
+        root: root.path,
+        currentProjectJson: basis.projectJson,
+        expectedHead: basis.head,
+      );
+      if (result.basisHead.canonicalJson != basis.head.canonicalJson ||
+          result.projectId != projectId ||
+          result.projectRevision != projectRevision) {
+        throw const ManagedProjectVerificationException(
+          'revision-3 Voice build plan disagrees with its exact session basis',
+        );
+      }
+      return result;
+    },
+    operation: 'planVoiceV1',
+    handleReadError: _core._throwRevision3VoiceBuildPlanError,
+  );
 
   /// Build the exact current selected Voice graph into a new offline bundle.
   /// This is a serialized exact-head read and never publishes or deploys.
@@ -6048,6 +6097,39 @@ class _ManagedProjectSessionCore {
     );
   }
 
+  Never _throwRevision3VoiceBuildPlanError(
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (error is ModFfiException) {
+      if (error.code == 'AUTHORING_REVISION3_VOICE_PLAN_HEAD_CONFLICT') {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(
+          ManagedProjectHeadConflictException(error.message),
+          stackTrace,
+        );
+      }
+      if (_revision3VoiceBuildPlanErrorIsRetryable(error.code)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      _requiresReopen = true;
+      Error.throwWithStackTrace(
+        ManagedProjectVerificationException(error.message),
+        stackTrace,
+      );
+    }
+    _requiresReopen = true;
+    if (error is ManagedProjectSessionException) {
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    Error.throwWithStackTrace(
+      const ManagedProjectVerificationException(
+        'managed revision-3 Voice build plan could not be verified exactly',
+      ),
+      stackTrace,
+    );
+  }
+
   Never _throwRevision3VoiceBuildError(Object error, StackTrace stackTrace) {
     if (error is ModFfiException) {
       if (error.code == 'AUTHORING_REVISION3_VOICE_BUILD_HEAD_CONFLICT') {
@@ -7121,6 +7203,12 @@ bool _revision3VoiceBuildErrorIsRetryable(String code) => const {
   'AUTHORING_REVISION3_VOICE_BUILD_STORE_OUTPUT_ALIAS',
   'AUTHORING_REVISION3_VOICE_BUILD_STORE_GAME_ALIAS',
   'AUTHORING_REVISION3_VOICE_BUILD_VERIFY_FAILED',
+}.contains(code);
+
+bool _revision3VoiceBuildPlanErrorIsRetryable(String code) => const {
+  'AUTHORING_REVISION3_VOICE_PLAN_INPUT_LIMIT',
+  'AUTHORING_REVISION3_VOICE_PLAN_PROJECT_INVALID',
+  'AUTHORING_REVISION3_VOICE_PLAN_RESPONSE_LIMIT',
 }.contains(code);
 
 bool _revision3ExactSnapshotExportErrorIsRetryable(String code) => const {

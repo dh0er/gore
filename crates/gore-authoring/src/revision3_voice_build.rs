@@ -346,6 +346,48 @@ fn valid_bundle_mod_name(value: &str) -> bool {
         && gore_vo::validate_archive_entry_path(value, &gore_vo::Limits::default()).is_ok()
 }
 
+/// Wire-safe presentation label shared with the Mod Studio parser.
+///
+/// Keep this predicate explicit instead of using language-specific `trim` or Unicode-control
+/// helpers: Rust and Dart do not promise the same whitespace tables across runtime versions.
+fn valid_voice_build_line_label(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1
+        || value.chars().any(voice_build_line_label_control)
+    {
+        return false;
+    }
+    let mut characters = value.chars();
+    let first = characters.next().expect("non-empty label has a first char");
+    let last = characters.next_back().unwrap_or(first);
+    !voice_build_line_label_boundary_whitespace(first)
+        && !voice_build_line_label_boundary_whitespace(last)
+}
+
+fn voice_build_line_label_control(character: char) -> bool {
+    matches!(character, '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}')
+}
+
+/// Unicode White_Space plus the legacy zero-width no-break-space/BOM recognized by common
+/// string trim implementations. The identical code-point set is enumerated in Dart.
+fn voice_build_line_label_boundary_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}'..='\u{000d}'
+            | '\u{0020}'
+            | '\u{0085}'
+            | '\u{00a0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202f}'
+            | '\u{205f}'
+            | '\u{3000}'
+            | '\u{feff}'
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VoiceSlotOwnerFactsV1 {
     line_id: EntityId,
@@ -364,9 +406,9 @@ fn collect_slot_owner_facts(
         if line.voice_slots.is_empty() {
             continue;
         }
-        if line_entity.display_name.len() > MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1 {
+        if !valid_voice_build_line_label(&line_entity.display_name) {
             return Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(format!(
-                "DialogLine {line_id} display name is {} bytes; maximum build label is {}",
+                "DialogLine {line_id} display name is not one canonical build label ({} UTF-8 bytes; maximum {})",
                 line_entity.display_name.len(),
                 MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1
             )));

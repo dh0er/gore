@@ -493,6 +493,33 @@ fn managed_voice_build_slot_limit_accepts_1024_and_blocks_1025_globally() {
 }
 
 #[test]
+fn managed_voice_build_slot_limit_precedes_line_label_projection() {
+    let mut oversized = project_with_slot_count(MAX_REVISION3_VOICE_BUILD_SLOTS_V1 + 1);
+    oversized
+        .entities
+        .get_mut(&wide_id(2))
+        .unwrap()
+        .display_name = " Line 0".to_owned();
+
+    let Revision3VoiceBuildPlanEvaluationV1::Blocked { report } =
+        plan_revision3_voice_build_v1(&oversized).unwrap()
+    else {
+        panic!("the hard slot cap must precede presentation-fact projection")
+    };
+    assert_eq!(
+        report.total_slots,
+        u64::try_from(MAX_REVISION3_VOICE_BUILD_SLOTS_V1 + 1).unwrap()
+    );
+    assert_eq!(report.ready_slots, 0);
+    assert_eq!(report.blockers.len(), 1);
+    assert_eq!(
+        report.blockers[0].reason,
+        Revision3VoiceBuildBlockReasonV1::VoiceSlotLimitExceeded
+    );
+    assert_eq!(report.blockers[0].line_label, None);
+}
+
+#[test]
 fn selected_payload_budget_counts_reused_take_per_slot_occurrence() {
     assert_eq!(
         MAX_REVISION3_VOICE_BUILD_SELECTED_PAYLOAD_BYTES_V1,
@@ -557,10 +584,14 @@ fn unicode_case_duplicate_targets_are_rejected_before_planning() {
 }
 
 #[test]
-fn blocker_line_label_is_exact_and_build_bounded() {
+fn blocker_line_label_contract_is_exact_canonical_and_utf8_bounded() {
     let mut project = project(VoiceTargetResolution::Unresolved, false);
-    project.entities.get_mut(&id(2)).unwrap().display_name =
-        "x".repeat(MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1);
+    let exact_utf8_boundary = "é".repeat(MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1 / 2);
+    assert_eq!(
+        exact_utf8_boundary.len(),
+        MAX_REVISION3_VOICE_BUILD_LINE_LABEL_BYTES_V1
+    );
+    project.entities.get_mut(&id(2)).unwrap().display_name = exact_utf8_boundary.clone();
     let Revision3VoiceBuildPlanEvaluationV1::Blocked { report } =
         plan_revision3_voice_build_v1(&project).unwrap()
     else {
@@ -571,17 +602,27 @@ fn blocker_line_label_is_exact_and_build_bounded() {
         Some(project.entities[&id(2)].display_name.as_str())
     );
 
-    project
-        .entities
-        .get_mut(&id(2))
-        .unwrap()
-        .display_name
-        .push('x');
+    project.entities.get_mut(&id(2)).unwrap().display_name = "Asghan\u{00a0}greeting".to_owned();
     assert!(matches!(
         plan_revision3_voice_build_v1(&project),
-        Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(message))
-            if message.contains("maximum build label")
+        Ok(Revision3VoiceBuildPlanEvaluationV1::Blocked { .. })
     ));
+
+    for invalid in [
+        String::new(),
+        " Asghan greeting".to_owned(),
+        "Asghan greeting\u{00a0}".to_owned(),
+        "\u{feff}Asghan greeting".to_owned(),
+        "Asghan\u{009f}greeting".to_owned(),
+        format!("{exact_utf8_boundary}x"),
+    ] {
+        project.entities.get_mut(&id(2)).unwrap().display_name = invalid;
+        assert!(matches!(
+            plan_revision3_voice_build_v1(&project),
+            Err(Revision3VoiceBuildPlanErrorV1::InvalidProject(message))
+                if message.contains("canonical build label")
+        ));
+    }
 }
 
 #[test]

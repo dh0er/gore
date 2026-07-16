@@ -578,6 +578,7 @@ abstract interface class ManagedRevision3CurrentProjectLease {
     required String gameRoot,
     required Revision3VoiceTargetTechnicalPlan plan,
   });
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1();
   Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
     required String gameRoot,
     required String output,
@@ -1501,6 +1502,10 @@ final class _ManagedRevision3SessionLease
       matchCount: checkpoint.targets.length,
     );
   }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1() =>
+      _session.planVoiceV1();
 
   @override
   Future<AuthoringRevision3VoiceBuildResult> buildVoiceV1({
@@ -4166,6 +4171,61 @@ final class CurrentProjectCoordinator
       if (lease.requiresReopen) {
         Error.throwWithStackTrace(
           const Revision3VoiceTargetRequiresReopenException(),
+          stackTrace,
+        );
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      _refreshCurrentIfUnchanged(current);
+    }
+  });
+
+  /// Evaluate Voice build readiness against the exact current checkpoint.
+  /// This read accepts no game or output path and grants no build, deployment,
+  /// save, or game-mutation authority.
+  Future<AuthoringRevision3VoiceBuildPlanResult> planCurrentRevision3Voice({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current == null) throw const NoCurrentProjectException();
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const CurrentProjectOperationUnsupportedException(
+        'Voice build planning is available only for managed revision-3 projects',
+      );
+    }
+    final lease = current.lease;
+    if (lease.requiresReopen) {
+      throw const Revision3VoiceBuildRequiresReopenException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3VoiceBuildStaleCheckpointException();
+    }
+    try {
+      final result = await lease.planVoiceV1();
+      if (lease.requiresReopen) {
+        throw const Revision3VoiceBuildRequiresReopenException();
+      }
+      if (result.projectId != expectedProjectId ||
+          result.projectId != lease.projectId ||
+          result.projectRevision != expectedProjectRevision ||
+          result.projectRevision != lease.projectRevision ||
+          result.basisHead.canonicalJson != expectedHead.canonicalJson ||
+          lease.head.canonicalJson != expectedHead.canonicalJson) {
+        throw const CurrentProjectCoordinatorException(
+          'Voice build plan disagrees with the current managed checkpoint',
+        );
+      }
+      return result;
+    } catch (error, stackTrace) {
+      if (lease.requiresReopen) {
+        Error.throwWithStackTrace(
+          const Revision3VoiceBuildRequiresReopenException(),
           stackTrace,
         );
       }

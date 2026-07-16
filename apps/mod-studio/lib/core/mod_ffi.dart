@@ -1813,6 +1813,38 @@ class ModFfi {
     }
   }
 
+  /// Evaluate the exact current managed revision-3 Voice graph without output,
+  /// game, build, deployment, or publication authority.
+  Future<AuthoringRevision3VoiceBuildPlanResult>
+  authoringStorePlanRevision3VoiceV1({
+    required String root,
+    required String currentProjectJson,
+    required AuthoringWorkingHead expectedHead,
+  }) async {
+    const command = 'authoring_store_plan_revision3_voice_v1';
+    _authoringRevision3Path(root, 'root');
+    _authoringRevision3RequestString(
+      currentProjectJson,
+      'currentProjectJson',
+      _maxAuthoringProjectJsonBytes,
+    );
+    _authoringRequireCanonicalRevision3ProjectJson(currentProjectJson);
+    final response = await _call(command, <String, Object?>{
+      'current_project_json': currentProjectJson,
+      'expected_head_json': expectedHead.canonicalJson,
+      'root': root,
+    });
+    try {
+      return AuthoringRevision3VoiceBuildPlanResult.fromJson(
+        response,
+        expectedHead: expectedHead,
+        expectedProjectJson: currentProjectJson,
+      );
+    } on FormatException catch (error) {
+      throw ModFfiException._malformed(command: command, reason: error.message);
+    }
+  }
+
   /// Build the exact current managed revision-3 Voice selection into a brand-new, sealed bundle.
   ///
   /// Native code reads Ogg bytes only through the managed Store, refuses unresolved/ambiguous or

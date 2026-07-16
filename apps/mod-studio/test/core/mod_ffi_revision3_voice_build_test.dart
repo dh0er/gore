@@ -81,6 +81,25 @@ Map<String, Object?> _builtResponse(String output, {int editCount = 1}) =>
       'deployment_status': 'not_performed',
     };
 
+Map<String, Object?> _planResponse({
+  required String outcome,
+  required int totalSlots,
+  required int readySlots,
+  required List<Object?> blockers,
+}) => <String, Object?>{
+  'ok': true,
+  'outcome': outcome,
+  'basis_head_json': _headJson('b'),
+  'project_id': revision3VoiceFixtureProjectId,
+  'project_revision': 7,
+  'total_slots': totalSlots,
+  'ready_slots': readySlots,
+  'blockers': blockers,
+  'plan_authority': 'read_only_voice_build_plan_v1',
+  'build_authority': 'not_granted',
+  'deployment_status': 'not_performed',
+};
+
 List<Object?> _unreadySlotBlockers(int slotCount) => <Object?>[
   for (var index = 0; index < slotCount; index++) ...<Object?>[
     _slotBlocker(
@@ -95,18 +114,245 @@ List<Object?> _unreadySlotBlockers(int slotCount) => <Object?>[
   ],
 ];
 
+String _projectWithVoiceLineLabel(String lineLabel, {int slotCount = 1}) {
+  final project =
+      (jsonDecode(revision3VoiceFixtureProjectWithVoiceSlotCountJson(slotCount))
+              as Map)
+          .cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final line = (entities[revision3VoiceFixtureLineId]! as Map)
+      .cast<String, Object?>();
+  line['display_name'] = lineLabel;
+  return jsonEncode(project);
+}
+
+List<Object?> _unreadyBlockersWithLineLabel(String lineLabel) => <Object?>[
+  _slotBlocker(lineLabel: lineLabel),
+  _slotBlocker(lineLabel: lineLabel, reason: 'missing_selected_take'),
+];
+
 void main() {
   final head = AuthoringWorkingHead.fromCanonicalJson(_headJson('b'));
 
-  test('required command handshake includes managed R3 Voice build', () {
-    expect(
-      requiredStudioCoreCommands,
-      contains('authoring_store_build_revision3_voice_v1'),
+  test(
+    'required command handshake includes managed R3 Voice plan and build',
+    () {
+      expect(
+        requiredStudioCoreCommands,
+        contains('authoring_store_build_revision3_voice_v1'),
+      );
+      expect(
+        requiredStudioCoreCommands,
+        contains('authoring_store_plan_revision3_voice_v1'),
+      );
+      expect(
+        requiredStudioCoreCommands,
+        orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
+      );
+    },
+  );
+
+  test(
+    'read-only plan parser accepts only the exact local ready projection',
+    () {
+      final projectJson = revision3VoiceFixtureBuildReadyProjectJson();
+      final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+        _planResponse(
+          outcome: 'ready',
+          totalSlots: 1,
+          readySlots: 1,
+          blockers: const <Object?>[],
+        ),
+        expectedHead: head,
+        expectedProjectJson: projectJson,
+      );
+
+      expect(result.outcome, AuthoringRevision3VoiceBuildPlanOutcome.ready);
+      expect(result.isReady, isTrue);
+      expect(result.basisHead.canonicalJson, head.canonicalJson);
+      expect(result.projectId, revision3VoiceFixtureProjectId);
+      expect(result.projectRevision, 7);
+      expect(result.totalSlots, 1);
+      expect(result.readySlots, 1);
+      expect(result.blockers, isEmpty);
+    },
+  );
+
+  test('read-only plan parser retains exact structured blockers', () {
+    final projectJson = revision3VoiceFixtureProjectWithVoiceSlotCountJson(1);
+    final blockers = _unreadySlotBlockers(1).reversed.toList(growable: false);
+    final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+      _planResponse(
+        outcome: 'blocked',
+        totalSlots: 1,
+        readySlots: 0,
+        blockers: blockers,
+      ),
+      expectedHead: head,
+      expectedProjectJson: projectJson,
     );
+
+    expect(result.outcome, AuthoringRevision3VoiceBuildPlanOutcome.blocked);
+    expect(result.isReady, isFalse);
+    expect(result.totalSlots, 1);
+    expect(result.readySlots, 0);
+    expect(result.blockers, hasLength(2));
     expect(
-      requiredStudioCoreCommands,
-      orderedEquals(<String>[...requiredStudioCoreCommands]..sort()),
+      result.blockers.map((blocker) => blocker.reason),
+      containsAll(<AuthoringRevision3VoiceBuildBlockReason>[
+        AuthoringRevision3VoiceBuildBlockReason.unresolvedTarget,
+        AuthoringRevision3VoiceBuildBlockReason.missingSelectedTake,
+      ]),
     );
+  });
+
+  test('read-only plan applies the slot cap before projecting line labels', () {
+    for (final lineLabel in <String>['Asghan greeting', ' Asghan greeting']) {
+      final projectJson = _projectWithVoiceLineLabel(
+        lineLabel,
+        slotCount: 1025,
+      );
+      final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+        _planResponse(
+          outcome: 'blocked',
+          totalSlots: 1025,
+          readySlots: 0,
+          blockers: <Object?>[
+            <String, Object?>{'reason': 'voice_slot_limit_exceeded'},
+          ],
+        ),
+        expectedHead: head,
+        expectedProjectJson: projectJson,
+      );
+
+      expect(result.totalSlots, 1025);
+      expect(result.readySlots, 0);
+      expect(result.blockers, hasLength(1));
+      expect(
+        result.blockers.single.reason,
+        AuthoringRevision3VoiceBuildBlockReason.voiceSlotLimitExceeded,
+      );
+      expect(result.blockers.single.isGlobal, isTrue);
+    }
+  });
+
+  test(
+    'line-label contract matches native controls, boundaries, and UTF-8 cap',
+    () {
+      final accepted = <String>[
+        List<String>.filled(128, 'é').join(),
+        'Asghan\u00a0greeting',
+      ];
+      for (final lineLabel in accepted) {
+        final result = AuthoringRevision3VoiceBuildPlanResult.fromJson(
+          _planResponse(
+            outcome: 'blocked',
+            totalSlots: 1,
+            readySlots: 0,
+            blockers: _unreadyBlockersWithLineLabel(lineLabel),
+          ),
+          expectedHead: head,
+          expectedProjectJson: _projectWithVoiceLineLabel(lineLabel),
+        );
+        expect(result.blockers.first.lineLabel, lineLabel);
+      }
+
+      final exactBoundary = List<String>.filled(128, 'é').join();
+      final rejected = <String>[
+        '',
+        ' Asghan greeting',
+        'Asghan greeting\u00a0',
+        '\ufeffAsghan greeting',
+        'Asghan\u009fgreeting',
+        '${exactBoundary}x',
+      ];
+      for (final lineLabel in rejected) {
+        expect(
+          () => AuthoringRevision3VoiceBuildPlanResult.fromJson(
+            _planResponse(
+              outcome: 'blocked',
+              totalSlots: 1,
+              readySlots: 0,
+              blockers: _unreadyBlockersWithLineLabel(lineLabel),
+            ),
+            expectedHead: head,
+            expectedProjectJson: _projectWithVoiceLineLabel(lineLabel),
+          ),
+          throwsFormatException,
+          reason: 'must reject ${jsonEncode(lineLabel)}',
+        );
+      }
+    },
+  );
+
+  test('read-only plan rejects forged basis, readiness, or authority', () {
+    final projectJson = revision3VoiceFixtureBuildReadyProjectJson();
+    Map<String, Object?> ready() => _planResponse(
+      outcome: 'ready',
+      totalSlots: 1,
+      readySlots: 1,
+      blockers: const <Object?>[],
+    );
+    final mutations = <Map<String, Object?> Function()>[
+      () => ready()..['outcome'] = 'blocked',
+      () => ready()..['basis_head_json'] = _headJson('c'),
+      () => ready()..['project_id'] = 'f' * 32,
+      () => ready()..['project_revision'] = 8,
+      () => ready()..['total_slots'] = 2,
+      () => ready()..['ready_slots'] = 0,
+      () => ready()
+        ..['blockers'] = <Object?>[
+          <String, Object?>{'reason': 'no_voice_slots'},
+        ],
+      () => ready()..['plan_authority'] = 'build',
+      () => ready()..['build_authority'] = 'granted',
+      () => ready()..['deployment_status'] = 'performed',
+      () => ready()..['output'] = r'C:\MustNotExist',
+    ];
+
+    for (final mutate in mutations) {
+      expect(
+        () => AuthoringRevision3VoiceBuildPlanResult.fromJson(
+          mutate(),
+          expectedHead: head,
+          expectedProjectJson: projectJson,
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+
+  test('read-only wrapper sends no game or output path', () async {
+    final projectJson = revision3VoiceFixtureBuildReadyProjectJson();
+    final core = FakeGoreCoreFfiService(
+      responses: <String, Map<String, Object?>>{
+        'authoring_store_plan_revision3_voice_v1': _planResponse(
+          outcome: 'ready',
+          totalSlots: 1,
+          readySlots: 1,
+          blockers: const <Object?>[],
+        ),
+      },
+    );
+
+    final result = await ModFfi(core).authoringStorePlanRevision3VoiceV1(
+      root: r'C:\Projects\Voice.goreproj',
+      currentProjectJson: projectJson,
+      expectedHead: head,
+    );
+
+    expect(result.isReady, isTrue);
+    expect(
+      core.calls.single.command,
+      'authoring_store_plan_revision3_voice_v1',
+    );
+    expect(core.calls.single.payload, <String, Object?>{
+      'current_project_json': projectJson,
+      'expected_head_json': head.canonicalJson,
+      'root': r'C:\Projects\Voice.goreproj',
+    });
+    expect(core.calls.single.payload, isNot(contains('game_root')));
+    expect(core.calls.single.payload, isNot(contains('output')));
   });
 
   test('strict parser retains structured all-or-nothing blockers', () {

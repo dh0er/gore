@@ -2458,4 +2458,309 @@ class AppLocalizationsDe extends AppLocalizations {
   String managedNpcProfileEditSaved(String name, int revision) {
     return '$name wurde in Projektrevision $revision gespeichert. Der NPC bleibt ein build-blockierter Offline-Entwurf.';
   }
+
+  @override
+  String get managedVoiceBuildReadinessTitle => 'Voice-Bereitschaft';
+
+  @override
+  String get managedVoiceBuildReadinessRefresh =>
+      'Voice-Bereitschaft aktualisieren';
+
+  @override
+  String get managedVoiceBuildReadinessChecking =>
+      'Exakte Voice-Bereitschaft wird geprüft';
+
+  @override
+  String get managedVoiceBuildReadinessLoadError =>
+      'Die Voice-Bereitschaft des aktuellen Projekts konnte nicht verifiziert werden. Aus diesem Ergebnis ist kein Build verfügbar.';
+
+  @override
+  String get managedVoiceBuildReadinessReadyTitle => 'Voice ist bereit';
+
+  @override
+  String get managedVoiceBuildReadinessBlockedTitle =>
+      'Voice benötigt Aufmerksamkeit';
+
+  @override
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
+    return '$readySlots von $totalSlots Voice-Slots sind bereit.';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessBlockedBoundary =>
+      'Es wurde kein Bundle erstellt und nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildReadinessBuildBundle => 'Bundle bauen';
+
+  @override
+  String get managedVoiceBuildReadinessBuildReleaseGuidance =>
+      'Der Voice-Inhalt ist bereit. Öffne Build & Release, um das Offline-Bundle zu erstellen.';
+
+  @override
+  String get managedVoiceBuildReadinessConfigureGameGuidance =>
+      'Der Voice-Inhalt ist bereit. Konfiguriere die Spielinstallation, bevor du ein Offline-Bundle erstellst.';
+
+  @override
+  String get managedVoiceBuildReadinessHideBlockers => 'Blocker ausblenden';
+
+  @override
+  String managedVoiceBuildReadinessShowBlockers(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count Blocker anzeigen',
+      one: '1 Blocker anzeigen',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessWorkflowFailed =>
+      'Der ausgewählte Voice-Workflow konnte nicht geöffnet werden. Aktualisiere die Ansicht und versuche es erneut.';
+
+  @override
+  String get managedVoiceBuildReadinessBuildWorkflowFailed =>
+      'Der Voice-Build-Workflow konnte nicht geöffnet werden.';
+
+  @override
+  String managedVoiceBuildReadinessExactRevision(int revision) {
+    return 'Exakte Projektrevision $revision';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessResolveTarget => 'Ziel auflösen';
+
+  @override
+  String get managedVoiceBuildReadinessManageTakes => 'Takes verwalten';
+
+  @override
+  String get managedVoiceBuildBlockerNoSlots =>
+      'Dieses Projekt enthält keine Voice-Setups.';
+
+  @override
+  String get managedVoiceBuildBlockerPayloadBudget =>
+      'Die ausgewählten Voice-Aufnahmen überschreiten das sichere Speicherbudget des Bundles.';
+
+  @override
+  String get managedVoiceBuildBlockerUnresolvedTarget =>
+      'Löse dieses Voice-Ziel auf.';
+
+  @override
+  String get managedVoiceBuildBlockerAmbiguousTarget =>
+      'Dieses Voice-Ziel ist nicht eindeutig.';
+
+  @override
+  String get managedVoiceBuildBlockerUnqualifiedAdd =>
+      'Dieses Ziel ist kein versiegelter Ersatz eines vorhandenen Eintrags.';
+
+  @override
+  String get managedVoiceBuildBlockerMissingTake =>
+      'Wähle einen freigegebenen Voice-Take aus.';
+
+  @override
+  String get managedVoiceBuildBlockerTakeNotApproved =>
+      'Der ausgewählte Voice-Take ist nicht freigegeben.';
+
+  @override
+  String get managedVoiceBuildBlockerCodecUnqualified =>
+      'Der ausgewählte Voice-Take verwendet einen nicht unterstützten Codec.';
+
+  @override
+  String get managedVoiceBuildBlockerSlotLimit =>
+      'Dieses Projekt überschreitet das Limit von 1024 Voice-Slots pro Bundle.';
+
+  @override
+  String get managedVoiceBuildOfflineNotice =>
+      'Nur Offline-Build. Dadurch wird ein versiegeltes Voice-Bundle aus vorhandenen Einträgen erstellt. Es wird weder bereitgestellt noch in das Spiel geschrieben.';
+
+  @override
+  String get managedVoiceBuildNewFolderName => 'Name des neuen Ordners';
+
+  @override
+  String get managedVoiceBuildNewFolderHelp =>
+      'Das Bundle muss in einen völlig neuen Unterordner geschrieben werden.';
+
+  @override
+  String get managedVoiceBuildChooseParent => 'Übergeordneten Ordner wählen';
+
+  @override
+  String get managedVoiceBuildNoParentSelected =>
+      'Kein übergeordneter Ordner ausgewählt';
+
+  @override
+  String get managedVoiceBuildNewOutput => 'Neue Ausgabe';
+
+  @override
+  String get managedVoiceBuildOfflineBundle => 'Offline-Bundle bauen';
+
+  @override
+  String get managedVoiceBuildParentInspectFailed =>
+      'Der übergeordnete Ordner konnte nicht sicher geprüft werden. Es wurde weder gebaut noch etwas bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildChooseExistingParent =>
+      'Wähle einen vorhandenen übergeordneten Ordner aus.';
+
+  @override
+  String get managedVoiceBuildTargetSymlink =>
+      'Der Zielpfad ist ein symbolischer Link. Wähle einen anderen neuen Ordnernamen.';
+
+  @override
+  String get managedVoiceBuildTargetExists =>
+      'Das Ziel existiert bereits. Wähle einen anderen neuen Ordnernamen.';
+
+  @override
+  String get managedVoiceBuildRequiresReopen =>
+      'Dieses Projekt kann nicht mehr als aktuell verifiziert werden. Schließe dieses Fenster und öffne das verwaltete Projekt erneut, bevor du ein weiteres Voice-Bundle baust.';
+
+  @override
+  String get managedVoiceBuildStaleCheckpoint =>
+      'Das verwaltete Projekt wurde geändert, während dieses Fenster geöffnet war. Schließe dieses Build-Fenster und öffne es erneut aus dem aktuellen Projekt.';
+
+  @override
+  String get managedVoiceBuildFailed =>
+      'Das Voice-Bundle konnte nicht exakt gebaut werden. Es wurde nichts bereitgestellt. Falls eine Ausgabe angelegt wurde, wähle vor dem nächsten Versuch einen neuen Ordnernamen.';
+
+  @override
+  String get managedVoiceBuildPlanFailed =>
+      'Die Voice-Bereitschaft des exakten aktuellen Projekts konnte nicht verifiziert werden. Ausgabeauswahl und Build bleiben gesperrt, bis die Verifizierung erfolgreich ist.';
+
+  @override
+  String get managedVoiceBuildParentAbsolute =>
+      'Wähle einen absoluten Pfad zu einem vorhandenen übergeordneten Ordner.';
+
+  @override
+  String get managedVoiceBuildParentSymlink =>
+      'Der ausgewählte übergeordnete Ordner ist ein symbolischer Link. Wähle einen echten vorhandenen Ordner.';
+
+  @override
+  String get managedVoiceBuildFolderRequired =>
+      'Gib einen neuen Ordnernamen ein.';
+
+  @override
+  String get managedVoiceBuildFolderWhitespace =>
+      'Der Ordnername darf nicht mit Leerraum beginnen oder enden.';
+
+  @override
+  String get managedVoiceBuildFolderTooLong => 'Der Ordnername ist zu lang.';
+
+  @override
+  String get managedVoiceBuildFolderPortable =>
+      'Verwende einen portablen Ordnernamen ohne Trennzeichen oder reservierte Zeichen.';
+
+  @override
+  String get managedVoiceBuildFolderWindowsReserved =>
+      'Dieser Ordnername ist unter Windows reserviert.';
+
+  @override
+  String get managedVoiceBuildExecutableUnavailable =>
+      'Die installierte Spiel-EXE konnte nicht gelesen werden. Schließe ein laufendes Spielupdate ab und prüfe die konfigurierte Installation. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildExecutableMismatch =>
+      'Die installierte Spiel-EXE entspricht nicht mehr dieser Projektgeneration. Importiere das verwaltete Projekt neu oder richte es neu aus. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildGameUnavailable =>
+      'Die konfigurierte Gothic-1-Remake-Installation ist nicht verfügbar. Prüfe sie in den Einstellungen. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildStoreGameAlias =>
+      'Der Projektordner überschneidet sich mit der konfigurierten Spielinstallation. Verschiebe das Projekt aus dem Spielordner, bevor du baust. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildGameOutputAlias =>
+      'Die Bundle-Ausgabe überschneidet sich mit einer Gothic-1-Remake-Installation. Wähle einen übergeordneten Ordner außerhalb aller Spielinstallationen. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildStoreOutputAlias =>
+      'Die Bundle-Ausgabe überschneidet sich mit dem verwalteten Projekt. Wähle einen übergeordneten Ordner außerhalb des Projekts. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildOutputUnavailable =>
+      'Der ausgewählte Ausgabeordner ist nicht verfügbar oder kann nicht sicher durchlaufen werden. Wähle einen echten vorhandenen Ordner außerhalb von Projekt und Spiel.';
+
+  @override
+  String get managedVoiceBuildOutputFailed =>
+      'Der neue Bundle-Ordner konnte nicht vollständig geschrieben werden. Verwende keine dort verbliebene Ausgabe und wähle vor dem nächsten Versuch einen anderen neuen Ordnernamen. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildPromotionFailed =>
+      'Das versiegelte Bundle konnte nicht in den gewünschten neuen Ausgabeordner übernommen werden. Eine kollidierende Ausgabe blieb unverändert; das eigene Staging wurde entfernt. Wähle vor dem nächsten Versuch einen anderen neuen Ordnernamen. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildCleanupFailed =>
+      'Das Voice-Bundle wurde nicht veröffentlicht, aber sein temporärer Staging-Ordner konnte nicht vollständig entfernt werden. Entferne den gemeldeten Staging-Ordner vor einem neuen Versuch. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildPublicationUnconfirmed =>
+      'Die atomare Veröffentlichung könnte erfolgreich gewesen sein, ihre endgültige Identität oder Dauerhaftigkeit konnte jedoch nicht bestätigt werden. Wiederhole, ersetze oder lösche diese exakte Ausgabe noch nicht. Schließe das Fenster und prüfe den gemeldeten Ordner. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildStoreRootChanged =>
+      'Der Stammordner des verwalteten Projekts wurde während des Builds geändert. Schließe dieses Fenster und öffne das Projekt erneut. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildGameRootChanged =>
+      'Die Spielinstallation wurde während des Builds geändert. Schließe das Update oder den Dateivorgang ab und versuche es mit einem neuen Ordnernamen erneut. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildOutputRootChanged =>
+      'Der übergeordnete Ausgabeordner wurde während des Builds geändert. Schließe den Dateivorgang ab, prüfe den Ordner und versuche es mit einem neuen Ordnernamen erneut. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildVerifyFailed =>
+      'Das geschriebene Bundle konnte nicht exakt verifiziert werden. Verwende diese Ausgabe nicht und wähle vor dem nächsten Versuch einen anderen neuen Ordnernamen. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildBundleInvalid =>
+      'Der ausgewählte Voice-Inhalt konnte nicht in ein exaktes versiegeltes Bundle überführt werden. Öffne das Projekt erneut, prüfe seine Voice-Slots und versuche es noch einmal. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildInputInvalid =>
+      'Die Voice-Build-Anfrage oder der Ausgabepfad überschreitet die sicheren unterstützten Grenzen. Wähle einen kürzeren neuen Ausgabepfad. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildResponseLimit =>
+      'Das Bundle war zu groß, um eine exakte Build-Quittung zurückzugeben. Verwende keine Ausgabe ohne Quittung; reduziere zuerst den Voice-Build und wähle erst danach einen neuen Ordner. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildBuiltTitle => 'Versiegeltes Voice-Bundle gebaut';
+
+  @override
+  String get managedVoiceBuildOfflineReceipt =>
+      'Nur Offline-Quittung. Es wurde nichts bereitgestellt.';
+
+  @override
+  String get managedVoiceBuildBasisRevision => 'Basis-Projektrevision';
+
+  @override
+  String get managedVoiceBuildOutputLabel => 'Ausgabe';
+
+  @override
+  String get managedVoiceBuildArchiveEdits => 'Archivänderungen';
+
+  @override
+  String get managedVoiceBuildBundleFiles => 'Bundle-Dateien';
+
+  @override
+  String get managedVoiceBuildSealedBytes => 'Versiegelte Bytes';
+
+  @override
+  String get managedVoiceBuildBundleSha256 => 'Bundle-SHA-256';
+
+  @override
+  String get managedVoiceBuildParentPickerTitle =>
+      'Übergeordneten Ordner für das Voice-Bundle wählen';
+
+  @override
+  String managedVoiceBuildBuiltMessage(String output) {
+    return 'Das versiegelte Voice-Bundle wurde unter $output gebaut. Es wurde nichts bereitgestellt.';
+  }
+
+  @override
+  String managedVoiceBuildBlockedMessage(int count) {
+    return 'Der Voice-Build ist durch $count exakte Anforderungen blockiert. Es wurde kein Bundle erstellt oder bereitgestellt.';
+  }
 }

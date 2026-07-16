@@ -2450,4 +2450,304 @@ class AppLocalizationsFr extends AppLocalizations {
   String managedNpcProfileEditSaved(String name, int revision) {
     return '$name was saved in project revision $revision. It remains an offline, build-blocked draft.';
   }
+
+  @override
+  String get managedVoiceBuildReadinessTitle => 'Voice readiness';
+
+  @override
+  String get managedVoiceBuildReadinessRefresh => 'Refresh Voice readiness';
+
+  @override
+  String get managedVoiceBuildReadinessChecking =>
+      'Checking exact Voice readiness';
+
+  @override
+  String get managedVoiceBuildReadinessLoadError =>
+      'Voice readiness could not be verified for the current project. No build is available from this result.';
+
+  @override
+  String get managedVoiceBuildReadinessReadyTitle => 'Voice is ready';
+
+  @override
+  String get managedVoiceBuildReadinessBlockedTitle => 'Voice needs attention';
+
+  @override
+  String managedVoiceBuildReadinessCount(int readySlots, int totalSlots) {
+    return '$readySlots of $totalSlots Voice slots are ready.';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessBlockedBoundary =>
+      'No bundle was created and deployment was not performed.';
+
+  @override
+  String get managedVoiceBuildReadinessBuildBundle => 'Build bundle';
+
+  @override
+  String get managedVoiceBuildReadinessBuildReleaseGuidance =>
+      'Voice content is ready. Open Build & Release to create the offline bundle.';
+
+  @override
+  String get managedVoiceBuildReadinessConfigureGameGuidance =>
+      'Voice content is ready. Configure the game installation before creating an offline bundle.';
+
+  @override
+  String get managedVoiceBuildReadinessHideBlockers => 'Hide blockers';
+
+  @override
+  String managedVoiceBuildReadinessShowBlockers(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Show $count blockers',
+      one: 'Show 1 blocker',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessWorkflowFailed =>
+      'The selected Voice workflow could not be opened. Refresh and try again.';
+
+  @override
+  String get managedVoiceBuildReadinessBuildWorkflowFailed =>
+      'The Voice build workflow could not be opened.';
+
+  @override
+  String managedVoiceBuildReadinessExactRevision(int revision) {
+    return 'Exact project revision $revision';
+  }
+
+  @override
+  String get managedVoiceBuildReadinessResolveTarget => 'Resolve target';
+
+  @override
+  String get managedVoiceBuildReadinessManageTakes => 'Manage takes';
+
+  @override
+  String get managedVoiceBuildBlockerNoSlots =>
+      'No Voice setups exist in this project.';
+
+  @override
+  String get managedVoiceBuildBlockerPayloadBudget =>
+      'The selected Voice recordings exceed the safe bundle memory budget.';
+
+  @override
+  String get managedVoiceBuildBlockerUnresolvedTarget =>
+      'Resolve this Voice target.';
+
+  @override
+  String get managedVoiceBuildBlockerAmbiguousTarget =>
+      'This Voice target is ambiguous.';
+
+  @override
+  String get managedVoiceBuildBlockerUnqualifiedAdd =>
+      'This target is not a sealed existing-member replacement.';
+
+  @override
+  String get managedVoiceBuildBlockerMissingTake =>
+      'Select an approved Voice take.';
+
+  @override
+  String get managedVoiceBuildBlockerTakeNotApproved =>
+      'The selected Voice take is not approved.';
+
+  @override
+  String get managedVoiceBuildBlockerCodecUnqualified =>
+      'The selected Voice take uses an unsupported codec.';
+
+  @override
+  String get managedVoiceBuildBlockerSlotLimit =>
+      'This project exceeds the 1024-slot Voice bundle limit.';
+
+  @override
+  String get managedVoiceBuildOfflineNotice =>
+      'Offline build only. This creates a sealed existing-member Voice bundle. It does not deploy or write to the game.';
+
+  @override
+  String get managedVoiceBuildNewFolderName => 'New folder name';
+
+  @override
+  String get managedVoiceBuildNewFolderHelp =>
+      'The bundle must be written to a brand-new child folder.';
+
+  @override
+  String get managedVoiceBuildChooseParent => 'Choose parent folder';
+
+  @override
+  String get managedVoiceBuildNoParentSelected => 'No parent folder selected';
+
+  @override
+  String get managedVoiceBuildNewOutput => 'New output';
+
+  @override
+  String get managedVoiceBuildOfflineBundle => 'Build offline bundle';
+
+  @override
+  String get managedVoiceBuildParentInspectFailed =>
+      'The parent folder could not be inspected safely. No build or deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildChooseExistingParent =>
+      'Choose an existing parent folder.';
+
+  @override
+  String get managedVoiceBuildTargetSymlink =>
+      'The target path is a symlink. Choose a different new folder name.';
+
+  @override
+  String get managedVoiceBuildTargetExists =>
+      'The target already exists. Choose a different new folder name.';
+
+  @override
+  String get managedVoiceBuildRequiresReopen =>
+      'This project can no longer be verified as current. Close this window and reopen the managed project before building another Voice bundle.';
+
+  @override
+  String get managedVoiceBuildStaleCheckpoint =>
+      'The managed project changed while this window was open. Close this build window and open it again from the current project.';
+
+  @override
+  String get managedVoiceBuildFailed =>
+      'The Voice bundle could not be built exactly. No deployment was attempted. Before retrying, choose a new folder name if output was created.';
+
+  @override
+  String get managedVoiceBuildPlanFailed =>
+      'Voice readiness could not be verified for the exact current project. Output selection and build are unavailable until verification succeeds.';
+
+  @override
+  String get managedVoiceBuildParentAbsolute =>
+      'Choose an absolute existing parent folder.';
+
+  @override
+  String get managedVoiceBuildParentSymlink =>
+      'The selected parent is a symlink. Choose a real existing folder.';
+
+  @override
+  String get managedVoiceBuildFolderRequired => 'Enter a new folder name.';
+
+  @override
+  String get managedVoiceBuildFolderWhitespace =>
+      'The folder name cannot start or end with whitespace.';
+
+  @override
+  String get managedVoiceBuildFolderTooLong => 'The folder name is too long.';
+
+  @override
+  String get managedVoiceBuildFolderPortable =>
+      'Use one portable folder name without separators or reserved characters.';
+
+  @override
+  String get managedVoiceBuildFolderWindowsReserved =>
+      'That folder name is reserved by Windows.';
+
+  @override
+  String get managedVoiceBuildExecutableUnavailable =>
+      'The installed game executable could not be read. Finish any game update and check the configured installation before trying again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildExecutableMismatch =>
+      'The installed game executable no longer matches this project generation. Re-import or retarget the managed project before building again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildGameUnavailable =>
+      'The configured Gothic 1 Remake installation is unavailable. Check it in Settings before trying again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildStoreGameAlias =>
+      'This project folder overlaps the configured game installation. Move the project outside the game folder before building. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildGameOutputAlias =>
+      'The bundle output overlaps a Gothic 1 Remake installation. Choose a parent folder outside every game installation. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildStoreOutputAlias =>
+      'The bundle output overlaps the managed project. Choose a parent folder outside the project. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildOutputUnavailable =>
+      'The selected output parent is unavailable or cannot be traversed safely. Choose a real existing parent folder outside the project and game.';
+
+  @override
+  String get managedVoiceBuildOutputFailed =>
+      'The new bundle folder could not be written completely. Do not use any output left there; choose a different new folder name before retrying. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildPromotionFailed =>
+      'The sealed bundle could not be promoted into the requested new output folder. A conflicting output was left untouched and owned staging was removed. Choose a different new folder name before retrying. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildCleanupFailed =>
+      'The Voice bundle was not published, but its temporary staging folder could not be removed completely. Remove the reported staging folder before retrying. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildPublicationUnconfirmed =>
+      'The atomic publication may have succeeded, but its final identity or durability could not be confirmed. Do not retry, replace, or delete that exact output yet. Close this window and inspect the reported folder before deciding how to proceed. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildStoreRootChanged =>
+      'The managed project root changed while the bundle was being built. Close this window and reopen the project before building again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildGameRootChanged =>
+      'The game installation changed while the bundle was being built. Finish the update or file operation, then retry with a new folder name. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildOutputRootChanged =>
+      'The output parent changed while the bundle was being built. Finish the file operation, verify the parent, then retry with a new folder name. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildVerifyFailed =>
+      'The written bundle could not be verified exactly. Do not use that output; choose a different new folder name before retrying. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildBundleInvalid =>
+      'The selected Voice content could not be lowered into one exact sealed bundle. Reopen the project, review its Voice slots, and try again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildInputInvalid =>
+      'The Voice build request or output path exceeds the safe supported limits. Choose a shorter new output path and try again. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildResponseLimit =>
+      'The bundle was too large to return an exact build receipt. Do not use any unreceipted output; choose a new folder only after reducing the Voice build. No deployment was attempted.';
+
+  @override
+  String get managedVoiceBuildBuiltTitle => 'Sealed Voice bundle built';
+
+  @override
+  String get managedVoiceBuildOfflineReceipt =>
+      'Offline receipt only. Deployment was not performed.';
+
+  @override
+  String get managedVoiceBuildBasisRevision => 'Basis project revision';
+
+  @override
+  String get managedVoiceBuildOutputLabel => 'Output';
+
+  @override
+  String get managedVoiceBuildArchiveEdits => 'Archive edits';
+
+  @override
+  String get managedVoiceBuildBundleFiles => 'Bundle files';
+
+  @override
+  String get managedVoiceBuildSealedBytes => 'Sealed bytes';
+
+  @override
+  String get managedVoiceBuildBundleSha256 => 'Bundle SHA-256';
+
+  @override
+  String get managedVoiceBuildParentPickerTitle => 'Choose Voice bundle parent';
+
+  @override
+  String managedVoiceBuildBuiltMessage(String output) {
+    return 'Sealed Voice bundle built at $output. Deployment was not performed.';
+  }
+
+  @override
+  String managedVoiceBuildBlockedMessage(int count) {
+    return 'Voice build blocked by $count exact requirements. No bundle was created or deployed.';
+  }
 }

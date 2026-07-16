@@ -37,6 +37,7 @@ import 'package:gore_mod/project/revision3_quest_context_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_transitions_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_authoring.dart';
+import 'package:gore_mod/project/revision3_voice_build_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_dialog.dart';
 import 'package:gore_mod/project/revision3_voice_take_selection_authoring.dart';
 import 'package:gore_mod/project/revision3_voice_take_status_authoring.dart';
@@ -2131,6 +2132,179 @@ void main() {
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'Validate Voice blocker opens the exact line and locale workflow',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_validate_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-validate'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePlan: _unresolvedVoicePlan,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-voice-readiness-panel')),
+        findsOneWidget,
+      );
+      expect(find.text('0 of 1 Voice slots are ready.'), findsOneWidget);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+      await tester.tap(
+        find.byKey(const Key('revision3-voice-readiness-toggle-blockers')),
+      );
+      await tester.pumpAndSettle();
+      final resolve = find.byKey(
+        const ValueKey('revision3-voice-readiness-blocker-action-0'),
+      );
+      await tester.ensureVisible(resolve);
+      await tester.tap(resolve);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-voice-target-dialog')),
+        findsOneWidget,
+      );
+      expect(find.text('Current target: unresolved'), findsOneWidget);
+      expect(
+        tester
+            .widget<DropdownButtonFormField<String>>(
+              find.byType(DropdownButtonFormField<String>),
+            )
+            .initialValue,
+        'de',
+      );
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+
+      await tester.tap(find.byKey(const Key('revision3-voice-target-cancel')));
+      await tester.pumpAndSettle();
+      expect(managed.voicePlanCalls, 2);
+    },
+  );
+
+  testWidgets(
+    'German managed Home localizes Voice readiness and the plan-first build',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_voice_validate_de_game_',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\voice-validate-de'),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+        contentIndexBuilder: (lease) =>
+            revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+        onVoicePlan: _readyVoicePlan,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      String? pickerLabel;
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (label) async {
+          pickerLabel = label;
+          return null;
+        },
+        gamePath: gameRoot.path,
+      );
+      container.read(localeProvider.notifier).setLocale('de');
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedWorkspace(
+        tester,
+        const Key('revision3-project-workspace-nav-validate-test'),
+      );
+
+      expect(find.text('Voice-Bereitschaft'), findsOneWidget);
+      expect(find.text('Voice ist bereit'), findsOneWidget);
+      expect(find.text('1 von 1 Voice-Slots sind bereit.'), findsOneWidget);
+      expect(find.text('Voice readiness'), findsNothing);
+      expect(find.text('Voice is ready'), findsNothing);
+
+      final build = find.byKey(const Key('revision3-voice-readiness-build'));
+      await tester.ensureVisible(build);
+      await tester.tap(build);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-voice-build-dialog')),
+        findsOneWidget,
+      );
+      expect(find.text('Voice-Bundle bauen'), findsOneWidget);
+      expect(find.text('Name des neuen Ordners'), findsOneWidget);
+      expect(find.text('Übergeordneten Ordner wählen'), findsOneWidget);
+      expect(
+        find.textContaining('Dadurch wird ein versiegeltes Voice-Bundle'),
+        findsOneWidget,
+      );
+      expect(find.text('Build Voice bundle'), findsNothing);
+      expect(find.text('New folder name'), findsNothing);
+      expect(find.textContaining('Offline build only'), findsNothing);
+      expect(managed.voicePlanCalls, 2);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-voice-build-choose-parent')),
+      );
+      await tester.pumpAndSettle();
+      expect(pickerLabel, 'Übergeordneten Ordner für das Voice-Bundle wählen');
+
+      final reportDeepLinkFailure = tester
+          .widget<Revision3VoiceBuildDialog>(
+            find.byType(Revision3VoiceBuildDialog),
+          )
+          .onDeepLinkFailure;
+      await tester.tap(find.byKey(const Key('revision3-voice-build-close')));
+      await tester.pumpAndSettle();
+      await Future<void>.sync(reportDeepLinkFailure);
+      await tester.pump();
+
+      expect(
+        find.text(
+          'Der ausgewählte Voice-Workflow konnte nicht geöffnet werden. '
+          'Aktualisiere die Ansicht und versuche es erneut.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.byType(SnackBar), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'visible managed Quest wizard publishes and reloads the new revision',
@@ -4262,6 +4436,7 @@ void main() {
             matchCount: 1,
           );
         },
+        onVoicePlan: _readyVoicePlan,
         onVoiceBuild: (lease, requestedGameRoot, output) {
           buildGameRoot = requestedGameRoot;
           buildOutput = output;
@@ -5770,6 +5945,7 @@ class _FakeManagedLease
     this.onVoiceSelectionPublish,
     this.onVoiceStatusPublish,
     this.onVoiceTargetPublish,
+    this.onVoicePlan,
     this.onVoiceBuild,
     this.onDataAssetList,
     this.onDataAssetPublish,
@@ -5889,6 +6065,10 @@ class _FakeManagedLease
     Revision3VoiceTargetTechnicalPlan plan,
   )?
   onVoiceTargetPublish;
+  final AuthoringRevision3VoiceBuildPlanResult Function(
+    _FakeManagedLease lease,
+  )?
+  onVoicePlan;
   final AuthoringRevision3VoiceBuildResult Function(
     _FakeManagedLease lease,
     String gameRoot,
@@ -5945,6 +6125,7 @@ class _FakeManagedLease
   int voiceSelectionPublishCalls = 0;
   int voiceStatusPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
+  int voicePlanCalls = 0;
   int voiceBuildCalls = 0;
   int dataAssetListCalls = 0;
   int dataAssetPublishCalls = 0;
@@ -6305,6 +6486,16 @@ class _FakeManagedLease
       throw StateError('fake managed lease has no Voice builder');
     }
     return build(this, gameRoot, output);
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1() async {
+    voicePlanCalls++;
+    final plan = onVoicePlan;
+    if (plan == null) {
+      throw StateError('fake managed lease has no Voice build planner');
+    }
+    return plan(this);
   }
 
   @override
@@ -7706,6 +7897,87 @@ Revision3BaseGameContentCatalog _baseGameCatalog() =>
       npcs: _npcCatalog(),
       quests: _questCatalog(),
     );
+
+AuthoringRevision3VoiceBuildPlanResult _readyVoicePlan(
+  _FakeManagedLease lease,
+) => AuthoringRevision3VoiceBuildPlanResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'ready',
+    'basis_head_json': lease.head.canonicalJson,
+    'project_id': lease.projectId,
+    'project_revision': lease.projectRevision,
+    'total_slots': 1,
+    'ready_slots': 1,
+    'blockers': const <Object?>[],
+    'plan_authority': 'read_only_voice_build_plan_v1',
+    'build_authority': 'not_granted',
+    'deployment_status': 'not_performed',
+  },
+  expectedHead: lease.head,
+  expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: lease.projectId,
+    projectRevision: lease.projectRevision,
+  ),
+);
+
+AuthoringRevision3VoiceBuildPlanResult _unresolvedVoicePlan(
+  _FakeManagedLease lease,
+) {
+  final readyJson = revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: lease.projectId,
+    projectRevision: lease.projectRevision,
+  );
+  final readyProject = (jsonDecode(readyJson) as Map).cast<String, Object?>();
+  final readyEntities = (readyProject['entities']! as Map)
+      .cast<String, Object?>();
+  final originalSlotId = readyEntities.entries.singleWhere((entry) {
+    final entity = (entry.value! as Map).cast<String, Object?>();
+    final payload = (entity['payload']! as Map).cast<String, Object?>();
+    return payload['kind'] == 'voice_slot';
+  }).key;
+  final contentBoundJson = readyJson
+      .replaceAll(
+        revision3VoiceFixtureLocalizationId,
+        revision3VoiceContentLocalizationId,
+      )
+      .replaceAll(revision3VoiceFixtureLineId, revision3VoiceContentLineId)
+      .replaceAll(originalSlotId, revision3VoiceContentSlotId);
+  final project = (jsonDecode(contentBoundJson) as Map).cast<String, Object?>();
+  final entities = (project['entities']! as Map).cast<String, Object?>();
+  final slot = (entities[revision3VoiceContentSlotId]! as Map)
+      .cast<String, Object?>();
+  final payload = (slot['payload']! as Map).cast<String, Object?>();
+  final data = (payload['data']! as Map).cast<String, Object?>();
+  data['target_resolution'] = <String, Object?>{'state': 'unresolved'};
+  final projectJson = jsonEncode(project);
+  return AuthoringRevision3VoiceBuildPlanResult.fromJson(
+    <String, Object?>{
+      'ok': true,
+      'outcome': 'blocked',
+      'basis_head_json': lease.head.canonicalJson,
+      'project_id': lease.projectId,
+      'project_revision': lease.projectRevision,
+      'total_slots': 1,
+      'ready_slots': 0,
+      'blockers': <Object?>[
+        <String, Object?>{
+          'slot_id': revision3VoiceContentSlotId,
+          'line_id': revision3VoiceContentLineId,
+          'line_label': 'Asghan greeting',
+          'loc_id': 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+          'locale': 'de',
+          'reason': 'unresolved_target',
+        },
+      ],
+      'plan_authority': 'read_only_voice_build_plan_v1',
+      'build_authority': 'not_granted',
+      'deployment_status': 'not_performed',
+    },
+    expectedHead: lease.head,
+    expectedProjectJson: projectJson,
+  );
+}
 
 AuthoringRevision3VoiceBuildResult _builtVoiceResult({
   required _FakeManagedLease lease,

@@ -11,6 +11,39 @@ const _maxAuthoringRevision3VoiceBuildTargetArchiveBytes =
     16 * 1024 * 1024 * 1024;
 const _maxAuthoringRevision3VoiceBuildTargetMemberBytes = 256 * 1024 * 1024;
 
+/// Exact cross-language presentation-label contract shared with the native
+/// Voice planner. Keep the code-point tables explicit: runtime `trim` and
+/// Unicode-control helpers are not a stable Rust/Dart wire contract.
+bool _authoringRevision3VoiceBuildLineLabelIsSafe(String value) {
+  if (value.isEmpty ||
+      utf8.encode(value).length >
+          _maxAuthoringRevision3VoiceBuildLineLabelBytes ||
+      value.runes.any(_authoringRevision3VoiceControl)) {
+    return false;
+  }
+  final runes = value.runes;
+  return !_authoringRevision3VoiceBuildLineLabelBoundaryWhitespace(
+        runes.first,
+      ) &&
+      !_authoringRevision3VoiceBuildLineLabelBoundaryWhitespace(runes.last);
+}
+
+/// Unicode White_Space plus the legacy zero-width no-break-space/BOM used by
+/// common trim implementations. Rust enumerates this identical code-point set.
+bool _authoringRevision3VoiceBuildLineLabelBoundaryWhitespace(int rune) =>
+    (rune >= 0x0009 && rune <= 0x000d) ||
+    rune == 0x0020 ||
+    rune == 0x0085 ||
+    rune == 0x00a0 ||
+    rune == 0x1680 ||
+    (rune >= 0x2000 && rune <= 0x200a) ||
+    rune == 0x2028 ||
+    rune == 0x2029 ||
+    rune == 0x202f ||
+    rune == 0x205f ||
+    rune == 0x3000 ||
+    rune == 0xfeff;
+
 enum AuthoringRevision3VoiceBuildOutcome { blocked, built }
 
 enum AuthoringRevision3VoiceBuildBlockReason {
@@ -128,8 +161,7 @@ final class AuthoringRevision3VoiceBuildBlocker {
       _authoringRequiredString(json, 'locale', maxBytes: 35),
     );
     if (lineId == slotId ||
-        lineLabel.trim() != lineLabel ||
-        lineLabel.runes.any(_authoringRevision3VoiceControl) ||
+        !_authoringRevision3VoiceBuildLineLabelIsSafe(lineLabel) ||
         !authoringRevision3VoiceArchiveBasenameStemIsSafe(locId)) {
       throw const FormatException(
         'revision-3 Voice build blocker has invalid line facts',
@@ -221,6 +253,150 @@ final class AuthoringRevision3VoiceBuildReport {
     );
   }
 }
+
+/// Result of evaluating the exact current managed Voice graph without creating
+/// an output path, reading a game installation, or granting build authority.
+enum AuthoringRevision3VoiceBuildPlanOutcome { ready, blocked }
+
+/// Strict, basis-bound projection of the native read-only Voice build plan.
+///
+/// The native response is accepted only when every count and blocker agrees
+/// with an independent bounded derivation from [expectedProjectJson]. A ready
+/// result still grants no build or deployment authority; the write-capable
+/// build command remains a separate explicit operation.
+final class AuthoringRevision3VoiceBuildPlanResult {
+  AuthoringRevision3VoiceBuildPlanResult._({
+    required this.outcome,
+    required this.basisHead,
+    required this.projectId,
+    required this.projectRevision,
+    required this.totalSlots,
+    required this.readySlots,
+    required List<AuthoringRevision3VoiceBuildBlocker> blockers,
+  }) : blockers = List.unmodifiable(blockers);
+
+  final AuthoringRevision3VoiceBuildPlanOutcome outcome;
+  final AuthoringWorkingHead basisHead;
+  final String projectId;
+  final int projectRevision;
+  final int totalSlots;
+  final int readySlots;
+  final List<AuthoringRevision3VoiceBuildBlocker> blockers;
+
+  bool get isReady => outcome == AuthoringRevision3VoiceBuildPlanOutcome.ready;
+
+  factory AuthoringRevision3VoiceBuildPlanResult.fromJson(
+    Map<String, Object?> json, {
+    required AuthoringWorkingHead expectedHead,
+    required String expectedProjectJson,
+  }) {
+    final expectation =
+        _AuthoringRevision3VoiceBuildExpectation.fromCanonicalProjectJson(
+          expectedProjectJson,
+        );
+    _authoringExactFields(json, const <String>{
+      'ok',
+      'outcome',
+      'basis_head_json',
+      'project_id',
+      'project_revision',
+      'total_slots',
+      'ready_slots',
+      'blockers',
+      'plan_authority',
+      'build_authority',
+      'deployment_status',
+    }, 'revision-3 Voice build plan response');
+    if (json['ok'] != true) {
+      throw const FormatException(
+        'revision-3 Voice build plan response is not successful',
+      );
+    }
+    final outcome = switch (json['outcome']) {
+      'ready' => AuthoringRevision3VoiceBuildPlanOutcome.ready,
+      'blocked' => AuthoringRevision3VoiceBuildPlanOutcome.blocked,
+      _ => throw const FormatException(
+        'revision-3 Voice build plan response has an unknown outcome',
+      ),
+    };
+    final basisHead = AuthoringWorkingHead.fromCanonicalJson(
+      _authoringRequiredString(
+        json,
+        'basis_head_json',
+        maxBytes: _maxAuthoringHeadJsonBytes,
+      ),
+    );
+    final projectId = _authoringEntityId(
+      _authoringRequiredString(json, 'project_id', maxBytes: 32),
+      'project_id',
+    );
+    final projectRevision = _authoringRequiredInt(
+      json,
+      'project_revision',
+      max: _maxAuthoringRevision3VoiceAppliedRevision,
+    );
+    final totalSlots = _authoringRequiredInt(
+      json,
+      'total_slots',
+      max: _maxAuthoringRevision3VoiceModelSlotCount,
+    );
+    final readySlots = _authoringRequiredInt(
+      json,
+      'ready_slots',
+      max: totalSlots,
+    );
+    final rawBlockers = json['blockers'];
+    if (rawBlockers is! List ||
+        rawBlockers.length > _maxAuthoringRevision3VoiceBuildBlockers) {
+      throw const FormatException(
+        'revision-3 Voice build plan response has an invalid blocker list',
+      );
+    }
+    final blockers = rawBlockers
+        .map(AuthoringRevision3VoiceBuildBlocker._fromJson)
+        .toList(growable: false);
+
+    if (basisHead.canonicalJson != expectedHead.canonicalJson ||
+        projectId != expectation.projectId ||
+        projectRevision != expectation.projectRevision ||
+        json['plan_authority'] != 'read_only_voice_build_plan_v1' ||
+        json['build_authority'] != 'not_granted' ||
+        json['deployment_status'] != 'not_performed') {
+      throw const FormatException(
+        'revision-3 Voice build plan response disagrees with its exact project basis or authority boundary',
+      );
+    }
+    _requireExactBuildBlockerReport(
+      totalSlots: totalSlots,
+      readySlots: readySlots,
+      blockers: blockers,
+      expectation: expectation,
+    );
+    if (_authoringRevision3VoiceBuildPlanOutcomeIsReady(outcome) !=
+            expectation.isReady ||
+        (outcome == AuthoringRevision3VoiceBuildPlanOutcome.ready &&
+            blockers.isNotEmpty) ||
+        (outcome == AuthoringRevision3VoiceBuildPlanOutcome.blocked &&
+            blockers.isEmpty)) {
+      throw const FormatException(
+        'revision-3 Voice build plan outcome disagrees with the exact project readiness',
+      );
+    }
+    return AuthoringRevision3VoiceBuildPlanResult._(
+      outcome: outcome,
+      basisHead: basisHead,
+      projectId: projectId,
+      projectRevision: projectRevision,
+      totalSlots: totalSlots,
+      readySlots: readySlots,
+      blockers: blockers,
+    );
+  }
+}
+
+bool _authoringRevision3VoiceBuildPlanOutcomeIsReady(
+  AuthoringRevision3VoiceBuildPlanOutcome outcome,
+) => outcome == AuthoringRevision3VoiceBuildPlanOutcome.ready;
 
 void _requireExactBuildBlockerReport({
   required int totalSlots,
@@ -485,6 +661,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
   _AuthoringRevision3VoiceBuildExpectation._({
     required this.projectId,
     required this.projectRevision,
+    required this.totalSlots,
     required Map<String, _AuthoringRevision3VoiceBuildSlotFacts> factsBySlot,
     required this.readySlots,
     required List<AuthoringRevision3VoiceBuildBlocker> blockers,
@@ -493,11 +670,11 @@ final class _AuthoringRevision3VoiceBuildExpectation {
 
   final String projectId;
   final int projectRevision;
+  final int totalSlots;
   final Map<String, _AuthoringRevision3VoiceBuildSlotFacts> factsBySlot;
   final int readySlots;
   final List<AuthoringRevision3VoiceBuildBlocker> blockers;
 
-  int get totalSlots => factsBySlot.length;
   bool get isReady =>
       totalSlots > 0 && blockers.isEmpty && readySlots == totalSlots;
 
@@ -564,6 +741,26 @@ final class _AuthoringRevision3VoiceBuildExpectation {
       );
     }
 
+    // Native validates the closed model, counts VoiceSlots, and applies the
+    // hard slot cap before deriving any presentation or build facts. Mirror
+    // that order exactly: an over-cap project always gets the one bounded
+    // global blocker, even if a line label would be invalid for a buildable
+    // project. This also avoids an unnecessary O(lines + ownership) pass.
+    if (voiceSlots.length > _maxAuthoringRevision3VoiceBuildCount) {
+      return _AuthoringRevision3VoiceBuildExpectation._(
+        projectId: current.projectId,
+        projectRevision: current.revision,
+        totalSlots: voiceSlots.length,
+        factsBySlot: const <String, _AuthoringRevision3VoiceBuildSlotFacts>{},
+        readySlots: 0,
+        blockers: <AuthoringRevision3VoiceBuildBlocker>[
+          _authoringRevision3VoiceBuildGlobalBlocker(
+            AuthoringRevision3VoiceBuildBlockReason.voiceSlotLimitExceeded,
+          ),
+        ],
+      );
+    }
+
     final factsBySlot = <String, _AuthoringRevision3VoiceBuildSlotFacts>{};
     for (final lineId in dialogLineIds) {
       final line = _authoringRevision3VoiceEntity(
@@ -589,8 +786,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
         'display_name',
         maxBytes: _maxAuthoringRevision3VoiceBuildLineLabelBytes,
       );
-      if (lineLabel.trim() != lineLabel ||
-          lineLabel.runes.any(_authoringRevision3VoiceControl)) {
+      if (!_authoringRevision3VoiceBuildLineLabelIsSafe(lineLabel)) {
         throw const FormatException(
           'revision-3 Voice build project has an invalid line label',
         );
@@ -649,20 +845,6 @@ final class _AuthoringRevision3VoiceBuildExpectation {
         !voiceSlots.keys.every(factsBySlot.containsKey)) {
       throw const FormatException(
         'revision-3 Voice build project has an unowned VoiceSlot',
-      );
-    }
-
-    if (voiceSlots.length > _maxAuthoringRevision3VoiceBuildCount) {
-      return _AuthoringRevision3VoiceBuildExpectation._(
-        projectId: current.projectId,
-        projectRevision: current.revision,
-        factsBySlot: factsBySlot,
-        readySlots: 0,
-        blockers: <AuthoringRevision3VoiceBuildBlocker>[
-          _authoringRevision3VoiceBuildGlobalBlocker(
-            AuthoringRevision3VoiceBuildBlockReason.voiceSlotLimitExceeded,
-          ),
-        ],
       );
     }
 
@@ -802,6 +984,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
         return _AuthoringRevision3VoiceBuildExpectation._(
           projectId: current.projectId,
           projectRevision: current.revision,
+          totalSlots: voiceSlots.length,
           factsBySlot: factsBySlot,
           readySlots: 0,
           blockers: <AuthoringRevision3VoiceBuildBlocker>[
@@ -826,6 +1009,7 @@ final class _AuthoringRevision3VoiceBuildExpectation {
     return _AuthoringRevision3VoiceBuildExpectation._(
       projectId: current.projectId,
       projectRevision: current.revision,
+      totalSlots: voiceSlots.length,
       factsBySlot: factsBySlot,
       readySlots: readySlots,
       blockers: blockers,

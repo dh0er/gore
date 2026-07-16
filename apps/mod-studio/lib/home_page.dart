@@ -77,6 +77,7 @@ import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
 import 'project/revision3_voice_build_dialog.dart';
+import 'project/revision3_voice_build_readiness_panel.dart';
 import 'project/revision3_voice_take_removal_authoring.dart';
 import 'project/revision3_voice_take_selection_authoring.dart';
 import 'project/revision3_voice_take_selection_dialog.dart';
@@ -1382,6 +1383,14 @@ class _HomePageState extends ConsumerState<HomePage>
                       plan: plan,
                     );
               },
+          planVoiceBuild: () => ref
+              .read(currentProjectCoordinatorProvider.notifier)
+              .planCurrentRevision3Voice(
+                expectedRoot: currentProject.root.path,
+                expectedProjectId: currentProject.projectId,
+                expectedProjectRevision: currentProject.projectRevision,
+                expectedHead: currentProject.head,
+              ),
           buildVoiceBundle: (output) {
             final configuredGameRoot = gameRoot;
             if (configuredGameRoot == null) {
@@ -1402,7 +1411,7 @@ class _HomePageState extends ConsumerState<HomePage>
           },
           pickVoiceBuildParent: () => ref.read(
             managedRevision3DirectoryPickerProvider,
-          )('Choose Voice bundle parent'),
+          )(l10n.managedVoiceBuildParentPickerTitle),
           buildReviewedDataAsset:
               ({required targetPath, required packName, required output}) {
                 final configuredGameRoot = gameRoot;
@@ -1942,6 +1951,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
     required this.publishVoiceTakeRemoval,
     required this.publishDialogVoiceSlotRemoval,
     required this.publishVoiceTarget,
+    required this.planVoiceBuild,
     required this.buildVoiceBundle,
     required this.pickVoiceBuildParent,
     required this.buildReviewedDataAsset,
@@ -2006,6 +2016,7 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   final Revision3DialogVoiceSlotRemovalTechnicalPublisher
   publishDialogVoiceSlotRemoval;
   final Revision3VoiceTargetTechnicalPublisher publishVoiceTarget;
+  final Revision3VoiceBuildPlanLoader planVoiceBuild;
   final Revision3VoiceExactBuild buildVoiceBundle;
   final Revision3VoiceBuildParentDirectoryPicker pickVoiceBuildParent;
   final Revision3ReviewedDataAssetStageBuilder buildReviewedDataAsset;
@@ -2085,6 +2096,7 @@ class _ManagedRevision3ProjectViewState
   get publishDialogVoiceSlotRemoval => widget.publishDialogVoiceSlotRemoval;
   Revision3VoiceTargetTechnicalPublisher get publishVoiceTarget =>
       widget.publishVoiceTarget;
+  Revision3VoiceBuildPlanLoader get planVoiceBuild => widget.planVoiceBuild;
   Revision3VoiceExactBuild get buildVoiceBundle => widget.buildVoiceBundle;
   Revision3VoiceBuildParentDirectoryPicker get pickVoiceBuildParent =>
       widget.pickVoiceBuildParent;
@@ -3097,33 +3109,72 @@ class _ManagedRevision3ProjectViewState
   Widget _buildValidateTestSection(
     BuildContext context,
     AppLocalizations l10n,
-  ) => Revision3ProjectProblemsView(
-    projectId: project.projectId,
-    projectRevision: project.projectRevision,
-    loadContent: loadContentIndex,
-    loadDataAssetStages: loadDataAssetStages,
-    gameConfigured: gameRoot != null,
-    copy: _projectProblemsCopy(l10n),
-    actions: Revision3ProjectProblemsActions(
-      openEntity: (entityId) => _openProblemEntity(context, entityId: entityId),
-      openAsset: (assetSha256) =>
-          _openProblemAsset(context, assetSha256: assetSha256),
-      openDataAssetStage: (_) => Revision3ProjectWorkspace.navigate(
-        context,
-        const Revision3ProjectWorkspaceLocation(
-          Revision3ProjectWorkspaceSection.content,
-          secondary: 'data-assets',
+  ) {
+    final gameConfigured = gameRoot != null;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+          child: Revision3VoiceBuildReadinessPanel(
+            projectId: project.projectId,
+            projectRevision: project.projectRevision,
+            plan: planVoiceBuild,
+            copy: _voiceBuildReadinessCopy(l10n),
+            gameConfigured: gameConfigured,
+            onResolveVoiceTarget: gameConfigured && !project.requiresReopen
+                ? ({required initialLineId, required initialLocale}) =>
+                      _openVoiceTargetResolver(
+                        context,
+                        initialLineId: initialLineId,
+                        initialLocale: initialLocale,
+                      )
+                : null,
+            onManageVoiceTakes: !project.requiresReopen
+                ? ({required initialLineId, required initialLocale}) =>
+                      _openVoiceTakeSelection(
+                        context,
+                        initialLineId: initialLineId,
+                        initialLocale: initialLocale,
+                      )
+                : null,
+            onBuild: gameConfigured && !project.requiresReopen
+                ? () => _openVoiceBuild(context)
+                : null,
+          ),
         ),
-      ),
-      openSettings: () => Revision3ProjectWorkspace.navigate(
-        context,
-        const Revision3ProjectWorkspaceLocation(
-          Revision3ProjectWorkspaceSection.settingsExpert,
+        Expanded(
+          child: Revision3ProjectProblemsView(
+            projectId: project.projectId,
+            projectRevision: project.projectRevision,
+            loadContent: loadContentIndex,
+            loadDataAssetStages: loadDataAssetStages,
+            gameConfigured: gameConfigured,
+            copy: _projectProblemsCopy(l10n),
+            actions: Revision3ProjectProblemsActions(
+              openEntity: (entityId) =>
+                  _openProblemEntity(context, entityId: entityId),
+              openAsset: (assetSha256) =>
+                  _openProblemAsset(context, assetSha256: assetSha256),
+              openDataAssetStage: (_) => Revision3ProjectWorkspace.navigate(
+                context,
+                const Revision3ProjectWorkspaceLocation(
+                  Revision3ProjectWorkspaceSection.content,
+                  secondary: 'data-assets',
+                ),
+              ),
+              openSettings: () => Revision3ProjectWorkspace.navigate(
+                context,
+                const Revision3ProjectWorkspaceLocation(
+                  Revision3ProjectWorkspaceSection.settingsExpert,
+                ),
+              ),
+              verifyCurrentProject: verifyCurrentHead,
+            ),
+          ),
         ),
-      ),
-      verifyCurrentProject: verifyCurrentHead,
-    ),
-  );
+      ],
+    );
+  }
 
   Widget _buildReleaseSection(BuildContext context, AppLocalizations l10n) =>
       Revision3ProjectSectionPage(
@@ -3504,17 +3555,43 @@ class _ManagedRevision3ProjectViewState
 
   Future<void> _openVoiceBuild(BuildContext context) async {
     if (gameRoot == null || project.requiresReopen) return;
+    final l10n = AppLocalizations.of(context);
+    final copy = _voiceBuildDialogCopy(l10n);
+    final messenger = ScaffoldMessenger.of(context);
     final result = await showDialog<AuthoringRevision3VoiceBuildResult>(
       context: context,
-      builder: (context) => Revision3VoiceBuildDialog(
+      builder: (_) => Revision3VoiceBuildDialog(
+        plan: planVoiceBuild,
         build: buildVoiceBundle,
         pickExistingParentDirectory: pickVoiceBuildParent,
+        copy: copy,
+        onDeepLinkFailure: () {
+          if (!messenger.mounted) return;
+          messenger.hideCurrentSnackBar();
+          messenger.showSnackBar(
+            SnackBar(content: Text(copy.readiness.workflowOpenFailed)),
+          );
+        },
+        onResolveVoiceTarget:
+            ({required initialLineId, required initialLocale}) =>
+                _openVoiceTargetResolver(
+                  context,
+                  initialLineId: initialLineId,
+                  initialLocale: initialLocale,
+                ),
+        onManageVoiceTakes:
+            ({required initialLineId, required initialLocale}) =>
+                _openVoiceTakeSelection(
+                  context,
+                  initialLineId: initialLineId,
+                  initialLocale: initialLocale,
+                ),
       ),
     );
     if (!context.mounted || result == null) return;
     final message = result.isBuilt
-        ? 'Sealed Voice bundle built at ${result.output}. Deployment was not performed.'
-        : 'Voice build blocked by ${result.report!.blockers.length} exact requirement(s). No bundle was created or deployed.';
+        ? l10n.managedVoiceBuildBuiltMessage(result.output!)
+        : l10n.managedVoiceBuildBlockedMessage(result.report!.blockers.length);
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
@@ -4139,6 +4216,111 @@ Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
   invalidInputMessage: l10n.managedLocalizationInvalid,
   genericFailureMessage: l10n.managedLocalizationSaveFailed,
 );
+
+Revision3VoiceBuildReadinessCopy _voiceBuildReadinessCopy(
+  AppLocalizations l10n,
+) => Revision3VoiceBuildReadinessCopy(
+  title: l10n.managedVoiceBuildReadinessTitle,
+  refreshTooltip: l10n.managedVoiceBuildReadinessRefresh,
+  checkingSemanticsLabel: l10n.managedVoiceBuildReadinessChecking,
+  loadError: l10n.managedVoiceBuildReadinessLoadError,
+  retryLabel: l10n.managedDashboardRetry,
+  readyTitle: l10n.managedVoiceBuildReadinessReadyTitle,
+  blockedTitle: l10n.managedVoiceBuildReadinessBlockedTitle,
+  readyCount: l10n.managedVoiceBuildReadinessCount,
+  blockedBoundary: l10n.managedVoiceBuildReadinessBlockedBoundary,
+  buildBundleLabel: l10n.managedVoiceBuildReadinessBuildBundle,
+  readyBuildReleaseGuidance:
+      l10n.managedVoiceBuildReadinessBuildReleaseGuidance,
+  readyConfigureGameGuidance:
+      l10n.managedVoiceBuildReadinessConfigureGameGuidance,
+  hideBlockersLabel: l10n.managedVoiceBuildReadinessHideBlockers,
+  showBlockersLabel: l10n.managedVoiceBuildReadinessShowBlockers,
+  workflowOpenFailed: l10n.managedVoiceBuildReadinessWorkflowFailed,
+  buildWorkflowOpenFailed: l10n.managedVoiceBuildReadinessBuildWorkflowFailed,
+  exactProjectRevision: l10n.managedVoiceBuildReadinessExactRevision,
+  resolveTargetLabel: l10n.managedVoiceBuildReadinessResolveTarget,
+  manageTakesLabel: l10n.managedVoiceBuildReadinessManageTakes,
+  blockerTitle: (reason) => switch (reason) {
+    AuthoringRevision3VoiceBuildBlockReason.noVoiceSlots =>
+      l10n.managedVoiceBuildBlockerNoSlots,
+    AuthoringRevision3VoiceBuildBlockReason.voicePayloadBudgetExceeded =>
+      l10n.managedVoiceBuildBlockerPayloadBudget,
+    AuthoringRevision3VoiceBuildBlockReason.unresolvedTarget =>
+      l10n.managedVoiceBuildBlockerUnresolvedTarget,
+    AuthoringRevision3VoiceBuildBlockReason.ambiguousTarget =>
+      l10n.managedVoiceBuildBlockerAmbiguousTarget,
+    AuthoringRevision3VoiceBuildBlockReason.unqualifiedAdd =>
+      l10n.managedVoiceBuildBlockerUnqualifiedAdd,
+    AuthoringRevision3VoiceBuildBlockReason.missingSelectedTake =>
+      l10n.managedVoiceBuildBlockerMissingTake,
+    AuthoringRevision3VoiceBuildBlockReason.selectedTakeNotApproved =>
+      l10n.managedVoiceBuildBlockerTakeNotApproved,
+    AuthoringRevision3VoiceBuildBlockReason.selectedTakeCodecUnqualified =>
+      l10n.managedVoiceBuildBlockerCodecUnqualified,
+    AuthoringRevision3VoiceBuildBlockReason.voiceSlotLimitExceeded =>
+      l10n.managedVoiceBuildBlockerSlotLimit,
+  },
+);
+
+Revision3VoiceBuildDialogCopy _voiceBuildDialogCopy(AppLocalizations l10n) =>
+    Revision3VoiceBuildDialogCopy(
+      readiness: _voiceBuildReadinessCopy(l10n),
+      title: l10n.managedActionBuildVoiceBundleTitle,
+      offlineNotice: l10n.managedVoiceBuildOfflineNotice,
+      newFolderNameLabel: l10n.managedVoiceBuildNewFolderName,
+      newFolderNameHelp: l10n.managedVoiceBuildNewFolderHelp,
+      chooseParentFolderLabel: l10n.managedVoiceBuildChooseParent,
+      noParentFolderSelected: l10n.managedVoiceBuildNoParentSelected,
+      newOutputLabel: l10n.managedVoiceBuildNewOutput,
+      cancelLabel: l10n.cancel,
+      closeLabel: l10n.close,
+      buildOfflineBundleLabel: l10n.managedVoiceBuildOfflineBundle,
+      parentInspectFailed: l10n.managedVoiceBuildParentInspectFailed,
+      chooseExistingParent: l10n.managedVoiceBuildChooseExistingParent,
+      targetSymlink: l10n.managedVoiceBuildTargetSymlink,
+      targetExists: l10n.managedVoiceBuildTargetExists,
+      requiresReopen: l10n.managedVoiceBuildRequiresReopen,
+      staleCheckpoint: l10n.managedVoiceBuildStaleCheckpoint,
+      buildFailed: l10n.managedVoiceBuildFailed,
+      planRequiresReopen: l10n.managedVoiceBuildRequiresReopen,
+      planStaleCheckpoint: l10n.managedVoiceBuildStaleCheckpoint,
+      planFailed: l10n.managedVoiceBuildPlanFailed,
+      parentMustBeAbsolute: l10n.managedVoiceBuildParentAbsolute,
+      parentSymlink: l10n.managedVoiceBuildParentSymlink,
+      parentMustExist: l10n.managedVoiceBuildChooseExistingParent,
+      folderNameRequired: l10n.managedVoiceBuildFolderRequired,
+      folderNameWhitespace: l10n.managedVoiceBuildFolderWhitespace,
+      folderNameTooLong: l10n.managedVoiceBuildFolderTooLong,
+      folderNamePortable: l10n.managedVoiceBuildFolderPortable,
+      folderNameWindowsReserved: l10n.managedVoiceBuildFolderWindowsReserved,
+      executableUnavailable: l10n.managedVoiceBuildExecutableUnavailable,
+      executableMismatch: l10n.managedVoiceBuildExecutableMismatch,
+      gameUnavailable: l10n.managedVoiceBuildGameUnavailable,
+      storeGameAlias: l10n.managedVoiceBuildStoreGameAlias,
+      gameOutputAlias: l10n.managedVoiceBuildGameOutputAlias,
+      storeOutputAlias: l10n.managedVoiceBuildStoreOutputAlias,
+      outputUnavailable: l10n.managedVoiceBuildOutputUnavailable,
+      outputFailed: l10n.managedVoiceBuildOutputFailed,
+      promotionFailed: l10n.managedVoiceBuildPromotionFailed,
+      cleanupFailed: l10n.managedVoiceBuildCleanupFailed,
+      publicationUnconfirmed: l10n.managedVoiceBuildPublicationUnconfirmed,
+      storeRootChanged: l10n.managedVoiceBuildStoreRootChanged,
+      gameRootChanged: l10n.managedVoiceBuildGameRootChanged,
+      outputRootChanged: l10n.managedVoiceBuildOutputRootChanged,
+      verifyFailed: l10n.managedVoiceBuildVerifyFailed,
+      bundleInvalid: l10n.managedVoiceBuildBundleInvalid,
+      inputInvalid: l10n.managedVoiceBuildInputInvalid,
+      responseLimit: l10n.managedVoiceBuildResponseLimit,
+      builtTitle: l10n.managedVoiceBuildBuiltTitle,
+      offlineReceipt: l10n.managedVoiceBuildOfflineReceipt,
+      basisRevisionLabel: l10n.managedVoiceBuildBasisRevision,
+      outputLabel: l10n.managedVoiceBuildOutputLabel,
+      archiveEditsLabel: l10n.managedVoiceBuildArchiveEdits,
+      bundleFilesLabel: l10n.managedVoiceBuildBundleFiles,
+      sealedBytesLabel: l10n.managedVoiceBuildSealedBytes,
+      bundleSha256Label: l10n.managedVoiceBuildBundleSha256,
+    );
 
 bool _hasIntactVoiceLine(Revision3ContentIndex index) {
   try {

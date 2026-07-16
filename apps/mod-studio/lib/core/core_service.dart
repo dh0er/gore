@@ -68,6 +68,7 @@ const requiredStudioCoreCommands = <String>[
   'authoring_store_open_head_bytes_document',
   'authoring_store_open_revision3',
   'authoring_store_open_revision3_head_bytes',
+  'authoring_store_plan_revision3_voice_v1',
   'authoring_store_prepare_checkpoint',
   'authoring_store_prepare_document_checkpoint',
   'authoring_store_prepare_remove_revision3_dataasset_stage_v1',

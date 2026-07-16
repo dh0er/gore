@@ -27,6 +27,86 @@ final _head = AuthoringWorkingHead.fromCanonicalJson(
 );
 
 void main() {
+  testWidgets(
+    'keeps every output control hidden until the exact plan is ready',
+    (tester) async {
+      final planned = Completer<AuthoringRevision3VoiceBuildPlanResult>();
+
+      await _openDialog(
+        tester,
+        plan: () => planned.future,
+        pickParent: () async => null,
+        build: (_) async => throw StateError('build must remain unavailable'),
+        settle: false,
+      );
+
+      expect(
+        find.byKey(const Key('revision3-voice-build-plan-loading')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-build-folder-name')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-build-choose-parent')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-build-submit')),
+        findsNothing,
+      );
+
+      planned.complete(_readyPlan());
+      await tester.pumpAndSettle();
+
+      expect(find.text('Voice is ready'), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-voice-build-folder-name')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-build-choose-parent')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-voice-build-submit')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('plan failure exposes retry but no output or build authority', (
+    tester,
+  ) async {
+    var calls = 0;
+    await _openDialog(
+      tester,
+      plan: () async {
+        calls += 1;
+        throw const FormatException('technical plan detail');
+      },
+      pickParent: () async => null,
+      build: (_) async => throw StateError('build must remain unavailable'),
+    );
+
+    expect(
+      find.byKey(const Key('revision3-voice-build-plan-error')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('exact current project'), findsOneWidget);
+    expect(find.textContaining('technical plan detail'), findsNothing);
+    expect(
+      find.byKey(const Key('revision3-voice-build-folder-name')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('revision3-voice-build-submit')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('revision3-voice-build-plan-retry')));
+    await tester.pumpAndSettle();
+    expect(calls, 2);
+  });
+
   testWidgets('builds only a brand-new child and shows its sealed receipt', (
     tester,
   ) async {
@@ -85,36 +165,47 @@ void main() {
   testWidgets('shows structured blockers without claiming output authority', (
     tester,
   ) async {
-    final parent = Directory.systemTemp.createTempSync(
-      'gore_voice_build_blocked_',
-    );
-    addTearDown(() => parent.deleteSync(recursive: true));
+    var pickCalls = 0;
+    var buildCalls = 0;
 
     await _openDialog(
       tester,
-      pickParent: () async => parent.path,
-      build: (output) async => _blocked(),
+      plan: () async => _blockedPlan(),
+      pickParent: () async {
+        pickCalls += 1;
+        return null;
+      },
+      build: (_) async {
+        buildCalls += 1;
+        return _blocked();
+      },
     );
-    await tester.tap(
-      find.byKey(const Key('revision3-voice-build-choose-parent')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('revision3-voice-build-submit')));
-    await tester.pumpAndSettle();
 
     expect(
-      find.byKey(const Key('revision3-voice-build-blocked')),
+      find.byKey(const Key('revision3-voice-readiness-report')),
       findsOneWidget,
     );
-    expect(find.text('Build blocked'), findsOneWidget);
+    expect(find.text('Voice needs attention'), findsOneWidget);
     expect(find.textContaining('0 of 2 Voice slots are ready'), findsOneWidget);
     expect(find.text('Resolve this Voice target.'), findsOneWidget);
     expect(find.text('Select an approved Voice take.'), findsOneWidget);
-    expect(find.text('Asghan greeting · de'), findsOneWidget);
-    expect(find.text('Asghan greeting · de-x1'), findsOneWidget);
-    expect(find.text('Basis project revision'), findsOneWidget);
+    expect(find.text('Asghan greeting — de'), findsOneWidget);
+    expect(find.text('Asghan greeting — de-x1'), findsOneWidget);
     expect(find.textContaining('No bundle was created'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-voice-build-folder-name')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('revision3-voice-build-choose-parent')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('revision3-voice-build-submit')), findsNothing);
+    expect(find.text(revision3VoiceFixtureLineId), findsNothing);
+    expect(find.text('GRD_263_ASGHAN_OPEN_INFO_06_02'), findsNothing);
     expect(find.textContaining(_bundleSha), findsNothing);
+    expect(pickCalls, 0);
+    expect(buildCalls, 0);
   });
 
   testWidgets('shows the payload budget blocker without claiming a bundle', (
@@ -139,7 +230,7 @@ void main() {
 
     expect(
       find.text(
-        'The selected Voice payloads exceed the safe bundle memory budget.',
+        'The selected Voice recordings exceed the safe bundle memory budget.',
       ),
       findsOneWidget,
     );
@@ -147,6 +238,81 @@ void main() {
     expect(find.textContaining('No bundle was created'), findsOneWidget);
     expect(find.byKey(const Key('revision3-voice-build-built')), findsNothing);
   });
+
+  testWidgets('blocker action closes the bound dialog before navigation', (
+    tester,
+  ) async {
+    var planCalls = 0;
+    String? openedLine;
+    String? openedLocale;
+    var dialogWasClosed = false;
+
+    await _openDialog(
+      tester,
+      plan: () async {
+        planCalls += 1;
+        return _blockedPlan();
+      },
+      pickParent: () async => null,
+      build: (_) async => throw StateError('build must remain unavailable'),
+      onResolveVoiceTarget: ({required initialLineId, required initialLocale}) {
+        dialogWasClosed = find
+            .byKey(const Key('revision3-voice-build-dialog'))
+            .evaluate()
+            .isEmpty;
+        openedLine = initialLineId;
+        openedLocale = initialLocale;
+      },
+    );
+
+    final action = find.byKey(
+      const ValueKey('revision3-voice-readiness-blocker-action-0'),
+    );
+    await tester.ensureVisible(action);
+    await tester.tap(action);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('revision3-voice-build-dialog')), findsNothing);
+    expect(openedLine, revision3VoiceFixtureLineId);
+    expect(openedLocale, 'de');
+    expect(dialogWasClosed, isTrue);
+    expect(planCalls, 1);
+  });
+
+  testWidgets(
+    'failed blocker deep link reports through the stable scaffold after pop',
+    (tester) async {
+      const failureMessage =
+          'The exact Voice workflow could not be opened from this checkpoint.';
+
+      await _openDialog(
+        tester,
+        plan: () async => _blockedPlan(),
+        pickParent: () async => null,
+        build: (_) async => throw StateError('build must remain unavailable'),
+        onResolveVoiceTarget:
+            ({required initialLineId, required initialLocale}) {
+              throw StateError('simulated navigation failure');
+            },
+        deepLinkFailureMessage: failureMessage,
+      );
+
+      final action = find.byKey(
+        const ValueKey('revision3-voice-readiness-blocker-action-0'),
+      );
+      await tester.ensureVisible(action);
+      await tester.tap(action);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('revision3-voice-build-dialog')),
+        findsNothing,
+      );
+      expect(find.text(failureMessage), findsOneWidget);
+      expect(find.byType(SnackBar), findsOneWidget);
+      expect(find.textContaining('simulated navigation failure'), findsNothing);
+    },
+  );
 
   testWidgets('rejects unsafe names and an existing target', (tester) async {
     final parent = Directory.systemTemp.createTempSync(
@@ -485,28 +651,62 @@ Future<void> _openDialog(
   WidgetTester tester, {
   required Revision3VoiceBuildParentDirectoryPicker pickParent,
   required Revision3VoiceExactBuild build,
+  Future<AuthoringRevision3VoiceBuildPlanResult> Function()? plan,
+  FutureOr<void> Function({
+    required String initialLineId,
+    required String initialLocale,
+  })?
+  onResolveVoiceTarget,
+  FutureOr<void> Function({
+    required String initialLineId,
+    required String initialLocale,
+  })?
+  onManageVoiceTakes,
+  String? deepLinkFailureMessage,
+  bool settle = true,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
         body: Builder(
-          builder: (context) => FilledButton(
-            key: const Key('open-voice-build'),
-            onPressed: () => showDialog<AuthoringRevision3VoiceBuildResult>(
-              context: context,
-              builder: (_) => Revision3VoiceBuildDialog(
-                build: build,
-                pickExistingParentDirectory: pickParent,
+          builder: (context) {
+            final messenger = ScaffoldMessenger.of(context);
+            return FilledButton(
+              key: const Key('open-voice-build'),
+              onPressed: () => showDialog<AuthoringRevision3VoiceBuildResult>(
+                context: context,
+                builder: (_) => Revision3VoiceBuildDialog(
+                  plan: plan ?? () async => _readyPlan(),
+                  build: build,
+                  pickExistingParentDirectory: pickParent,
+                  onResolveVoiceTarget: onResolveVoiceTarget,
+                  onManageVoiceTakes: onManageVoiceTakes,
+                  onDeepLinkFailure: () {
+                    if (!messenger.mounted) return;
+                    messenger.showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          deepLinkFailureMessage ??
+                              'The selected Voice workflow could not be opened.',
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
-            ),
-            child: const Text('Open'),
-          ),
+              child: const Text('Open'),
+            );
+          },
         ),
       ),
     ),
   );
   await tester.tap(find.byKey(const Key('open-voice-build')));
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }
 
 FilledButton _submitButton(WidgetTester tester) => tester.widget<FilledButton>(
@@ -537,6 +737,47 @@ AuthoringRevision3VoiceBuildResult _built(String output) =>
       expectedOutput: output,
     );
 
+AuthoringRevision3VoiceBuildPlanResult _readyPlan() =>
+    AuthoringRevision3VoiceBuildPlanResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'ready',
+        'basis_head_json': _head.canonicalJson,
+        'project_id': _projectId,
+        'project_revision': 7,
+        'total_slots': 2,
+        'ready_slots': 2,
+        'blockers': const <Object?>[],
+        'plan_authority': 'read_only_voice_build_plan_v1',
+        'build_authority': 'not_granted',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: _head,
+      expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+        slotCount: 2,
+        projectId: _projectId,
+      ),
+    );
+
+AuthoringRevision3VoiceBuildPlanResult _blockedPlan() =>
+    AuthoringRevision3VoiceBuildPlanResult.fromJson(
+      <String, Object?>{
+        'ok': true,
+        'outcome': 'blocked',
+        'basis_head_json': _head.canonicalJson,
+        'project_id': _projectId,
+        'project_revision': 7,
+        'total_slots': 2,
+        'ready_slots': 0,
+        'blockers': _mixedBlockersJson(),
+        'plan_authority': 'read_only_voice_build_plan_v1',
+        'build_authority': 'not_granted',
+        'deployment_status': 'not_performed',
+      },
+      expectedHead: _head,
+      expectedProjectJson: _mixedBlockedProjectJson(),
+    );
+
 AuthoringRevision3VoiceBuildResult _blocked() =>
     AuthoringRevision3VoiceBuildResult.fromJson(
       <String, Object?>{
@@ -550,24 +791,7 @@ AuthoringRevision3VoiceBuildResult _blocked() =>
           'project_revision': 7,
           'total_slots': 2,
           'ready_slots': 0,
-          'blockers': <Object?>[
-            <String, Object?>{
-              'slot_id': '00000000000000000000000000100000',
-              'line_id': revision3VoiceFixtureLineId,
-              'line_label': 'Asghan greeting',
-              'loc_id': 'GRD_263_ASGHAN_OPEN_INFO_06_02',
-              'locale': 'de',
-              'reason': 'unresolved_target',
-            },
-            <String, Object?>{
-              'slot_id': '00000000000000000000000000100001',
-              'line_id': revision3VoiceFixtureLineId,
-              'line_label': 'Asghan greeting',
-              'loc_id': 'GRD_263_ASGHAN_OPEN_INFO_06_02',
-              'locale': 'de-x1',
-              'reason': 'missing_selected_take',
-            },
-          ],
+          'blockers': _mixedBlockersJson(),
         },
         'build_authority': 'not_granted',
         'deployment_status': 'not_performed',
@@ -576,6 +800,25 @@ AuthoringRevision3VoiceBuildResult _blocked() =>
       expectedProjectJson: _mixedBlockedProjectJson(),
       expectedOutput: 'unused-for-blocked-response',
     );
+
+List<Object?> _mixedBlockersJson() => <Object?>[
+  <String, Object?>{
+    'slot_id': '00000000000000000000000000100000',
+    'line_id': revision3VoiceFixtureLineId,
+    'line_label': 'Asghan greeting',
+    'loc_id': 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+    'locale': 'de',
+    'reason': 'unresolved_target',
+  },
+  <String, Object?>{
+    'slot_id': '00000000000000000000000000100001',
+    'line_id': revision3VoiceFixtureLineId,
+    'line_label': 'Asghan greeting',
+    'loc_id': 'GRD_263_ASGHAN_OPEN_INFO_06_02',
+    'locale': 'de-x1',
+    'reason': 'missing_selected_take',
+  },
+];
 
 AuthoringRevision3VoiceBuildResult _payloadBudgetBlocked() =>
     AuthoringRevision3VoiceBuildResult.fromJson(

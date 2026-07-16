@@ -4597,6 +4597,148 @@ void main() {
   );
 
   test(
+    'Voice plan is exact, read-only, and leaves the current checkpoint unchanged',
+    () async {
+      final managed = _FakeManagedLease(
+        root: Directory('managed-voice-plan'),
+        projectIdValue: revision3VoiceContentProjectId,
+        projectRevision: 7,
+        head: _head(7),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.planCurrentRevision3Voice(
+          expectedRoot: managed.root.path,
+          expectedProjectId: managed.projectId,
+          expectedProjectRevision: 6,
+          expectedHead: _head(6),
+        ),
+        throwsA(isA<Revision3VoiceBuildStaleCheckpointException>()),
+      );
+      expect(managed.voicePlanCalls, 0);
+      expect(managed.voiceBuildCalls, 0);
+
+      final result = await coordinator.planCurrentRevision3Voice(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+      );
+
+      expect(result.isReady, isTrue);
+      expect(result.totalSlots, 1);
+      expect(result.readySlots, 1);
+      expect(result.blockers, isEmpty);
+      expect(result.basisHead.canonicalJson, _head(7).canonicalJson);
+      expect(managed.voicePlanCalls, 1);
+      expect(managed.voiceBuildCalls, 0);
+      expect(managed.projectRevision, 7);
+      expect(managed.head.canonicalJson, _head(7).canonicalJson);
+      final after = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(after.projectRevision, 7);
+      expect(after.head.canonicalJson, _head(7).canonicalJson);
+      expect(after.requiresReopen, isFalse);
+    },
+  );
+
+  test('poisoned Voice plan maps to requires-reopen and locks retry', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('managed-poisoned-voice-plan'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      onVoicePlan: (lease) {
+        lease.requiresReopenValue = true;
+        return _voicePlanResult(
+          head: lease.head,
+          projectId: lease.projectId,
+          projectRevision: lease.projectRevision,
+        );
+      },
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    Future<void> plan() async {
+      await coordinator.planCurrentRevision3Voice(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+      );
+    }
+
+    await expectLater(
+      plan(),
+      throwsA(isA<Revision3VoiceBuildRequiresReopenException>()),
+    );
+    expect(managed.voicePlanCalls, 1);
+    expect(managed.voiceBuildCalls, 0);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isTrue,
+    );
+    await expectLater(
+      plan(),
+      throwsA(isA<Revision3VoiceBuildRequiresReopenException>()),
+    );
+    expect(managed.voicePlanCalls, 1);
+    expect(managed.voiceBuildCalls, 0);
+  });
+
+  test('Voice plan rejects a result for a different checkpoint', () async {
+    final managed = _FakeManagedLease(
+      root: Directory('managed-mismatched-voice-plan'),
+      projectIdValue: revision3VoiceContentProjectId,
+      projectRevision: 7,
+      head: _head(7),
+      onVoicePlan: (_) => _voicePlanResult(
+        head: _head(6),
+        projectId: revision3VoiceContentProjectId,
+        projectRevision: 6,
+      ),
+    );
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.planCurrentRevision3Voice(
+        expectedRoot: managed.root.path,
+        expectedProjectId: managed.projectId,
+        expectedProjectRevision: 7,
+        expectedHead: _head(7),
+      ),
+      throwsA(isA<CurrentProjectCoordinatorException>()),
+    );
+    expect(managed.voicePlanCalls, 1);
+    expect(managed.voiceBuildCalls, 0);
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isFalse,
+    );
+  });
+
+  test(
     'exact project export is tuple-bound, game-independent, and leaves the current checkpoint unchanged',
     () async {
       const output = r'C:\Exports\project-copy-r7.goremod';
@@ -6849,6 +6991,10 @@ typedef _VoiceBuildHook =
       String gameRoot,
       String output,
     );
+typedef _VoicePlanHook =
+    FutureOr<AuthoringRevision3VoiceBuildPlanResult> Function(
+      _FakeManagedLease lease,
+    );
 typedef _ReviewedDataAssetBuildHook =
     FutureOr<AuthoringRevision3ReviewedDataAssetBuildResult> Function(
       _FakeManagedLease lease,
@@ -6973,6 +7119,7 @@ class _FakeManagedLease
     this.onVoiceSelectionPublish,
     this.onVoiceTakeStatusPublish,
     this.onVoiceTargetPublish,
+    this.onVoicePlan,
     this.onVoiceBuild,
     this.onReviewedDataAssetBuild,
     this.onDataAssetPublish,
@@ -7017,6 +7164,7 @@ class _FakeManagedLease
   final _VoiceSelectionPublishHook? onVoiceSelectionPublish;
   final _VoiceTakeStatusPublishHook? onVoiceTakeStatusPublish;
   final _VoiceTargetPublishHook? onVoiceTargetPublish;
+  final _VoicePlanHook? onVoicePlan;
   final _VoiceBuildHook? onVoiceBuild;
   final _ReviewedDataAssetBuildHook? onReviewedDataAssetBuild;
   final _DataAssetPublishHook? onDataAssetPublish;
@@ -7065,6 +7213,7 @@ class _FakeManagedLease
   int voiceSelectionPublishCalls = 0;
   int voiceTakeStatusPublishCalls = 0;
   int voiceTargetPublishCalls = 0;
+  int voicePlanCalls = 0;
   int voiceBuildCalls = 0;
   int reviewedDataAssetBuildCalls = 0;
   int dataAssetListCalls = 0;
@@ -7484,6 +7633,18 @@ class _FakeManagedLease
       throw StateError('fake managed lease has no Voice target publisher');
     }
     return publish(this, gameRoot, plan);
+  }
+
+  @override
+  Future<AuthoringRevision3VoiceBuildPlanResult> planVoiceV1() async {
+    voicePlanCalls++;
+    final plan = onVoicePlan;
+    if (plan != null) return plan(this);
+    return _voicePlanResult(
+      head: head,
+      projectId: projectId,
+      projectRevision: projectRevision,
+    );
   }
 
   @override
@@ -8015,6 +8176,31 @@ Revision3VoiceTakeStatusTechnicalPlan _voiceTakeStatusPlan() {
     desiredStatus: AuthoringRevision3VoiceTakeStatus.reviewed,
   );
 }
+
+AuthoringRevision3VoiceBuildPlanResult _voicePlanResult({
+  required AuthoringWorkingHead head,
+  required String projectId,
+  required int projectRevision,
+}) => AuthoringRevision3VoiceBuildPlanResult.fromJson(
+  <String, Object?>{
+    'ok': true,
+    'outcome': 'ready',
+    'basis_head_json': head.canonicalJson,
+    'project_id': projectId,
+    'project_revision': projectRevision,
+    'total_slots': 1,
+    'ready_slots': 1,
+    'blockers': const <Object?>[],
+    'plan_authority': 'read_only_voice_build_plan_v1',
+    'build_authority': 'not_granted',
+    'deployment_status': 'not_performed',
+  },
+  expectedHead: head,
+  expectedProjectJson: revision3VoiceFixtureBuildReadyProjectJson(
+    projectId: projectId,
+    projectRevision: projectRevision,
+  ),
+);
 
 AuthoringRevision3VoiceBuildResult _voiceBuildResult({
   required AuthoringWorkingHead head,

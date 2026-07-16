@@ -144,6 +144,9 @@
 //!   the archive or publishing the fixed project head.
 //! - `authoring_store_build_revision3_voice_v1` prepares the bounded revision-3 Voice build
 //!   artifact route without deploying, editing the installation, or publishing the project head.
+//! - `authoring_store_plan_revision3_voice_v1` fully reopens one exact current revision-3 project
+//!   around the pure Voice planner and returns only bounded readiness evidence. It accepts no game
+//!   installation or output path, creates no artifact, and grants no build or deployment authority.
 //! - `authoring_store_build_revision3_reviewed_dataasset_v1` builds exactly one exact-current
 //!   reviewed DataAsset stage into a verified no-clobber triplet plus canonical receipt. It
 //!   accepts no package/USMAP bytes, selector, replacement, receipt path, overwrite, deployment,
@@ -239,6 +242,7 @@ mod authoring_story_quest_outline_v2_revision3;
 mod authoring_story_quest_revision3;
 mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_build_revision3;
+mod authoring_voice_plan_revision3;
 mod authoring_voice_revision3;
 mod authoring_voice_selection_revision3;
 mod authoring_voice_take_remove_revision3;
@@ -296,6 +300,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_open_head_bytes_document",
     "authoring_store_open_revision3",
     "authoring_store_open_revision3_head_bytes",
+    authoring_voice_plan_revision3::COMMAND,
     "authoring_store_prepare_checkpoint",
     "authoring_store_prepare_document_checkpoint",
     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
@@ -585,6 +590,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         }
         "authoring_store_build_revision3_voice_v1" => {
             Some(authoring_voice_build_revision3::build_revision3_voice_v1_raw)
+        }
+        authoring_voice_plan_revision3::COMMAND => {
+            Some(authoring_voice_plan_revision3::plan_revision3_voice_v1_raw)
         }
         "authoring_store_check_revision3_npc_compiler_v1" => Some(
             authoring_story_compiler_revision3::check_revision3_npc_compiler_v1_raw,
@@ -1755,6 +1763,7 @@ mod tests {
                     "authoring_store_open_head_bytes_document",
                     "authoring_store_open_revision3",
                     "authoring_store_open_revision3_head_bytes",
+                    "authoring_store_plan_revision3_voice_v1",
                     "authoring_store_prepare_checkpoint",
                     "authoring_store_prepare_document_checkpoint",
                     "authoring_store_prepare_remove_revision3_dataasset_stage_v1",
@@ -1930,6 +1939,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_build_revision3_voice_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_plan_revision3_voice_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_read_revision3_content_index_v1"));
