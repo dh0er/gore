@@ -49,6 +49,7 @@ final class Revision3DialogLocalizationChoice {
     required this.stableKey,
     required this.displayLabel,
     required this.locales,
+    required this._associatedLineFacts,
     required this._localizationId,
     required this._localizationRevision,
     required this._locId,
@@ -57,9 +58,31 @@ final class Revision3DialogLocalizationChoice {
   final String stableKey;
   final String displayLabel;
   final List<String> locales;
+  final List<_Revision3DialogLocalizationLineSearchFact> _associatedLineFacts;
   final String _localizationId;
   final int _localizationRevision;
   final String _locId;
+
+  /// A display-only reason why this choice is associated with a dialog line.
+  ///
+  /// The returned label is built exclusively from the same sanitized line and
+  /// speaker facts used by [matches]. When [query] matched one of those facts,
+  /// that visible value is placed first so the search result explains itself.
+  /// Managed identities and LocIDs are never included.
+  String? visibleContextLabelFor(String query) {
+    if (_associatedLineFacts.isEmpty) return null;
+    final folded = query.trim().toLowerCase();
+    var fact = _associatedLineFacts.first;
+    if (folded.isNotEmpty) {
+      for (final candidate in _associatedLineFacts) {
+        if (_localizationLineFactMatches(candidate, folded)) {
+          fact = candidate;
+          break;
+        }
+      }
+    }
+    return _localizationLineFactLabel(fact, folded);
+  }
 
   bool matches(String query) {
     final folded = query.trim().toLowerCase();
@@ -67,8 +90,60 @@ final class Revision3DialogLocalizationChoice {
     return <String>[
       displayLabel,
       ...locales,
+      for (final fact in _associatedLineFacts) ...<String>[
+        if (fact.displayName != null) fact.displayName!,
+        if (fact.speaker != null) fact.speaker!,
+      ],
     ].any((value) => value.toLowerCase().contains(folded));
   }
+}
+
+final class _Revision3DialogLocalizationLineSearchFact {
+  const _Revision3DialogLocalizationLineSearchFact({
+    required this.displayName,
+    required this.speaker,
+  });
+
+  final String? displayName;
+  final String? speaker;
+}
+
+bool _localizationLineFactMatches(
+  _Revision3DialogLocalizationLineSearchFact fact,
+  String foldedQuery,
+) =>
+    (fact.displayName?.toLowerCase().contains(foldedQuery) ?? false) ||
+    (fact.speaker?.toLowerCase().contains(foldedQuery) ?? false);
+
+String _localizationLineFactLabel(
+  _Revision3DialogLocalizationLineSearchFact fact,
+  String foldedQuery,
+) {
+  final displayName = fact.displayName;
+  final speaker = fact.speaker;
+  if (displayName == null) return speaker!;
+  if (speaker == null || displayName.toLowerCase() == speaker.toLowerCase()) {
+    return displayName;
+  }
+  final displayNameMatches =
+      foldedQuery.isNotEmpty && displayName.toLowerCase().contains(foldedQuery);
+  final speakerMatches =
+      foldedQuery.isNotEmpty && speaker.toLowerCase().contains(foldedQuery);
+  return speakerMatches && !displayNameMatches
+      ? '$speaker · $displayName'
+      : '$displayName · $speaker';
+}
+
+final class _Revision3DialogLocalizationCandidate {
+  const _Revision3DialogLocalizationCandidate({
+    required this.entity,
+    required this.baseLabel,
+    required this.associatedLineFacts,
+  });
+
+  final Revision3ContentEntity entity;
+  final String baseLabel;
+  final List<_Revision3DialogLocalizationLineSearchFact> associatedLineFacts;
 }
 
 /// Exact-project catalog containing only safely editable authored texts.
@@ -83,37 +158,51 @@ final class Revision3DialogLocalizationEditCatalog {
   factory Revision3DialogLocalizationEditCatalog.fromContentIndex(
     Revision3ContentIndex index,
   ) {
-    final candidates =
-        index.entities
-            .where(
-              (entity) =>
-                  entity.kind == Revision3ContentEntityKind.localizationEntry &&
-                  entity.origin.type == 'new' &&
-                  entity.problemCount == 0 &&
-                  entity.summary.localizationEntry != null &&
-                  entity.summary.localizationEntry!.locales.isNotEmpty,
-            )
-            .toList(growable: false)
-          ..sort((left, right) {
-            final leftName = _localizationFriendlyName(left.displayName);
-            final rightName = _localizationFriendlyName(right.displayName);
-            final byName = leftName.toLowerCase().compareTo(
-              rightName.toLowerCase(),
-            );
-            return byName != 0 ? byName : left.id.compareTo(right.id);
-          });
+    final candidates = <_Revision3DialogLocalizationCandidate>[];
+    for (final entity in index.entities) {
+      if (entity.kind != Revision3ContentEntityKind.localizationEntry ||
+          entity.origin.type != 'new' ||
+          entity.problemCount != 0 ||
+          entity.summary.localizationEntry == null ||
+          entity.summary.localizationEntry!.locales.isEmpty) {
+        continue;
+      }
+      final associatedLineFacts = _localizationAssociatedLineFacts(
+        index: index,
+        localizationId: entity.id,
+        locId: entity.summary.primaryIdentity,
+      );
+      candidates.add(
+        _Revision3DialogLocalizationCandidate(
+          entity: entity,
+          baseLabel: _localizationFriendlyName(
+            displayName: entity.displayName,
+            projectId: index.projectId,
+            localizationId: entity.id,
+            locId: entity.summary.primaryIdentity,
+            associatedLineFacts: associatedLineFacts,
+          ),
+          associatedLineFacts: associatedLineFacts,
+        ),
+      );
+    }
+    candidates.sort((left, right) {
+      final byName = left.baseLabel.toLowerCase().compareTo(
+        right.baseLabel.toLowerCase(),
+      );
+      return byName != 0 ? byName : left.entity.id.compareTo(right.entity.id);
+    });
 
     final duplicateCounts = <String, int>{};
-    for (final entity in candidates) {
-      final folded = _localizationFriendlyName(
-        entity.displayName,
-      ).toLowerCase();
+    for (final candidate in candidates) {
+      final folded = candidate.baseLabel.toLowerCase();
       duplicateCounts.update(folded, (count) => count + 1, ifAbsent: () => 1);
     }
     final duplicateIndexes = <String, int>{};
     final choices = <Revision3DialogLocalizationChoice>[];
-    for (final entity in candidates) {
-      final baseLabel = _localizationFriendlyName(entity.displayName);
+    for (final candidate in candidates) {
+      final entity = candidate.entity;
+      final baseLabel = candidate.baseLabel;
       final folded = baseLabel.toLowerCase();
       final duplicateIndex = duplicateIndexes.update(
         folded,
@@ -132,6 +221,7 @@ final class Revision3DialogLocalizationEditCatalog {
               ? baseLabel
               : '$baseLabel ($duplicateIndex)',
           locales: List<String>.unmodifiable(locales),
+          associatedLineFacts: candidate.associatedLineFacts,
           localizationId: entity.id,
           localizationRevision: entity.revision,
           locId: entity.summary.primaryIdentity,
@@ -150,6 +240,8 @@ final class Revision3DialogLocalizationEditCatalog {
                   choice._localizationRevision,
                   choice._locId,
                   choice.locales,
+                  for (final fact in choice._associatedLineFacts)
+                    <Object?>[fact.displayName, fact.speaker],
                 ],
             ]),
           ),
@@ -174,6 +266,84 @@ final class Revision3DialogLocalizationEditCatalog {
     }
     return null;
   }
+}
+
+List<_Revision3DialogLocalizationLineSearchFact>
+_localizationAssociatedLineFacts({
+  required Revision3ContentIndex index,
+  required String localizationId,
+  required String locId,
+}) {
+  final facts = <_Revision3DialogLocalizationLineSearchFact>[];
+  for (final entity in index.entities) {
+    if (entity.kind != Revision3ContentEntityKind.dialogLine ||
+        entity.summary.dialogLine == null) {
+      continue;
+    }
+    final localizationReferences = entity.references
+        .where((reference) => reference.role == 'dialog_localization')
+        .toList(growable: false);
+    if (localizationReferences.length != 1) continue;
+    final localizationReference = localizationReferences.single;
+    if (localizationReference.qualifier != null ||
+        localizationReference.resolution !=
+            Revision3ContentReferenceResolution.resolved ||
+        localizationReference.target.projectId != index.projectId ||
+        localizationReference.target.entityId != localizationId ||
+        localizationReference.target.expectedKind !=
+            Revision3ContentEntityKind.localizationEntry) {
+      continue;
+    }
+
+    final forbiddenValues = <String>{
+      index.projectId,
+      localizationId,
+      locId,
+      entity.id,
+    };
+    final lineDisplayName = entity.displayName;
+    final lineSpeaker = entity.summary.dialogLine!.speaker;
+    if (_localizationContainsTechnicalToken(
+          lineDisplayName,
+          forbiddenValues: forbiddenValues,
+        ) ||
+        _localizationContainsTechnicalToken(
+          lineSpeaker,
+          forbiddenValues: forbiddenValues,
+        )) {
+      continue;
+    }
+    final displayName = _localizationVisibleSearchValue(
+      lineDisplayName,
+      forbiddenValues: forbiddenValues,
+    );
+    final speaker = _localizationVisibleSearchValue(
+      lineSpeaker,
+      forbiddenValues: forbiddenValues,
+    );
+    if (displayName == null && speaker == null) continue;
+    facts.add(
+      _Revision3DialogLocalizationLineSearchFact(
+        displayName: displayName,
+        speaker: speaker,
+      ),
+    );
+  }
+  facts.sort((left, right) {
+    final byName = (left.displayName ?? '').compareTo(right.displayName ?? '');
+    return byName != 0
+        ? byName
+        : (left.speaker ?? '').compareTo(right.speaker ?? '');
+  });
+  final unique = <_Revision3DialogLocalizationLineSearchFact>[];
+  for (final fact in facts) {
+    if (unique.isEmpty ||
+        unique.last.displayName != fact.displayName ||
+        unique.last.speaker != fact.speaker) {
+      unique.add(fact);
+    }
+  }
+  return List<_Revision3DialogLocalizationLineSearchFact>.unmodifiable(unique);
 }
 
 /// One locale row with the exact VoiceSlot constraints required by the editor.
@@ -239,6 +409,7 @@ final class Revision3DialogLocalizationEditSeed {
     required this._projectId,
     required this._projectRevision,
     required this._checkpointFingerprint,
+    required this._exactSeedFingerprint,
     required this._expectedHead,
     required this._localizationId,
     required this._localizationRevision,
@@ -251,6 +422,7 @@ final class Revision3DialogLocalizationEditSeed {
   final String _projectId;
   final int _projectRevision;
   final String _checkpointFingerprint;
+  final String _exactSeedFingerprint;
   final AuthoringWorkingHead _expectedHead;
   final String _localizationId;
   final int _localizationRevision;
@@ -381,6 +553,9 @@ final class Revision3DialogLocalizationEditAuthoringService {
       catalog: freshCatalog,
       choice: freshChoice,
     );
+    if (seed._exactSeedFingerprint != freshSeed._exactSeedFingerprint) {
+      throw const Revision3DialogLocalizationEditStaleCheckpointException();
+    }
     final currentTexts = <String, String>{
       for (final locale in freshSeed.locales) locale.locale: locale.text,
     };
@@ -503,6 +678,7 @@ Revision3DialogLocalizationEditSeed _localizationSeedFromExact({
     projectId: exact.projectId,
     projectRevision: exact.projectRevision,
     checkpointFingerprint: catalog._checkpointFingerprint,
+    exactSeedFingerprint: _localizationExactSeedFingerprint(exact),
     expectedHead: exact.head,
     localizationId: exact.localizationId,
     localizationRevision: exact.localizationRevision,
@@ -510,12 +686,106 @@ Revision3DialogLocalizationEditSeed _localizationSeedFromExact({
   );
 }
 
+String _localizationExactSeedFingerprint(
+  AuthoringRevision3DialogLocalizationEditSeed exact,
+) => crypto.sha256
+    .convert(
+      utf8.encode(
+        jsonEncode(<Object?>[
+          exact.head.canonicalJson,
+          exact.projectId,
+          exact.projectRevision,
+          exact.localizationId,
+          exact.localizationRevision,
+          exact.locId,
+          <Object?>[
+            for (final locale in exact.locales)
+              <Object?>[
+                locale.locale,
+                locale.text,
+                locale.voiceSlotPresent,
+                locale.candidateCount,
+              ],
+          ],
+          <Object?>[
+            for (final line in exact.lineBacklinks)
+              <Object?>[
+                line.lineId,
+                line.lineRevision,
+                line.displayName,
+                line.speakerHint,
+                line.voiceSlotLocales,
+              ],
+          ],
+          exact.contentAuthority.name,
+          exact.buildStatus.name,
+          exact.runtimeStatus.name,
+          exact.publicationStatus.name,
+        ]),
+      ),
+    )
+    .toString();
+
 String _localizationBacklinkVisibleKey(String displayName, String? speaker) =>
     '${displayName.trim().toLowerCase()}\u0000${speaker?.trim().toLowerCase() ?? ''}';
 
-String _localizationFriendlyName(String value) {
-  final normalized = value.trim();
-  return normalized.isEmpty ? 'Project text' : normalized;
+final _localizationStandaloneTechnicalEntityId = RegExp(
+  r'(^|[^A-Za-z0-9_])[0-9a-fA-F]{32}(?=$|[^A-Za-z0-9_])',
+);
+
+bool _localizationContainsTechnicalToken(
+  String? value, {
+  required Set<String> forbiddenValues,
+}) {
+  final normalized = value?.trim() ?? '';
+  if (normalized.isEmpty) return false;
+  if (_localizationStandaloneTechnicalEntityId.hasMatch(normalized)) {
+    return true;
+  }
+  final folded = normalized.toLowerCase();
+  return forbiddenValues.any((item) {
+    final token = item.trim().toLowerCase();
+    return token.isNotEmpty && folded.contains(token);
+  });
+}
+
+String? _localizationVisibleSearchValue(
+  String? value, {
+  required Set<String> forbiddenValues,
+}) {
+  final normalized = value?.trim() ?? '';
+  if (normalized.isEmpty ||
+      _localizationContainsTechnicalToken(
+        normalized,
+        forbiddenValues: forbiddenValues,
+      )) {
+    return null;
+  }
+  return normalized;
+}
+
+String _localizationFriendlyName({
+  required String displayName,
+  required String projectId,
+  required String localizationId,
+  required String locId,
+  required List<_Revision3DialogLocalizationLineSearchFact> associatedLineFacts,
+}) {
+  final visibleDisplayName = _localizationVisibleSearchValue(
+    displayName,
+    forbiddenValues: <String>{projectId, localizationId, locId},
+  );
+  if (visibleDisplayName != null) return visibleDisplayName;
+
+  final lineNamesByFoldedValue = <String, String>{};
+  for (final fact in associatedLineFacts) {
+    final lineName = fact.displayName;
+    if (lineName == null) continue;
+    lineNamesByFoldedValue.putIfAbsent(lineName.toLowerCase(), () => lineName);
+  }
+  return lineNamesByFoldedValue.length == 1
+      ? lineNamesByFoldedValue.values.single
+      : 'Project text';
 }
 
 String _localizationStableKey({

@@ -22,6 +22,7 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
     this.previewOgg,
     this.initialLineId,
     this.initialLocale,
+    this.fixedContext = false,
     super.key,
   });
 
@@ -34,6 +35,11 @@ class Revision3VoiceTakeDialog extends StatefulWidget {
   /// to contain the line; stale or malformed values are discarded.
   final String? initialLineId;
   final String? initialLocale;
+
+  /// Keeps a line/locale handoff fixed for an in-workspace action. The exact
+  /// freshly loaded catalog must still prove that context safe before any
+  /// authoring controls or mutation become available.
+  final bool fixedContext;
 
   @override
   State<Revision3VoiceTakeDialog> createState() =>
@@ -60,6 +66,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
   bool _staleCheckpoint = false;
   bool _picking = false;
   bool _previewing = false;
+  bool _fixedContextInvalid = false;
   String? _error;
   int _loadGeneration = 0;
   int _catalogEpoch = 0;
@@ -75,7 +82,12 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
   @override
   void didUpdateWidget(covariant Revision3VoiceTakeDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.service, widget.service)) {
+    if (!identical(oldWidget.service, widget.service) ||
+        oldWidget.fixedContext != widget.fixedContext ||
+        oldWidget.initialLineId != widget.initialLineId ||
+        oldWidget.initialLocale != widget.initialLocale) {
+      _lineId = widget.initialLineId;
+      _locale.text = widget.initialLocale ?? '';
       _loadCatalog(clear: true);
     }
   }
@@ -96,7 +108,9 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       _error = null;
       if (clear) {
         _catalog = null;
-        _lineId = null;
+        _lineId = widget.fixedContext ? widget.initialLineId : null;
+        _locale.text = widget.fixedContext ? widget.initialLocale ?? '' : '';
+        _fixedContextInvalid = false;
       }
     });
     try {
@@ -105,12 +119,33 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       setState(() {
         _catalog = catalog;
         _catalogEpoch += 1;
-        if (catalog.line(_lineId ?? '') == null) {
+        if (widget.fixedContext) {
+          final requestedLine = catalog.line(widget.initialLineId ?? '');
+          final requestedLocale = widget.initialLocale;
+          final contextIsValid =
+              requestedLine != null &&
+              requestedLocale != null &&
+              revision3VoiceLocaleIsCanonical(requestedLocale) &&
+              requestedLine.isLocaleAuthorable(requestedLocale);
+          if (contextIsValid) {
+            _lineId = requestedLine.lineId;
+            _locale.text = requestedLocale;
+            _fixedContextInvalid = false;
+          } else {
+            _lineId = null;
+            _locale.clear();
+            _fixedContextInvalid = true;
+            _error =
+                'This Voice action no longer matches one intact dialog line and language in the exact current project. Close it and reopen the action from the current workspace. No files were changed.';
+          }
+          _selectTake = false;
+          _replacementConfirmed = false;
+        } else if (catalog.line(_lineId ?? '') == null) {
           _lineId = null;
           _selectTake = false;
           _replacementConfirmed = false;
         }
-        if (_locale.text.isEmpty) {
+        if (!widget.fixedContext && _locale.text.isEmpty) {
           _locale.text = catalog.suggestedLocales.first;
         }
         _loading = false;
@@ -202,6 +237,19 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       _status == AuthoringRevision3VoiceTakeStatus.approved &&
       (_selectedSlotSummary?.hasSelectedTake ?? false);
 
+  bool get _fixedContextIsCurrent {
+    if (!widget.fixedContext) return true;
+    final line = _selectedLine;
+    final locale = widget.initialLocale;
+    return !_fixedContextInvalid &&
+        line != null &&
+        line.lineId == widget.initialLineId &&
+        locale != null &&
+        _locale.text == locale &&
+        revision3VoiceLocaleIsCanonical(locale) &&
+        line.isLocaleAuthorable(locale);
+  }
+
   void _selectLine(Revision3VoiceDialogLineChoice line) {
     setState(() {
       _lineId = line.lineId;
@@ -237,6 +285,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
         _staleCheckpoint ||
         catalog == null ||
         lineId == null ||
+        !_fixedContextIsCurrent ||
         _selectedLocaleBlocked ||
         (_replacementConfirmationRequired && !_replacementConfirmed) ||
         !(_formKey.currentState?.validate() ?? false)) {
@@ -367,6 +416,15 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                         label: const Text('Refresh dialog lines'),
                       ),
                     )
+                  else if (_fixedContextInvalid)
+                    Center(
+                      child: OutlinedButton.icon(
+                        key: const Key('revision3-voice-fixed-context-retry'),
+                        onPressed: blocked ? null : _loadCatalog,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Refresh Voice context'),
+                      ),
+                    )
                   else
                     _buildForm(enabled: !busy && !blocked),
                 ],
@@ -388,6 +446,7 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
                 busy ||
                     _catalog == null ||
                     _lineId == null ||
+                    !_fixedContextIsCurrent ||
                     blocked ||
                     _selectedLocaleBlocked ||
                     (_replacementConfirmationRequired && !_replacementConfirmed)
@@ -413,98 +472,105 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          RawAutocomplete<Revision3VoiceDialogLineChoice>(
-            key: ValueKey('revision3-voice-line-$_catalogEpoch'),
-            initialValue: TextEditingValue(
-              text: _selectedLine?.displayLabel ?? '',
+          if (widget.fixedContext)
+            _VoiceFixedContextBreadcrumb(
+              lineLabel: _selectedLine!.displayLabel,
+              locale: _locale.text,
+            )
+          else
+            RawAutocomplete<Revision3VoiceDialogLineChoice>(
+              key: ValueKey('revision3-voice-line-$_catalogEpoch'),
+              initialValue: TextEditingValue(
+                text: _selectedLine?.displayLabel ?? '',
+              ),
+              displayStringForOption: (line) => line.displayLabel,
+              optionsBuilder: (value) {
+                final query = value.text.trim();
+                if (query.isEmpty) {
+                  return const <Revision3VoiceDialogLineChoice>[];
+                }
+                return catalog.lines
+                    .where((line) => line.matches(query))
+                    .take(50);
+              },
+              onSelected: _selectLine,
+              fieldViewBuilder:
+                  (
+                    context,
+                    controller,
+                    focusNode,
+                    onFieldSubmitted,
+                  ) => TextFormField(
+                    key: const Key('revision3-voice-line-search'),
+                    controller: controller,
+                    focusNode: focusNode,
+                    enabled: enabled,
+                    decoration: const InputDecoration(
+                      labelText: 'Dialog line',
+                      hintText: 'Search by speaker, line name, or Loc ID',
+                      helperText:
+                          'Type to search, then choose one exact existing line.',
+                      border: OutlineInputBorder(),
+                    ),
+                    onChanged: _clearChangedLineSearch,
+                    onFieldSubmitted: (_) => onFieldSubmitted(),
+                    validator: (_) => _lineId == null
+                        ? 'Search for and choose a dialog line'
+                        : null,
+                  ),
+              optionsViewBuilder: (context, onSelected, options) {
+                final bounded = options.toList(growable: false);
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 6,
+                    clipBehavior: Clip.antiAlias,
+                    borderRadius: BorderRadius.circular(8),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: 640,
+                        maxHeight: 300,
+                      ),
+                      child: ListView.builder(
+                        key: const Key('revision3-voice-line-results'),
+                        padding: EdgeInsets.zero,
+                        shrinkWrap: true,
+                        itemCount: bounded.length,
+                        itemBuilder: (context, index) {
+                          final line = bounded[index];
+                          return ListTile(
+                            title: Text(line.displayLabel),
+                            onTap: () => onSelected(line),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
             ),
-            displayStringForOption: (line) => line.displayLabel,
-            optionsBuilder: (value) {
-              final query = value.text.trim();
-              if (query.isEmpty) {
-                return const <Revision3VoiceDialogLineChoice>[];
-              }
-              return catalog.lines
-                  .where((line) => line.matches(query))
-                  .take(50);
-            },
-            onSelected: _selectLine,
-            fieldViewBuilder:
-                (
-                  context,
-                  controller,
-                  focusNode,
-                  onFieldSubmitted,
-                ) => TextFormField(
-                  key: const Key('revision3-voice-line-search'),
-                  controller: controller,
-                  focusNode: focusNode,
-                  enabled: enabled,
-                  decoration: const InputDecoration(
-                    labelText: 'Dialog line',
-                    hintText: 'Search by speaker, line name, or Loc ID',
-                    helperText:
-                        'Type to search, then choose one exact existing line.',
-                    border: OutlineInputBorder(),
-                  ),
-                  onChanged: _clearChangedLineSearch,
-                  onFieldSubmitted: (_) => onFieldSubmitted(),
-                  validator: (_) => _lineId == null
-                      ? 'Search for and choose a dialog line'
-                      : null,
-                ),
-            optionsViewBuilder: (context, onSelected, options) {
-              final bounded = options.toList(growable: false);
-              return Align(
-                alignment: Alignment.topLeft,
-                child: Material(
-                  elevation: 6,
-                  clipBehavior: Clip.antiAlias,
-                  borderRadius: BorderRadius.circular(8),
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(
-                      maxWidth: 640,
-                      maxHeight: 300,
-                    ),
-                    child: ListView.builder(
-                      key: const Key('revision3-voice-line-results'),
-                      padding: EdgeInsets.zero,
-                      shrinkWrap: true,
-                      itemCount: bounded.length,
-                      itemBuilder: (context, index) {
-                        final line = bounded[index];
-                        return ListTile(
-                          title: Text(line.displayLabel),
-                          onTap: () => onSelected(line),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
           const SizedBox(height: 14),
-          TextFormField(
-            key: const Key('revision3-voice-locale'),
-            controller: _locale,
-            enabled: enabled,
-            maxLength: 35,
-            decoration: const InputDecoration(
-              labelText: 'Language code',
-              hintText: 'de',
-              helperText: 'Examples: de, en, en-US',
-              border: OutlineInputBorder(),
+          if (!widget.fixedContext)
+            TextFormField(
+              key: const Key('revision3-voice-locale'),
+              controller: _locale,
+              enabled: enabled,
+              maxLength: 35,
+              decoration: const InputDecoration(
+                labelText: 'Language code',
+                hintText: 'de',
+                helperText: 'Examples: de, en, en-US',
+                border: OutlineInputBorder(),
+              ),
+              validator: _validateLocale,
+              onChanged: (value) {
+                setState(() {
+                  _selectTake = false;
+                  _replacementConfirmed = false;
+                });
+              },
             ),
-            validator: _validateLocale,
-            onChanged: (value) {
-              setState(() {
-                _selectTake = false;
-                _replacementConfirmed = false;
-              });
-            },
-          ),
-          if (catalog.suggestedLocales.isNotEmpty) ...[
+          if (!widget.fixedContext && catalog.suggestedLocales.isNotEmpty) ...[
             Wrap(
               spacing: 8,
               runSpacing: 4,
@@ -665,6 +731,43 @@ class _Revision3VoiceTakeDialogState extends State<Revision3VoiceTakeDialog> {
       ),
     );
   }
+}
+
+class _VoiceFixedContextBreadcrumb extends StatelessWidget {
+  const _VoiceFixedContextBreadcrumb({
+    required this.lineLabel,
+    required this.locale,
+  });
+
+  final String lineLabel;
+  final String locale;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('revision3-voice-fixed-context'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(lineLabel, style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 3),
+              Text('Voice language: $locale'),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _VoiceSlotSummary extends StatelessWidget {

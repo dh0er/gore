@@ -124,6 +124,91 @@ void main() {
     expect(find.text(revision3VoiceContentLineId), findsNothing);
   });
 
+  testWidgets(
+    'fixed context hides global navigation and resolves only its exact slot',
+    (tester) async {
+      Revision3VoiceTargetTechnicalPlan? received;
+      final service = Revision3VoiceTargetAuthoringService(
+        loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              received = plan;
+              return _publication(
+                plan,
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+              );
+            },
+      );
+
+      await _openDialog(
+        tester,
+        service,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+      );
+
+      expect(
+        find.byKey(const Key('revision3-voice-target-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Mine entrance question'), findsOneWidget);
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-voice-target-line-search')),
+        findsNothing,
+      );
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+
+      await tester.tap(find.byKey(const Key('revision3-voice-target-submit')));
+      await tester.pumpAndSettle();
+
+      expect(received?.lineId, revision3VoiceContentLineId);
+      expect(received?.locale, 'de');
+    },
+  );
+
+  testWidgets('invalid fixed context fails closed without resolving', (
+    tester,
+  ) async {
+    var publishes = 0;
+    final service = Revision3VoiceTargetAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            publishes++;
+            throw StateError('must not publish');
+          },
+    );
+
+    await _openDialog(
+      tester,
+      service,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'en',
+      fixedContext: true,
+    );
+
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(
+      find.byKey(const Key('revision3-voice-target-line-search')),
+      findsNothing,
+    );
+    expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+    expect(_submitButton(tester).onPressed, isNull);
+    expect(publishes, 0);
+  });
+
   testWidgets('offers an intact target even when its take capacity is full', (
     tester,
   ) async {
@@ -369,6 +454,7 @@ Future<void> _openDialog(
   ValueChanged<Revision3VoiceTargetPublication?>? onResult,
   String? initialLineId,
   String? initialLocale,
+  bool fixedContext = false,
 }) async {
   tester.view.physicalSize = const Size(1200, 900);
   tester.view.devicePixelRatio = 1;
@@ -387,6 +473,7 @@ Future<void> _openDialog(
                   service: service,
                   initialLineId: initialLineId,
                   initialLocale: initialLocale,
+                  fixedContext: fixedContext,
                 ),
               );
               onResult?.call(result);

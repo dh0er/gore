@@ -209,6 +209,97 @@ void main() {
     },
   );
 
+  testWidgets(
+    'fixed context hides global navigation and publishes only its exact line and locale',
+    (tester) async {
+      await _useLargeSurface(tester);
+      Revision3VoiceTakeTechnicalPlan? captured;
+      final service = Revision3VoiceAuthoringService(
+        loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+        publishTechnicalPlan:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              captured = plan;
+              return _publication(
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+                plan: plan,
+              );
+            },
+      );
+
+      await _openWizard(
+        tester,
+        service: service,
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+      );
+
+      expect(
+        find.byKey(const Key('revision3-voice-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.text(_lineLabel), findsOneWidget);
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(
+        find.byKey(const Key('revision3-voice-line-search')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('revision3-voice-locale')), findsNothing);
+      expect(find.byKey(const Key('revision3-voice-locale-de')), findsNothing);
+      expect(find.text(revision3VoiceContentLineId), findsNothing);
+
+      await _fillSourceAndName(tester);
+      await _submit(tester);
+
+      expect(captured?.lineId, revision3VoiceContentLineId);
+      expect(captured?.locale, 'de');
+    },
+  );
+
+  testWidgets('invalid fixed context fails closed without publishing', (
+    tester,
+  ) async {
+    await _useLargeSurface(tester);
+    var publishes = 0;
+    const staleLineId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    final service = Revision3VoiceAuthoringService(
+      loadContentIndex: () async => revision3VoiceContentIndexFixture(),
+      publishTechnicalPlan:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            publishes++;
+            return _publication(
+              projectId: expectedProjectId,
+              revision: expectedProjectRevision + 1,
+              plan: plan,
+            );
+          },
+    );
+
+    await _openWizard(
+      tester,
+      service: service,
+      initialLineId: staleLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+    );
+
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(find.textContaining(staleLineId), findsNothing);
+    expect(find.byKey(const Key('revision3-voice-line-search')), findsNothing);
+    expect(find.byKey(const Key('revision3-voice-source')), findsNothing);
+    expect(_submitButton(tester).onPressed, isNull);
+    expect(publishes, 0);
+  });
+
   testWidgets('duplicate results hide IDs and target changes reset selection', (
     tester,
   ) async {
@@ -595,6 +686,7 @@ Future<void> _openWizard(
   Revision3VoiceOggPreviewLauncher? preview,
   String? initialLineId,
   String? initialLocale,
+  bool fixedContext = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
@@ -612,6 +704,7 @@ Future<void> _openWizard(
                 previewOgg: preview,
                 initialLineId: initialLineId,
                 initialLocale: initialLocale,
+                fixedContext: fixedContext,
               ),
             ),
             child: const Text('Open'),

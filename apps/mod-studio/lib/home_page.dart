@@ -76,6 +76,7 @@ import 'project/revision3_settings_expert_page.dart';
 import 'project/revision3_installed_content_browser.dart';
 import 'project/revision3_localization_voice_workspace.dart';
 import 'project/revision3_voice_authoring.dart';
+import 'project/revision3_voice_production_card.dart';
 import 'project/revision3_voice_build_dialog.dart';
 import 'project/revision3_voice_build_readiness_panel.dart';
 import 'project/revision3_voice_take_removal_authoring.dart';
@@ -3049,11 +3050,18 @@ class _ManagedRevision3ProjectViewState
         return Revision3LocalizationVoiceWorkspace(
           projectId: project.projectId,
           projectRevision: project.projectRevision,
+          projectCheckpointIdentity: project.head.canonicalJson,
           service: Revision3DialogLocalizationEditAuthoringService(
             loadContentIndex: availability.loadContentIndex,
             loadExactSeed: loadDialogLocalizationEditSeed,
             publishTechnicalPlan: publishDialogLocalizationEdit,
           ),
+          loadVoiceCatalog: () async => Revision3VoiceCatalog.fromContentIndex(
+            await availability.loadContentIndex(),
+          ),
+          voiceProductionCopy: l10n.localeName.startsWith('de')
+              ? Revision3VoiceProductionCardCopy.german
+              : Revision3VoiceProductionCardCopy.english,
           copy: _localizationVoiceWorkspaceCopy(l10n),
           onDirtyChanged: widget.onDialogLocalizationDirtyChanged,
           notice: !gameConfigured
@@ -3083,6 +3091,7 @@ class _ManagedRevision3ProjectViewState
                       context,
                       initialLineId: initialLineId,
                       initialLocale: initialLocale,
+                      fixedContext: true,
                     )
               : null,
           onManageVoiceTakesFor: intactVoiceLine
@@ -3091,6 +3100,7 @@ class _ManagedRevision3ProjectViewState
                       context,
                       initialLineId: initialLineId,
                       initialLocale: initialLocale,
+                      fixedContext: true,
                     )
               : null,
           onResolveVoiceTargetFor: gameConfigured && intactVoiceLine
@@ -3099,6 +3109,7 @@ class _ManagedRevision3ProjectViewState
                       context,
                       initialLineId: initialLineId,
                       initialLocale: initialLocale,
+                      fixedContext: true,
                     )
               : null,
         );
@@ -3127,6 +3138,7 @@ class _ManagedRevision3ProjectViewState
                         context,
                         initialLineId: initialLineId,
                         initialLocale: initialLocale,
+                        fixedContext: true,
                       )
                 : null,
             onManageVoiceTakes: !project.requiresReopen
@@ -3135,6 +3147,7 @@ class _ManagedRevision3ProjectViewState
                         context,
                         initialLineId: initialLineId,
                         initialLocale: initialLocale,
+                        fixedContext: true,
                       )
                 : null,
             onBuild: gameConfigured && !project.requiresReopen
@@ -3445,6 +3458,7 @@ class _ManagedRevision3ProjectViewState
       context,
       initialLineId: result.publication.lineId,
       initialLocale: result.publication.locale,
+      fixedContext: true,
     );
   }
 
@@ -3452,6 +3466,7 @@ class _ManagedRevision3ProjectViewState
     BuildContext context, {
     String? initialLineId,
     String? initialLocale,
+    bool fixedContext = false,
   }) async {
     if (gameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3VoiceTakePublication>(
@@ -3463,6 +3478,7 @@ class _ManagedRevision3ProjectViewState
         ),
         initialLineId: initialLineId,
         initialLocale: initialLocale,
+        fixedContext: fixedContext,
       ),
     );
     if (!context.mounted || publication == null) return;
@@ -3479,6 +3495,7 @@ class _ManagedRevision3ProjectViewState
     BuildContext context, {
     String? initialLineId,
     String? initialLocale,
+    bool fixedContext = false,
   }) async {
     if (project.requiresReopen) return;
     final publication =
@@ -3503,6 +3520,7 @@ class _ManagedRevision3ProjectViewState
             ),
             initialLineId: initialLineId,
             initialLocale: initialLocale,
+            fixedContext: fixedContext,
           ),
         );
     if (!context.mounted || publication == null) return;
@@ -3522,6 +3540,7 @@ class _ManagedRevision3ProjectViewState
     BuildContext context, {
     String? initialLineId,
     String? initialLocale,
+    bool fixedContext = false,
   }) async {
     if (gameRoot == null || project.requiresReopen) return;
     final publication = await showDialog<Revision3VoiceTargetPublication>(
@@ -3533,6 +3552,7 @@ class _ManagedRevision3ProjectViewState
         ),
         initialLineId: initialLineId,
         initialLocale: initialLocale,
+        fixedContext: fixedContext,
       ),
     );
     if (!context.mounted || publication == null) return;
@@ -3578,6 +3598,7 @@ class _ManagedRevision3ProjectViewState
                   context,
                   initialLineId: initialLineId,
                   initialLocale: initialLocale,
+                  fixedContext: true,
                 ),
         onManageVoiceTakes:
             ({required initialLineId, required initialLocale}) =>
@@ -3585,6 +3606,7 @@ class _ManagedRevision3ProjectViewState
                   context,
                   initialLineId: initialLineId,
                   initialLocale: initialLocale,
+                  fixedContext: true,
                 ),
       ),
     );
@@ -4215,6 +4237,7 @@ Revision3LocalizationVoiceWorkspaceCopy _localizationVoiceWorkspaceCopy(
   reopenMessage: l10n.managedLocalizationReopen,
   invalidInputMessage: l10n.managedLocalizationInvalid,
   genericFailureMessage: l10n.managedLocalizationSaveFailed,
+  voiceActionFailedMessage: l10n.managedLocalizationVoiceActionFailed,
 );
 
 Revision3VoiceBuildReadinessCopy _voiceBuildReadinessCopy(

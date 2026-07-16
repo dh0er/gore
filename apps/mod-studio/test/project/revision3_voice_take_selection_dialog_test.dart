@@ -69,6 +69,424 @@ void main() {
   });
 
   testWidgets(
+    'fixed context hides global navigation and publishes only its exact slot',
+    (tester) async {
+      Revision3VoiceTakeSelectionTechnicalPlan? received;
+      await _openDialog(
+        tester,
+        index: _index(),
+        initialLineId: revision3VoiceContentLineId,
+        initialLocale: 'de',
+        fixedContext: true,
+        publish:
+            ({
+              required expectedProjectId,
+              required expectedProjectRevision,
+              required plan,
+            }) async {
+              received = plan;
+              return _publication(
+                projectId: expectedProjectId,
+                revision: expectedProjectRevision + 1,
+                plan: plan,
+              );
+            },
+      );
+
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(
+        find.byKey(const Key('voice-selection-line-search')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('voice-selection-lines')), findsNothing);
+      expect(find.byKey(const Key('voice-selection-locale')), findsNothing);
+      expect(find.textContaining(revision3VoiceContentLineId), findsNothing);
+
+      await tester.tap(find.byKey(const Key('voice-selection-clear')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('voice-selection-save')));
+      await tester.pumpAndSettle();
+
+      expect(received?.lineId, revision3VoiceContentLineId);
+      expect(received?.locale, 'de');
+      expect(received?.selectedTakeId, isNull);
+    },
+  );
+
+  testWidgets('invalid fixed context fails closed without any mutation', (
+    tester,
+  ) async {
+    var selectionPublishes = 0;
+    var statusPublishes = 0;
+    var removalPublishes = 0;
+    var slotRemovalPublishes = 0;
+    await _openDialog(
+      tester,
+      index: _index(),
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'en',
+      fixedContext: true,
+      publish:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            selectionPublishes++;
+            throw StateError('must not publish');
+          },
+      publishStatus:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            statusPublishes++;
+            throw StateError('must not publish');
+          },
+      publishRemoval:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            removalPublishes++;
+            throw StateError('must not publish');
+          },
+      publishSlotRemoval:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            slotRemovalPublishes++;
+            throw StateError('must not publish');
+          },
+    );
+
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(find.byKey(const Key('voice-selection-line-search')), findsNothing);
+    expect(find.byKey(const Key('voice-selection-lines')), findsNothing);
+    expect(find.byKey(const Key('voice-selection-locale')), findsNothing);
+    expect(find.byKey(const Key('voice-selection-clear')), findsNothing);
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    expect(
+      selectionPublishes +
+          statusPublishes +
+          removalPublishes +
+          slotRemovalPublishes,
+      0,
+    );
+  });
+
+  testWidgets(
+    'older catalog completion cannot replace a newer fixed context load',
+    (tester) async {
+      final olderLoad = Completer<Revision3ContentIndex>();
+
+      Widget app(Future<Revision3ContentIndex> Function() load) {
+        return MaterialApp(
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Revision3VoiceTakeSelectionDialog(
+            key: const Key('selection-dialog-under-test'),
+            service: Revision3VoiceTakeSelectionAuthoringService(
+              loadContentIndex: load,
+              publishTechnicalPlan: _unexpectedPublish,
+            ),
+            statusService: Revision3VoiceTakeStatusAuthoringService(
+              loadContentIndex: load,
+              publishTechnicalPlan: _unexpectedStatusPublish,
+            ),
+            removalService: Revision3VoiceTakeRemovalAuthoringService(
+              loadContentIndex: load,
+              publishTechnicalPlan: _unexpectedRemovalPublish,
+            ),
+            slotRemovalService: Revision3DialogVoiceSlotRemovalAuthoringService(
+              loadContentIndex: load,
+              publishTechnicalPlan: _unexpectedSlotRemovalPublish,
+            ),
+            initialLineId: revision3VoiceContentLineId,
+            initialLocale: 'de',
+            fixedContext: true,
+          ),
+        );
+      }
+
+      await tester.pumpWidget(app(() => olderLoad.future));
+      await tester.pump();
+
+      await tester.pumpWidget(app(() async => _index()));
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(find.textContaining('no longer matches'), findsNothing);
+
+      olderLoad.complete(
+        revision3VoiceContentIndexFixture(existingDeSlot: false),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(find.textContaining('no longer matches'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'failed fixed-context rebind clears old authority and offers retry',
+    (tester) async {
+      var selectionPublishes = 0;
+      var statusPublishes = 0;
+      var removalPublishes = 0;
+      var slotRemovalPublishes = 0;
+      var failedLoads = 0;
+
+      Future<Revision3VoiceTakeSelectionPublication> publishSelection({
+        required String expectedProjectId,
+        required int expectedProjectRevision,
+        required Revision3VoiceTakeSelectionTechnicalPlan plan,
+      }) async {
+        selectionPublishes++;
+        throw StateError('selection publish must stay fail-closed');
+      }
+
+      Future<Revision3VoiceTakeStatusPublication> publishStatus({
+        required String expectedProjectId,
+        required int expectedProjectRevision,
+        required Revision3VoiceTakeStatusTechnicalPlan plan,
+      }) async {
+        statusPublishes++;
+        throw StateError('status publish must stay fail-closed');
+      }
+
+      Future<Revision3VoiceTakeRemovalPublication> publishRemoval({
+        required String expectedProjectId,
+        required int expectedProjectRevision,
+        required Revision3VoiceTakeRemovalTechnicalPlan plan,
+      }) async {
+        removalPublishes++;
+        throw StateError('removal publish must stay fail-closed');
+      }
+
+      Future<Revision3DialogVoiceSlotRemovalPublication> publishSlotRemoval({
+        required String expectedProjectId,
+        required int expectedProjectRevision,
+        required Revision3DialogVoiceSlotRemovalTechnicalPlan plan,
+      }) async {
+        slotRemovalPublishes++;
+        throw StateError('slot removal publish must stay fail-closed');
+      }
+
+      Widget app(Future<Revision3ContentIndex> Function() load) => MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Revision3VoiceTakeSelectionDialog(
+          key: const Key('selection-dialog-under-test'),
+          service: Revision3VoiceTakeSelectionAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: publishSelection,
+          ),
+          statusService: Revision3VoiceTakeStatusAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: publishStatus,
+          ),
+          removalService: Revision3VoiceTakeRemovalAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: publishRemoval,
+          ),
+          slotRemovalService: Revision3DialogVoiceSlotRemovalAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: publishSlotRemoval,
+          ),
+          initialLineId: revision3VoiceContentLineId,
+          initialLocale: 'de',
+          fixedContext: true,
+        ),
+      );
+
+      await tester.pumpWidget(app(() async => _index()));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-selection-clear')));
+      await tester.pump();
+      final staleSave = _button(tester, 'voice-selection-save').onPressed;
+      expect(staleSave, isNotNull);
+
+      await tester.pumpWidget(
+        app(() async {
+          failedLoads++;
+          throw StateError('replacement catalog unavailable');
+        }),
+      );
+      await tester.pumpAndSettle();
+
+      expect(failedLoads, 1);
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('voice-selection-clear')), findsNothing);
+      expect(find.byKey(const Key('voice-take-remove-0')), findsNothing);
+      expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+      final retry = _button(tester, 'voice-selection-retry');
+      expect(retry.onPressed, isNotNull);
+
+      staleSave!();
+      await tester.pump();
+      expect(
+        selectionPublishes +
+            statusPublishes +
+            removalPublishes +
+            slotRemovalPublishes,
+        0,
+      );
+
+      await tester.tap(find.byKey(const Key('voice-selection-retry')));
+      await tester.pumpAndSettle();
+      expect(failedLoads, 2);
+      expect(find.byKey(const Key('voice-selection-retry')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'pending recovery cannot replace a successfully rebound fixed context',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(1200, 1000));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final initial = _index();
+      final recovered = _index(
+        revision: 8,
+        secondApproved: true,
+        secondTakeRevision: 1,
+      );
+      final reboundJson = revision3VoiceContentIndexJsonFixture(revision: 9);
+      final reboundEntities = (reboundJson['entities']! as List<Object?>)
+          .cast<Map<String, Object?>>();
+      reboundEntities.singleWhere(
+        (entity) => entity['id'] == revision3VoiceContentLineId,
+      )['display_name'] = 'Rebound current Voice context';
+      final rebound = Revision3ContentIndex.fromJsonObject(reboundJson);
+      final oldRecovery = Completer<Revision3ContentIndex>();
+      var oldReads = 0;
+      var statusPublishes = 0;
+
+      Future<Revision3ContentIndex> oldLoad() async {
+        oldReads++;
+        if (oldReads == 3) throw StateError('temporary reload failure');
+        if (oldReads == 4) return oldRecovery.future;
+        return initial;
+      }
+
+      Widget app({
+        required Future<Revision3ContentIndex> Function() load,
+        required String lineId,
+        required Revision3VoiceTakeStatusTechnicalPublisher publishStatus,
+      }) => MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Revision3VoiceTakeSelectionDialog(
+          key: const Key('selection-dialog-under-test'),
+          service: Revision3VoiceTakeSelectionAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: _unexpectedPublish,
+          ),
+          statusService: Revision3VoiceTakeStatusAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: publishStatus,
+          ),
+          removalService: Revision3VoiceTakeRemovalAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: _unexpectedRemovalPublish,
+          ),
+          slotRemovalService: Revision3DialogVoiceSlotRemovalAuthoringService(
+            loadContentIndex: load,
+            publishTechnicalPlan: _unexpectedSlotRemovalPublish,
+          ),
+          initialLineId: lineId,
+          initialLocale: 'de',
+          fixedContext: true,
+        ),
+      );
+
+      await tester.pumpWidget(
+        app(
+          load: oldLoad,
+          lineId: revision3VoiceContentLineId,
+          publishStatus:
+              ({
+                required expectedProjectId,
+                required expectedProjectRevision,
+                required plan,
+              }) async {
+                statusPublishes++;
+                return _statusPublication(
+                  projectId: expectedProjectId,
+                  revision: 8,
+                  plan: plan,
+                );
+              },
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-status-change-1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('voice-status-option-1-approved')));
+      await tester.pumpAndSettle();
+      expect(statusPublishes, 1);
+      expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('voice-status-reload')));
+      await tester.pump();
+      expect(oldReads, 4);
+
+      await tester.pumpWidget(
+        app(
+          load: () async => rebound,
+          lineId: revision3VoiceContentLineId,
+          publishStatus: _unexpectedStatusPublish,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Rebound current Voice context'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('no longer matches'), findsNothing);
+
+      oldRecovery.complete(recovered);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Rebound current Voice context'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('voice-selection-fixed-context')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('no longer matches'), findsNothing);
+      expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+    },
+  );
+
+  testWidgets(
     'clear warns, stays explicit, and publishes a project-only clear',
     (tester) async {
       Revision3VoiceTakeSelectionTechnicalPlan? received;
@@ -1153,6 +1571,57 @@ void main() {
     expect(find.byKey(const Key('voice-take-remove-0')), findsNothing);
   });
 
+  testWidgets('fixed-context recovery closes when its exact slot disappeared', (
+    tester,
+  ) async {
+    final initial = _index(candidateCount: 1, selected: false);
+    final withoutSlot = _indexWithoutSlot(revision: 8, lineRevision: 3);
+    var reads = 0;
+    var publishCalls = 0;
+    await _openDialog(
+      tester,
+      index: initial,
+      load: () async => reads++ == 0 ? initial : withoutSlot,
+      initialLineId: revision3VoiceContentLineId,
+      initialLocale: 'de',
+      fixedContext: true,
+      publishRemoval:
+          ({
+            required expectedProjectId,
+            required expectedProjectRevision,
+            required plan,
+          }) async {
+            publishCalls++;
+            throw StateError('stale context must reject before publish');
+          },
+    );
+
+    await tester.tap(find.byKey(const Key('voice-take-remove-0')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('voice-take-remove-confirm')));
+    await tester.pumpAndSettle();
+
+    expect(publishCalls, 0);
+    expect(find.byKey(const Key('voice-status-reload')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('voice-status-reload')));
+    await tester.pumpAndSettle();
+
+    expect(publishCalls, 0);
+    expect(find.textContaining('no longer matches'), findsOneWidget);
+    expect(find.textContaining('Latest Voice takes reloaded'), findsNothing);
+    expect(find.textContaining('saved removal was confirmed'), findsNothing);
+    expect(find.byKey(const Key('voice-status-reload')), findsNothing);
+    expect(
+      find.byKey(const Key('voice-selection-fixed-context')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('voice-selection-line-search')), findsNothing);
+    expect(find.byKey(const Key('voice-selection-locale')), findsNothing);
+    expect(_button(tester, 'voice-selection-save').onPressed, isNull);
+    expect(find.widgetWithText(TextButton, 'Close'), findsOneWidget);
+  });
+
   testWidgets('requires-reopen removal is terminal and is never retried', (
     tester,
   ) async {
@@ -1268,6 +1737,7 @@ Future<void> _openDialog(
   Size surfaceSize = const Size(1200, 1000),
   String? initialLineId,
   String? initialLocale,
+  bool fixedContext = false,
 }) async {
   await tester.binding.setSurfaceSize(surfaceSize);
   addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1304,6 +1774,7 @@ Future<void> _openDialog(
               slotRemovalService: slotRemovalService,
               initialLineId: initialLineId,
               initialLocale: initialLocale,
+              fixedContext: fixedContext,
             ),
           ),
           child: const Text('Open'),

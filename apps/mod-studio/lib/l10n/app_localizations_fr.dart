@@ -967,6 +967,10 @@ class AppLocalizationsFr extends AppLocalizations {
       'The project text could not be saved.';
 
   @override
+  String get managedLocalizationVoiceActionFailed =>
+      'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
+
+  @override
   String get managedSectionValidateTestDescription =>
       'Vérifie l’intégrité exacte du projet et ses points de contrôle ; aucun test en jeu n’est revendiqué.';
 

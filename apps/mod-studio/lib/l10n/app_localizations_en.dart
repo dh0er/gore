@@ -842,7 +842,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get managedSectionLocalizationVoiceDescription =>
-      'Write and translate project dialog in one place, then continue with voice work.';
+      'Write and translate project dialog, then review each language\'s takes, selection, and target in the same workspace.';
 
   @override
   String get managedLocalizationProjectTextsLabel => 'Project texts';
@@ -959,6 +959,10 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get managedLocalizationSaveFailed =>
       'The project text could not be saved.';
+
+  @override
+  String get managedLocalizationVoiceActionFailed =>
+      'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.';
 
   @override
   String get managedSectionValidateTestDescription =>

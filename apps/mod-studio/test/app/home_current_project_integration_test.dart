@@ -2194,13 +2194,11 @@ void main() {
       );
       expect(find.text('Current target: unresolved'), findsOneWidget);
       expect(
-        tester
-            .widget<DropdownButtonFormField<String>>(
-              find.byType(DropdownButtonFormField<String>),
-            )
-            .initialValue,
-        'de',
+        find.byKey(const Key('revision3-voice-target-fixed-context')),
+        findsOneWidget,
       );
+      expect(find.text('Voice language: de'), findsOneWidget);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(find.text(revision3VoiceContentLineId), findsNothing);
 
       await tester.tap(find.byKey(const Key('revision3-voice-target-cancel')));
@@ -3449,23 +3447,16 @@ void main() {
 
       expect(find.byKey(const Key('revision3-voice-wizard')), findsOneWidget);
       expect(
-        tester
-            .widget<TextFormField>(
-              find.byKey(const Key('revision3-voice-line-search')),
-            )
-            .controller
-            ?.text,
-        'Asghan — Mine entrance warning',
+        find.byKey(const Key('revision3-voice-fixed-context')),
+        findsOneWidget,
       );
+      expect(find.text('Asghan — Mine entrance warning'), findsOneWidget);
+      expect(find.text('Voice language: de'), findsOneWidget);
       expect(
-        tester
-            .widget<TextFormField>(
-              find.byKey(const Key('revision3-voice-locale')),
-            )
-            .controller
-            ?.text,
-        'de',
+        find.byKey(const Key('revision3-voice-line-search')),
+        findsNothing,
       );
+      expect(find.byKey(const Key('revision3-voice-locale')), findsNothing);
       expect(managed.voicePublishCalls, 0);
 
       await tester.tap(find.byKey(const Key('revision3-voice-cancel')));
@@ -3897,7 +3888,19 @@ void main() {
       projectRevision: 7,
       head: _head(7),
       contentIndexBuilder: (lease) =>
-          revision3VoiceContentIndexFixture(revision: lease.projectRevision),
+          _voiceLocalizationWorkspaceIndex(revision: lease.projectRevision),
+      onDialogLocalizationEditSeed:
+          (lease, localizationId, localizationRevision, locId) =>
+              _dialogLocalizationEditSeed(
+                lease: lease,
+                localizationId: localizationId,
+                localizationRevision: localizationRevision,
+                locId: locId,
+                lineId: revision3VoiceContentLineId,
+                lineDisplayName: 'Mine entrance question',
+                speaker: 'Asghan',
+                voiceSlotLocales: const <String>{'de'},
+              ),
     );
     final coordinator = CurrentProjectCoordinator(
       openManagedRevision3: (_) async => managed,
@@ -3934,6 +3937,27 @@ void main() {
       key: const Key('revision3-localization-resolve-voice'),
       enabled: true,
     );
+    expect(
+      find.byKey(const Key('revision3-voice-production-intact')),
+      findsOneWidget,
+    );
+    expect(find.text('0 takes'), findsOneWidget);
+    expect(find.text('Target: Unresolved'), findsOneWidget);
+
+    final contextualManage = find.byKey(
+      const Key('revision3-voice-production-manage'),
+    );
+    await _scrollManagedEditorUntilVisible(tester, contextualManage);
+    await tester.tap(contextualManage);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('voice-selection-fixed-context')),
+      findsOneWidget,
+    );
+    expect(find.text('Voice language: de'), findsOneWidget);
+    expect(find.byKey(const Key('voice-selection-line-search')), findsNothing);
+    await tester.tap(find.byKey(const Key('voice-selection-cancel')));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -5744,6 +5768,27 @@ Future<void> _navigateManagedLocalizationVoice(
   }
 }
 
+Future<void> _scrollManagedEditorUntilVisible(
+  WidgetTester tester,
+  Finder target,
+) async {
+  final scrollable = find
+      .descendant(
+        of: find.byKey(const Key('revision3-localization-editor-scroll')),
+        matching: find.byType(Scrollable),
+      )
+      .first;
+  final viewportHeight =
+      tester.view.physicalSize.height / tester.view.devicePixelRatio;
+  for (var attempt = 0; attempt < 20; attempt++) {
+    final center = tester.getCenter(target, warnIfMissed: false);
+    if (center.dy >= 0 && center.dy <= viewportHeight) return;
+    await tester.drag(scrollable, const Offset(0, -220));
+    await tester.pump();
+  }
+  fail('managed editor target did not become visible');
+}
+
 Future<void> _openStoryWorkbenchEntity(
   WidgetTester tester,
   String entityId,
@@ -6824,6 +6869,21 @@ Revision3ContentIndex _contentIndex({
   'assets': <Object?>[],
 });
 
+Revision3ContentIndex _voiceLocalizationWorkspaceIndex({
+  required int revision,
+}) {
+  final json = revision3VoiceContentIndexJsonFixture(revision: revision);
+  final entities = (json['entities']! as List<Object?>)
+      .cast<Map<String, Object?>>();
+  final localization = entities.singleWhere(
+    (entity) => entity['id'] == revision3VoiceContentLocalizationId,
+  );
+  final summary = (localization['summary']! as Map).cast<String, Object?>();
+  final data = (summary['data']! as Map).cast<String, Object?>();
+  data['locales'] = <Object?>['de', 'en'];
+  return Revision3ContentIndex.fromJsonObject(json);
+}
+
 Revision3ContentIndex _dialogLocalizationEditIndex({
   required String projectId,
   required int projectRevision,
@@ -6871,6 +6931,10 @@ AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
   required String localizationId,
   required int localizationRevision,
   required String locId,
+  String? lineId,
+  String lineDisplayName = 'Dialog line',
+  String? speaker,
+  Set<String> voiceSlotLocales = const <String>{},
 }) {
   final request = AuthoringRevision3DialogLocalizationEditSeedRequestV1(
     expectedHead: lease.head,
@@ -6892,17 +6956,26 @@ AuthoringRevision3DialogLocalizationEditSeed _dialogLocalizationEditSeed({
         <String, Object?>{
           'locale': 'de',
           'text': 'Bleib stehen!',
-          'voice_slot_present': false,
+          'voice_slot_present': voiceSlotLocales.contains('de'),
           'candidate_count': 0,
         },
         <String, Object?>{
           'locale': 'en',
           'text': 'Stop right there!',
-          'voice_slot_present': false,
+          'voice_slot_present': voiceSlotLocales.contains('en'),
           'candidate_count': 0,
         },
       ],
-      'line_backlinks': <Object?>[],
+      'line_backlinks': <Object?>[
+        if (lineId != null)
+          <String, Object?>{
+            'line_id': lineId,
+            'line_revision': 2,
+            'display_name': lineDisplayName,
+            'speaker_hint': speaker,
+            'voice_slot_locales': voiceSlotLocales.toList()..sort(),
+          },
+      ],
       'content_authority': 'read_only_exact_current_localization_edit_seed',
       'build_status': 'not_evaluated',
       'runtime_status': 'runtime_unqualified',

@@ -9,6 +9,8 @@ import 'revision3_voice_take_selection_authoring.dart';
 import 'revision3_voice_take_status_authoring.dart';
 
 const _clearSelectionValue = '__no_voice_take_selected__';
+const _fixedContextUnavailableMessage =
+    'This Voice action no longer matches one intact existing Voice setup in the exact current project. Close it and reopen Manage takes from the current workspace. No project, game, or save files were changed.';
 
 /// Friendly project-only editor for selecting or clearing an existing Voice
 /// take. Entity IDs, CAS heads, paths, and archive internals are never shown.
@@ -21,6 +23,7 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
     required this.slotRemovalService,
     this.initialLineId,
     this.initialLocale,
+    this.fixedContext = false,
   });
 
   final Revision3VoiceTakeSelectionAuthoringService service;
@@ -29,6 +32,10 @@ class Revision3VoiceTakeSelectionDialog extends StatefulWidget {
   final Revision3DialogVoiceSlotRemovalAuthoringService slotRemovalService;
   final String? initialLineId;
   final String? initialLocale;
+
+  /// Keeps an in-workspace line/locale handoff fixed. The freshly loaded
+  /// catalog must still prove that exact existing Voice setup intact.
+  final bool fixedContext;
 
   @override
   State<Revision3VoiceTakeSelectionDialog> createState() =>
@@ -57,8 +64,18 @@ class _Revision3VoiceTakeSelectionDialogState
   bool _requiresClose = false;
   bool _reloadRequired = false;
   bool _initialSelectionConsumed = false;
+  bool _fixedContextInvalid = false;
+  bool _catalogLoadFailed = false;
+  int _loadGeneration = 0;
 
-  bool get _interactionLocked => _busy || _requiresClose || _reloadRequired;
+  bool get _interactionLocked =>
+      _loading ||
+      _catalogLoadFailed ||
+      _catalog == null ||
+      _busy ||
+      _requiresClose ||
+      _reloadRequired ||
+      !_fixedContextIsCurrent;
 
   @override
   void initState() {
@@ -68,7 +85,23 @@ class _Revision3VoiceTakeSelectionDialogState
   }
 
   @override
+  void didUpdateWidget(covariant Revision3VoiceTakeSelectionDialog oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.service, widget.service) ||
+        !identical(oldWidget.statusService, widget.statusService) ||
+        !identical(oldWidget.removalService, widget.removalService) ||
+        !identical(oldWidget.slotRemovalService, widget.slotRemovalService) ||
+        oldWidget.fixedContext != widget.fixedContext ||
+        oldWidget.initialLineId != widget.initialLineId ||
+        oldWidget.initialLocale != widget.initialLocale) {
+      _initialSelectionConsumed = false;
+      _load(resetRecovery: true);
+    }
+  }
+
+  @override
   void dispose() {
+    _loadGeneration++;
     _searchController
       ..removeListener(_searchChanged)
       ..dispose();
@@ -79,25 +112,55 @@ class _Revision3VoiceTakeSelectionDialogState
     if (mounted) setState(() {});
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool resetRecovery = false}) async {
+    final generation = ++_loadGeneration;
     setState(() {
+      if (resetRecovery) {
+        if (_reloadRequired) _busy = false;
+        _reloadRequired = false;
+        _pendingStatusPublication = null;
+        _pendingRemovalPublication = null;
+        _pendingSlotRemovalPublication = null;
+      }
       _loading = true;
+      _catalogLoadFailed = false;
+      _catalog = null;
+      _lineId = null;
+      _locale = null;
+      _selectionValue = null;
+      _fixedContextInvalid = false;
       _error = null;
       _notice = null;
     });
     try {
       final catalog = await widget.service.loadCatalog();
-      if (!mounted) return;
-      final initialLine = _initialSelectionConsumed
-          ? null
-          : catalog.line(widget.initialLineId ?? '');
-      final initialLocales = initialLine == null
-          ? const <String>[]
-          : _intactLocalesFor(initialLine);
-      final initialLocale = initialLocales.contains(widget.initialLocale)
-          ? widget.initialLocale
-          : initialLocales.firstOrNull;
-      _initialSelectionConsumed = true;
+      if (!mounted || generation != _loadGeneration) return;
+      Revision3VoiceDialogLineChoice? initialLine;
+      String? initialLocale;
+      var fixedContextInvalid = false;
+      if (widget.fixedContext) {
+        final requestedLine = catalog.line(widget.initialLineId ?? '');
+        final requestedLocale = widget.initialLocale;
+        if (requestedLine != null &&
+            requestedLocale != null &&
+            _intactLocalesFor(requestedLine).contains(requestedLocale)) {
+          initialLine = requestedLine;
+          initialLocale = requestedLocale;
+        } else {
+          fixedContextInvalid = true;
+        }
+      } else {
+        initialLine = _initialSelectionConsumed
+            ? null
+            : catalog.line(widget.initialLineId ?? '');
+        final initialLocales = initialLine == null
+            ? const <String>[]
+            : _intactLocalesFor(initialLine);
+        initialLocale = initialLocales.contains(widget.initialLocale)
+            ? widget.initialLocale
+            : initialLocales.firstOrNull;
+        _initialSelectionConsumed = true;
+      }
       setState(() {
         _catalog = catalog;
         _lineId = initialLine?.lineId;
@@ -107,19 +170,26 @@ class _Revision3VoiceTakeSelectionDialogState
             : _selectionValueFor(
                 initialLine.slotSummaryForLocale(initialLocale)!,
               );
+        _fixedContextInvalid = fixedContextInvalid;
+        _catalogLoadFailed = false;
+        if (fixedContextInvalid) {
+          _error = _fixedContextUnavailableMessage;
+        }
         _loading = false;
       });
     } on Revision3VoiceTakeSelectionRequiresReopenException {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _loading = false;
+        _catalogLoadFailed = true;
         _requiresClose = true;
         _error = 'Reopen the managed project before changing Voice takes.';
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _loading = false;
+        _catalogLoadFailed = true;
         _error = 'Voice takes could not be loaded: ${_friendlyError(error)}';
       });
     }
@@ -156,6 +226,19 @@ class _Revision3VoiceTakeSelectionDialogState
     return line == null || locale == null
         ? null
         : line.slotSummaryForLocale(locale);
+  }
+
+  bool get _fixedContextIsCurrent {
+    if (!widget.fixedContext) return true;
+    final line = _selectedLine;
+    final locale = _locale;
+    return !_fixedContextInvalid &&
+        line != null &&
+        line.lineId == widget.initialLineId &&
+        locale != null &&
+        locale == widget.initialLocale &&
+        line.slotSummaryForLocale(locale) != null &&
+        _intactLocalesFor(line).contains(locale);
   }
 
   void _chooseLine(Revision3VoiceDialogLineChoice line) {
@@ -642,13 +725,20 @@ class _Revision3VoiceTakeSelectionDialogState
       final copy = AppLocalizations.of(context);
       setState(() {
         _catalog = refreshed;
-        _lineId = locales.isEmpty ? null : refreshedLine!.lineId;
-        _locale = locales.firstOrNull;
-        _selectionValue = _locale == null
-            ? null
-            : _selectionValueFor(
-                refreshedLine!.slotSummaryForLocale(_locale!)!,
-              );
+        if (widget.fixedContext) {
+          _lineId = refreshedLine?.lineId;
+          _locale = locale;
+          _selectionValue = null;
+          _requiresClose = true;
+        } else {
+          _lineId = locales.isEmpty ? null : refreshedLine!.lineId;
+          _locale = locales.firstOrNull;
+          _selectionValue = _locale == null
+              ? null
+              : _selectionValueFor(
+                  refreshedLine!.slotSummaryForLocale(_locale!)!,
+                );
+        }
         _busy = false;
         _pendingSlotRemovalPublication = null;
         _notice = copy.managedVoiceSlotRemoveSuccess;
@@ -685,6 +775,24 @@ class _Revision3VoiceTakeSelectionDialogState
 
   Future<void> _reloadTakes() async {
     if (_busy || !_reloadRequired || _requiresClose) return;
+    final generation = ++_loadGeneration;
+    final service = widget.service;
+    final statusService = widget.statusService;
+    final removalService = widget.removalService;
+    final slotRemovalService = widget.slotRemovalService;
+    final fixedContext = widget.fixedContext;
+    final initialLineId = widget.initialLineId;
+    final initialLocale = widget.initialLocale;
+    bool recoveryIsCurrent() =>
+        mounted &&
+        generation == _loadGeneration &&
+        identical(widget.service, service) &&
+        identical(widget.statusService, statusService) &&
+        identical(widget.removalService, removalService) &&
+        identical(widget.slotRemovalService, slotRemovalService) &&
+        widget.fixedContext == fixedContext &&
+        widget.initialLineId == initialLineId &&
+        widget.initialLocale == initialLocale;
     final previous = _catalog;
     final pending = _pendingStatusPublication;
     final pendingRemoval = _pendingRemovalPublication;
@@ -695,7 +803,8 @@ class _Revision3VoiceTakeSelectionDialogState
       _notice = null;
     });
     try {
-      final refreshed = await widget.statusService.loadCatalog();
+      final refreshed = await statusService.loadCatalog();
+      if (!recoveryIsCurrent()) return;
       if (previous == null || refreshed.projectId != previous.projectId) {
         throw const Revision3VoiceTakeStatusRequiresReopenException();
       }
@@ -711,15 +820,50 @@ class _Revision3VoiceTakeSelectionDialogState
           !_catalogConfirmsSlotRemoval(refreshed, pendingSlotRemoval)) {
         throw const Revision3DialogVoiceSlotRemovalRequiresReopenException();
       }
-      final line = _lineId == null ? null : refreshed.line(_lineId!);
-      final locales = line == null ? const <String>[] : _intactLocales(line);
-      final locale = _locale != null && locales.contains(_locale)
-          ? _locale
-          : locales.firstOrNull;
-      final summary = locale == null
-          ? null
-          : line!.slotSummaryForLocale(locale);
-      if (!mounted) return;
+      Revision3VoiceDialogLineChoice? line;
+      String? locale;
+      Revision3VoiceExistingSlotSummary? summary;
+      if (fixedContext) {
+        final requestedLocale = initialLocale;
+        line = refreshed.line(initialLineId ?? '');
+        locale = requestedLocale;
+        summary = line == null || requestedLocale == null
+            ? null
+            : line.slotSummaryForLocale(requestedLocale);
+        final exactContextIsCurrent =
+            line != null &&
+            requestedLocale != null &&
+            summary != null &&
+            _intactLocalesFor(line).contains(requestedLocale);
+        final confirmedRequestedSlotRemoval = pendingSlotRemoval != null;
+        if (!exactContextIsCurrent && !confirmedRequestedSlotRemoval) {
+          if (!recoveryIsCurrent()) return;
+          setState(() {
+            _catalog = refreshed;
+            _lineId = null;
+            _locale = null;
+            _selectionValue = null;
+            _pendingStatusPublication = null;
+            _pendingRemovalPublication = null;
+            _pendingSlotRemovalPublication = null;
+            _reloadRequired = false;
+            _busy = false;
+            _fixedContextInvalid = true;
+            _requiresClose = true;
+            _error = _fixedContextUnavailableMessage;
+            _notice = null;
+          });
+          return;
+        }
+      } else {
+        line = _lineId == null ? null : refreshed.line(_lineId!);
+        final locales = line == null ? const <String>[] : _intactLocales(line);
+        locale = _locale != null && locales.contains(_locale)
+            ? _locale
+            : locales.firstOrNull;
+        summary = locale == null ? null : line!.slotSummaryForLocale(locale);
+      }
+      if (!recoveryIsCurrent()) return;
       setState(() {
         _catalog = refreshed;
         _lineId = locale == null ? null : line!.lineId;
@@ -730,6 +874,9 @@ class _Revision3VoiceTakeSelectionDialogState
         _pendingSlotRemovalPublication = null;
         _reloadRequired = false;
         _busy = false;
+        if (fixedContext && pendingSlotRemoval != null) {
+          _requiresClose = true;
+        }
         _notice = pendingSlotRemoval != null
             ? AppLocalizations.of(context).managedVoiceSlotRemoveReloadConfirmed
             : pendingRemoval != null
@@ -739,7 +886,7 @@ class _Revision3VoiceTakeSelectionDialogState
             : 'Saved status confirmed from the latest project.';
       });
     } on Revision3VoiceTakeRemovalRequiresReopenException {
-      if (!mounted) return;
+      if (!recoveryIsCurrent()) return;
       setState(() {
         _busy = false;
         _reloadRequired = false;
@@ -749,7 +896,7 @@ class _Revision3VoiceTakeSelectionDialogState
         ).managedVoiceTakeRemoveSavedUnconfirmed;
       });
     } on Revision3DialogVoiceSlotRemovalRequiresReopenException {
-      if (!mounted) return;
+      if (!recoveryIsCurrent()) return;
       setState(() {
         _busy = false;
         _reloadRequired = false;
@@ -759,7 +906,7 @@ class _Revision3VoiceTakeSelectionDialogState
         ).managedVoiceSlotRemoveSavedUnconfirmed;
       });
     } on Revision3VoiceTakeStatusRequiresReopenException {
-      if (!mounted) return;
+      if (!recoveryIsCurrent()) return;
       setState(() {
         _busy = false;
         _reloadRequired = false;
@@ -768,7 +915,7 @@ class _Revision3VoiceTakeSelectionDialogState
             'The latest Voice takes could not be confirmed. Close this window and reopen the managed project.';
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!recoveryIsCurrent()) return;
       setState(() {
         _busy = false;
         _error =
@@ -798,18 +945,27 @@ class _Revision3VoiceTakeSelectionDialogState
                 'Choose which existing Approved recording this dialog line should use. Status is an author workflow label only; it does not prove audio quality or in-game readiness. Changes stay in the offline project until separate build and deployment steps.',
               ),
               const SizedBox(height: 16),
-              TextField(
-                key: const Key('voice-selection-line-search'),
-                controller: _searchController,
-                enabled: !_loading && !_interactionLocked,
-                decoration: const InputDecoration(
-                  labelText: 'Find a dialog line',
-                  hintText: 'Search by speaker or line name',
-                  prefixIcon: Icon(Icons.search),
-                  border: OutlineInputBorder(),
+              if (widget.fixedContext && line != null && _locale != null) ...[
+                _SelectionFixedContextBreadcrumb(
+                  lineLabel: line.displayLabel,
+                  locale: _locale!,
                 ),
-              ),
-              const SizedBox(height: 8),
+                const SizedBox(height: 8),
+              ],
+              if (!widget.fixedContext) ...[
+                TextField(
+                  key: const Key('voice-selection-line-search'),
+                  controller: _searchController,
+                  enabled: !_loading && !_interactionLocked,
+                  decoration: const InputDecoration(
+                    labelText: 'Find a dialog line',
+                    hintText: 'Search by speaker or line name',
+                    prefixIcon: Icon(Icons.search),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               if (_loading)
                 const Center(
                   child: Padding(
@@ -817,7 +973,9 @@ class _Revision3VoiceTakeSelectionDialogState
                     child: CircularProgressIndicator(),
                   ),
                 )
-              else if (_catalog != null && lines.isEmpty)
+              else if (!widget.fixedContext &&
+                  _catalog != null &&
+                  lines.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 16),
                   child: Text(
@@ -825,7 +983,7 @@ class _Revision3VoiceTakeSelectionDialogState
                     key: Key('voice-selection-no-lines'),
                   ),
                 )
-              else if (_catalog != null)
+              else if (!widget.fixedContext && _catalog != null)
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxHeight: 190),
                   child: ListView.builder(
@@ -856,7 +1014,7 @@ class _Revision3VoiceTakeSelectionDialogState
                     },
                   ),
                 ),
-              if (line != null) ...[
+              if (!widget.fixedContext && line != null) ...[
                 const SizedBox(height: 16),
                 DropdownButtonFormField<String>(
                   key: const Key('voice-selection-locale'),
@@ -997,10 +1155,13 @@ class _Revision3VoiceTakeSelectionDialogState
         ),
       ),
       actions: [
-        if (_error != null && _catalog == null && !_loading && !_requiresClose)
+        if (_error != null &&
+            (_catalog == null || _fixedContextInvalid) &&
+            !_loading &&
+            !_requiresClose)
           TextButton(
             key: const Key('voice-selection-retry'),
-            onPressed: _interactionLocked ? null : _load,
+            onPressed: _busy ? null : _load,
             child: const Text('Retry'),
           ),
         if (_reloadRequired)
@@ -1035,6 +1196,43 @@ class _Revision3VoiceTakeSelectionDialogState
       ],
     );
   }
+}
+
+class _SelectionFixedContextBreadcrumb extends StatelessWidget {
+  const _SelectionFixedContextBreadcrumb({
+    required this.lineLabel,
+    required this.locale,
+  });
+
+  final String lineLabel;
+  final String locale;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('voice-selection-fixed-context'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(lineLabel, style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 3),
+              Text('Voice language: $locale'),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _TakeChoiceTile extends StatelessWidget {

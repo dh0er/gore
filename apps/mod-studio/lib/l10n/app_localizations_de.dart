@@ -857,7 +857,7 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedSectionLocalizationVoiceDescription =>
-      'Schreibe und übersetze Projektdialoge an einem Ort und arbeite anschließend direkt an der Sprachausgabe weiter.';
+      'Schreibe und übersetze Projektdialoge und prüfe Aufnahmen, Auswahl und Ziel jeder Sprache im selben Arbeitsbereich.';
 
   @override
   String get managedLocalizationProjectTextsLabel => 'Projekttexte';
@@ -978,6 +978,10 @@ class AppLocalizationsDe extends AppLocalizations {
   @override
   String get managedLocalizationSaveFailed =>
       'Der Projekttext konnte nicht gespeichert werden.';
+
+  @override
+  String get managedLocalizationVoiceActionFailed =>
+      'Die Voice-Aktion wurde nicht sauber abgeschlossen. Aktualisiere das Projekt vor einem erneuten Versuch; das exakt aktuelle Projekt zeigt, ob eine Änderung veröffentlicht wurde. Dieser Arbeitsbereich hat keine Spiel- oder Speicherdateien geändert.';
 
   @override
   String get managedSectionValidateTestDescription =>

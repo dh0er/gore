@@ -662,8 +662,12 @@ final class Revision3ContentVoiceTakeSummary {
 
 /// Structured DialogLine facts bound to its exact projected slot references.
 final class Revision3ContentDialogLineSummary {
-  const Revision3ContentDialogLineSummary({required this.voiceSlotLocales});
+  const Revision3ContentDialogLineSummary({
+    required this.speaker,
+    required this.voiceSlotLocales,
+  });
 
+  final String? speaker;
   final List<String> voiceSlotLocales;
 }
 
@@ -805,6 +809,7 @@ final class Revision3ContentSummary {
           );
         }
         dialogLine = Revision3ContentDialogLineSummary(
+          speaker: speaker,
           voiceSlotLocales: List<String>.unmodifiable(locales),
         );
         primary = speaker ?? 'Dialog line';

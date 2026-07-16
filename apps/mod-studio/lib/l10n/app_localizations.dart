@@ -1517,7 +1517,7 @@ abstract class AppLocalizations {
   /// No description provided for @managedSectionLocalizationVoiceDescription.
   ///
   /// In en, this message translates to:
-  /// **'Write and translate project dialog in one place, then continue with voice work.'**
+  /// **'Write and translate project dialog, then review each language\'s takes, selection, and target in the same workspace.'**
   String get managedSectionLocalizationVoiceDescription;
 
   /// No description provided for @managedLocalizationProjectTextsLabel.
@@ -1723,6 +1723,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The project text could not be saved.'**
   String get managedLocalizationSaveFailed;
+
+  /// No description provided for @managedLocalizationVoiceActionFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.'**
+  String get managedLocalizationVoiceActionFailed;
 
   /// No description provided for @managedSectionValidateTestDescription.
   ///

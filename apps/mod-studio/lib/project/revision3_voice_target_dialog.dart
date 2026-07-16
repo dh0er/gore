@@ -15,12 +15,17 @@ class Revision3VoiceTargetDialog extends StatefulWidget {
     required this.service,
     this.initialLineId,
     this.initialLocale,
+    this.fixedContext = false,
     super.key,
   });
 
   final Revision3VoiceTargetAuthoringService service;
   final String? initialLineId;
   final String? initialLocale;
+
+  /// Keeps an in-workspace line/locale handoff fixed. The freshly loaded
+  /// catalog must still prove the exact existing slot targetable.
+  final bool fixedContext;
 
   @override
   State<Revision3VoiceTargetDialog> createState() =>
@@ -38,6 +43,7 @@ class _Revision3VoiceTargetDialogState
   bool _publicationStarted = false;
   bool _requiresReopen = false;
   bool _staleCheckpoint = false;
+  bool _fixedContextInvalid = false;
   String? _error;
   int _loadGeneration = 0;
   int _catalogEpoch = 0;
@@ -52,7 +58,11 @@ class _Revision3VoiceTargetDialogState
   @override
   void didUpdateWidget(covariant Revision3VoiceTargetDialog oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.service, widget.service)) {
+    if (!identical(oldWidget.service, widget.service) ||
+        oldWidget.fixedContext != widget.fixedContext ||
+        oldWidget.initialLineId != widget.initialLineId ||
+        oldWidget.initialLocale != widget.initialLocale) {
+      _initialSelectionConsumed = false;
       _loadCatalog(clear: true);
     }
   }
@@ -73,6 +83,7 @@ class _Revision3VoiceTargetDialogState
         _lines = const [];
         _lineId = null;
         _locale = null;
+        _fixedContextInvalid = false;
       }
     });
     try {
@@ -85,23 +96,41 @@ class _Revision3VoiceTargetDialogState
         _catalog = catalog;
         _lines = List.unmodifiable(lines);
         _catalogEpoch += 1;
-        final initial = _initialSelectionConsumed
-            ? null
-            : _lineFrom(lines, widget.initialLineId);
-        _initialSelectionConsumed = true;
-        final selected = initial ?? _lineFrom(lines, _lineId);
-        if (selected == null) {
-          _lineId = null;
-          _locale = null;
+        if (widget.fixedContext) {
+          final requestedLine = _lineFrom(lines, widget.initialLineId);
+          final requestedLocale = widget.initialLocale;
+          if (requestedLine != null &&
+              requestedLocale != null &&
+              _safeLocales(requestedLine).contains(requestedLocale)) {
+            _lineId = requestedLine.lineId;
+            _locale = requestedLocale;
+            _fixedContextInvalid = false;
+          } else {
+            _lineId = null;
+            _locale = null;
+            _fixedContextInvalid = true;
+            _error =
+                'This Voice action no longer matches one intact existing Voice target in the exact current project. Close it and reopen Resolve target from the current workspace. No project, game, or save files were changed.';
+          }
         } else {
-          _lineId = selected.lineId;
-          final locales = _safeLocales(selected);
-          final requestedLocale = initial == null
-              ? _locale
-              : widget.initialLocale;
-          _locale = locales.contains(requestedLocale)
-              ? requestedLocale
-              : locales.first;
+          final initial = _initialSelectionConsumed
+              ? null
+              : _lineFrom(lines, widget.initialLineId);
+          _initialSelectionConsumed = true;
+          final selected = initial ?? _lineFrom(lines, _lineId);
+          if (selected == null) {
+            _lineId = null;
+            _locale = null;
+          } else {
+            _lineId = selected.lineId;
+            final locales = _safeLocales(selected);
+            final requestedLocale = initial == null
+                ? _locale
+                : widget.initialLocale;
+            _locale = locales.contains(requestedLocale)
+                ? requestedLocale
+                : locales.first;
+          }
         }
         _loading = false;
       });
@@ -142,6 +171,18 @@ class _Revision3VoiceTargetDialogState
         : line.slotSummaryForLocale(locale);
   }
 
+  bool get _fixedContextIsCurrent {
+    if (!widget.fixedContext) return true;
+    final line = _selectedLine;
+    final locale = _locale;
+    return !_fixedContextInvalid &&
+        line != null &&
+        line.lineId == widget.initialLineId &&
+        locale != null &&
+        locale == widget.initialLocale &&
+        _safeLocales(line).contains(locale);
+  }
+
   void _selectLine(Revision3VoiceDialogLineChoice line) {
     final locales = _safeLocales(line);
     if (locales.isEmpty) return;
@@ -172,6 +213,7 @@ class _Revision3VoiceTargetDialogState
         catalog == null ||
         line == null ||
         locale == null ||
+        !_fixedContextIsCurrent ||
         !_safeLocales(line).contains(locale)) {
       return;
     }
@@ -230,6 +272,7 @@ class _Revision3VoiceTargetDialogState
         !_loading &&
         !_resolving &&
         !blocked &&
+        _fixedContextIsCurrent &&
         _catalog != null &&
         _selectedLine != null &&
         _locale != null;
@@ -287,6 +330,17 @@ class _Revision3VoiceTargetDialogState
                         label: const Text('Refresh existing Voice slots'),
                       ),
                     )
+                  else if (_fixedContextInvalid)
+                    Center(
+                      child: OutlinedButton.icon(
+                        key: const Key(
+                          'revision3-voice-target-fixed-context-retry',
+                        ),
+                        onPressed: blocked ? null : _loadCatalog,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Refresh Voice context'),
+                      ),
+                    )
                   else if (_lines.isEmpty)
                     const _NoSafeVoiceSlots()
                   else
@@ -328,93 +382,100 @@ class _Revision3VoiceTargetDialogState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        RawAutocomplete<Revision3VoiceDialogLineChoice>(
-          key: ValueKey('revision3-voice-target-line-$_catalogEpoch'),
-          initialValue: TextEditingValue(text: line?.displayLabel ?? ''),
-          displayStringForOption: (option) => option.displayLabel,
-          optionsBuilder: (value) {
-            final query = value.text.trim();
-            if (query.isEmpty) {
-              return const <Revision3VoiceDialogLineChoice>[];
-            }
-            return _lines.where((option) => option.matches(query)).take(50);
-          },
-          onSelected: _selectLine,
-          fieldViewBuilder:
-              (
-                context,
-                controller,
-                focusNode,
-                onFieldSubmitted,
-              ) => TextFormField(
-                key: const Key('revision3-voice-target-line-search'),
-                controller: controller,
-                focusNode: focusNode,
-                enabled: enabled,
-                decoration: const InputDecoration(
-                  labelText: 'Dialog line with an existing Voice slot',
-                  hintText: 'Search by speaker, line name, or Loc ID',
-                  helperText:
-                      'Only intact lines that already own a safe Voice slot are shown.',
-                  border: OutlineInputBorder(),
-                ),
-                onChanged: _clearChangedLineSearch,
-                onFieldSubmitted: (_) => onFieldSubmitted(),
-              ),
-          optionsViewBuilder: (context, onSelected, options) {
-            final bounded = options.toList(growable: false);
-            return Align(
-              alignment: Alignment.topLeft,
-              child: Material(
-                elevation: 6,
-                clipBehavior: Clip.antiAlias,
-                borderRadius: BorderRadius.circular(8),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(
-                    maxWidth: 640,
-                    maxHeight: 300,
+        if (widget.fixedContext)
+          _TargetFixedContextBreadcrumb(
+            lineLabel: line!.displayLabel,
+            locale: _locale!,
+          )
+        else
+          RawAutocomplete<Revision3VoiceDialogLineChoice>(
+            key: ValueKey('revision3-voice-target-line-$_catalogEpoch'),
+            initialValue: TextEditingValue(text: line?.displayLabel ?? ''),
+            displayStringForOption: (option) => option.displayLabel,
+            optionsBuilder: (value) {
+              final query = value.text.trim();
+              if (query.isEmpty) {
+                return const <Revision3VoiceDialogLineChoice>[];
+              }
+              return _lines.where((option) => option.matches(query)).take(50);
+            },
+            onSelected: _selectLine,
+            fieldViewBuilder:
+                (
+                  context,
+                  controller,
+                  focusNode,
+                  onFieldSubmitted,
+                ) => TextFormField(
+                  key: const Key('revision3-voice-target-line-search'),
+                  controller: controller,
+                  focusNode: focusNode,
+                  enabled: enabled,
+                  decoration: const InputDecoration(
+                    labelText: 'Dialog line with an existing Voice slot',
+                    hintText: 'Search by speaker, line name, or Loc ID',
+                    helperText:
+                        'Only intact lines that already own a safe Voice slot are shown.',
+                    border: OutlineInputBorder(),
                   ),
-                  child: ListView.builder(
-                    key: const Key('revision3-voice-target-line-results'),
-                    padding: EdgeInsets.zero,
-                    shrinkWrap: true,
-                    itemCount: bounded.length,
-                    itemBuilder: (context, index) {
-                      final option = bounded[index];
-                      return ListTile(
-                        title: Text(option.displayLabel),
-                        onTap: () => onSelected(option),
-                      );
-                    },
+                  onChanged: _clearChangedLineSearch,
+                  onFieldSubmitted: (_) => onFieldSubmitted(),
+                ),
+            optionsViewBuilder: (context, onSelected, options) {
+              final bounded = options.toList(growable: false);
+              return Align(
+                alignment: Alignment.topLeft,
+                child: Material(
+                  elevation: 6,
+                  clipBehavior: Clip.antiAlias,
+                  borderRadius: BorderRadius.circular(8),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(
+                      maxWidth: 640,
+                      maxHeight: 300,
+                    ),
+                    child: ListView.builder(
+                      key: const Key('revision3-voice-target-line-results'),
+                      padding: EdgeInsets.zero,
+                      shrinkWrap: true,
+                      itemCount: bounded.length,
+                      itemBuilder: (context, index) {
+                        final option = bounded[index];
+                        return ListTile(
+                          title: Text(option.displayLabel),
+                          onTap: () => onSelected(option),
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
-            );
-          },
-        ),
+              );
+            },
+          ),
         const SizedBox(height: 14),
-        DropdownButtonFormField<String>(
-          key: ValueKey(
-            'revision3-voice-target-locale-${line?.lineId ?? 'none'}',
+        if (!widget.fixedContext)
+          DropdownButtonFormField<String>(
+            key: ValueKey(
+              'revision3-voice-target-locale-${line?.lineId ?? 'none'}',
+            ),
+            initialValue: locales.contains(_locale) ? _locale : null,
+            decoration: const InputDecoration(
+              labelText: 'Existing Voice-slot language',
+              helperText:
+                  'Only languages with an intact existing slot can be resolved here.',
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              for (final locale in locales)
+                DropdownMenuItem(value: locale, child: Text(locale)),
+            ],
+            onChanged: enabled && line != null
+                ? (value) => setState(() {
+                    _locale = value;
+                    _error = null;
+                  })
+                : null,
           ),
-          initialValue: locales.contains(_locale) ? _locale : null,
-          decoration: const InputDecoration(
-            labelText: 'Existing Voice-slot language',
-            helperText:
-                'Only languages with an intact existing slot can be resolved here.',
-            border: OutlineInputBorder(),
-          ),
-          items: [
-            for (final locale in locales)
-              DropdownMenuItem(value: locale, child: Text(locale)),
-          ],
-          onChanged: enabled && line != null
-              ? (value) => setState(() {
-                  _locale = value;
-                  _error = null;
-                })
-              : null,
-        ),
         if (_selectedSummary case final summary?) ...[
           const SizedBox(height: 14),
           _CurrentTargetState(summary: summary),
@@ -424,6 +485,43 @@ class _Revision3VoiceTargetDialogState
       ],
     );
   }
+}
+
+class _TargetFixedContextBreadcrumb extends StatelessWidget {
+  const _TargetFixedContextBreadcrumb({
+    required this.lineLabel,
+    required this.locale,
+  });
+
+  final String lineLabel;
+  final String locale;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('revision3-voice-target-fixed-context'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.subdirectory_arrow_right, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(lineLabel, style: Theme.of(context).textTheme.titleSmall),
+              const SizedBox(height: 3),
+              Text('Voice language: $locale'),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 List<String> _safeLocales(Revision3VoiceDialogLineChoice line) {

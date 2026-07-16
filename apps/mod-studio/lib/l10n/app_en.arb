@@ -474,7 +474,7 @@
     "placeholders": {"error": {"type": "String"}}
   },
   "managedSectionWorldDescription": "World placement and workflows are planned.",
-  "managedSectionLocalizationVoiceDescription": "Write and translate project dialog in one place, then continue with voice work.",
+  "managedSectionLocalizationVoiceDescription": "Write and translate project dialog, then review each language's takes, selection, and target in the same workspace.",
   "managedLocalizationProjectTextsLabel": "Project texts",
   "managedLocalizationSearchLabel": "Search project texts",
   "managedLocalizationRefresh": "Refresh",
@@ -509,6 +509,7 @@
   "managedLocalizationReopen": "The project must be reopened before text editing can continue.",
   "managedLocalizationInvalid": "Check that every language and dialog text is valid and not empty.",
   "managedLocalizationSaveFailed": "The project text could not be saved.",
+  "managedLocalizationVoiceActionFailed": "The Voice action did not finish cleanly. Refresh the project before trying again; the exact current project will show whether a change was published. This workspace did not change game or save files.",
   "managedSectionValidateTestDescription": "Verify exact project integrity and checkpoints; no runtime test is claimed.",
   "managedSectionBuildReleaseDescription": "Voice bundles are available; full playable builds and deployment are unavailable.",
   "managedSectionSettingsExpertDescription": "Settings are available; expert tools are not yet integrated.",
