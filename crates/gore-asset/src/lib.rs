@@ -6,6 +6,8 @@
 
 pub mod dataasset_workflow;
 pub mod envelope;
+#[path = "offline_pack.rs"]
+pub mod legacy_offline_pack;
 mod legacy_preflight;
 pub mod package;
 pub mod patch;
