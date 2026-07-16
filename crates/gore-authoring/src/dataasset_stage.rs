@@ -6,6 +6,7 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
 use gore_asset::dataasset_workflow::{
     validate_generation_receipt, validate_sidecar_generation_mapping, AssetGenerationReceipt,
@@ -355,6 +356,10 @@ pub enum Revision3DataAssetStagingErrorV1 {
     ProjectBinding(String),
     #[error("prepared DataAsset stage candidate did not reopen exactly")]
     CandidateReopenMismatch,
+    #[error(transparent)]
+    Reviewed(#[from] ReviewedDataAssetStageBlockReasonV1),
+    #[error("exact-current reviewed DataAsset source did not reopen exactly")]
+    CurrentSourceReopenMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,6 +419,87 @@ pub fn verify_reviewed_fixed_leaf_stage_v1(
             Ok(VerifiedReviewedFixedLeafStageV1 { stage, reviewed })
         }
         ReviewedDataAssetStageEligibilityV1::Blocked(reason) => Err(reason),
+    }
+}
+
+/// Opaque, path-free owned source for one exact-current reviewed DataAsset stage.
+///
+/// Construction fully reopens the published revision-3 project before and after loading every
+/// stage component from Store CAS. This value has no `Clone`, serialization, consuming-parts,
+/// build, publication, deployment, or runtime-authority API.
+pub struct VerifiedCurrentReviewedDataAssetStageSourceV1 {
+    current_head: WorkingHead,
+    current_project: ProjectRevision3,
+    reviewed_stage: VerifiedReviewedFixedLeafStageV1,
+    patched_uasset: Vec<u8>,
+    patched_uexp: Vec<u8>,
+    usmap: Vec<u8>,
+    sidecars: BTreeMap<SidecarRole, Vec<u8>>,
+}
+
+impl fmt::Debug for VerifiedCurrentReviewedDataAssetStageSourceV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sidecar_roles: Vec<_> = self.sidecars.keys().copied().collect();
+        formatter
+            .debug_struct("VerifiedCurrentReviewedDataAssetStageSourceV1")
+            .field("current_head", &self.current_head)
+            .field("project_id", &self.current_project.project_id)
+            .field("project_revision", &self.current_project.revision)
+            .field("target_path", &self.reviewed_stage.stage().target_path())
+            .field("patched_uasset_bytes", &self.patched_uasset.len())
+            .field("patched_uexp_bytes", &self.patched_uexp.len())
+            .field("usmap_bytes", &self.usmap.len())
+            .field("sidecar_roles", &sidecar_roles)
+            .finish()
+    }
+}
+
+impl VerifiedCurrentReviewedDataAssetStageSourceV1 {
+    pub fn current_head(&self) -> &WorkingHead {
+        &self.current_head
+    }
+
+    pub const fn project_id(&self) -> ProjectId {
+        self.current_project.project_id
+    }
+
+    pub const fn project_revision(&self) -> u64 {
+        self.current_project.revision
+    }
+
+    pub fn project_target(&self) -> &GameGenerationAnchor {
+        &self.current_project.target
+    }
+
+    pub fn stage(&self) -> &Revision3DataAssetStageViewV1 {
+        self.reviewed_stage.stage()
+    }
+
+    pub fn reviewed(&self) -> &ReviewedFootstepPresetReplacementV1 {
+        self.reviewed_stage.reviewed()
+    }
+
+    pub fn patched_component_bytes(&self, component: PackageComponent) -> &[u8] {
+        match component {
+            PackageComponent::Uasset => &self.patched_uasset,
+            PackageComponent::Uexp => &self.patched_uexp,
+        }
+    }
+
+    pub fn usmap_bytes(&self) -> &[u8] {
+        &self.usmap
+    }
+
+    pub fn sidecar_bytes(&self, role: SidecarRole) -> Option<&[u8]> {
+        self.sidecars.get(&role).map(Vec::as_slice)
+    }
+
+    pub fn sidecars(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (SidecarRole, &[u8])> + DoubleEndedIterator + '_ {
+        self.sidecars
+            .iter()
+            .map(|(role, bytes)| (*role, bytes.as_slice()))
     }
 }
 
@@ -792,6 +878,116 @@ impl WorkingProjectStore {
         Ok(stages)
     }
 
+    /// Open one reviewed managed stage from the exact currently published revision-3 project.
+    ///
+    /// The returned capsule owns only sealed bytes and path-free project/stage evidence. It grants
+    /// no build, publication, deployment, runtime, or future reinspection authority.
+    pub fn open_current_reviewed_dataasset_stage_source_v1(
+        &self,
+        expected_head: &WorkingHead,
+        target_path: &str,
+    ) -> Result<VerifiedCurrentReviewedDataAssetStageSourceV1, Revision3DataAssetStagingErrorV1>
+    {
+        self.open_current_reviewed_dataasset_stage_source_v1_with_final_reopen_hook(
+            expected_head,
+            target_path,
+            || Ok(()),
+        )
+    }
+
+    fn open_current_reviewed_dataasset_stage_source_v1_with_final_reopen_hook<F>(
+        &self,
+        expected_head: &WorkingHead,
+        target_path: &str,
+        before_final_reopen: F,
+    ) -> Result<VerifiedCurrentReviewedDataAssetStageSourceV1, Revision3DataAssetStagingErrorV1>
+    where
+        F: FnOnce() -> Result<(), WorkingStoreError>,
+    {
+        gore_asset::dataasset_workflow::validate_game_asset_path(
+            target_path,
+            "DATAASSET_REVIEWED_CURRENT_TARGET",
+        )
+        .map_err(|error| Revision3DataAssetStagingErrorV1::ProjectBinding(error.to_string()))?;
+        self.require_exact_head_for_dataasset(Some(expected_head))?;
+        let opened = self.open_current_revision3(AssetVerification::Full)?;
+        if &opened.head != expected_head {
+            return Err(WorkingStoreError::HeadConflict {
+                expected: Some(expected_head.clone()),
+                actual: Some(opened.head),
+            }
+            .into());
+        }
+        let stages = self.load_revision3_dataasset_stages(&opened.project)?;
+        let stage = stages
+            .into_iter()
+            .find(|stage| stage.target_path().eq_ignore_ascii_case(target_path))
+            .ok_or_else(|| DataAssetStageConflictV1::TargetNotStaged {
+                target: target_path.to_owned(),
+            })?;
+        let reviewed_stage = verify_reviewed_fixed_leaf_stage_v1(stage)?;
+        let manifest = reviewed_stage.stage().manifest();
+        let package_limits = gore_asset::dataasset_workflow::asset_package_limits();
+        let patched_uasset = self.read_exact_dataasset_blob(
+            manifest.patched_uasset(),
+            dataasset_host_limit(package_limits.max_uasset_bytes, "patched uasset")?,
+            "reviewed DataAsset patched uasset",
+        )?;
+        let patched_uexp = self.read_exact_dataasset_blob(
+            manifest.patched_uexp(),
+            dataasset_host_limit(package_limits.max_uexp_bytes, "patched uexp")?,
+            "reviewed DataAsset patched uexp",
+        )?;
+        let usmap = self.read_exact_dataasset_blob(
+            manifest.usmap(),
+            dataasset_host_limit(MAX_USMAP_BYTES, "USMAP")?,
+            "reviewed DataAsset USMAP",
+        )?;
+        let mut sidecars = BTreeMap::new();
+        for (role, seal) in manifest.sidecars() {
+            let bytes = self.read_exact_dataasset_blob(
+                seal,
+                dataasset_host_limit(MAX_OPTIONAL_SIDECAR_BYTES, "sidecar")?,
+                "reviewed DataAsset sidecar",
+            )?;
+            sidecars.insert(*role, bytes);
+        }
+
+        before_final_reopen()?;
+        let reopened = self.open_current_revision3(AssetVerification::Full)?;
+        if &reopened.head != expected_head {
+            return Err(WorkingStoreError::HeadConflict {
+                expected: Some(expected_head.clone()),
+                actual: Some(reopened.head),
+            }
+            .into());
+        }
+        if reopened.head != opened.head || reopened.project != opened.project {
+            return Err(Revision3DataAssetStagingErrorV1::CurrentSourceReopenMismatch);
+        }
+        let reopened_stages = self.load_revision3_dataasset_stages(&reopened.project)?;
+        let Some(reopened_stage) = reopened_stages
+            .into_iter()
+            .find(|stage| stage.target_path().eq_ignore_ascii_case(target_path))
+        else {
+            return Err(Revision3DataAssetStagingErrorV1::CurrentSourceReopenMismatch);
+        };
+        if &reopened_stage != reviewed_stage.stage() {
+            return Err(Revision3DataAssetStagingErrorV1::CurrentSourceReopenMismatch);
+        }
+        self.require_exact_head_for_dataasset(Some(expected_head))?;
+
+        Ok(VerifiedCurrentReviewedDataAssetStageSourceV1 {
+            current_head: opened.head,
+            current_project: opened.project,
+            reviewed_stage,
+            patched_uasset,
+            patched_uexp,
+            usmap,
+            sidecars,
+        })
+    }
+
     /// Remove one managed-stage registry entry from a revision-3 candidate without deleting CAS
     /// objects and without publishing the prepared head.
     pub fn prepare_remove_revision3_dataasset_stage_v1(
@@ -1125,6 +1321,17 @@ fn stage_budget_error(
         limit,
     }
     .into()
+}
+
+fn dataasset_host_limit(
+    limit: u64,
+    kind: &'static str,
+) -> Result<usize, Revision3DataAssetStagingErrorV1> {
+    usize::try_from(limit).map_err(|_| {
+        Revision3DataAssetStagingErrorV1::ProjectBinding(format!(
+            "{kind} byte limit does not fit this host"
+        ))
+    })
 }
 
 fn preflight_candidate_stage_budgets(
@@ -1462,6 +1669,14 @@ mod tests {
                 .join(&digest[..2])
                 .join(&digest[2..])
         }
+
+        fn snapshot_path(&self, digest: Sha256Digest) -> PathBuf {
+            let digest = digest.to_string();
+            self.0
+                .join("snapshots/sha256")
+                .join(&digest[..2])
+                .join(format!("{}.json", &digest[2..]))
+        }
     }
 
     impl Drop for TestRoot {
@@ -1693,6 +1908,20 @@ mod tests {
         )
     }
 
+    fn publish_reviewed_stage(
+        root: &TestRoot,
+        store: &WorkingProjectStore,
+        fixture: &ProjectionFixture,
+    ) -> PreparedRevision3DataAssetStageV1 {
+        let basis = store
+            .prepare_revision3_checkpoint(None, &project(&fixture.executable))
+            .unwrap();
+        root.publish(&basis.head_bytes);
+        let staged = prepare_projection(store, &basis.head, fixture).unwrap();
+        root.publish(&staged.checkpoint().head_bytes);
+        staged
+    }
+
     #[test]
     fn reviewed_wrapper_preserves_the_exact_stage_and_closed_authority_contract() {
         let root = TestRoot::new("reviewed-wrapper");
@@ -1762,6 +1991,272 @@ mod tests {
             verify_reviewed_fixed_leaf_stage_v1(near_miss),
             Err(ReviewedDataAssetStageBlockReasonV1::SelectorMismatch { fact: "class path" })
         ));
+    }
+
+    #[test]
+    fn current_reviewed_source_owns_exact_sealed_stage_bytes() {
+        let root = TestRoot::new("reviewed-current-owned");
+        let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+        let fixture = reviewed_wolf_fixture();
+        let staged = publish_reviewed_stage(&root, &store, &fixture);
+
+        let source = store
+            .open_current_reviewed_dataasset_stage_source_v1(
+                &staged.checkpoint().head,
+                &fixture.generation.asset,
+            )
+            .unwrap();
+
+        assert_eq!(source.current_head(), &staged.checkpoint().head);
+        assert_eq!(source.project_id(), staged.project().project_id);
+        assert_eq!(source.project_revision(), staged.project().revision);
+        assert_eq!(source.project_target(), &staged.project().target);
+        assert_eq!(source.stage(), staged.stage());
+        assert_eq!(
+            source.reviewed().target(),
+            gore_asset::ReviewedFootstepPresetTargetV1::Wolf
+        );
+        assert_eq!(
+            source.reviewed().replacement_components(),
+            [11.0, 12.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            source.patched_component_bytes(PackageComponent::Uasset),
+            fixture.uasset
+        );
+        assert_eq!(
+            source.patched_component_bytes(PackageComponent::Uexp),
+            fixture.uexp
+        );
+        assert_eq!(source.usmap_bytes(), fixture.usmap);
+        assert_eq!(
+            source.sidecars().collect::<Vec<_>>(),
+            vec![(SidecarRole::Bulk, fixture.sidecar.as_slice())]
+        );
+        assert_eq!(
+            seal_bytes(source.patched_component_bytes(PackageComponent::Uasset)),
+            *source.stage().manifest().patched_uasset()
+        );
+        assert_eq!(
+            seal_bytes(source.patched_component_bytes(PackageComponent::Uexp)),
+            *source.stage().manifest().patched_uexp()
+        );
+        assert_eq!(
+            seal_bytes(source.usmap_bytes()),
+            *source.stage().manifest().usmap()
+        );
+        assert_eq!(
+            seal_bytes(source.sidecar_bytes(SidecarRole::Bulk).unwrap()),
+            source.stage().manifest().sidecars()[&SidecarRole::Bulk]
+        );
+
+        fs::remove_file(root.asset_path(source.stage().manifest().patched_uasset().sha256))
+            .unwrap();
+        assert_eq!(
+            source.patched_component_bytes(PackageComponent::Uasset),
+            fixture.uasset
+        );
+    }
+
+    #[test]
+    fn current_reviewed_source_accepts_target_casing_variant_and_retains_canonical_stage() {
+        let root = TestRoot::new("reviewed-current-target-case");
+        let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+        let fixture = reviewed_wolf_fixture();
+        let staged = publish_reviewed_stage(&root, &store, &fixture);
+        let casing_variant = format!(
+            "/Game/{}",
+            fixture
+                .generation
+                .asset
+                .strip_prefix("/Game/")
+                .unwrap()
+                .to_ascii_lowercase()
+        );
+        assert_ne!(casing_variant, fixture.generation.asset);
+
+        let source = store
+            .open_current_reviewed_dataasset_stage_source_v1(
+                &staged.checkpoint().head,
+                &casing_variant,
+            )
+            .unwrap();
+
+        assert_eq!(source.stage().target_path(), fixture.generation.asset);
+        assert_eq!(source.stage(), staged.stage());
+    }
+
+    #[test]
+    fn current_reviewed_source_rejects_stale_head_missing_target_and_near_miss() {
+        let root = TestRoot::new("reviewed-current-rejections");
+        let store = WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+        let fixture = reviewed_wolf_fixture();
+        let staged = publish_reviewed_stage(&root, &store, &fixture);
+        let mut stale = staged.checkpoint().head.clone();
+        stale.snapshot.sha256 = Sha256Digest::from_bytes([0x91; 32]);
+
+        assert!(matches!(
+            store
+                .open_current_reviewed_dataasset_stage_source_v1(&stale, &fixture.generation.asset),
+            Err(Revision3DataAssetStagingErrorV1::Store(
+                WorkingStoreError::HeadConflict { .. }
+            ))
+        ));
+        assert!(matches!(
+            store.open_current_reviewed_dataasset_stage_source_v1(
+                &staged.checkpoint().head,
+                "/Game/NotStaged"
+            ),
+            Err(Revision3DataAssetStagingErrorV1::Conflict(
+                DataAssetStageConflictV1::TargetNotStaged { .. }
+            ))
+        ));
+
+        let near_root = TestRoot::new("reviewed-current-near-miss");
+        let near_store =
+            WorkingProjectStore::at(near_root.path(), WorkingStoreLimits::default()).unwrap();
+        let mut near_fixture = reviewed_wolf_fixture();
+        near_fixture.selector.class_path = "/Script/G1R.FootstepTagNearMiss".to_owned();
+        let near_staged = publish_reviewed_stage(&near_root, &near_store, &near_fixture);
+        assert!(matches!(
+            near_store.open_current_reviewed_dataasset_stage_source_v1(
+                &near_staged.checkpoint().head,
+                &near_fixture.generation.asset
+            ),
+            Err(Revision3DataAssetStagingErrorV1::Reviewed(
+                ReviewedDataAssetStageBlockReasonV1::SelectorMismatch { fact: "class path" }
+            ))
+        ));
+    }
+
+    #[test]
+    fn current_reviewed_source_rejects_missing_or_mutated_cas() {
+        {
+            let root = TestRoot::new("reviewed-current-missing-cas");
+            let store =
+                WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+            let fixture = reviewed_wolf_fixture();
+            let staged = publish_reviewed_stage(&root, &store, &fixture);
+            fs::remove_file(root.asset_path(staged.stage().manifest().patched_uexp().sha256))
+                .unwrap();
+
+            assert!(matches!(
+                store.open_current_reviewed_dataasset_stage_source_v1(
+                    &staged.checkpoint().head,
+                    &fixture.generation.asset
+                ),
+                Err(Revision3DataAssetStagingErrorV1::Store(
+                    WorkingStoreError::MissingObject(_)
+                ))
+            ));
+        }
+
+        {
+            let root = TestRoot::new("reviewed-current-mutated-cas");
+            let store =
+                WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+            let fixture = reviewed_wolf_fixture();
+            let staged = publish_reviewed_stage(&root, &store, &fixture);
+            let mut mutated = fixture.uasset.clone();
+            mutated[0] ^= 0xff;
+            fs::write(
+                root.asset_path(staged.stage().manifest().patched_uasset().sha256),
+                mutated,
+            )
+            .unwrap();
+
+            assert!(matches!(
+                store.open_current_reviewed_dataasset_stage_source_v1(
+                    &staged.checkpoint().head,
+                    &fixture.generation.asset
+                ),
+                Err(Revision3DataAssetStagingErrorV1::Store(
+                    WorkingStoreError::SealMismatch { .. }
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn current_reviewed_source_rejects_final_head_or_project_race() {
+        {
+            let root = TestRoot::new("reviewed-current-head-race");
+            let store =
+                WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+            let fixture = reviewed_wolf_fixture();
+            let staged = publish_reviewed_stage(&root, &store, &fixture);
+            let mut raced_project = staged.project().clone();
+            raced_project.revision += 1;
+            let raced = store
+                .prepare_revision3_checkpoint(Some(&staged.checkpoint().head), &raced_project)
+                .unwrap();
+
+            let result = store
+                .open_current_reviewed_dataasset_stage_source_v1_with_final_reopen_hook(
+                    &staged.checkpoint().head,
+                    &fixture.generation.asset,
+                    || {
+                        root.publish(&raced.head_bytes);
+                        Ok(())
+                    },
+                );
+            assert!(matches!(
+                result,
+                Err(Revision3DataAssetStagingErrorV1::Store(
+                    WorkingStoreError::HeadConflict {
+                        expected: Some(expected),
+                        actual: Some(actual),
+                    }
+                )) if expected == staged.checkpoint().head && actual == raced.head
+            ));
+        }
+
+        {
+            let root = TestRoot::new("reviewed-current-project-race");
+            let store =
+                WorkingProjectStore::at(root.path(), WorkingStoreLimits::default()).unwrap();
+            let fixture = reviewed_wolf_fixture();
+            let staged = publish_reviewed_stage(&root, &store, &fixture);
+            let snapshot_path = root.snapshot_path(staged.checkpoint().head.snapshot.sha256);
+            let mut mutated_snapshot = fs::read(&snapshot_path).unwrap();
+            mutated_snapshot[0] ^= 0x01;
+
+            let result = store
+                .open_current_reviewed_dataasset_stage_source_v1_with_final_reopen_hook(
+                    &staged.checkpoint().head,
+                    &fixture.generation.asset,
+                    || {
+                        fs::write(&snapshot_path, &mutated_snapshot)?;
+                        Ok(())
+                    },
+                );
+            assert!(matches!(
+                result,
+                Err(Revision3DataAssetStagingErrorV1::Store(
+                    WorkingStoreError::SealMismatch { .. }
+                ))
+            ));
+        }
+    }
+
+    #[test]
+    fn current_reviewed_source_is_not_cloneable_or_serializable() {
+        trait AmbiguousIfClone<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+        impl<T: Clone + ?Sized> AmbiguousIfClone<u8> for T {}
+
+        trait AmbiguousIfSerialize<Marker> {
+            fn marker() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSerialize<()> for T {}
+        impl<T: serde::Serialize + ?Sized> AmbiguousIfSerialize<u8> for T {}
+
+        let _ = <VerifiedCurrentReviewedDataAssetStageSourceV1 as AmbiguousIfClone<_>>::marker
+            as fn();
+        let _ = <VerifiedCurrentReviewedDataAssetStageSourceV1 as AmbiguousIfSerialize<_>>::marker
+            as fn();
     }
 
     #[test]
