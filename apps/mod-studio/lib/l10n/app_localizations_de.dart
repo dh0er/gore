@@ -832,7 +832,33 @@ class AppLocalizationsDe extends AppLocalizations {
 
   @override
   String get managedProjectRecoveryContentLocked =>
-      'Öffne das verwaltete Projekt erneut, bevor seine Inhalte gelesen werden.';
+      'Stelle das verwaltete Projekt wieder her oder öffne es erneut, bevor seine Inhalte gelesen werden.';
+
+  @override
+  String get managedProjectRecoveryDescription =>
+      'Mod Studio öffnet dieses Projekt sicher neu, während die Sperre gehalten wird. Dabei werden weder das Spiel noch ein Spielstand verändert.';
+
+  @override
+  String get managedProjectRecoveryTry => 'Wiederherstellung versuchen';
+
+  @override
+  String get managedProjectRecoveryTrying => 'Wiederherstellung läuft…';
+
+  @override
+  String get managedProjectRecoveryAlternative =>
+      'Falls die Wiederherstellung nicht funktioniert, schließe das Projekt und öffne es erneut.';
+
+  @override
+  String get managedProjectRecoverySucceeded =>
+      'Das Projekt wurde wiederhergestellt. Du kannst weiterarbeiten.';
+
+  @override
+  String get managedProjectRecoveryFailed =>
+      'Die Wiederherstellung wurde nicht abgeschlossen. Versuche es erneut oder schließe das Projekt und öffne es wieder.';
+
+  @override
+  String get managedProjectRecoveryUnavailable =>
+      'Die Wiederherstellung ist für dieses Projekt nicht verfügbar. Schließe das Projekt und öffne es erneut.';
 
   @override
   String get managedDashboardUntitledProject => 'Unbenanntes Projekt';

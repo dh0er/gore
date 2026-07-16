@@ -21,6 +21,7 @@ import 'package:gore_mod/l10n/app_localizations.dart';
 import 'package:gore_mod/project/dialog_topics_notifier.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
+import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:gore_mod/project/revision3_base_game_content_browser.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
@@ -4539,6 +4540,10 @@ void main() {
         find.byKey(const Key('managed-project-requires-reopen-warning')),
         findsNothing,
       );
+      expect(
+        find.byKey(const Key('managed-project-try-recovery')),
+        findsNothing,
+      );
 
       await _sendControlS(tester);
 
@@ -4549,8 +4554,9 @@ void main() {
         find.byKey(const Key('managed-project-requires-reopen-warning')),
         findsOneWidget,
       );
+      expect(find.textContaining('safely reopen this project'), findsOneWidget);
       expect(
-        find.textContaining('This session now requires recovery'),
+        find.byKey(const Key('managed-project-try-recovery')),
         findsOneWidget,
       );
       expect(find.byKey(const Key('managed-open-settings')), findsOneWidget);
@@ -4585,6 +4591,346 @@ void main() {
       expect(managed.verifyCalls, 1);
       expect(
         find.byKey(const Key('managed-project-requires-reopen-warning')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'recovery blocks duplicate project actions and refreshes an advanced head',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = 'c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1';
+      final previous = _recoverySnapshot(projectId: projectId, revision: 24);
+      final recovered = _recoverySnapshot(projectId: projectId, revision: 25);
+      final recoveryGate = Completer<void>();
+      late final _FakeRecoverableManagedLease managed;
+      managed = _FakeRecoverableManagedLease(
+        root: Directory(r'C:\mods\recover-advanced'),
+        projectId: projectId,
+        projectRevision: 24,
+        head: previous.head,
+        canonicalProjectJsonValue: previous.projectJson,
+        onRecovery: (lease) async {
+          await recoveryGate.future;
+          lease
+            ..projectRevision = 25
+            ..head = recovered.head
+            ..canonicalProjectJsonValue = recovered.projectJson
+            ..requiresReopenValue = false;
+          return _recoveryCheckpoint(
+            projectId: projectId,
+            previousRevision: 24,
+            previousHead: previous.head,
+            recoveredRevision: 25,
+            recoveredHead: recovered.head,
+            recoveredProjectJson: recovered.projectJson,
+          );
+        },
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      final recoveryButton = find.byKey(
+        const Key('managed-project-try-recovery'),
+      );
+      expect(recoveryButton, findsOneWidget);
+      await tester.tap(recoveryButton);
+      await tester.tap(recoveryButton);
+      await tester.pump();
+
+      expect(managed.recoveryCalls, 1);
+      expect(
+        find.byKey(const Key('managed-project-recovery-progress')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<IconButton>(find.byKey(const Key('managed-open-settings')))
+            .onPressed,
+        isNull,
+      );
+      final menuFinder = find.byKey(const Key('project-menu'));
+      final projectItems = tester
+          .widget<PopupMenuButton<String>>(menuFinder)
+          .itemBuilder(tester.element(menuFinder))
+          .whereType<PopupMenuItem<String>>();
+      expect(projectItems.map((item) => item.enabled), everyElement(isFalse));
+
+      recoveryGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(managed.recoveryCalls, 1);
+      expect(managed.verifyCalls, 0);
+      expect(
+        find.byKey(const Key('managed-project-requires-reopen-warning')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('managed-project-try-recovery')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace')),
+        findsOneWidget,
+      );
+      await _expandManagedTechnicalDetails(tester);
+      expect(
+        tester
+            .widget<SelectableText>(
+              find.byKey(const Key('managed-project-revision')),
+            )
+            .data,
+        '25',
+      );
+      expect(
+        find.text('Project recovery completed. You can continue working.'),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('recovery also refreshes an unchanged durable head', (
+    tester,
+  ) async {
+    await _setDesktopTestSurface(tester);
+    const projectId = 'c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2';
+    final snapshot = _recoverySnapshot(projectId: projectId, revision: 24);
+    late final _FakeRecoverableManagedLease managed;
+    managed = _FakeRecoverableManagedLease(
+      root: Directory(r'C:\mods\recover-unchanged'),
+      projectId: projectId,
+      projectRevision: 24,
+      head: snapshot.head,
+      canonicalProjectJsonValue: snapshot.projectJson,
+      onRecovery: (lease) {
+        lease.requiresReopenValue = false;
+        return _recoveryCheckpoint(
+          projectId: projectId,
+          previousRevision: 24,
+          previousHead: snapshot.head,
+          recoveredRevision: 24,
+          recoveredHead: snapshot.head,
+          recoveredProjectJson: snapshot.projectJson,
+        );
+      },
+    )..requiresReopenValue = true;
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    await coordinator.openManagedRevision3(managed.root);
+    final container = _container(
+      coordinator: coordinator,
+      pickManaged: (_) async => null,
+    );
+    addTearDown(container.dispose);
+
+    await _pumpApp(tester, container);
+    await tester.tap(find.byKey(const Key('managed-project-try-recovery')));
+    await tester.pumpAndSettle();
+
+    final current = coordinator.state as ManagedRevision3CurrentProjectState;
+    expect(current.requiresReopen, isFalse);
+    expect(current.projectRevision, 24);
+    expect(current.head.canonicalJson, snapshot.head.canonicalJson);
+    expect(managed.recoveryCalls, 1);
+    expect(
+      find.byKey(const Key('revision3-project-workspace')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets(
+    'retryable recovery failure stays locked and enables one later retry',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = 'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3';
+      final snapshot = _recoverySnapshot(projectId: projectId, revision: 24);
+      late final _FakeRecoverableManagedLease managed;
+      managed = _FakeRecoverableManagedLease(
+        root: Directory(r'C:\mods\recover-failure'),
+        projectId: projectId,
+        projectRevision: 24,
+        head: snapshot.head,
+        canonicalProjectJsonValue: snapshot.projectJson,
+        onRecovery: (_) => throw StateError('private repair details'),
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      final buttonFinder = find.byKey(
+        const Key('managed-project-try-recovery'),
+      );
+      await tester.tap(buttonFinder);
+      await tester.pumpAndSettle();
+
+      expect(managed.recoveryCalls, 1);
+      expect(
+        find.byKey(const Key('managed-project-requires-reopen-warning')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('managed-project-recovery-error')),
+        findsOneWidget,
+      );
+      final warningText = tester
+          .widgetList<Text>(
+            find.descendant(
+              of: find.byKey(
+                const Key('managed-project-requires-reopen-warning'),
+              ),
+              matching: find.byType(Text),
+            ),
+          )
+          .map((text) => text.data ?? text.textSpan?.toPlainText() ?? '')
+          .join(' ')
+          .toLowerCase();
+      expect(warningText, isNot(contains('private repair details')));
+      expect(warningText, isNot(contains('journal')));
+      expect(warningText, isNot(contains('hash')));
+      expect(warningText, isNot(contains('repairoutcome')));
+      expect(tester.widget<FilledButton>(buttonFinder).onPressed, isNotNull);
+
+      await tester.tap(buttonFinder);
+      await tester.pumpAndSettle();
+      expect(managed.recoveryCalls, 2);
+      expect(managed.verifyCalls, 0);
+      expect(
+        find.byKey(const Key('revision3-project-workspace')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'unsupported recovery is terminal and keeps the close-open fallback',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const projectId = 'c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4';
+      final snapshot = _recoverySnapshot(projectId: projectId, revision: 24);
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\recover-unsupported'),
+        projectId: projectId,
+        projectRevision: 24,
+        head: snapshot.head,
+        canonicalProjectJsonValue: snapshot.projectJson,
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      final buttonFinder = find.byKey(
+        const Key('managed-project-try-recovery'),
+      );
+      await tester.tap(buttonFinder);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.textContaining('Recovery is not available for this project'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('close and open the project again'),
+        findsWidgets,
+      );
+      expect(tester.widget<FilledButton>(buttonFinder).onPressed, isNull);
+      expect(
+        find.byKey(const Key('revision3-project-workspace')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'a stale rendered recovery cannot call or affect a switched project',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      const oldProjectId = 'c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5';
+      const newProjectId = 'c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6c6';
+      final oldSnapshot = _recoverySnapshot(
+        projectId: oldProjectId,
+        revision: 24,
+      );
+      final newSnapshot = _recoverySnapshot(
+        projectId: newProjectId,
+        revision: 7,
+      );
+      final oldRoot = Directory(r'C:\mods\recover-old');
+      final newRoot = Directory(r'C:\mods\recover-new');
+      late final _FakeRecoverableManagedLease oldProject;
+      oldProject = _FakeRecoverableManagedLease(
+        root: oldRoot,
+        projectId: oldProjectId,
+        projectRevision: 24,
+        head: oldSnapshot.head,
+        canonicalProjectJsonValue: oldSnapshot.projectJson,
+        onRecovery: (_) => throw StateError('must not be called'),
+      )..requiresReopenValue = true;
+      final newProject = _FakeManagedLease(
+        root: newRoot,
+        projectId: newProjectId,
+        projectRevision: 7,
+        head: newSnapshot.head,
+        canonicalProjectJsonValue: newSnapshot.projectJson,
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (root) async =>
+            root.path == oldRoot.path ? oldProject : newProject,
+      );
+      await coordinator.openManagedRevision3(oldRoot);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      final staleOnPressed = tester
+          .widget<FilledButton>(
+            find.byKey(const Key('managed-project-try-recovery')),
+          )
+          .onPressed!;
+      await coordinator.closeCurrent();
+      await coordinator.openManagedRevision3(newRoot);
+      staleOnPressed();
+      await tester.pumpAndSettle();
+
+      expect(oldProject.recoveryCalls, 0);
+      expect(oldProject.closeCalls, 1);
+      expect(coordinator.state, isA<ManagedRevision3CurrentProjectState>());
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectId, newProjectId);
+      expect(current.projectRevision, 7);
+      expect(current.requiresReopen, isFalse);
+      expect(
+        find.byKey(const Key('managed-project-recovery-error')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('revision3-project-workspace')),
         findsOneWidget,
       );
     },
@@ -5030,8 +5376,12 @@ typedef _DialogLocalizationEditPublishCallback =
       _FakeManagedLease lease,
       Revision3DialogLocalizationEditTechnicalPlan plan,
     );
+typedef _RecoveryCallback =
+    FutureOr<ManagedRevision3RecoveryCheckpoint> Function(
+      _FakeRecoverableManagedLease lease,
+    );
 
-final class _FakeManagedLease
+class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
@@ -5078,7 +5428,7 @@ final class _FakeManagedLease
   final String projectId;
   @override
   String get canonicalProjectJson => canonicalProjectJsonValue;
-  final String canonicalProjectJsonValue;
+  String canonicalProjectJsonValue;
   @override
   int projectRevision;
   @override
@@ -5653,6 +6003,35 @@ final class _FakeManagedLease
   }
 }
 
+final class _FakeRecoverableManagedLease extends _FakeManagedLease
+    implements ManagedRevision3RecoveryLease {
+  _FakeRecoverableManagedLease({
+    required super.root,
+    required super.projectId,
+    required super.projectRevision,
+    required super.head,
+    required this.onRecovery,
+    super.canonicalProjectJsonValue,
+  });
+
+  final _RecoveryCallback onRecovery;
+  int recoveryCalls = 0;
+  int recoveryUncertaintyMarks = 0;
+
+  @override
+  Future<ManagedRevision3RecoveryCheckpoint>
+  recoverAfterUncertainPublication() async {
+    recoveryCalls++;
+    return onRecovery(this);
+  }
+
+  @override
+  void markRequiresReopenAfterRecoveryUncertainty() {
+    recoveryUncertaintyMarks++;
+    requiresReopenValue = true;
+  }
+}
+
 AuthoringRevision3DataAssetPackageIndexResult _homeDataAssetPackageIndexResult({
   required AuthoringWorkingHead head,
   required String projectId,
@@ -5716,6 +6095,57 @@ AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
       'sha256': value.toRadixString(16).padLeft(64, '0'),
     },
   }),
+);
+
+({String projectJson, AuthoringWorkingHead head}) _recoverySnapshot({
+  required String projectId,
+  required int revision,
+}) {
+  final projectJson = jsonEncode(<String, Object?>{
+    'format': 2,
+    'schema_revision': 3,
+    'project_id': projectId,
+    'revision': revision,
+    'target': <String, Object?>{
+      'executable': <String, Object?>{
+        'byte_len': 171698176,
+        'sha256':
+            'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+      },
+    },
+    'entities': <String, Object?>{},
+    'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+  });
+  final bytes = utf8.encode(projectJson);
+  return (
+    projectJson: projectJson,
+    head: AuthoringWorkingHead.fromCanonicalJson(
+      jsonEncode(<String, Object?>{
+        'store_format': 1,
+        'snapshot': <String, Object?>{
+          'byte_len': bytes.length,
+          'sha256': crypto.sha256.convert(bytes).toString(),
+        },
+      }),
+    ),
+  );
+}
+
+ManagedRevision3RecoveryCheckpoint _recoveryCheckpoint({
+  required String projectId,
+  required int previousRevision,
+  required AuthoringWorkingHead previousHead,
+  required int recoveredRevision,
+  required AuthoringWorkingHead recoveredHead,
+  required String recoveredProjectJson,
+}) => ManagedRevision3RecoveryCheckpoint(
+  previousHead: previousHead,
+  recoveredHead: recoveredHead,
+  projectId: projectId,
+  previousProjectRevision: previousRevision,
+  recoveredProjectRevision: recoveredRevision,
+  repairOutcome: AtomicRepairOutcome.clean,
+  canonicalProjectJson: recoveredProjectJson,
 );
 
 Revision3ContentIndex _contentIndex({

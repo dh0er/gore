@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/current_project_controller.dart';
 import 'package:gore_mod/project/managed_project_session.dart';
+import 'package:gore_mod/project/project_atomic_io.dart';
 import 'package:gore_mod/project/project_controller.dart';
 import 'package:gore_mod/project/revision3_content_index.dart';
 import 'package:gore_mod/project/revision3_dataasset_authoring.dart';
@@ -302,6 +303,515 @@ void main() {
       throwsA(isA<CurrentProjectOperationUnsupportedException>()),
     );
     expect(managed.verifyCalls, 1);
+  });
+
+  test(
+    'managed recovery keeps an unchanged exact durable checkpoint',
+    () async {
+      const projectId = '14141414141414141414141414141414';
+      final projectJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 4,
+      );
+      final head = _recoveryHead(projectJson);
+      late _FakeRecoveryManagedLease managed;
+      managed = _FakeRecoveryManagedLease(
+        root: Directory('recover-unchanged'),
+        projectIdValue: projectId,
+        projectRevision: 4,
+        head: head,
+        canonicalProjectJson: projectJson,
+        onRecovery: (lease) {
+          lease.requiresReopenValue = false;
+          return ManagedRevision3RecoveryCheckpoint(
+            previousHead: head,
+            recoveredHead: head,
+            projectId: projectId,
+            previousProjectRevision: 4,
+            recoveredProjectRevision: 4,
+            repairOutcome: AtomicRepairOutcome.restoredBackup,
+            canonicalProjectJson: projectJson,
+          );
+        },
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      final recovered = await coordinator.recoverCurrentRevision3(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+      );
+
+      expect(recovered.advanced, isFalse);
+      expect(recovered.repairOutcome, AtomicRepairOutcome.restoredBackup);
+      expect(managed.recoveryCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 4);
+      expect(state.head.canonicalJson, head.canonicalJson);
+      expect(state.requiresReopen, isFalse);
+    },
+  );
+
+  test('managed recovery publishes an exact one-revision advance', () async {
+    const projectId = '15151515151515151515151515151515';
+    final previousJson = _recoveryProjectJson(
+      projectId: projectId,
+      revision: 7,
+    );
+    final previousHead = _recoveryHead(previousJson);
+    final recoveredJson = _recoveryProjectJson(
+      projectId: projectId,
+      revision: 8,
+    );
+    final recoveredHead = _recoveryHead(recoveredJson);
+    late _FakeRecoveryManagedLease managed;
+    managed = _FakeRecoveryManagedLease(
+      root: Directory('recover-advanced'),
+      projectIdValue: projectId,
+      projectRevision: 7,
+      head: previousHead,
+      canonicalProjectJson: previousJson,
+      onRecovery: (lease) {
+        lease
+          ..projectRevision = 8
+          ..head = recoveredHead
+          ..canonicalProjectJson = recoveredJson
+          ..requiresReopenValue = false;
+        return ManagedRevision3RecoveryCheckpoint(
+          previousHead: previousHead,
+          recoveredHead: recoveredHead,
+          projectId: projectId,
+          previousProjectRevision: 7,
+          recoveredProjectRevision: 8,
+          repairOutcome: AtomicRepairOutcome.promotedTemp,
+          canonicalProjectJson: recoveredJson,
+        );
+      },
+    )..requiresReopenValue = true;
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    final recovered = await coordinator.recoverCurrentRevision3(
+      expectedRoot: visible.root.path,
+      expectedProjectId: visible.projectId,
+      expectedProjectRevision: visible.projectRevision,
+      expectedHead: visible.head,
+    );
+
+    expect(recovered.advanced, isTrue);
+    expect(managed.recoveryCalls, 1);
+    final state = coordinator.state as ManagedRevision3CurrentProjectState;
+    expect(state.projectRevision, 8);
+    expect(state.head.canonicalJson, recoveredHead.canonicalJson);
+    expect(state.requiresReopen, isFalse);
+  });
+
+  test(
+    'forged format schema or target drift fails closed after a sealed advance',
+    () async {
+      const projectId = '21212121212121212121212121212121';
+      const stableTarget = <String, Object?>{
+        'executable': <String, Object?>{
+          'byte_len': 171698176,
+          'sha256':
+              'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+        },
+        'game_generation': <String, Object?>{
+          'edition': 'remake',
+          'catalog_seal': 'a',
+        },
+      };
+      final scenarios =
+          <
+            ({
+              String name,
+              int format,
+              int schemaRevision,
+              Map<String, Object?> target,
+            })
+          >[
+            (
+              name: 'format',
+              format: 1,
+              schemaRevision: 3,
+              target: stableTarget,
+            ),
+            (
+              name: 'schema',
+              format: 2,
+              schemaRevision: 4,
+              target: stableTarget,
+            ),
+            (
+              name: 'target',
+              format: 2,
+              schemaRevision: 3,
+              target: const <String, Object?>{
+                'executable': <String, Object?>{
+                  'byte_len': 171698176,
+                  'sha256':
+                      'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+                },
+                'game_generation': <String, Object?>{
+                  'edition': 'remake',
+                  'catalog_seal': 'b',
+                },
+              },
+            ),
+          ];
+
+      for (final scenario in scenarios) {
+        final previousJson = _recoveryProjectJson(
+          projectId: projectId,
+          revision: 12,
+          target: stableTarget,
+        );
+        final previousHead = _recoveryHead(previousJson);
+        final forgedJson = _recoveryProjectJson(
+          projectId: projectId,
+          revision: 13,
+          format: scenario.format,
+          schemaRevision: scenario.schemaRevision,
+          target: scenario.target,
+        );
+        final forgedHead = _recoveryHead(forgedJson);
+        late _FakeRecoveryManagedLease managed;
+        managed = _FakeRecoveryManagedLease(
+          root: Directory('recover-forged-${scenario.name}'),
+          projectIdValue: projectId,
+          projectRevision: 12,
+          head: previousHead,
+          canonicalProjectJson: previousJson,
+          onRecovery: (lease) {
+            lease
+              ..projectRevision = 13
+              ..head = forgedHead
+              ..canonicalProjectJson = forgedJson
+              ..requiresReopenValue = false;
+            return ManagedRevision3RecoveryCheckpoint(
+              previousHead: previousHead,
+              recoveredHead: forgedHead,
+              projectId: projectId,
+              previousProjectRevision: 12,
+              recoveredProjectRevision: 13,
+              repairOutcome: AtomicRepairOutcome.keptTarget,
+              canonicalProjectJson: forgedJson,
+            );
+          },
+        )..requiresReopenValue = true;
+        final coordinator = CurrentProjectCoordinator(
+          openManagedRevision3: (_) async => managed,
+        );
+        try {
+          final visible = await coordinator.openManagedRevision3(managed.root);
+
+          await expectLater(
+            coordinator.recoverCurrentRevision3(
+              expectedRoot: visible.root.path,
+              expectedProjectId: visible.projectId,
+              expectedProjectRevision: visible.projectRevision,
+              expectedHead: visible.head,
+            ),
+            throwsA(isA<Revision3RecoveryFailedException>()),
+            reason: scenario.name,
+          );
+
+          expect(managed.recoveryCalls, 1, reason: scenario.name);
+          expect(managed.recoveryRelatchCalls, 1, reason: scenario.name);
+          expect(
+            (coordinator.state as ManagedRevision3CurrentProjectState)
+                .requiresReopen,
+            isTrue,
+            reason: scenario.name,
+          );
+        } finally {
+          await coordinator.shutdown();
+          coordinator.dispose();
+        }
+      }
+    },
+  );
+
+  test(
+    'stale managed recovery tuples never reach the recovery lease',
+    () async {
+      const projectId = '16161616161616161616161616161616';
+      final projectJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 3,
+      );
+      final head = _recoveryHead(projectJson);
+      final managed = _FakeRecoveryManagedLease(
+        root: Directory('recover-stale'),
+        projectIdValue: projectId,
+        projectRevision: 3,
+        head: head,
+        canonicalProjectJson: projectJson,
+        onRecovery: (_) => throw StateError('must not recover a stale tuple'),
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+      final attempts = <Future<ManagedRevision3RecoveryCheckpoint> Function()>[
+        () => coordinator.recoverCurrentRevision3(
+          expectedRoot: '${visible.root.path}-other',
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+        ),
+        () => coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: 'ffffffffffffffffffffffffffffffff',
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+        ),
+        () => coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision + 1,
+          expectedHead: visible.head,
+        ),
+        () => coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: _head(99),
+        ),
+      ];
+
+      for (final attempt in attempts) {
+        await expectLater(
+          attempt(),
+          throwsA(isA<Revision3RecoveryStaleCheckpointException>()),
+        );
+      }
+      expect(managed.recoveryCalls, 0);
+    },
+  );
+
+  test(
+    'unsupported managed recovery capability is rejected without a call',
+    () async {
+      const projectId = '17171717171717171717171717171717';
+      final projectJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 2,
+      );
+      final managed = _FakeManagedLease(
+        root: Directory('recover-unsupported'),
+        projectIdValue: projectId,
+        projectRevision: 2,
+        head: _recoveryHead(projectJson),
+        canonicalProjectJson: projectJson,
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+        ),
+        throwsA(isA<Revision3RecoveryNotSupportedException>()),
+      );
+      expect(managed.requiresReopen, isTrue);
+    },
+  );
+
+  test(
+    'healthy managed checkpoint rejects unnecessary recovery without a call',
+    () async {
+      const projectId = '18181818181818181818181818181818';
+      final projectJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 6,
+      );
+      final managed = _FakeRecoveryManagedLease(
+        root: Directory('recover-not-required'),
+        projectIdValue: projectId,
+        projectRevision: 6,
+        head: _recoveryHead(projectJson),
+        canonicalProjectJson: projectJson,
+        onRecovery: (_) => throw StateError('healthy lease must not recover'),
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+        ),
+        throwsA(isA<Revision3RecoveryNotRequiredException>()),
+      );
+      expect(managed.recoveryCalls, 0);
+    },
+  );
+
+  test(
+    'recovery receipt mismatch relatches and never claims success',
+    () async {
+      const projectId = '19191919191919191919191919191919';
+      final previousJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 10,
+      );
+      final previousHead = _recoveryHead(previousJson);
+      final claimedJson = _recoveryProjectJson(
+        projectId: projectId,
+        revision: 11,
+      );
+      final claimedHead = _recoveryHead(claimedJson);
+      final managed = _FakeRecoveryManagedLease(
+        root: Directory('recover-mismatch'),
+        projectIdValue: projectId,
+        projectRevision: 10,
+        head: previousHead,
+        canonicalProjectJson: previousJson,
+        onRecovery: (lease) {
+          lease.requiresReopenValue = false;
+          return ManagedRevision3RecoveryCheckpoint(
+            previousHead: previousHead,
+            recoveredHead: claimedHead,
+            projectId: projectId,
+            previousProjectRevision: 10,
+            recoveredProjectRevision: 11,
+            repairOutcome: AtomicRepairOutcome.keptTarget,
+            canonicalProjectJson: claimedJson,
+          );
+        },
+      )..requiresReopenValue = true;
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      addTearDown(() async {
+        await coordinator.shutdown();
+        coordinator.dispose();
+      });
+      final visible = await coordinator.openManagedRevision3(managed.root);
+
+      await expectLater(
+        coordinator.recoverCurrentRevision3(
+          expectedRoot: visible.root.path,
+          expectedProjectId: visible.projectId,
+          expectedProjectRevision: visible.projectRevision,
+          expectedHead: visible.head,
+        ),
+        throwsA(isA<Revision3RecoveryFailedException>()),
+      );
+
+      expect(managed.recoveryCalls, 1);
+      expect(managed.recoveryRelatchCalls, 1);
+      final state = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(state.projectRevision, 10);
+      expect(state.head.canonicalJson, previousHead.canonicalJson);
+      expect(state.requiresReopen, isTrue);
+    },
+  );
+
+  test('normal work resumes only after a later successful recovery', () async {
+    const projectId = '20202020202020202020202020202020';
+    final projectJson = _recoveryProjectJson(projectId: projectId, revision: 5);
+    final head = _recoveryHead(projectJson);
+    late _FakeRecoveryManagedLease managed;
+    managed = _FakeRecoveryManagedLease(
+      root: Directory('recover-retry'),
+      projectIdValue: projectId,
+      projectRevision: 5,
+      head: head,
+      canonicalProjectJson: projectJson,
+      contentIndex: _contentIndex(projectId: projectId, revision: 5),
+      onRecovery: (lease) {
+        if (lease.recoveryCalls == 1) {
+          lease.requiresReopenValue = false;
+          throw StateError('first repair did not verify');
+        }
+        lease.requiresReopenValue = false;
+        return ManagedRevision3RecoveryCheckpoint(
+          previousHead: head,
+          recoveredHead: head,
+          projectId: projectId,
+          previousProjectRevision: 5,
+          recoveredProjectRevision: 5,
+          repairOutcome: AtomicRepairOutcome.clean,
+          canonicalProjectJson: projectJson,
+        );
+      },
+    )..requiresReopenValue = true;
+    final coordinator = CurrentProjectCoordinator(
+      openManagedRevision3: (_) async => managed,
+    );
+    addTearDown(() async {
+      await coordinator.shutdown();
+      coordinator.dispose();
+    });
+    final visible = await coordinator.openManagedRevision3(managed.root);
+
+    await expectLater(
+      coordinator.recoverCurrentRevision3(
+        expectedRoot: visible.root.path,
+        expectedProjectId: visible.projectId,
+        expectedProjectRevision: visible.projectRevision,
+        expectedHead: visible.head,
+      ),
+      throwsA(isA<Revision3RecoveryFailedException>()),
+    );
+    expect(
+      (coordinator.state as ManagedRevision3CurrentProjectState).requiresReopen,
+      isTrue,
+    );
+    await expectLater(
+      coordinator.readCurrentRevision3ContentIndex(),
+      throwsA(isA<Revision3ContentRequiresReopenException>()),
+    );
+    expect(managed.contentReadCalls, 0);
+
+    await coordinator.recoverCurrentRevision3(
+      expectedRoot: visible.root.path,
+      expectedProjectId: visible.projectId,
+      expectedProjectRevision: visible.projectRevision,
+      expectedHead: visible.head,
+    );
+    final index = await coordinator.readCurrentRevision3ContentIndex();
+    expect(index.projectRevision, 5);
+    expect(managed.recoveryCalls, 2);
+    expect(managed.recoveryRelatchCalls, 1);
+    expect(managed.contentReadCalls, 1);
   });
 
   test('adopting legacy retires the managed lease exactly once', () async {
@@ -4825,8 +5335,12 @@ typedef _DialogLocalizationEditPublishHook =
       _FakeManagedLease lease,
       Revision3DialogLocalizationEditTechnicalPlan plan,
     );
+typedef _RecoveryHook =
+    FutureOr<ManagedRevision3RecoveryCheckpoint> Function(
+      _FakeRecoveryManagedLease lease,
+    );
 
-final class _FakeManagedLease
+class _FakeManagedLease
     implements
         ManagedRevision3CurrentProjectLease,
         ManagedRevision3DialogLocalizationReadLease,
@@ -4878,7 +5392,7 @@ final class _FakeManagedLease
   final String projectIdValue;
   final Object? projectIdError;
   @override
-  final String canonicalProjectJson;
+  String canonicalProjectJson;
   @override
   int projectRevision;
   @override
@@ -5451,6 +5965,36 @@ final class _FakeManagedLease
   }
 }
 
+final class _FakeRecoveryManagedLease extends _FakeManagedLease
+    implements ManagedRevision3RecoveryLease {
+  _FakeRecoveryManagedLease({
+    required super.root,
+    required super.projectIdValue,
+    required super.projectRevision,
+    required super.head,
+    required super.canonicalProjectJson,
+    required this.onRecovery,
+    super.contentIndex,
+  });
+
+  final _RecoveryHook onRecovery;
+  int recoveryCalls = 0;
+  int recoveryRelatchCalls = 0;
+
+  @override
+  Future<ManagedRevision3RecoveryCheckpoint>
+  recoverAfterUncertainPublication() async {
+    recoveryCalls++;
+    return onRecovery(this);
+  }
+
+  @override
+  void markRequiresReopenAfterRecoveryUncertainty() {
+    recoveryRelatchCalls++;
+    requiresReopenValue = true;
+  }
+}
+
 Revision3DialogLineEntryTechnicalPlan _dialogLinePlan({
   required String projectId,
   required int projectRevision,
@@ -5722,6 +6266,43 @@ _controllerManagedCompilerCheckResult({
     expectedHead: head,
     requestedEntityId: revision3QuestOutlineQuestId,
     expectedKind: AuthoringRevision3ManagedCompilerEntityKind.questDraft,
+  );
+}
+
+String _recoveryProjectJson({
+  required String projectId,
+  required int revision,
+  int format = 2,
+  int schemaRevision = 3,
+  Map<String, Object?>? target,
+}) => jsonEncode(<String, Object?>{
+  'format': format,
+  'schema_revision': schemaRevision,
+  'project_id': projectId,
+  'revision': revision,
+  'target':
+      target ??
+      <String, Object?>{
+        'executable': <String, Object?>{
+          'byte_len': 171698176,
+          'sha256':
+              'f406f969d3e73b6e58ea6e7aa10df7380318d97e7974d3be6e5a01183a4524f5',
+        },
+      },
+  'entities': <String, Object?>{},
+  'asset_store': <String, Object?>{'assets': <String, Object?>{}},
+});
+
+AuthoringWorkingHead _recoveryHead(String projectJson) {
+  final bytes = utf8.encode(projectJson);
+  return AuthoringWorkingHead.fromCanonicalJson(
+    jsonEncode(<String, Object?>{
+      'store_format': 1,
+      'snapshot': <String, Object?>{
+        'byte_len': bytes.length,
+        'sha256': crypto.sha256.convert(bytes).toString(),
+      },
+    }),
   );
 }
 

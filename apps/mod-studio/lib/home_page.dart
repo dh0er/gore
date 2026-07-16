@@ -30,6 +30,7 @@ import 'loc/domain/loc_catalog_provider.dart';
 import 'loc/domain/loc_notifier.dart';
 import 'loc/ui/loc_extract_flow.dart';
 import 'project/current_project_controller.dart';
+import 'project/managed_project_session.dart';
 import 'project/project_controller.dart';
 import 'project/revision3_base_game_content_browser.dart';
 import 'project/revision3_content_index.dart';
@@ -85,6 +86,9 @@ import 'textures/ui/texture_tab.dart';
 
 typedef ManagedRevision3DirectoryPicker =
     Future<String?> Function(String confirmButtonText);
+
+typedef ManagedRevision3RecoveryAction =
+    Future<ManagedRevision3RecoveryCheckpoint> Function();
 
 final class _Revision3ManagedCompilerSelection {
   const _Revision3ManagedCompilerSelection({
@@ -381,6 +385,40 @@ class _HomePageState extends ConsumerState<HomePage>
       }
     }
   });
+
+  Future<ManagedRevision3RecoveryCheckpoint> _recoverManagedRevision3Project(
+    ManagedRevision3CurrentProjectState expected,
+  ) async {
+    if (_projectActionBusy) {
+      throw const CurrentProjectCoordinatorException(
+        'another project action is already in progress',
+      );
+    }
+    final current = ref.read(currentProjectCoordinatorProvider);
+    if (current is! ManagedRevision3CurrentProjectState ||
+        !current.requiresReopen ||
+        current.root.path != expected.root.path ||
+        current.projectId != expected.projectId ||
+        current.projectRevision != expected.projectRevision ||
+        current.head.canonicalJson != expected.head.canonicalJson) {
+      throw const CurrentProjectCoordinatorException(
+        'the project changed before recovery started',
+      );
+    }
+    setState(() => _projectActionBusy = true);
+    try {
+      return await ref
+          .read(currentProjectCoordinatorProvider.notifier)
+          .recoverCurrentRevision3(
+            expectedRoot: expected.root.path,
+            expectedProjectId: expected.projectId,
+            expectedProjectRevision: expected.projectRevision,
+            expectedHead: expected.head,
+          );
+    } finally {
+      if (mounted) setState(() => _projectActionBusy = false);
+    }
+  }
 
   Future<void> _saveProjectAs() => _runProjectAction(() async {
     try {
@@ -930,6 +968,8 @@ class _HomePageState extends ConsumerState<HomePage>
         ManagedRevision3CurrentProjectState() => _ManagedRevision3ProjectView(
           project: currentProject,
           gameRoot: gameRoot,
+          recoveryBusy: _projectActionBusy,
+          recoverProject: () => _recoverManagedRevision3Project(currentProject),
           onDialogLocalizationDirtyChanged: _onManagedWorkspaceDirtyChanged,
           verifyCurrentHead: _saveProject,
           loadContentIndex: () => ref
@@ -1597,6 +1637,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
   const _ManagedRevision3ProjectView({
     required this.project,
     required this.gameRoot,
+    required this.recoveryBusy,
+    required this.recoverProject,
     required this.onDialogLocalizationDirtyChanged,
     required this.verifyCurrentHead,
     required this.loadContentIndex,
@@ -1644,6 +1686,8 @@ class _ManagedRevision3ProjectView extends StatefulWidget {
 
   final ManagedRevision3CurrentProjectState project;
   final String? gameRoot;
+  final bool recoveryBusy;
+  final ManagedRevision3RecoveryAction recoverProject;
   final ValueChanged<bool> onDialogLocalizationDirtyChanged;
   final Future<void> Function() verifyCurrentHead;
   final Revision3ContentIndexLoader loadContentIndex;
@@ -1701,6 +1745,9 @@ class _ManagedRevision3ProjectViewState
     extends State<_ManagedRevision3ProjectView> {
   late Revision3ContentLibraryController _contentLibraryController;
   late Revision3StoryWorkspaceController _storyWorkspaceController;
+  bool _recoveryStarting = false;
+  bool _recoveryTerminal = false;
+  String? _recoveryError;
 
   ManagedRevision3CurrentProjectState get project => widget.project;
   String? get gameRoot => widget.gameRoot;
@@ -1816,8 +1863,18 @@ class _ManagedRevision3ProjectViewState
   @override
   void didUpdateWidget(covariant _ManagedRevision3ProjectView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.project.root.path == project.root.path &&
-        oldWidget.project.projectId == project.projectId) {
+    final identityChanged =
+        oldWidget.project.root.path != project.root.path ||
+        oldWidget.project.projectId != project.projectId;
+    final checkpointChanged =
+        oldWidget.project.projectRevision != project.projectRevision ||
+        oldWidget.project.head.canonicalJson != project.head.canonicalJson;
+    if (identityChanged || checkpointChanged || !project.requiresReopen) {
+      _recoveryStarting = false;
+      _recoveryTerminal = false;
+      _recoveryError = null;
+    }
+    if (!identityChanged) {
       return;
     }
     _contentLibraryController.dispose();
@@ -1826,6 +1883,92 @@ class _ManagedRevision3ProjectViewState
     );
     _storyWorkspaceController.dispose();
     _storyWorkspaceController = Revision3StoryWorkspaceController();
+  }
+
+  bool _stillShowsRecoveryFor(ManagedRevision3CurrentProjectState expected) =>
+      mounted &&
+      project.requiresReopen &&
+      project.root.path == expected.root.path &&
+      project.projectId == expected.projectId &&
+      project.projectRevision == expected.projectRevision &&
+      project.head.canonicalJson == expected.head.canonicalJson;
+
+  bool _recoveryMatchesExpected(
+    ManagedRevision3CurrentProjectState expected,
+    ManagedRevision3RecoveryCheckpoint checkpoint,
+  ) {
+    final unchanged =
+        checkpoint.recoveredProjectRevision == expected.projectRevision &&
+        checkpoint.recoveredHead.canonicalJson == expected.head.canonicalJson;
+    final advanced =
+        checkpoint.recoveredProjectRevision == expected.projectRevision + 1 &&
+        checkpoint.recoveredHead.canonicalJson != expected.head.canonicalJson;
+    return checkpoint.projectId == expected.projectId &&
+        checkpoint.previousProjectRevision == expected.projectRevision &&
+        checkpoint.previousHead.canonicalJson == expected.head.canonicalJson &&
+        (unchanged || advanced);
+  }
+
+  Future<void> _tryRecovery() async {
+    if (_recoveryStarting ||
+        widget.recoveryBusy ||
+        _recoveryTerminal ||
+        !project.requiresReopen) {
+      return;
+    }
+    final expected = project;
+    setState(() {
+      _recoveryStarting = true;
+      _recoveryError = null;
+    });
+    try {
+      final checkpoint = await widget.recoverProject();
+      if (!_recoveryMatchesExpected(expected, checkpoint)) {
+        if (_stillShowsRecoveryFor(expected)) {
+          setState(() {
+            _recoveryTerminal = true;
+            _recoveryError = AppLocalizations.of(
+              context,
+            ).managedProjectRecoveryUnavailable;
+          });
+        }
+        return;
+      }
+      if (!mounted ||
+          project.root.path != expected.root.path ||
+          project.projectId != expected.projectId) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            AppLocalizations.of(context).managedProjectRecoverySucceeded,
+          ),
+        ),
+      );
+    } on Revision3RecoveryNotSupportedException {
+      if (_stillShowsRecoveryFor(expected)) {
+        setState(() {
+          _recoveryTerminal = true;
+          _recoveryError = AppLocalizations.of(
+            context,
+          ).managedProjectRecoveryUnavailable;
+        });
+      }
+    } catch (_) {
+      if (_stillShowsRecoveryFor(expected)) {
+        setState(() {
+          _recoveryTerminal = false;
+          _recoveryError = AppLocalizations.of(
+            context,
+          ).managedProjectRecoveryFailed;
+        });
+      }
+    } finally {
+      if (_stillShowsRecoveryFor(expected)) {
+        setState(() => _recoveryStarting = false);
+      }
+    }
   }
 
   @override
@@ -1865,7 +2008,9 @@ class _ManagedRevision3ProjectViewState
                     );
                     final settings = IconButton.outlined(
                       key: const Key('managed-open-settings'),
-                      onPressed: () => unawaited(_openSettings(context)),
+                      onPressed: widget.recoveryBusy || _recoveryStarting
+                          ? null
+                          : () => unawaited(_openSettings(context)),
                       tooltip: l10n.managedActionSettingsTitle,
                       icon: const Icon(Icons.settings_outlined),
                     );
@@ -1910,13 +2055,68 @@ class _ManagedRevision3ProjectViewState
                         ),
                         const SizedBox(width: 10),
                         Expanded(
-                          child: Text(
-                            l10n.projectManagedRevision3RequiresReopen,
-                            style: TextStyle(
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onErrorContainer,
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                l10n.managedProjectRecoveryDescription,
+                                style: TextStyle(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onErrorContainer,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                l10n.managedProjectRecoveryAlternative,
+                                style: TextStyle(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onErrorContainer,
+                                ),
+                              ),
+                              if (_recoveryError case final error?) ...[
+                                const SizedBox(height: 8),
+                                Text(
+                                  error,
+                                  key: const Key(
+                                    'managed-project-recovery-error',
+                                  ),
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onErrorContainer,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 10),
+                              FilledButton.icon(
+                                key: const Key('managed-project-try-recovery'),
+                                onPressed:
+                                    _recoveryStarting ||
+                                        widget.recoveryBusy ||
+                                        _recoveryTerminal
+                                    ? null
+                                    : () => unawaited(_tryRecovery()),
+                                icon: _recoveryStarting
+                                    ? const SizedBox.square(
+                                        key: Key(
+                                          'managed-project-recovery-progress',
+                                        ),
+                                        dimension: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.restart_alt),
+                                label: Text(
+                                  _recoveryStarting
+                                      ? l10n.managedProjectRecoveryTrying
+                                      : l10n.managedProjectRecoveryTry,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],

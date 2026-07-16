@@ -96,7 +96,7 @@ final class ManagedRevision3CompilerCheckReceipt {
 
   /// False when the fixed Store head changed after native produced [result].
   /// The evidence and any recovery instructions remain reportable, but another
-  /// managed operation requires closing and reopening the project.
+  /// managed operation requires verified recovery or reopening the project.
   final bool storeStillExactCurrent;
 
   bool get exactCurrent => storeStillExactCurrent && result.exactCurrent;
@@ -105,6 +105,35 @@ final class ManagedRevision3CompilerCheckReceipt {
       storeStillExactCurrent && result.acceptedAtExactCurrent;
 
   bool get recoveryRequired => result.recoveryRequired;
+}
+
+/// One fully verified in-session recovery of an uncertain revision-3 head.
+///
+/// Recovery only reconciles the crash-safe project head while this session
+/// keeps its exclusive project lock. It grants no game, save-game, build,
+/// deployment, or runtime authority.
+final class ManagedRevision3RecoveryCheckpoint {
+  const ManagedRevision3RecoveryCheckpoint({
+    required this.previousHead,
+    required this.recoveredHead,
+    required this.projectId,
+    required this.previousProjectRevision,
+    required this.recoveredProjectRevision,
+    required this.repairOutcome,
+    required this.canonicalProjectJson,
+  });
+
+  final AuthoringWorkingHead previousHead;
+  final AuthoringWorkingHead recoveredHead;
+  final String projectId;
+  final int previousProjectRevision;
+  final int recoveredProjectRevision;
+  final AtomicRepairOutcome repairOutcome;
+
+  /// Exact canonical project bytes returned by the full recovered Store open.
+  final String canonicalProjectJson;
+
+  bool get advanced => recoveredProjectRevision == previousProjectRevision + 1;
 }
 
 /// One immutable decision produced from the exact latest project inside a managed session's
@@ -1543,8 +1572,8 @@ class ManagedRevision3AuthoringProjectSession {
       _core.supportsReviewedDataAssetBuild;
 
   /// Fail closed after a higher-layer post-publication receipt mismatch. This
-  /// can only remove authoring authority; closing and reopening is required to
-  /// regain it.
+  /// can only remove authoring authority; regain it through verified in-session
+  /// recovery or by closing and reopening the project.
   void markRequiresReopenAfterPublicationUncertainty() =>
       _core.markRequiresReopenAfterPublicationUncertainty();
   File get headFile => _core.headFile;
@@ -3371,6 +3400,12 @@ class ManagedRevision3AuthoringProjectSession {
   /// verification without preparing or publishing a new checkpoint.
   Future<void> verifyCurrentHead() => _core.verifyCurrentHead();
 
+  /// Repair and fully reopen an uncertain publication without releasing this
+  /// session's exclusive project lock.
+  Future<ManagedRevision3RecoveryCheckpoint>
+  recoverAfterUncertainPublication() =>
+      _core.recoverAfterUncertainPublication();
+
   Future<void> close() => _core.close();
 }
 
@@ -3664,7 +3699,7 @@ class _ManagedProjectSessionCore {
       _store.supportsReviewedDataAssetBuild;
 
   /// True after an I/O or verification failure leaves publication state
-  /// uncertain. Close and reopen before attempting another edit.
+  /// uncertain. Recover when supported, or close and reopen before editing.
   bool get requiresReopen => _requiresReopen;
 
   void markRequiresReopenAfterPublicationUncertainty() {
@@ -3992,7 +4027,7 @@ class _ManagedProjectSessionCore {
   ///
   /// This is a durability check, not a save: it prepares no immutable objects
   /// and never enters the publication lane. Any drift or reopen failure poisons
-  /// the session so callers must close and reopen before another edit.
+  /// the session until verified recovery or a close and reopen.
   Future<void> verifyCurrentHead() {
     if (_isActiveDeriveCallbackZone) {
       return _reentrantOperation<void>('verifyCurrentHead');
@@ -4018,6 +4053,72 @@ class _ManagedProjectSessionCore {
     });
   }
 
+  /// Repair an interrupted fixed-head publication while retaining this
+  /// session's operation lane and OS lock. The old checkpoint remains visible
+  /// and the poison latch remains set until the repaired generation has passed
+  /// a full Store reopen and every closed recovery invariant.
+  Future<ManagedRevision3RecoveryCheckpoint>
+  recoverAfterUncertainPublication() {
+    if (_isActiveDeriveCallbackZone) {
+      return _reentrantOperation<ManagedRevision3RecoveryCheckpoint>(
+        'recoverAfterUncertainPublication',
+      );
+    }
+    return _enqueue(() async {
+      if (!_requiresReopen) {
+        throw const ManagedProjectVerificationException(
+          'managed project recovery requires an uncertain publication',
+        );
+      }
+
+      final previous = _opened;
+      final previousIdentity = _revision3RecoveryIdentity(
+        previous,
+        context: 'previous revision-3 recovery checkpoint',
+      );
+      final operations = _ManagedSessionOperations(
+        root: root,
+        store: _store,
+        replacement: _replacement,
+      );
+
+      // Recovery deliberately bypasses the ordinary writable-state guard, but
+      // never the poison latch. Any failure below leaves both the old in-memory
+      // checkpoint and the recovery requirement intact.
+      _requiresReopen = true;
+      try {
+        final repairOutcome = await operations.repairHead();
+        final recovered = await operations.openPublished();
+        final recoveredIdentity = _revision3RecoveryIdentity(
+          recovered,
+          context: 'recovered revision-3 checkpoint',
+        );
+        _requireValidRevision3Recovery(
+          previous: previous,
+          previousIdentity: previousIdentity,
+          recovered: recovered,
+          recoveredIdentity: recoveredIdentity,
+        );
+
+        final checkpoint = ManagedRevision3RecoveryCheckpoint(
+          previousHead: previous.head,
+          recoveredHead: recovered.head,
+          projectId: recoveredIdentity.projectId,
+          previousProjectRevision: previousIdentity.revision,
+          recoveredProjectRevision: recoveredIdentity.revision,
+          repairOutcome: repairOutcome,
+          canonicalProjectJson: recovered.projectJson,
+        );
+        _opened = recovered;
+        _requiresReopen = false;
+        return checkpoint;
+      } catch (error, stackTrace) {
+        _requiresReopen = true;
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+    });
+  }
+
   bool get _isActiveDeriveCallbackZone {
     final token = Zone.current[_deriveZoneKey];
     return token is _ManagedProjectDeriveZoneToken && token.active;
@@ -4032,7 +4133,7 @@ class _ManagedProjectSessionCore {
   void _requireWritableState() {
     if (_requiresReopen) {
       throw const ManagedProjectVerificationException(
-        'managed project must be reopened after an uncertain publication',
+        'managed project requires recovery after an uncertain publication',
       );
     }
   }
@@ -5732,6 +5833,93 @@ void _requireExactOpened(
       opened.projectJson != expectedProjectJson) {
     throw ManagedProjectVerificationException(
       '$context did not reproduce the exact captured project JSON',
+    );
+  }
+}
+
+({String projectId, int revision, String canonicalTarget})
+_revision3RecoveryIdentity(
+  _ManagedOpenedCheckpoint opened, {
+  required String context,
+}) {
+  try {
+    final decoded = jsonDecode(opened.projectJson);
+    if (decoded is! Map) {
+      throw const FormatException('project root is not an object');
+    }
+    final project = decoded.cast<String, Object?>();
+    if (jsonEncode(project) != opened.projectJson ||
+        project['format'] != 2 ||
+        project['schema_revision'] != 3) {
+      throw const FormatException(
+        'project is not canonical schema-revision-3 format-2 JSON',
+      );
+    }
+    final projectId = project['project_id'];
+    final revision = project['revision'];
+    final target = project['target'];
+    if (projectId is! String ||
+        !_managedRevision3CompilerIdPattern.hasMatch(projectId) ||
+        projectId == _managedRevision3CompilerZeroId) {
+      throw const FormatException('project ID is not a nonzero entity ID');
+    }
+    if (revision is! int || revision < 0 || revision > 0x7fffffffffffffff) {
+      throw const FormatException(
+        'project revision is outside the wire domain',
+      );
+    }
+    if (target is! Map) {
+      throw const FormatException('project target is not an object');
+    }
+    if (opened.projectId != projectId || opened.projectRevision != revision) {
+      throw const FormatException(
+        'Store checkpoint identity disagrees with its project JSON',
+      );
+    }
+    return (
+      projectId: projectId,
+      revision: revision,
+      canonicalTarget: jsonEncode(target),
+    );
+  } on ManagedProjectSessionException {
+    rethrow;
+  } catch (_) {
+    throw ManagedProjectVerificationException(
+      '$context has invalid or inconsistent project identity',
+    );
+  }
+}
+
+void _requireValidRevision3Recovery({
+  required _ManagedOpenedCheckpoint previous,
+  required ({String projectId, int revision, String canonicalTarget})
+  previousIdentity,
+  required _ManagedOpenedCheckpoint recovered,
+  required ({String projectId, int revision, String canonicalTarget})
+  recoveredIdentity,
+}) {
+  if (recoveredIdentity.projectId != previousIdentity.projectId ||
+      recoveredIdentity.canonicalTarget != previousIdentity.canonicalTarget) {
+    throw const ManagedProjectVerificationException(
+      'recovered revision-3 checkpoint changed project identity or target',
+    );
+  }
+
+  if (recoveredIdentity.revision == previousIdentity.revision) {
+    if (recovered.head.canonicalJson != previous.head.canonicalJson ||
+        recovered.projectJson != previous.projectJson) {
+      throw const ManagedProjectVerificationException(
+        'same-revision recovery did not reproduce the exact prior checkpoint',
+      );
+    }
+    return;
+  }
+
+  if (previousIdentity.revision == 0x7fffffffffffffff ||
+      recoveredIdentity.revision != previousIdentity.revision + 1 ||
+      recovered.head.canonicalJson == previous.head.canonicalJson) {
+    throw const ManagedProjectVerificationException(
+      'recovered revision-3 checkpoint is not the prior or next generation',
     );
   }
 }

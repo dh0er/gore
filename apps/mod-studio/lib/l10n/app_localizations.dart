@@ -1517,8 +1517,50 @@ abstract class AppLocalizations {
   /// No description provided for @managedProjectRecoveryContentLocked.
   ///
   /// In en, this message translates to:
-  /// **'Reopen the managed project before reading its content.'**
+  /// **'Recover or reopen the managed project before reading its content.'**
   String get managedProjectRecoveryContentLocked;
+
+  /// No description provided for @managedProjectRecoveryDescription.
+  ///
+  /// In en, this message translates to:
+  /// **'Mod Studio will safely reopen this project while keeping its lock. This does not change the game or any save.'**
+  String get managedProjectRecoveryDescription;
+
+  /// No description provided for @managedProjectRecoveryTry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try recovery'**
+  String get managedProjectRecoveryTry;
+
+  /// No description provided for @managedProjectRecoveryTrying.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying recovery…'**
+  String get managedProjectRecoveryTrying;
+
+  /// No description provided for @managedProjectRecoveryAlternative.
+  ///
+  /// In en, this message translates to:
+  /// **'If recovery does not work, close and open the project again.'**
+  String get managedProjectRecoveryAlternative;
+
+  /// No description provided for @managedProjectRecoverySucceeded.
+  ///
+  /// In en, this message translates to:
+  /// **'Project recovery completed. You can continue working.'**
+  String get managedProjectRecoverySucceeded;
+
+  /// No description provided for @managedProjectRecoveryFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery did not complete. Try again, or close and open the project again.'**
+  String get managedProjectRecoveryFailed;
+
+  /// No description provided for @managedProjectRecoveryUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Recovery is not available for this project. Close and open the project again.'**
+  String get managedProjectRecoveryUnavailable;
 
   /// No description provided for @managedDashboardUntitledProject.
   ///

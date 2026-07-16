@@ -825,6 +825,32 @@ class AppLocalizationsFr extends AppLocalizations {
       'Rouvrez le projet géré avant de lire son contenu.';
 
   @override
+  String get managedProjectRecoveryDescription =>
+      'Mod Studio will safely reopen this project while keeping its lock. This does not change the game or any save.';
+
+  @override
+  String get managedProjectRecoveryTry => 'Try recovery';
+
+  @override
+  String get managedProjectRecoveryTrying => 'Trying recovery…';
+
+  @override
+  String get managedProjectRecoveryAlternative =>
+      'If recovery does not work, close and open the project again.';
+
+  @override
+  String get managedProjectRecoverySucceeded =>
+      'Project recovery completed. You can continue working.';
+
+  @override
+  String get managedProjectRecoveryFailed =>
+      'Recovery did not complete. Try again, or close and open the project again.';
+
+  @override
+  String get managedProjectRecoveryUnavailable =>
+      'Recovery is not available for this project. Close and open the project again.';
+
+  @override
   String get managedDashboardUntitledProject => 'Projet sans titre';
 
   @override

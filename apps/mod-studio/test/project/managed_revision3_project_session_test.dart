@@ -1470,7 +1470,7 @@ void main() {
   );
 
   test(
-    'higher-layer publication uncertainty permanently removes session authority',
+    'higher-layer publication uncertainty removes authority until verified recovery',
     () async {
       final root = await _projectRoot(
         fixture,
@@ -1494,6 +1494,327 @@ void main() {
       await session.close();
     },
   );
+
+  test(
+    'in-session recovery accepts one clean exact prior checkpoint',
+    () async {
+      final root = await _projectRoot(fixture, suffix: 'recovery_clean');
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 7, name: 'Recovery clean');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+      );
+      final previousHead = session.head;
+      await expectLater(
+        session.recoverAfterUncertainPublication(),
+        throwsA(isA<ManagedProjectVerificationException>()),
+      );
+      expect(session.requiresReopen, isFalse);
+      session.markRequiresReopenAfterPublicationUncertainty();
+
+      final recovered = await session.recoverAfterUncertainPublication();
+
+      expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+      expect(recovered.recoveredHead.canonicalJson, previousHead.canonicalJson);
+      expect(recovered.projectId, session.projectId);
+      expect(recovered.previousProjectRevision, 7);
+      expect(recovered.recoveredProjectRevision, 7);
+      expect(recovered.repairOutcome, AtomicRepairOutcome.clean);
+      expect(recovered.canonicalProjectJson, original);
+      expect(recovered.advanced, isFalse);
+      expect(session.requiresReopen, isFalse);
+      expect(session.projectJson, original);
+      await session.close();
+    },
+  );
+
+  for (final scenario
+      in <
+        ({
+          String name,
+          AtomicSwapPhase failurePhase,
+          AtomicRepairOutcome outcome,
+          String operationId,
+        })
+      >[
+        (
+          name: 'promotes a validated temporary next generation',
+          failurePhase: AtomicSwapPhase.tempValidated,
+          outcome: AtomicRepairOutcome.promotedTemp,
+          operationId: '76000000000000000000000000000001',
+        ),
+        (
+          name: 'keeps an already promoted next generation',
+          failurePhase: AtomicSwapPhase.tempPromoted,
+          outcome: AtomicRepairOutcome.keptTarget,
+          operationId: '76000000000000000000000000000002',
+        ),
+      ]) {
+    test('in-session recovery ${scenario.name}', () async {
+      final root = await _projectRoot(
+        fixture,
+        suffix: 'recovery_${scenario.outcome.name}',
+      );
+      final store = _FakeRevision3Store(sealRegisteredHeads: true);
+      var armed = false;
+      var interrupted = false;
+      final replacement = AtomicByteReplacement(
+        operationIdFactory: () => scenario.operationId,
+        onPhase: (phase) {
+          if (armed && !interrupted && phase == scenario.failurePhase) {
+            interrupted = true;
+            throw const AtomicSwapException(
+              'injected recovery fixture failure',
+            );
+          }
+        },
+      );
+      final original = _projectJson(revision: 10, name: 'Recovery basis');
+      final candidate = _projectJson(revision: 11, name: 'Recovery candidate');
+      final session = await ManagedRevision3AuthoringProjectSession.create(
+        root: root,
+        store: store,
+        projectJson: original,
+        replacement: replacement,
+      );
+      final previousHead = session.head;
+      armed = true;
+
+      await expectLater(
+        session.save(candidate),
+        throwsA(isA<AtomicSwapException>()),
+      );
+      expect(session.requiresReopen, isTrue);
+      expect(session.projectJson, original);
+
+      final recovered = await session.recoverAfterUncertainPublication();
+
+      expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+      expect(
+        recovered.recoveredHead.canonicalJson,
+        isNot(previousHead.canonicalJson),
+      );
+      expect(recovered.previousProjectRevision, 10);
+      expect(recovered.recoveredProjectRevision, 11);
+      expect(recovered.repairOutcome, scenario.outcome);
+      expect(recovered.canonicalProjectJson, candidate);
+      expect(recovered.advanced, isTrue);
+      expect(session.projectJson, candidate);
+      expect(session.projectRevision, 11);
+      expect(session.requiresReopen, isFalse);
+      await session.close();
+    });
+  }
+
+  test('in-session recovery restores the exact prior backup', () async {
+    const operationId = '76000000000000000000000000000003';
+    final root = await _projectRoot(fixture, suffix: 'recovery_backup');
+    final store = _FakeRevision3Store(sealRegisteredHeads: true);
+    var armed = false;
+    var interrupted = false;
+    final replacement = AtomicByteReplacement(
+      operationIdFactory: () => operationId,
+      onPhase: (phase) {
+        if (armed && !interrupted && phase == AtomicSwapPhase.targetBackedUp) {
+          interrupted = true;
+          throw const AtomicSwapException('injected backup recovery failure');
+        }
+      },
+    );
+    final original = _projectJson(revision: 20, name: 'Backup basis');
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: original,
+      replacement: replacement,
+    );
+    final previousHead = session.head;
+    armed = true;
+    await expectLater(
+      session.save(_projectJson(revision: 21, name: 'Broken candidate')),
+      throwsA(isA<AtomicSwapException>()),
+    );
+    final temporary = File(
+      '${session.headFile.path}.gore-swap-$operationId.tmp',
+    );
+    expect(await temporary.exists(), isTrue);
+    await temporary.writeAsString('not a canonical head', flush: true);
+
+    final recovered = await session.recoverAfterUncertainPublication();
+
+    expect(recovered.repairOutcome, AtomicRepairOutcome.restoredBackup);
+    expect(recovered.previousHead.canonicalJson, previousHead.canonicalJson);
+    expect(recovered.recoveredHead.canonicalJson, previousHead.canonicalJson);
+    expect(recovered.previousProjectRevision, 20);
+    expect(recovered.recoveredProjectRevision, 20);
+    expect(recovered.advanced, isFalse);
+    expect(session.projectJson, original);
+    expect(session.requiresReopen, isFalse);
+    await session.close();
+  });
+
+  test('in-session recovery stays ahead of a queued close', () async {
+    final root = await _projectRoot(fixture, suffix: 'recovery_close');
+    final store = _FakeRevision3Store(sealRegisteredHeads: true);
+    final session = await ManagedRevision3AuthoringProjectSession.create(
+      root: root,
+      store: store,
+      projectJson: _projectJson(revision: 8, name: 'Recovery then close'),
+    );
+    session.markRequiresReopenAfterPublicationUncertainty();
+
+    final recovery = session.recoverAfterUncertainPublication();
+    final close = session.close();
+    await expectLater(
+      session.recoverAfterUncertainPublication(),
+      throwsA(isA<ManagedProjectSessionClosedException>()),
+    );
+    final checkpoint = await recovery;
+    await close;
+
+    expect(checkpoint.recoveredProjectRevision, 8);
+    expect(checkpoint.repairOutcome, AtomicRepairOutcome.clean);
+    expect(session.isClosed, isTrue);
+  });
+
+  test(
+    'broken recovery journal and failed full reopen retain the old poisoned checkpoint',
+    () async {
+      final brokenRoot = await _projectRoot(
+        fixture,
+        suffix: 'recovery_broken_journal',
+      );
+      final brokenStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final original = _projectJson(revision: 30, name: 'Broken journal');
+      final brokenSession =
+          await ManagedRevision3AuthoringProjectSession.create(
+            root: brokenRoot,
+            store: brokenStore,
+            projectJson: original,
+          );
+      final previousHead = brokenSession.head.canonicalJson;
+      brokenSession.markRequiresReopenAfterPublicationUncertainty();
+      final journal = File(
+        AtomicByteReplacement.journalPathFor(brokenSession.headFile),
+      );
+      await journal.writeAsString('{broken', flush: true);
+
+      await expectLater(
+        brokenSession.recoverAfterUncertainPublication(),
+        throwsA(isA<AtomicSwapRecoveryException>()),
+      );
+      expect(brokenSession.head.canonicalJson, previousHead);
+      expect(brokenSession.projectJson, original);
+      expect(brokenSession.requiresReopen, isTrue);
+      expect(await journal.exists(), isTrue);
+      await brokenSession.close();
+
+      final reopenRoot = await _projectRoot(
+        fixture,
+        suffix: 'recovery_reopen_retry',
+      );
+      final reopenStore = _FakeRevision3Store(sealRegisteredHeads: true);
+      final retrySession = await ManagedRevision3AuthoringProjectSession.create(
+        root: reopenRoot,
+        store: reopenStore,
+        projectJson: original,
+      );
+      retrySession.markRequiresReopenAfterPublicationUncertainty();
+      reopenStore.nextOpenProjectOverride = '{broken';
+
+      await expectLater(
+        retrySession.recoverAfterUncertainPublication(),
+        throwsA(isA<FormatException>()),
+      );
+      expect(retrySession.projectJson, original);
+      expect(retrySession.requiresReopen, isTrue);
+
+      final retry = await retrySession.recoverAfterUncertainPublication();
+      expect(retry.repairOutcome, AtomicRepairOutcome.clean);
+      expect(retry.advanced, isFalse);
+      expect(retrySession.requiresReopen, isFalse);
+      await retrySession.close();
+    },
+  );
+
+  for (final mode in <String>[
+    'identity',
+    'target',
+    'schema',
+    'h-plus-two',
+    'same-head-next-revision',
+    'same-revision-fork',
+  ]) {
+    test(
+      'in-session recovery rejects $mode mismatch and stays poisoned',
+      () async {
+        final root = await _projectRoot(fixture, suffix: 'recovery_$mode');
+        final store = _FakeRevision3Store(sealRegisteredHeads: true);
+        final original = _projectJson(revision: 40, name: 'Recovery invariant');
+        final session = await ManagedRevision3AuthoringProjectSession.create(
+          root: root,
+          store: store,
+          projectJson: original,
+        );
+        final previousHead = session.head.canonicalJson;
+        session.markRequiresReopenAfterPublicationUncertainty();
+        final variant = (jsonDecode(original) as Map).cast<String, Object?>();
+        switch (mode) {
+          case 'identity':
+            variant['project_id'] = '00000000000000000000000000000004';
+            break;
+          case 'target':
+            variant['target'] = <String, Object?>{
+              'executable': <String, Object?>{
+                'byte_len': 1,
+                'sha256':
+                    '1111111111111111111111111111111111111111111111111111111111111111',
+              },
+            };
+            break;
+          case 'schema':
+            variant['schema_revision'] = 2;
+            break;
+          case 'h-plus-two':
+            variant['revision'] = 42;
+            break;
+          case 'same-head-next-revision':
+            variant['revision'] = 41;
+            break;
+          case 'same-revision-fork':
+            (variant['meta']! as Map)['name'] = 'Same revision fork';
+            break;
+        }
+        final variantJson = jsonEncode(variant);
+        if (mode == 'same-revision-fork') {
+          final forkHead = store.register(variantJson);
+          await session.headFile.writeAsString(
+            forkHead.canonicalJson,
+            flush: true,
+          );
+        } else {
+          store.nextOpenProjectOverride = variantJson;
+        }
+
+        await expectLater(
+          session.recoverAfterUncertainPublication(),
+          throwsA(
+            anyOf(
+              isA<ManagedProjectVerificationException>(),
+              isA<FormatException>(),
+            ),
+          ),
+        );
+        expect(session.head.canonicalJson, previousHead);
+        expect(session.projectJson, original);
+        expect(session.projectRevision, 40);
+        expect(session.requiresReopen, isTrue);
+        await session.close();
+      },
+    );
+  }
 
   test(
     'Quest outline edit publishes through full reopen CAS without a game root',
@@ -5460,6 +5781,10 @@ void main() {
         );
         await expectLater(
           session.verifyCurrentHead(),
+          throwsA(isA<ManagedProjectReentrantOperationException>()),
+        );
+        await expectLater(
+          session.recoverAfterUncertainPublication(),
           throwsA(isA<ManagedProjectReentrantOperationException>()),
         );
         await expectLater(

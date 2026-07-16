@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/legacy.dart';
 import 'package:path/path.dart' as p;
@@ -103,6 +105,32 @@ final class CurrentProjectCoordinatorClosedException
     extends CurrentProjectCoordinatorException {
   const CurrentProjectCoordinatorClosedException()
     : super('the current-project coordinator is shutting down or disposed');
+}
+
+final class Revision3RecoveryStaleCheckpointException
+    extends CurrentProjectCoordinatorException {
+  const Revision3RecoveryStaleCheckpointException()
+    : super('the managed project changed before recovery could start');
+}
+
+final class Revision3RecoveryFailedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3RecoveryFailedException()
+    : super(
+        'managed project recovery did not complete; reopen the project before editing',
+      );
+}
+
+final class Revision3RecoveryNotSupportedException
+    extends CurrentProjectCoordinatorException {
+  const Revision3RecoveryNotSupportedException()
+    : super('the current project does not support in-place recovery');
+}
+
+final class Revision3RecoveryNotRequiredException
+    extends CurrentProjectCoordinatorException {
+  const Revision3RecoveryNotRequiredException()
+    : super('the current managed project does not require recovery');
 }
 
 final class ManagedRevision3ProjectCreationException
@@ -382,6 +410,17 @@ abstract interface class ManagedRevision3VoiceTakeStatusLease {
   });
 }
 
+/// Optional authority for reconciling one managed lease after an uncertain
+/// publication. Recovery remains separate from normal editing so unrelated
+/// leases and fakes do not accidentally claim repair authority.
+abstract interface class ManagedRevision3RecoveryLease {
+  Future<ManagedRevision3RecoveryCheckpoint> recoverAfterUncertainPublication();
+
+  /// Fail closed when a returned recovery checkpoint cannot be bound to the
+  /// lease's complete post-recovery state.
+  void markRequiresReopenAfterRecoveryUncertainty();
+}
+
 /// Optional immutable-build capability. It is separate from checkpoint editing
 /// so unrelated lease fakes do not accidentally claim artifact authority.
 abstract interface class ManagedRevision3ReviewedDataAssetBuildLease {
@@ -505,6 +544,7 @@ final class _ManagedRevision3SessionLease
         ManagedRevision3DialogLocalizationReadLease,
         ManagedRevision3DialogLocalizationEditLease,
         ManagedRevision3VoiceTakeStatusLease,
+        ManagedRevision3RecoveryLease,
         ManagedRevision3ReviewedDataAssetBuildLease {
   const _ManagedRevision3SessionLease(this._session);
 
@@ -528,6 +568,15 @@ final class _ManagedRevision3SessionLease
   @override
   void markRequiresReopenAfterPublicationUncertainty() =>
       _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  void markRequiresReopenAfterRecoveryUncertainty() =>
+      _session.markRequiresReopenAfterPublicationUncertainty();
+
+  @override
+  Future<ManagedRevision3RecoveryCheckpoint>
+  recoverAfterUncertainPublication() =>
+      _session.recoverAfterUncertainPublication();
 
   @override
   bool get supportsReviewedDataAssetBuild =>
@@ -1303,6 +1352,50 @@ String _managedRevision3CasePath(String value) {
   return Platform.isWindows ? normalized.toLowerCase() : normalized;
 }
 
+final RegExp _managedRevision3RecoveryProjectIdPattern = RegExp(
+  r'^[0-9a-f]{32}$',
+);
+const _managedRevision3RecoveryZeroProjectId =
+    '00000000000000000000000000000000';
+
+String? _managedRevision3CanonicalTargetForCheckpoint({
+  required String projectJson,
+  required String projectId,
+  required int projectRevision,
+  required AuthoringWorkingHead head,
+}) {
+  try {
+    final bytes = utf8.encode(projectJson);
+    if (bytes.length != head.snapshotByteLength ||
+        crypto.sha256.convert(bytes).toString() != head.snapshotSha256) {
+      return null;
+    }
+    final decoded = jsonDecode(projectJson);
+    if (decoded is! Map) return null;
+    final project = decoded.cast<String, Object?>();
+    final decodedProjectId = project['project_id'];
+    final decodedRevision = project['revision'];
+    final target = project['target'];
+    if (jsonEncode(project) != projectJson ||
+        project['format'] != 2 ||
+        project['schema_revision'] != 3 ||
+        decodedProjectId is! String ||
+        !_managedRevision3RecoveryProjectIdPattern.hasMatch(decodedProjectId) ||
+        decodedProjectId == _managedRevision3RecoveryZeroProjectId ||
+        decodedProjectId != projectId ||
+        decodedRevision is! int ||
+        decodedRevision < 0 ||
+        decodedRevision > 0x7fffffffffffffff ||
+        decodedRevision != projectRevision ||
+        target is! Map) {
+      return null;
+    }
+    return jsonEncode(target);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Single app-wide owner for compatibility and managed project lifetimes.
 ///
 /// Candidate opens complete before adoption, so a failed open cannot disturb
@@ -1525,6 +1618,91 @@ final class CurrentProjectCoordinator
               as ManagedRevision3CurrentProjectState;
     }
     return refreshed;
+  });
+
+  /// Reconcile one exact, visibly poisoned managed checkpoint with any durable
+  /// publication that may have completed before its caller observed a result.
+  /// Normal editing remains blocked until the complete recovery result can be
+  /// bound to the same lease, project JSON, revision, and working head.
+  Future<ManagedRevision3RecoveryCheckpoint> recoverCurrentRevision3({
+    required String expectedRoot,
+    required String expectedProjectId,
+    required int expectedProjectRevision,
+    required AuthoringWorkingHead expectedHead,
+  }) => _enqueue(() async {
+    final current = _current;
+    if (current is! _OwnedManagedRevision3CurrentProject) {
+      throw const Revision3RecoveryNotSupportedException();
+    }
+    final lease = current.lease;
+    if (!lease.requiresReopen) {
+      throw const Revision3RecoveryNotRequiredException();
+    }
+    if (lease.root.path != expectedRoot ||
+        lease.projectId != expectedProjectId ||
+        lease.projectRevision != expectedProjectRevision ||
+        lease.head.canonicalJson != expectedHead.canonicalJson) {
+      throw const Revision3RecoveryStaleCheckpointException();
+    }
+    if (lease is! ManagedRevision3RecoveryLease) {
+      throw const Revision3RecoveryNotSupportedException();
+    }
+    final recovery = lease as ManagedRevision3RecoveryLease;
+    final previousProjectJson = lease.canonicalProjectJson;
+    try {
+      final checkpoint = await recovery.recoverAfterUncertainPublication();
+      final previousCanonicalTarget =
+          _managedRevision3CanonicalTargetForCheckpoint(
+            projectJson: previousProjectJson,
+            projectId: expectedProjectId,
+            projectRevision: expectedProjectRevision,
+            head: expectedHead,
+          );
+      final recoveredCanonicalTarget =
+          _managedRevision3CanonicalTargetForCheckpoint(
+            projectJson: checkpoint.canonicalProjectJson,
+            projectId: expectedProjectId,
+            projectRevision: checkpoint.recoveredProjectRevision,
+            head: checkpoint.recoveredHead,
+          );
+      final unchanged =
+          checkpoint.recoveredProjectRevision == expectedProjectRevision &&
+          checkpoint.recoveredHead.canonicalJson ==
+              expectedHead.canonicalJson &&
+          checkpoint.canonicalProjectJson == previousProjectJson;
+      final advanced =
+          checkpoint.recoveredProjectRevision == expectedProjectRevision + 1 &&
+          checkpoint.recoveredHead.canonicalJson != expectedHead.canonicalJson;
+      if (lease.requiresReopen ||
+          lease.root.path != expectedRoot ||
+          lease.projectId != expectedProjectId ||
+          lease.projectRevision != checkpoint.recoveredProjectRevision ||
+          lease.head.canonicalJson != checkpoint.recoveredHead.canonicalJson ||
+          lease.canonicalProjectJson != checkpoint.canonicalProjectJson ||
+          checkpoint.projectId != expectedProjectId ||
+          checkpoint.previousProjectRevision != expectedProjectRevision ||
+          checkpoint.previousHead.canonicalJson != expectedHead.canonicalJson ||
+          (!unchanged && !advanced) ||
+          previousCanonicalTarget == null ||
+          recoveredCanonicalTarget == null ||
+          recoveredCanonicalTarget != previousCanonicalTarget) {
+        throw const Revision3RecoveryFailedException();
+      }
+      _refreshCurrentIfUnchanged(current);
+      return checkpoint;
+    } catch (error, stackTrace) {
+      if (!lease.requiresReopen) {
+        recovery.markRequiresReopenAfterRecoveryUncertainty();
+      }
+      _refreshCurrentIfUnchanged(current);
+      if (error is Revision3RecoveryFailedException) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      Error.throwWithStackTrace(
+        const Revision3RecoveryFailedException(),
+        stackTrace,
+      );
+    }
   });
 
   /// Read the semantic index of the exact managed revision-3 current project.
