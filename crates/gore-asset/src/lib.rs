@@ -15,6 +15,9 @@ pub mod primitive;
 pub mod reviewed_dataasset;
 pub mod schema;
 pub mod span;
+#[cfg(any(test, feature = "test-fixtures"))]
+#[doc(hidden)]
+pub mod test_fixture;
 pub mod unversioned;
 mod usmap_preflight;
 

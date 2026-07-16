@@ -862,6 +862,7 @@ dependencies = [
  "aes",
  "anyhow",
  "assert_cmd",
+ "blake3",
  "clap",
  "gore-as",
  "gore-asset",

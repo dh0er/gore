@@ -1,19 +1,26 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use retoc::iostore;
 use retoc::legacy_asset::{
     EPackageFlags, FLegacyPackageFileSummary, FLegacyPackageHeader, FObjectExport, FObjectImport,
 };
 use retoc::logging::Log;
 use retoc::version::EngineVersion;
 use retoc::zen::FPackageIndex;
-use retoc::{EIoChunkType, FIoChunkId, FIoContainerId, FPackageId};
+use retoc::{Config, EIoChunkType, FIoChunkId, FIoContainerId, FPackageId};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+
+use gore_asset::test_fixture::{
+    write_valid_usmap, write_valid_zen_fixture, SYNTHETIC_WOLF_ASSET, SYNTHETIC_WOLF_COOKED_PATH,
+};
 
 const EXPORT_BYTES: [u8; 3] = [0x00, 0x03, 0x01];
 
@@ -1066,6 +1073,401 @@ fn pack_rejects_every_formerly_ignored_patch_v2_proof() {
 }
 
 #[test]
+fn synthetic_wolf_extract_inspect_patch_pack_is_closed_and_offline() {
+    const NAME: &str = "zzz_GoreWolfSynthetic_P";
+    let temp = TempDir::new().unwrap();
+    let game = temp.path().join("Game");
+    let paks = game.join("G1R/Content/Paks");
+    let ue4ss = game.join("G1R/Binaries/Win64/ue4ss");
+    fs::create_dir_all(&paks).unwrap();
+    fs::create_dir_all(&ue4ss).unwrap();
+    write_valid_zen_fixture(&paks.join("G1R-Windows.utoc"), [100.0, 200.0, 300.0, 400.0]).unwrap();
+    write_valid_usmap(&ue4ss.join("Mappings.usmap")).unwrap();
+    let game_before = nofollow_tree_bytes(&game);
+
+    let extracted = temp.path().join("extracted");
+    let extract = Command::cargo_bin("gore")
+        .unwrap()
+        .args(["asset", "extract", "--game"])
+        .arg(&game)
+        .args(["--asset", SYNTHETIC_WOLF_ASSET, "--out"])
+        .arg(&extracted)
+        .arg("--json")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let extract_receipt_path = extracted.join("gore-asset-extract.json");
+    assert_stdout_is_stored_json_plus_lf(extract.get_output(), &extract_receipt_path);
+    let extract_receipt: Value =
+        serde_json::from_slice(&fs::read(&extract_receipt_path).unwrap()).unwrap();
+    assert_closed_keys(
+        &extract_receipt,
+        &[
+            "asset",
+            "deployed",
+            "format",
+            "generation",
+            "output",
+            "package_seal",
+            "source",
+            "status",
+        ],
+    );
+    assert_eq!(extract_receipt["format"], "gore.asset.extract.v2");
+    assert_eq!(extract_receipt["status"], "extracted");
+    assert_eq!(extract_receipt["asset"], SYNTHETIC_WOLF_ASSET);
+    assert_eq!(extract_receipt["deployed"], false);
+    assert_eq!(
+        directory_file_names(&extracted),
+        BTreeSet::from([
+            "DA_WolfFootsteps.uasset".to_owned(),
+            "DA_WolfFootsteps.uexp".to_owned(),
+            "gore-asset-extract.json".to_owned(),
+            "gore-generation.usmap".to_owned(),
+        ])
+    );
+
+    let source_uasset = extracted.join("DA_WolfFootsteps.uasset");
+    let source_uexp = source_uasset.with_extension("uexp");
+    let copied_usmap = extracted.join("gore-generation.usmap");
+    let source_pair_before = (
+        fs::read(&source_uasset).unwrap(),
+        fs::read(&source_uexp).unwrap(),
+    );
+    let inspection = inspect_json(&source_uasset, &copied_usmap);
+    let leaf = inspection["exports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|export| export["leaves"].as_array().unwrap())
+        .find(|leaf| leaf["editable"] == true && leaf["selector"]["kind"] == "vector4_f64x4")
+        .expect("synthetic Wolf must expose its Vector4 leaf")
+        .clone();
+    let expected_hex = leaf["selector"]["expected_hex"].as_str().unwrap();
+    let mut replacement_bytes = decode_hex(expected_hex);
+    assert_eq!(replacement_bytes.len(), 32);
+    replacement_bytes[..8].copy_from_slice(&125.0_f64.to_le_bytes());
+    let replacement_hex = encode_hex_bytes(&replacement_bytes);
+    assert_ne!(replacement_hex, expected_hex);
+    let selector_path = temp.path().join("wolf-vector4-selector.json");
+    fs::write(&selector_path, serde_json::to_vec_pretty(&leaf).unwrap()).unwrap();
+
+    let patched_dir = temp.path().join("patched");
+    fs::create_dir(&patched_dir).unwrap();
+    let patched_uasset = patched_dir.join("DA_WolfFootsteps.uasset");
+    let patch = patch_command_with_receipt(
+        &source_uasset,
+        &copied_usmap,
+        &extract_receipt_path,
+        &selector_path,
+        expected_hex,
+        &replacement_hex,
+        &patched_uasset,
+    )
+    .assert()
+    .success()
+    .stderr(predicate::str::is_empty());
+    let patch_receipt_path = patched_dir.join("DA_WolfFootsteps.gore-asset-patch.json");
+    assert_stdout_is_stored_json_plus_lf(patch.get_output(), &patch_receipt_path);
+    let patch_receipt: Value =
+        serde_json::from_slice(&fs::read(&patch_receipt_path).unwrap()).unwrap();
+    assert_closed_keys(
+        &patch_receipt,
+        &[
+            "asset",
+            "expected_hex",
+            "format",
+            "generation_bound",
+            "input_package_seal",
+            "input_selector",
+            "output",
+            "output_package_seal",
+            "output_requires_reinspect",
+            "output_sidecars",
+            "patch",
+            "provenance",
+            "replacement_hex",
+            "status",
+        ],
+    );
+    assert_eq!(patch_receipt["format"], "gore.asset.patch-fixed.v2");
+    assert_eq!(patch_receipt["status"], "patched");
+    assert_eq!(patch_receipt["generation_bound"], true);
+    assert_eq!(patch_receipt["output_requires_reinspect"], true);
+    assert_eq!(patch_receipt["expected_hex"], expected_hex);
+    assert_eq!(patch_receipt["replacement_hex"], replacement_hex);
+    assert_eq!(
+        directory_file_names(&patched_dir),
+        BTreeSet::from([
+            "DA_WolfFootsteps.gore-asset-patch.json".to_owned(),
+            "DA_WolfFootsteps.uasset".to_owned(),
+            "DA_WolfFootsteps.uexp".to_owned(),
+        ])
+    );
+    assert_eq!(
+        (
+            fs::read(&source_uasset).unwrap(),
+            fs::read(&source_uexp).unwrap()
+        ),
+        source_pair_before
+    );
+    let patched_inspection = inspect_json(&patched_uasset, &copied_usmap);
+    let patched_leaf = patched_inspection["exports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|export| export["leaves"].as_array().unwrap())
+        .find(|candidate| candidate["semantic_path"] == leaf["semantic_path"])
+        .unwrap();
+    assert_eq!(patched_leaf["selector"]["expected_hex"], replacement_hex);
+
+    let packed = temp.path().join("packed");
+    let pack = Command::cargo_bin("gore")
+        .unwrap()
+        .args(["asset", "pack", "--game"])
+        .arg(&game)
+        .arg("--uasset")
+        .arg(&patched_uasset)
+        .arg("--patch-receipt")
+        .arg(&patch_receipt_path)
+        .args(["--asset", SYNTHETIC_WOLF_ASSET, "--name", NAME, "--out"])
+        .arg(&packed)
+        .arg("--json")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let pack_receipt_path = packed.join("gore-asset-pack.json");
+    assert_stdout_is_stored_json_plus_lf(pack.get_output(), &pack_receipt_path);
+    let pack_receipt: Value =
+        serde_json::from_slice(&fs::read(&pack_receipt_path).unwrap()).unwrap();
+    assert_pack_v2_closed_shape(&pack_receipt);
+    assert_eq!(pack_receipt["format"], "gore.asset.pack.v2");
+    assert_eq!(pack_receipt["status"], "packed");
+    assert_eq!(pack_receipt["asset"], SYNTHETIC_WOLF_ASSET);
+    assert_eq!(pack_receipt["name"], NAME);
+    assert_eq!(pack_receipt["generation_bound"], true);
+    assert_eq!(pack_receipt["deployed"], false);
+    assert_eq!(pack_receipt["output"]["compressed"], false);
+    assert_eq!(pack_receipt["output"]["receipt"], "gore-asset-pack.json");
+    assert_eq!(
+        pack_receipt["output"]["root"],
+        fs::canonicalize(&packed).unwrap().display().to_string()
+    );
+    assert_eq!(
+        pack_receipt["output"]["reopened_packages"],
+        serde_json::json!([SYNTHETIC_WOLF_ASSET])
+    );
+    assert_eq!(
+        pack_receipt["source"]["game_root"],
+        fs::canonicalize(&game).unwrap().display().to_string()
+    );
+    assert_eq!(
+        pack_receipt["source"]["content_binding"],
+        "script-object and container-header chunks were verified against the winning containers' TOC BLAKE3 hashes before conversion"
+    );
+    assert_file_seal_matches(
+        &pack_receipt["source"]["global_script_store"]["utoc"],
+        &paks.join("global.utoc"),
+    );
+    assert_file_seal_matches(
+        &pack_receipt["source"]["global_script_store"]["ucas"],
+        &paks.join("global.ucas"),
+    );
+    assert_source_container_tocs_match(
+        &pack_receipt["source"]["source_container_tocs"],
+        [&paks.join("G1R-Windows.utoc"), &paks.join("global.utoc")],
+    );
+    assert_consumed_chunks_match_sources(&pack_receipt["source"]["consumed_chunks"], &paks);
+    assert_eq!(
+        pack_receipt["provenance"]["generation"],
+        extract_receipt["generation"]
+    );
+    assert_eq!(
+        pack_receipt["provenance"]["generation"],
+        patch_receipt["provenance"]["generation"]
+    );
+    assert_generation_arrays_sorted_unique(&pack_receipt["provenance"]["generation"]);
+    assert_eq!(
+        pack_receipt["provenance"]["extract_receipt"],
+        patch_receipt["provenance"]["extract_receipt"]
+    );
+    assert_file_seal_matches(
+        &pack_receipt["provenance"]["patch_receipt"],
+        &patch_receipt_path,
+    );
+    assert_file_seal_matches(
+        &pack_receipt["provenance"]["extract_receipt"],
+        &extract_receipt_path,
+    );
+    assert_eq!(
+        pack_receipt["provenance"]["input_package_seal"],
+        patch_receipt["input_package_seal"]
+    );
+    assert_eq!(
+        pack_receipt["provenance"]["patched_package_seal"],
+        patch_receipt["output_package_seal"]
+    );
+    let patched_uexp = patched_uasset.with_extension("uexp");
+    let expected_input_package_seal = serde_json::json!({
+        "uasset_sha256": sha256_hex(&fs::read(&patched_uasset).unwrap()),
+        "uexp_sha256": sha256_hex(&fs::read(&patched_uexp).unwrap()),
+    });
+    assert_eq!(
+        pack_receipt["input"]["package_seal"],
+        patch_receipt["output_package_seal"]
+    );
+    assert_eq!(
+        pack_receipt["input"]["package_seal"],
+        expected_input_package_seal
+    );
+    let input_components = pack_receipt["input"]["components"].as_array().unwrap();
+    assert_eq!(input_components.len(), 2);
+    for (component, source, packed_relative) in [
+        (
+            &input_components[0],
+            patched_uasset.as_path(),
+            "G1R/Content/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps.uasset",
+        ),
+        (
+            &input_components[1],
+            patched_uexp.as_path(),
+            "G1R/Content/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps.uexp",
+        ),
+    ] {
+        let bytes = fs::read(source).unwrap();
+        assert_eq!(
+            component["source_path"],
+            fs::canonicalize(source).unwrap().display().to_string()
+        );
+        assert_eq!(component["packed_relative_path"], packed_relative);
+        assert_eq!(component["length"], bytes.len());
+        assert_eq!(component["sha256"], sha256_hex(&bytes));
+    }
+
+    let expected_names = BTreeSet::from([
+        format!("{NAME}.pak"),
+        format!("{NAME}.ucas"),
+        format!("{NAME}.utoc"),
+        "gore-asset-pack.json".to_owned(),
+    ]);
+    let actual_names = fs::read_dir(&packed)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(actual_names, expected_names);
+    let triplet = pack_receipt["output"]["triplet"].as_array().unwrap();
+    assert_eq!(
+        triplet
+            .iter()
+            .map(|component| component["relative_path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            format!("{NAME}.utoc"),
+            format!("{NAME}.ucas"),
+            format!("{NAME}.pak"),
+        ]
+    );
+    for component in triplet {
+        let path = packed.join(component["relative_path"].as_str().unwrap());
+        let bytes = fs::read(path).unwrap();
+        assert_eq!(component["length"], bytes.len());
+        assert_eq!(component["sha256"], sha256_hex(&bytes));
+    }
+
+    let final_utoc = packed.join(format!("{NAME}.utoc"));
+    let final_pak = packed.join(format!("{NAME}.pak"));
+    assert_eq!(
+        gore_tex::container::list_packages(&final_utoc).unwrap(),
+        [SYNTHETIC_WOLF_ASSET]
+    );
+    let reopened = gore_tex::container::verify_single_package_triplet(
+        &final_utoc,
+        &final_pak,
+        SYNTHETIC_WOLF_ASSET,
+        gore_tex::container::ExpectedSidecars {
+            bulk: false,
+            optional_bulk: false,
+            memory_mapped_bulk: false,
+        },
+    )
+    .unwrap();
+    let strict = &pack_receipt["output"]["strict_reopen"];
+    assert_eq!(strict["package"], SYNTHETIC_WOLF_ASSET);
+    assert_eq!(strict["export_path"], SYNTHETIC_WOLF_COOKED_PATH);
+    assert_eq!(strict["pak_mount_point"], "../../../");
+    assert_eq!(strict["pak_files"], serde_json::json!([]));
+    assert_eq!(strict["bulk_chunks"], 0);
+    assert_eq!(strict["optional_bulk_chunks"], 0);
+    assert_eq!(strict["memory_mapped_bulk_chunks"], 0);
+    assert_eq!(
+        strict["chunk_count"],
+        strict["chunks"].as_array().unwrap().len()
+    );
+    let mut reopened_json = serde_json::to_value(reopened).unwrap();
+    let mut receipted_reopen = pack_receipt["output"]["strict_reopen"].clone();
+    normalize_reopen_chunk_source_utoc(&mut reopened_json);
+    normalize_reopen_chunk_source_utoc(&mut receipted_reopen);
+    assert_eq!(reopened_json, receipted_reopen);
+
+    assert_no_asset_staging(temp.path());
+    assert_eq!(nofollow_tree_bytes(&game), game_before);
+    let packed_before_collision = nofollow_tree_bytes(&packed);
+    Command::cargo_bin("gore")
+        .unwrap()
+        .args(["asset", "pack", "--game"])
+        .arg(&game)
+        .arg("--uasset")
+        .arg(temp.path().join("missing.uasset"))
+        .arg("--patch-receipt")
+        .arg(temp.path().join("missing.gore-asset-patch.json"))
+        .args(["--asset", SYNTHETIC_WOLF_ASSET, "--name", NAME, "--out"])
+        .arg(&packed)
+        .arg("--json")
+        .assert()
+        .failure()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::contains("ASSET_PACK_OUTPUT"))
+        .stderr(predicate::str::contains("ASSET_PATCH_RECEIPT").not())
+        .stderr(predicate::str::contains("ASSET_PACK_INPUT").not())
+        .stderr(predicate::str::contains("ASSET_PACK_GENERATION").not());
+    assert_eq!(nofollow_tree_bytes(&packed), packed_before_collision);
+    assert_eq!(nofollow_tree_bytes(&game), game_before);
+    assert_no_asset_staging(temp.path());
+
+    let packed_human = temp.path().join("packed-human");
+    let human = Command::cargo_bin("gore")
+        .unwrap()
+        .args(["asset", "pack", "--game"])
+        .arg(&game)
+        .arg("--uasset")
+        .arg(&patched_uasset)
+        .arg("--patch-receipt")
+        .arg(&patch_receipt_path)
+        .args(["--asset", SYNTHETIC_WOLF_ASSET, "--name", NAME, "--out"])
+        .arg(&packed_human)
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let packed_human = fs::canonicalize(&packed_human).unwrap();
+    let expected_human_stdout = format!(
+        "PACKED\tasset={}\tname={}\toutput={}\treceipt={}\tdeployed=false\n",
+        serde_json::to_string(SYNTHETIC_WOLF_ASSET).unwrap(),
+        serde_json::to_string(NAME).unwrap(),
+        serde_json::to_string(&packed_human.display().to_string()).unwrap(),
+        serde_json::to_string(
+            &packed_human
+                .join("gore-asset-pack.json")
+                .display()
+                .to_string()
+        )
+        .unwrap(),
+    );
+    assert_eq!(human.get_output().stdout, expected_human_stdout.as_bytes());
+    assert_eq!(nofollow_tree_bytes(&game), game_before);
+    assert_no_asset_staging(temp.path());
+}
+
+#[test]
 #[ignore = "local real-game proof; scans the installed IoStore and never deploys"]
 fn real_wolf_extract_inspect_patch_pack_and_reopen_offline() {
     const ASSET: &str = "/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps";
@@ -1222,6 +1624,397 @@ fn real_wolf_extract_inspect_patch_pack_and_reopen_offline() {
     assert!(packed.join("zzz_GoreWolfProof_P.ucas").is_file());
     assert!(packed.join("zzz_GoreWolfProof_P.pak").is_file());
     assert!(packed.join("gore-asset-pack.json").is_file());
+}
+
+fn assert_stdout_is_stored_json_plus_lf(output: &std::process::Output, stored: &Path) {
+    let mut expected = fs::read(stored).unwrap();
+    assert_ne!(
+        expected.last(),
+        Some(&b'\n'),
+        "stored receipt must not have a terminal LF"
+    );
+    expected.push(b'\n');
+    assert_eq!(
+        output.stdout, expected,
+        "stdout differs from stored receipt"
+    );
+}
+
+fn assert_closed_keys(value: &Value, expected: &[&str]) {
+    let actual = value
+        .as_object()
+        .expect("expected closed JSON object")
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    assert_eq!(actual, expected);
+}
+
+fn assert_pack_v2_closed_shape(receipt: &Value) {
+    assert_closed_keys(
+        receipt,
+        &[
+            "asset",
+            "deployed",
+            "format",
+            "generation_bound",
+            "input",
+            "name",
+            "output",
+            "provenance",
+            "source",
+            "status",
+        ],
+    );
+    assert_closed_keys(
+        &receipt["provenance"],
+        &[
+            "extract_receipt",
+            "generation",
+            "input_package_seal",
+            "patch_receipt",
+            "patched_package_seal",
+        ],
+    );
+    assert_closed_keys(
+        &receipt["source"],
+        &[
+            "consumed_chunks",
+            "content_binding",
+            "game_root",
+            "global_script_store",
+            "source_container_tocs",
+        ],
+    );
+    assert_closed_keys(&receipt["input"], &["components", "package_seal"]);
+    assert_closed_keys(
+        &receipt["output"],
+        &[
+            "compressed",
+            "receipt",
+            "reopened_packages",
+            "root",
+            "strict_reopen",
+            "triplet",
+        ],
+    );
+    assert_closed_keys(
+        &receipt["output"]["strict_reopen"],
+        &[
+            "bulk_chunks",
+            "chunk_count",
+            "chunks",
+            "export_path",
+            "memory_mapped_bulk_chunks",
+            "optional_bulk_chunks",
+            "package",
+            "pak_files",
+            "pak_mount_point",
+        ],
+    );
+    for seal in [
+        &receipt["provenance"]["extract_receipt"],
+        &receipt["provenance"]["patch_receipt"],
+    ] {
+        assert_closed_keys(seal, &["length", "path", "sha256"]);
+    }
+    for pair in [
+        &receipt["provenance"]["input_package_seal"],
+        &receipt["provenance"]["patched_package_seal"],
+        &receipt["input"]["package_seal"],
+    ] {
+        assert_closed_keys(pair, &["uasset_sha256", "uexp_sha256"]);
+    }
+    assert_closed_keys(&receipt["source"]["global_script_store"], &["ucas", "utoc"]);
+    for source_file in receipt["source"]["source_container_tocs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain([
+            &receipt["source"]["global_script_store"]["utoc"],
+            &receipt["source"]["global_script_store"]["ucas"],
+        ])
+    {
+        assert_closed_keys(source_file, &["length", "path", "sha256"]);
+    }
+    for component in receipt["input"]["components"].as_array().unwrap() {
+        assert_closed_keys(
+            component,
+            &["length", "packed_relative_path", "sha256", "source_path"],
+        );
+    }
+    for component in receipt["output"]["triplet"].as_array().unwrap() {
+        assert_closed_keys(component, &["length", "relative_path", "sha256"]);
+    }
+    for chunk in receipt["source"]["consumed_chunks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(
+            receipt["output"]["strict_reopen"]["chunks"]
+                .as_array()
+                .unwrap(),
+        )
+    {
+        assert_closed_keys(
+            chunk,
+            &[
+                "blake3",
+                "chunk_id",
+                "chunk_type",
+                "length",
+                "source_utoc",
+                "toc_hash",
+                "toc_hash_bytes",
+            ],
+        );
+    }
+    let generation = &receipt["provenance"]["generation"];
+    assert_closed_keys(
+        generation,
+        &[
+            "asset",
+            "container_set",
+            "format",
+            "global_ucas",
+            "global_utoc",
+            "main_utoc",
+            "target_chunks",
+            "usmap",
+        ],
+    );
+    for anchor in [
+        &generation["usmap"],
+        &generation["main_utoc"],
+        &generation["global_utoc"],
+        &generation["global_ucas"],
+    ]
+    .into_iter()
+    .chain(generation["container_set"].as_array().unwrap())
+    {
+        assert_closed_keys(anchor, &["file_name", "length", "sha256"]);
+    }
+    for chunk in generation["target_chunks"].as_array().unwrap() {
+        assert_closed_keys(
+            chunk,
+            &[
+                "blake3",
+                "chunk_id",
+                "chunk_type",
+                "length",
+                "toc_hash",
+                "toc_hash_bytes",
+                "winner_utoc",
+            ],
+        );
+        assert_closed_keys(&chunk["winner_utoc"], &["file_name", "length", "sha256"]);
+    }
+}
+
+fn assert_file_seal_matches(seal: &Value, path: &Path) {
+    let bytes = fs::read(path).unwrap();
+    assert_eq!(
+        seal["path"],
+        fs::canonicalize(path).unwrap().display().to_string()
+    );
+    assert_eq!(seal["length"], bytes.len());
+    assert_eq!(seal["sha256"], sha256_hex(&bytes));
+}
+
+fn assert_source_container_tocs_match(receipts: &Value, sources: [&Path; 2]) {
+    let mut expected = sources.map(|path| fs::canonicalize(path).unwrap());
+    expected.sort();
+    let receipts = receipts.as_array().unwrap();
+    assert_eq!(receipts.len(), expected.len());
+    for (receipt, path) in receipts.iter().zip(expected) {
+        assert_file_seal_matches(receipt, &path);
+    }
+}
+
+fn assert_generation_arrays_sorted_unique(generation: &Value) {
+    let container_set = generation["container_set"].as_array().unwrap();
+    let container_keys = container_set
+        .iter()
+        .map(|anchor| {
+            (
+                anchor["file_name"].as_str().unwrap(),
+                anchor["sha256"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut expected_container_keys = container_keys.clone();
+    expected_container_keys.sort_unstable();
+    expected_container_keys.dedup();
+    assert_eq!(container_keys, expected_container_keys);
+
+    let target_chunks = generation["target_chunks"].as_array().unwrap();
+    let target_keys = target_chunks
+        .iter()
+        .map(|chunk| {
+            (
+                chunk["chunk_id"].as_str().unwrap(),
+                chunk["chunk_type"].as_str().unwrap(),
+                chunk["winner_utoc"]["file_name"].as_str().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut expected_target_keys = target_keys.clone();
+    expected_target_keys.sort_unstable();
+    expected_target_keys.dedup();
+    assert_eq!(target_keys, expected_target_keys);
+}
+
+fn assert_consumed_chunks_match_sources(receipts: &Value, paks: &Path) {
+    // Reconstruct the exact source reads independently from the pack receipt:
+    // conversion primes every unique ContainerHeader in the composite store and
+    // loads the winning ScriptObjects chunk. Reading each ChunkInfo below reaches
+    // its real sibling UCAS and lets this oracle recalculate every advertised hash.
+    let canonical_paks = fs::canonicalize(paks).unwrap();
+    let store = iostore::open(&canonical_paks, Arc::new(Config::default())).unwrap();
+    let mut source_chunks = store
+        .chunks()
+        .filter(|chunk| {
+            matches!(
+                chunk.id().get_chunk_type(),
+                EIoChunkType::ContainerHeader | EIoChunkType::ScriptObjects
+            )
+        })
+        .collect::<Vec<_>>();
+    source_chunks.sort_by_key(|chunk| encode_hex_bytes(&chunk.id().get_raw().id));
+
+    let receipts = receipts.as_array().unwrap();
+    assert_eq!(receipts.len(), source_chunks.len());
+    for (receipt, chunk) in receipts.iter().zip(source_chunks) {
+        let bytes = chunk.read().unwrap();
+        assert_eq!(u64::try_from(bytes.len()).unwrap(), chunk.size());
+        let actual_hash = blake3::hash(&bytes);
+        let toc_hash = &chunk.hash().0;
+        let toc_hash_bytes = if toc_hash[20..].iter().any(|byte| *byte != 0) {
+            32
+        } else {
+            20
+        };
+        assert_eq!(
+            &actual_hash.as_bytes()[..toc_hash_bytes],
+            &toc_hash[..toc_hash_bytes]
+        );
+        let source_utoc = fs::canonicalize(chunk.container().container_path()).unwrap();
+        assert!(
+            source_utoc == canonical_paks.join("G1R-Windows.utoc")
+                || source_utoc == canonical_paks.join("global.utoc")
+        );
+        assert_eq!(
+            receipt,
+            &serde_json::json!({
+                "blake3": encode_hex_bytes(actual_hash.as_bytes()),
+                "chunk_id": encode_hex_bytes(&chunk.id().get_raw().id),
+                "chunk_type": format!("{:?}", chunk.id().get_chunk_type()),
+                "length": chunk.size(),
+                "source_utoc": source_utoc.display().to_string(),
+                "toc_hash": encode_hex_bytes(&toc_hash[..toc_hash_bytes]),
+                "toc_hash_bytes": toc_hash_bytes,
+            })
+        );
+    }
+}
+
+fn directory_file_names(directory: &Path) -> BTreeSet<String> {
+    fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            let metadata = fs::symlink_metadata(entry.path()).unwrap();
+            assert_plain_tree_entry(&entry.path(), &metadata);
+            assert!(metadata.is_file(), "unexpected directory entry");
+            entry.file_name().to_string_lossy().into_owned()
+        })
+        .collect()
+}
+
+fn normalize_reopen_chunk_source_utoc(value: &mut Value) {
+    for chunk in value["chunks"].as_array_mut().unwrap() {
+        chunk["source_utoc"] = Value::String("<normalized-source-utoc>".to_owned());
+    }
+}
+
+fn nofollow_tree_bytes(root: &Path) -> BTreeMap<String, Option<Vec<u8>>> {
+    let mut snapshot = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert_plain_tree_entry(&path, &metadata);
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if metadata.is_dir() {
+                assert!(snapshot.insert(relative, None).is_none());
+                pending.push(path);
+            } else {
+                assert!(metadata.is_file(), "non-regular entry: {}", path.display());
+                assert!(snapshot
+                    .insert(relative, Some(fs::read(path).unwrap()))
+                    .is_none());
+            }
+        }
+    }
+    snapshot
+}
+
+fn assert_plain_tree_entry(path: &Path, metadata: &fs::Metadata) {
+    assert!(
+        !metadata.file_type().is_symlink(),
+        "symlink in synthetic tree: {}",
+        path.display()
+    );
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        assert_eq!(
+            metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT,
+            0,
+            "reparse point in synthetic tree: {}",
+            path.display()
+        );
+    }
+}
+
+fn assert_no_asset_staging(root: &Path) {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).unwrap();
+            assert_plain_tree_entry(&path, &metadata);
+            assert!(
+                !entry.file_name().to_string_lossy().starts_with(".gore-"),
+                "staging leftover: {}",
+                path.display()
+            );
+            if metadata.is_dir() {
+                pending.push(path);
+            }
+        }
+    }
+}
+
+fn decode_hex(value: &str) -> Vec<u8> {
+    assert_eq!(value.len() % 2, 0);
+    (0..value.len())
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&value[offset..offset + 2], 16).unwrap())
+        .collect()
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn inspect_json(uasset: &Path, usmap: &Path) -> Value {
