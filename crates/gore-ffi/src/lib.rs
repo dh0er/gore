@@ -109,6 +109,10 @@
 //!   VoiceTake candidate or clears one exact VoiceSlot selection. It fully verifies current Ogg
 //!   assets, prepares and reopens only an immutable candidate, and never reads a game/save or
 //!   publishes the fixed project head.
+//! - `authoring_store_prepare_revision3_voice_take_status_v1` changes only one uniquely retained
+//!   VoiceTake review status plus its take/project revisions. It fully verifies current Store
+//!   assets, independently closes the exact delta, prepares and reopens an immutable candidate,
+//!   and accepts no game/save/media/build/deployment or fixed-head publication authority.
 //! - `authoring_store_prepare_revision3_voice_target_v1` resolves one existing VoiceSlot against
 //!   the first installed archive for its canonical locale. Native code alone derives bounded,
 //!   sealed exact-member evidence; the route prepares a fully reopened candidate without editing
@@ -203,6 +207,7 @@ mod authoring_story_quest_transitions_revision3;
 mod authoring_voice_build_revision3;
 mod authoring_voice_revision3;
 mod authoring_voice_selection_revision3;
+mod authoring_voice_take_status_revision3;
 mod authoring_voice_target_revision3;
 mod dataasset;
 mod script_compile_report;
@@ -271,6 +276,7 @@ const CORE_COMMANDS: &[&str] = &[
     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
     "authoring_store_prepare_revision3_voice_take_selection_v1",
+    "authoring_store_prepare_revision3_voice_take_status_v1",
     "authoring_store_prepare_revision3_voice_take_v1",
     "authoring_store_prepare_revision3_voice_target_v1",
     "authoring_store_read_revision3_content_index_v1",
@@ -601,6 +607,9 @@ fn revision3_store_raw_route(command: &str) -> Option<fn(&str) -> Value> {
         ),
         "authoring_store_prepare_revision3_voice_take_selection_v1" => {
             Some(authoring_voice_selection_revision3::prepare_revision3_voice_take_selection_v1_raw)
+        }
+        "authoring_store_prepare_revision3_voice_take_status_v1" => {
+            Some(authoring_voice_take_status_revision3::prepare_revision3_voice_take_status_v1_raw)
         }
         "authoring_store_prepare_revision3_voice_take_v1" => {
             Some(authoring_voice_revision3::prepare_revision3_voice_take_v1_raw)
@@ -1698,6 +1707,7 @@ mod tests {
                     "authoring_store_prepare_revision3_quest_transitions_edit_v1",
                     "authoring_store_prepare_revision3_reviewed_installed_dataasset_edit_v1",
                     "authoring_store_prepare_revision3_voice_take_selection_v1",
+                    "authoring_store_prepare_revision3_voice_take_status_v1",
                     "authoring_store_prepare_revision3_voice_take_v1",
                     "authoring_store_prepare_revision3_voice_target_v1",
                     "authoring_store_read_revision3_content_index_v1",
@@ -1829,6 +1839,9 @@ mod tests {
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_selection_v1"));
+        assert!(commands
+            .iter()
+            .any(|command| command == "authoring_store_prepare_revision3_voice_take_status_v1"));
         assert!(commands
             .iter()
             .any(|command| command == "authoring_store_prepare_revision3_voice_take_v1"));

@@ -32,6 +32,7 @@ mod story_transaction_revision3_quest_outline_v2;
 mod story_transaction_revision3_quest_transitions;
 mod story_transaction_revision3_voice;
 mod story_transaction_revision3_voice_selection;
+mod story_transaction_revision3_voice_take_status;
 mod story_transaction_revision3_voice_target;
 mod strict_json;
 mod validate;
@@ -289,6 +290,15 @@ pub use story_transaction_revision3_voice_selection::{
     Revision3VoiceTakeSelectionRejectionV1, Revision3VoiceTakeSelectionRequestJsonErrorV1,
     Revision3VoiceTakeSelectionRequestV1, Revision3VoiceTakeSelectionRuntimeStatusV1,
     MAX_REVISION3_VOICE_TAKE_SELECTION_REQUEST_JSON_BYTES_V1,
+};
+pub use story_transaction_revision3_voice_take_status::{
+    apply_revision3_voice_take_status_edit_transaction_v1,
+    Revision3VoiceTakeStatusEditBuildStatusV1, Revision3VoiceTakeStatusEditConflictV1,
+    Revision3VoiceTakeStatusEditErrorV1, Revision3VoiceTakeStatusEditEvaluationV1,
+    Revision3VoiceTakeStatusEditOutcomeV1, Revision3VoiceTakeStatusEditRejectionV1,
+    Revision3VoiceTakeStatusEditRequestJsonErrorV1, Revision3VoiceTakeStatusEditRequestV1,
+    Revision3VoiceTakeStatusEditRuntimeStatusV1,
+    MAX_REVISION3_VOICE_TAKE_STATUS_EDIT_REQUEST_JSON_BYTES_V1,
 };
 pub use story_transaction_revision3_voice_target::{
     apply_revision3_voice_target_resolution_transaction_v1,
