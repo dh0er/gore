@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -48,11 +49,16 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
   bool _requiresReopen = false;
   bool _staleCheckpoint = false;
   bool _mayApplyInitialCatalogId = true;
+  bool _baselineCatalogIdCaptured = false;
+  String? _baselineCatalogId;
+  bool _allowPop = false;
+  bool _confirmingDiscard = false;
   int _loadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
+    _displayName.addListener(_fieldChanged);
     _loadCatalog();
   }
 
@@ -65,8 +71,13 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
   @override
   void dispose() {
     _loadGeneration += 1;
+    _displayName.removeListener(_fieldChanged);
     _displayName.dispose();
     super.dispose();
+  }
+
+  void _fieldChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadCatalog({bool clear = false}) async {
@@ -88,6 +99,10 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
           catalog,
           allowInitialCatalogId: _mayApplyInitialCatalogId,
         );
+        if (!_baselineCatalogIdCaptured) {
+          _baselineCatalogId = _catalogId;
+          _baselineCatalogIdCaptured = true;
+        }
         _mayApplyInitialCatalogId = false;
         _catalogLoading = false;
       });
@@ -219,7 +234,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       );
       if (!mounted) return;
       completed = true;
-      Navigator.of(context).pop(publication);
+      await _popAfterUnlock(publication);
     } on Revision3NpcDraftRequiresReopenException {
       if (!mounted) return;
       setState(() {
@@ -256,12 +271,21 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
     }
   }
 
-  bool get _busy => _catalogLoading || _choosing || _publishing;
+  bool get _busy =>
+      _catalogLoading || _choosing || _publishing || _publicationStarted;
   bool get _locked => _requiresReopen || _staleCheckpoint;
+  bool get _hasChanges =>
+      _displayName.text.isNotEmpty ||
+      (_baselineCatalogIdCaptured
+          ? _catalogId != _baselineCatalogId
+          : _catalogId != null);
 
   @override
   Widget build(BuildContext context) => PopScope(
-    canPop: !_publicationStarted,
+    canPop: _allowPop || (!_busy && !_hasChanges),
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop) unawaited(_requestDismiss());
+    },
     child: AlertDialog(
       key: const Key('revision3-npc-wizard'),
       title: const Row(
@@ -320,9 +344,7 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       actions: [
         TextButton(
           key: const Key('revision3-npc-cancel'),
-          onPressed: _publicationStarted
-              ? null
-              : () => Navigator.of(context).pop(),
+          onPressed: _busy || _confirmingDiscard ? null : _requestDismiss,
           child: Text(_locked ? 'Close' : 'Cancel'),
         ),
         FilledButton.icon(
@@ -339,6 +361,51 @@ class _Revision3NpcWizardDialogState extends State<Revision3NpcWizardDialog> {
       ],
     ),
   );
+
+  Future<void> _requestDismiss() async {
+    if (_busy || _confirmingDiscard) return;
+    if (_locked) {
+      await _popAfterUnlock();
+      return;
+    }
+    if (!_hasChanges) {
+      await _popAfterUnlock();
+      return;
+    }
+    setState(() => _confirmingDiscard = true);
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('revision3-npc-discard-dialog'),
+        title: const Text('Discard character draft changes?'),
+        content: const Text(
+          'Your unsaved character name and archetype choice will be lost.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('revision3-npc-keep-editing'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            key: const Key('revision3-npc-discard'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _confirmingDiscard = false);
+    if (discard == true) await _popAfterUnlock();
+  }
+
+  Future<void> _popAfterUnlock([Revision3NpcDraftPublication? result]) async {
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.of(context).pop(result);
+  }
 
   Widget _buildForm(BuildContext context) {
     final selected = _catalog?.choice(_catalogId ?? '');

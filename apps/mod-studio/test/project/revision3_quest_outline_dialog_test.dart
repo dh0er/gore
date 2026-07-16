@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/core/mod_ffi.dart';
 import 'package:gore_mod/project/revision3_quest_outline_authoring.dart';
@@ -120,6 +123,159 @@ void main() {
     );
   });
 
+  testWidgets(
+    'dirty cancel, barrier, Escape, and Back require explicit discard',
+    (tester) async {
+      await _open(
+        tester,
+        publish: ({required input}) async => _publication(input),
+      );
+      final title = find.byKey(const Key('revision3-quest-outline-title'));
+      await tester.enterText(title, 'Do not lose this Quest outline');
+      await tester.pump();
+
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-outline-keep-editing')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextField>(title).controller?.text,
+        'Do not lose this Quest outline',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-outline-keep-editing')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-outline-keep-editing')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('revision3-quest-outline-cancel')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('revision3-quest-outline-discard')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-outline-dialog')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('identity loading and publication cannot dismiss the editor', (
+    tester,
+  ) async {
+    final fixture = Revision3QuestOutlineFixture();
+    final seed = AuthoringRevision3QuestTransitionsSeed.forProject(
+      currentProjectJson: fixture.semanticProjectJson,
+      questId: revision3QuestOutlineQuestId,
+      expectedQuestRevision: fixture.questRevision,
+      expectedModuleId: revision3QuestOutlineModuleId,
+      expectedModuleRevision: fixture.moduleRevision,
+    );
+    final seedCompletion = Completer<AuthoringRevision3QuestTransitionsSeed>();
+    final publication = Completer<Revision3QuestOutlineEditPublication>();
+    var publishes = 0;
+    await _open(
+      tester,
+      semantic: true,
+      settle: false,
+      loadTransitionSeed:
+          ({
+            required questId,
+            required expectedQuestRevision,
+            required expectedModuleId,
+            required expectedModuleRevision,
+          }) => seedCompletion.future,
+      publish: ({required input}) {
+        publishes++;
+        return publication.future;
+      },
+    );
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<TextButton>(
+            find.byKey(const Key('revision3-quest-outline-cancel')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-dialog')),
+      findsOneWidget,
+    );
+
+    seedCompletion.complete(seed);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('revision3-quest-outline-title')),
+      'Find Homer safely',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
+    await tester.pump();
+    expect(publishes, 1);
+    expect(
+      tester
+          .widget<TextButton>(
+            find.byKey(const Key('revision3-quest-outline-cancel')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-dialog')),
+      findsOneWidget,
+    );
+
+    publication.complete(
+      Revision3QuestOutlineEditPublication(
+        projectId: revision3QuestOutlineProjectId,
+        projectRevision: 8,
+        questId: revision3QuestOutlineQuestId,
+        moduleId: revision3QuestOutlineModuleId,
+        questRevision: fixture.questRevision + 1,
+        moduleRevision: fixture.moduleRevision + 1,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-dialog')),
+      findsNothing,
+    );
+  });
+
   testWidgets('stale checkpoint gives plain guidance and locks resubmit', (
     tester,
   ) async {
@@ -151,6 +307,47 @@ void main() {
           )
           .onPressed,
       isNull,
+    );
+    expect(find.text('Close'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-quest-outline-cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-discard-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('revision3-quest-outline-dialog')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('requires-reopen lock closes without a discard prompt', (
+    tester,
+  ) async {
+    await _open(
+      tester,
+      publish: ({required input}) async =>
+          throw const Revision3QuestOutlineRequiresReopenException(),
+    );
+    await tester.enterText(
+      find.byKey(const Key('revision3-quest-outline-title')),
+      'Find Homer safely',
+    );
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('revision3-quest-outline-save')));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('can no longer be verified'), findsOneWidget);
+    expect(find.text('Close'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-quest-outline-cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-outline-discard-dialog')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const Key('revision3-quest-outline-dialog')),
+      findsNothing,
     );
   });
 
@@ -307,6 +504,7 @@ Future<void> _open(
   required Revision3QuestOutlineEditPublisher publish,
   Revision3QuestTransitionsSeedLoader? loadTransitionSeed,
   bool semantic = false,
+  bool settle = true,
 }) async {
   final index = Revision3QuestOutlineFixture().contentIndex(
     questGeneratorVersion: semantic ? 4 : 3,
@@ -333,7 +531,11 @@ Future<void> _open(
     ),
   );
   await tester.tap(find.text('Open'));
-  await tester.pumpAndSettle();
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
 }
 
 Revision3QuestOutlineEditPublication _publication(

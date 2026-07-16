@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -49,12 +50,22 @@ class _Revision3QuestWizardDialogState
   bool _publicationStarted = false;
   bool _requiresReopen = false;
   bool _staleCheckpoint = false;
+  bool _baselineCatalogChoicesCaptured = false;
+  String? _baselineParentCatalogId;
+  String? _baselineGiverCatalogId;
+  bool _allowPop = false;
+  bool _confirmingDiscard = false;
   int _loadGeneration = 0;
   int _catalogEpoch = 0;
 
   @override
   void initState() {
     super.initState();
+    _title.addListener(_fieldChanged);
+    _description.addListener(_fieldChanged);
+    for (final objective in _objectives) {
+      objective.addListener(_fieldChanged);
+    }
     _explicitParentCatalogId = widget.initialParentCatalogId;
     _explicitGiverCatalogId = widget.initialGiverCatalogId;
     _loadCatalog();
@@ -69,12 +80,19 @@ class _Revision3QuestWizardDialogState
   @override
   void dispose() {
     _loadGeneration += 1;
+    _title.removeListener(_fieldChanged);
+    _description.removeListener(_fieldChanged);
     _title.dispose();
     _description.dispose();
     for (final objective in _objectives) {
+      objective.removeListener(_fieldChanged);
       objective.dispose();
     }
     super.dispose();
+  }
+
+  void _fieldChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadCatalog({bool clear = false}) async {
@@ -89,6 +107,11 @@ class _Revision3QuestWizardDialogState
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _adoptCatalog(catalog, chooseDefaults: true);
+        if (!_baselineCatalogChoicesCaptured) {
+          _baselineParentCatalogId = _parentCatalogId;
+          _baselineGiverCatalogId = _giverCatalogId;
+          _baselineCatalogChoicesCaptured = true;
+        }
         _catalogLoading = false;
       });
     } catch (_) {
@@ -210,7 +233,7 @@ class _Revision3QuestWizardDialogState
       );
       if (!mounted) return;
       completed = true;
-      Navigator.of(context).pop(publication);
+      await _popAfterUnlock(publication);
     } on Revision3QuestDraftRequiresReopenException {
       if (!mounted) return;
       setState(() {
@@ -249,12 +272,16 @@ class _Revision3QuestWizardDialogState
 
   void _addObjective() {
     if (_objectives.length >= 8 || _publishing) return;
-    setState(() => _objectives.add(TextEditingController()));
+    setState(
+      () =>
+          _objectives.add(TextEditingController()..addListener(_fieldChanged)),
+    );
   }
 
   void _removeObjective(int index) {
     if (_objectives.length <= 1 || _publishing) return;
     final removed = _objectives.removeAt(index);
+    removed.removeListener(_fieldChanged);
     removed.dispose();
     setState(() {});
   }
@@ -285,11 +312,29 @@ class _Revision3QuestWizardDialogState
     return null;
   }
 
+  bool get _busy => _catalogLoading || _publishing || _publicationStarted;
+  bool get _locked => _requiresReopen || _staleCheckpoint;
+
+  bool get _hasChanges {
+    if (_title.text.isNotEmpty || _description.text.isNotEmpty) return true;
+    if (_objectives.length != 1 || _objectives.first.text.isNotEmpty) {
+      return true;
+    }
+    if (!_baselineCatalogChoicesCaptured) {
+      return _parentCatalogId != null || _giverCatalogId != null;
+    }
+    return _parentCatalogId != _baselineParentCatalogId ||
+        _giverCatalogId != _baselineGiverCatalogId;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final busy = _catalogLoading || _publishing;
+    final busy = _busy;
     return PopScope(
-      canPop: !_publicationStarted,
+      canPop: _allowPop || (!busy && !_hasChanges),
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_requestDismiss());
+      },
       child: AlertDialog(
         key: const Key('revision3-quest-wizard'),
         title: const Row(
@@ -359,9 +404,7 @@ class _Revision3QuestWizardDialogState
         actions: [
           TextButton(
             key: const Key('revision3-quest-cancel'),
-            onPressed: _publicationStarted
-                ? null
-                : () => Navigator.of(context).pop(),
+            onPressed: busy || _confirmingDiscard ? null : _requestDismiss,
             child: Text(
               _requiresReopen || _staleCheckpoint ? 'Close' : 'Cancel',
             ),
@@ -383,6 +426,51 @@ class _Revision3QuestWizardDialogState
         ],
       ),
     );
+  }
+
+  Future<void> _requestDismiss() async {
+    if (_busy || _confirmingDiscard) return;
+    if (_locked) {
+      await _popAfterUnlock();
+      return;
+    }
+    if (!_hasChanges) {
+      await _popAfterUnlock();
+      return;
+    }
+    setState(() => _confirmingDiscard = true);
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('revision3-quest-discard-dialog'),
+        title: const Text('Discard Quest draft changes?'),
+        content: const Text(
+          'Your unsaved Quest text, objectives, and game connections will be lost.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('revision3-quest-keep-editing'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            key: const Key('revision3-quest-discard'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _confirmingDiscard = false);
+    if (discard == true) await _popAfterUnlock();
+  }
+
+  Future<void> _popAfterUnlock([Revision3QuestDraftPublication? result]) async {
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.of(context).pop(result);
   }
 
   Widget _buildForm(BuildContext context) {

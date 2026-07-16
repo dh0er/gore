@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/mod_ffi.dart';
@@ -37,6 +39,8 @@ class _Revision3QuestOutlineEditDialogState
   late bool _loading;
   bool _busy = false;
   bool _checkpointLocked = false;
+  bool _allowPop = false;
+  bool _confirmingDiscard = false;
   int _loadGeneration = 0;
 
   Revision3ContentQuestDraftSummary get _summary =>
@@ -290,7 +294,7 @@ class _Revision3QuestOutlineEditDialogState
     try {
       final publication = await widget.publish(input: input);
       if (!mounted) return;
-      Navigator.of(context).pop(publication);
+      await _popAfterUnlock(publication);
     } on Revision3QuestOutlineStaleCheckpointException {
       if (!mounted) return;
       setState(() {
@@ -320,7 +324,7 @@ class _Revision3QuestOutlineEditDialogState
   @override
   Widget build(BuildContext context) {
     final summary = _summary;
-    return AlertDialog(
+    final dialog = AlertDialog(
       key: const Key('revision3-quest-outline-dialog'),
       title: const Text('Edit quest outline'),
       content: SizedBox(
@@ -451,8 +455,10 @@ class _Revision3QuestOutlineEditDialogState
       actions: [
         TextButton(
           key: const Key('revision3-quest-outline-cancel'),
-          onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Cancel'),
+          onPressed: _loading || _busy || _confirmingDiscard
+              ? null
+              : _requestDismiss,
+          child: Text(_checkpointLocked ? 'Close' : 'Cancel'),
         ),
         FilledButton.icon(
           key: const Key('revision3-quest-outline-save'),
@@ -475,6 +481,60 @@ class _Revision3QuestOutlineEditDialogState
         ),
       ],
     );
+    return PopScope(
+      canPop: _allowPop || (!_loading && !_busy && !_hasChanges),
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_requestDismiss());
+      },
+      child: dialog,
+    );
+  }
+
+  Future<void> _requestDismiss() async {
+    if (_loading || _busy || _confirmingDiscard) return;
+    if (_checkpointLocked) {
+      await _popAfterUnlock();
+      return;
+    }
+    if (!_hasChanges) {
+      await _popAfterUnlock();
+      return;
+    }
+    setState(() => _confirmingDiscard = true);
+    final discard = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        key: const Key('revision3-quest-outline-discard-dialog'),
+        title: const Text('Discard Quest outline changes?'),
+        content: const Text(
+          'Your unsaved Quest name, title, objective text, and objective order will be lost.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('revision3-quest-outline-keep-editing'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep editing'),
+          ),
+          FilledButton(
+            key: const Key('revision3-quest-outline-discard'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Discard'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    setState(() => _confirmingDiscard = false);
+    if (discard == true) await _popAfterUnlock();
+  }
+
+  Future<void> _popAfterUnlock([
+    Revision3QuestOutlineEditPublication? result,
+  ]) async {
+    if (!mounted) return;
+    setState(() => _allowPop = true);
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) Navigator.of(context).pop(result);
   }
 }
 

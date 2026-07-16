@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_npc_authoring.dart';
 import 'package:gore_mod/project/revision3_npc_wizard.dart';
@@ -241,6 +244,10 @@ void main() {
     );
     expect(submit.onPressed, isNull);
     expect(find.text('Close'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-npc-discard-dialog')), findsNothing);
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
   });
 
   testWidgets('requires a fresh wizard after the project checkpoint changed', (
@@ -272,6 +279,10 @@ void main() {
       find.byKey(const Key('revision3-npc-submit')),
     );
     expect(submit.onPressed, isNull);
+    await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-npc-discard-dialog')), findsNothing);
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
   });
 
   testWidgets('catalog failure can retry without authoring anything', (
@@ -302,6 +313,148 @@ void main() {
     expect(loadCalls, 2);
     expect(publishCalls, 0);
     expect(find.byKey(const Key('revision3-npc-display-name')), findsOneWidget);
+  });
+
+  testWidgets(
+    'dirty cancel, barrier, Escape, and Back require explicit discard',
+    (tester) async {
+      await _setSurface(tester);
+      await _openWizard(
+        tester,
+        initialCatalogId: _asghanCatalogId,
+        loadCatalog: (_) async => _catalog(),
+        chooseArchetype: (_, _) async => _viperCatalogId,
+        publish: ({required gameRoot, required input}) async => _publication(),
+      );
+      await tester.pumpAndSettle();
+      final name = find.byKey(const Key('revision3-npc-display-name'));
+      await tester.enterText(name, 'Do not lose this guard');
+      await tester.pump();
+
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-npc-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-keep-editing')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextFormField>(name).controller?.text,
+        'Do not lose this guard',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-npc-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-keep-editing')));
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-npc-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-npc-keep-editing')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('revision3-npc-cancel')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-npc-discard')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+    },
+  );
+
+  testWidgets('unchanged character wizard may close without confirmation', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    await _openWizard(
+      tester,
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) async => _catalog(),
+      chooseArchetype: (_, _) async => _viperCatalogId,
+      publish: ({required gameRoot, required input}) async => _publication(),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
+    expect(find.byKey(const Key('revision3-npc-discard-dialog')), findsNothing);
+  });
+
+  testWidgets('catalog loading and publication cannot dismiss the wizard', (
+    tester,
+  ) async {
+    await _setSurface(tester);
+    final initialCatalog = Completer<Revision3NpcCatalog>();
+    final freshCatalog = Completer<Revision3NpcCatalog>();
+    final publication = Completer<Revision3NpcDraftPublication>();
+    var loads = 0;
+    var publishes = 0;
+    await _openWizard(
+      tester,
+      initialCatalogId: _asghanCatalogId,
+      loadCatalog: (_) {
+        loads++;
+        return loads == 1 ? initialCatalog.future : freshCatalog.future;
+      },
+      chooseArchetype: (_, _) async => _viperCatalogId,
+      publish: ({required gameRoot, required input}) {
+        publishes++;
+        return publication.future;
+      },
+    );
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('revision3-npc-cancel')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+    initialCatalog.complete(_catalog());
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('revision3-npc-display-name')),
+      'North Gate Guard',
+    );
+    await tester.tap(find.byKey(const Key('revision3-npc-submit')));
+    await tester.pump();
+    expect(loads, 2);
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('revision3-npc-cancel')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+    freshCatalog.complete(_catalog());
+    await tester.pump();
+    expect(publishes, 1);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsOneWidget);
+
+    publication.complete(_publication());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-npc-wizard')), findsNothing);
   });
 }
 

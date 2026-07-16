@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gore_mod/project/revision3_quest_authoring.dart';
 import 'package:gore_mod/project/revision3_quest_wizard.dart';
@@ -312,6 +313,13 @@ void main() {
     );
     expect(submit.onPressed, isNull);
     expect(find.text('Close'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-discard-dialog')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
   });
 
   testWidgets('requires a fresh wizard after its project checkpoint changed', (
@@ -347,9 +355,16 @@ void main() {
     await tester.tap(find.byKey(const Key('revision3-quest-submit')));
     await tester.pump();
     expect(publishCalls, 1);
+    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('revision3-quest-discard-dialog')),
+      findsNothing,
+    );
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
   });
 
-  testWidgets('catalog load can retry and a pending load can be dismissed', (
+  testWidgets('catalog load can retry but a pending load cannot be dismissed', (
     tester,
   ) async {
     await _setSurface(tester);
@@ -373,6 +388,11 @@ void main() {
 
     await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    expect(
+      find.byKey(const Key('revision3-quest-discard-dialog')),
+      findsNothing,
+    );
 
     final pending = Completer<Revision3QuestCatalog>();
     await _openWizard(
@@ -385,20 +405,32 @@ void main() {
       find.byKey(const Key('revision3-quest-catalog-loading')),
       findsOneWidget,
     );
-    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
-    await tester.pumpAndSettle();
-    pending.complete(_catalog());
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('revision3-quest-cancel')))
+          .onPressed,
+      isNull,
+    );
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
     await tester.pump();
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+    pending.complete(_catalog());
+    await tester.pumpAndSettle();
 
     expect(tester.takeException(), isNull);
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
+    await tester.pumpAndSettle();
     expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
   });
 
-  testWidgets('fresh pre-publication check can be cancelled safely', (
+  testWidgets('preflight and active publication cannot dismiss the wizard', (
     tester,
   ) async {
     await _setSurface(tester);
     final fresh = Completer<Revision3QuestCatalog>();
+    final publication = Completer<Revision3QuestDraftPublication>();
     var loads = 0;
     var publishCalls = 0;
     await _openWizard(
@@ -407,9 +439,9 @@ void main() {
         loads += 1;
         return loads == 1 ? Future.value(_catalog()) : fresh.future;
       },
-      publish: ({required gameRoot, required input}) async {
+      publish: ({required gameRoot, required input}) {
         publishCalls += 1;
-        return _publication();
+        return publication.future;
       },
     );
     await tester.pumpAndSettle();
@@ -421,17 +453,84 @@ void main() {
       tester
           .widget<TextButton>(find.byKey(const Key('revision3-quest-cancel')))
           .onPressed,
-      isNotNull,
+      isNull,
     );
-    await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
-    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(4, 4));
+    await tester.binding.handlePopRoute();
+    await tester.pump();
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
+
     fresh.complete(_catalog());
     await tester.pump();
+    expect(publishCalls, 1);
+    expect(
+      tester
+          .widget<TextButton>(find.byKey(const Key('revision3-quest-cancel')))
+          .onPressed,
+      isNull,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.tapAt(const Offset(4, 4));
+    await tester.pump();
+    expect(find.byKey(const Key('revision3-quest-wizard')), findsOneWidget);
 
-    expect(publishCalls, 0);
+    publication.complete(_publication());
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
   });
+
+  testWidgets(
+    'dirty cancel, barrier, Escape, and Back require explicit discard',
+    (tester) async {
+      await _setSurface(tester);
+      await _openWizard(
+        tester,
+        loadCatalog: (_) async => _catalog(),
+        publish: ({required gameRoot, required input}) async => _publication(),
+      );
+      await tester.pumpAndSettle();
+      await _fillForm(tester);
+      final title = find.byKey(const Key('revision3-quest-title'));
+
+      await tester.tapAt(const Offset(4, 4));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-keep-editing')));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<TextFormField>(title).controller?.text,
+        'Find Homer',
+      );
+
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-keep-editing')));
+      await tester.pumpAndSettle();
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('revision3-quest-discard-dialog')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('revision3-quest-keep-editing')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('revision3-quest-cancel')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('revision3-quest-discard')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('revision3-quest-wizard')), findsNothing);
+    },
+  );
 
   testWidgets('authors, reorders, and persists multiple friendly objectives', (
     tester,
