@@ -4394,12 +4394,12 @@ class _ManagedRevision3ProjectViewState
     );
   }
 
-  Future<void> _openInstalledPackageBrowser(
+  Future<DataAssetSemanticStagePublication?> _openInstalledPackageBrowser(
     BuildContext context,
     String configuredGameRoot, {
     String initialQuery = '',
     String? initialTargetPath,
-  }) => showDialog<void>(
+  }) => showDialog<DataAssetSemanticStagePublication>(
     context: context,
     builder: (context) => InstalledPackageBrowserDialog(
       gameRoot: configuredGameRoot,

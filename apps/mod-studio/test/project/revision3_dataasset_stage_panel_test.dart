@@ -79,6 +79,412 @@ void main() {
   });
 
   testWidgets(
+    'compact high-text layout keeps header and empty actions scrollable',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(700, 460));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: const TextScaler.linear(2)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Revision3DataAssetStagePanel(
+              projectRoot: _projectRoot,
+              projectId: stage.projectId,
+              projectRevision: 5,
+              projectHead: fixture.stagedHead,
+              load: () async => const [],
+              publish: _unexpectedPublish,
+              remove: _unexpectedRemove,
+              browseInstalledPackages: () async => null,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-header-scroll')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Scrollbar>(
+              find.byKey(
+                const Key('revision3-dataasset-stage-header-scrollbar'),
+              ),
+            )
+            .thumbVisibility,
+        isTrue,
+      );
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-search')).hitTestable(),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-empty-scroll')),
+        findsOneWidget,
+      );
+      final emptyAction = find.byKey(
+        const Key('revision3-dataasset-empty-browse-installed'),
+      );
+      await tester.ensureVisible(emptyAction);
+      await tester.pump();
+      expect(tester.widget<FilledButton>(emptyAction).onPressed, isNotNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'reviewed quick start foregrounds installed presets and collapses expert tools',
+    (tester) async {
+      var browseCalls = 0;
+      await _pumpPanel(
+        tester,
+        Revision3DataAssetStagePanel(
+          projectRoot: _projectRoot,
+          projectId: stage.projectId,
+          projectRevision: 5,
+          projectHead: fixture.stagedHead,
+          load: () async => const [],
+          publish: _unexpectedPublish,
+          remove: _unexpectedRemove,
+          browseInstalledPackages: () async {
+            browseCalls++;
+            return null;
+          },
+        ),
+      );
+
+      expect(
+        find.byKey(const Key('revision3-dataasset-reviewed-quick-start')),
+        findsOneWidget,
+      );
+      for (final target in footstepPresetReviewedSchema.targets) {
+        expect(find.text(target.friendlyName), findsOneWidget);
+      }
+      final browse = find.byKey(
+        const Key('revision3-dataasset-browse-installed'),
+      );
+      expect(tester.widget<FilledButton>(browse).onPressed, isNotNull);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-add')),
+        findsNothing,
+      );
+      expect(find.textContaining('PatchReceipt'), findsNothing);
+      expect(find.textContaining('ExtractReceipt'), findsNothing);
+      expect(find.textContaining('safe X/Y'), findsNothing);
+      expect(
+        find.textContaining('reviewed, bounded X/Y texture-size project edit'),
+        findsOneWidget,
+      );
+
+      await tester.tap(browse);
+      await tester.pumpAndSettle();
+      expect(browseCalls, 1);
+
+      await _expandExpertTools(tester);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-add')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-search')).hitTestable(),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('empty-state primary action owns one installed-browser request', (
+    tester,
+  ) async {
+    final result = Completer<DataAssetSemanticStagePublication?>();
+    var browseCalls = 0;
+    await _pumpPanel(
+      tester,
+      Revision3DataAssetStagePanel(
+        projectRoot: _projectRoot,
+        projectId: stage.projectId,
+        projectRevision: 5,
+        projectHead: fixture.stagedHead,
+        load: () async => const [],
+        publish: _unexpectedPublish,
+        remove: _unexpectedRemove,
+        browseInstalledPackages: () {
+          browseCalls++;
+          return result.future;
+        },
+      ),
+    );
+
+    final emptyBrowse = find.byKey(
+      const Key('revision3-dataasset-empty-browse-installed'),
+    );
+    await tester.tap(emptyBrowse);
+    await tester.pump();
+
+    expect(browseCalls, 1);
+    expect(tester.widget<FilledButton>(emptyBrowse).onPressed, isNull);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('revision3-dataasset-browse-installed')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.tap(emptyBrowse);
+    expect(browseCalls, 1);
+
+    result.complete(null);
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(emptyBrowse).onPressed, isNotNull);
+  });
+
+  testWidgets(
+    'installed result from an opening head is ignored after same-revision head drift',
+    (tester) async {
+      final result = Completer<DataAssetSemanticStagePublication?>();
+      var projectHead = fixture.stagedHead;
+      late StateSetter rebuild;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('same-revision-divergent-head-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: 5,
+                  projectHead: projectHead,
+                  load: () async => const [],
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  browseInstalledPackages: () => result.future,
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-browse-installed')),
+      );
+      await tester.pump();
+      rebuild(() => projectHead = fixture.removedHead);
+      await tester.pump();
+      await tester.pump();
+
+      result.complete(
+        DataAssetSemanticStagePublication(
+          targetPath: stage.targetPath,
+          revision: 6,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final search = tester.widget<TextField>(
+        find.byKey(const Key('revision3-dataasset-stage-search')),
+      );
+      expect(search.controller?.text, isEmpty);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-reveal-notice')),
+        findsNothing,
+      );
+      expect(find.textContaining('saved and opened below'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'installed publication reloads the advanced checkpoint and expands its exact stage',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      var projectRevision = 4;
+      var projectHead = fixture.basisHead;
+      var stages = const <AuthoringRevision3DataAssetStage>[];
+      late StateSetter rebuild;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('published-focus-stage-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: projectRevision,
+                  projectHead: projectHead,
+                  load: () async => stages,
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  buildReviewedStage:
+                      ({
+                        required targetPath,
+                        required packName,
+                        required output,
+                      }) async => throw StateError('build must not run'),
+                  pickBuildParentDirectory: () async => null,
+                  browseInstalledPackages: () async {
+                    rebuild(() {
+                      projectRevision = 5;
+                      projectHead = fixture.stagedHead;
+                      stages = [stage];
+                    });
+                    return DataAssetSemanticStagePublication(
+                      targetPath: stage.targetPath,
+                      revision: 5,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-browse-installed')),
+      );
+      await tester.pumpAndSettle();
+
+      final search = tester.widget<TextField>(
+        find.byKey(const Key('revision3-dataasset-stage-search')),
+      );
+      expect(search.controller?.text, stage.targetPath);
+      final stageTile = tester.widget<ExpansionTile>(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      expect(stageTile.controller?.isExpanded, isTrue);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-reveal-notice')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('saved and opened below'), findsOneWidget);
+      expect(
+        tester.getSemantics(
+          find.byKey(const Key('revision3-dataasset-stage-reveal-notice')),
+        ),
+        matchesSemantics(
+          label:
+              'TestAsset is saved and opened below. Review it, then use Build files if support for this exact edit is confirmed.',
+          isLiveRegion: true,
+        ),
+      );
+      expect(find.text('Replacement width'), findsOneWidget);
+      expect(find.text('Gameplay unverified'), findsOneWidget);
+      final build = find.byKey(
+        ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
+      );
+      expect(tester.widget<FilledButton>(build).onPressed, isNotNull);
+      await tester.ensureVisible(build);
+      await tester.pumpAndSettle();
+      expect(build.hitTestable(), findsOneWidget);
+      expect(find.text('Deploy'), findsNothing);
+      expect(find.text('Test in game'), findsNothing);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-stage-reveal-dismiss')),
+      );
+      stageTile.controller!.collapse();
+      await tester.pumpAndSettle();
+      final refresh = find.byKey(
+        const Key('revision3-dataasset-stage-refresh'),
+      );
+      await tester.ensureVisible(refresh);
+      await tester.pump();
+      await tester.tap(refresh);
+      await tester.pumpAndSettle();
+
+      expect(stageTile.controller?.isExpanded, isFalse);
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-reveal-notice')),
+        findsNothing,
+      );
+      semantics.dispose();
+    },
+  );
+
+  testWidgets(
+    'publication never focuses an older same-target stage from another revision',
+    (tester) async {
+      var projectRevision = 5;
+      var projectHead = fixture.stagedHead;
+      late StateSetter rebuild;
+      await tester.binding.setSurfaceSize(const Size(1200, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                rebuild = setState;
+                return Revision3DataAssetStagePanel(
+                  key: const ValueKey('mismatched-focus-stage-panel'),
+                  projectRoot: _projectRoot,
+                  projectId: stage.projectId,
+                  projectRevision: projectRevision,
+                  projectHead: projectHead,
+                  load: () async => [stage],
+                  publish: _unexpectedPublish,
+                  remove: _unexpectedRemove,
+                  browseInstalledPackages: () async {
+                    rebuild(() {
+                      projectRevision = 6;
+                      projectHead = fixture.removedHead;
+                    });
+                    return DataAssetSemanticStagePublication(
+                      targetPath: stage.targetPath,
+                      revision: 6,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-browse-installed')),
+      );
+      await tester.pumpAndSettle();
+
+      final search = tester.widget<TextField>(
+        find.byKey(const Key('revision3-dataasset-stage-search')),
+      );
+      expect(search.controller?.text, isEmpty);
+      final stageTile = tester.widget<ExpansionTile>(
+        find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
+      );
+      expect(stageTile.controller?.isExpanded, isFalse);
+      expect(
+        find.textContaining('not present at its published project revision'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('revision3-dataasset-stage-reveal-notice')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
     'stale semantic wizard closes and stays latched until an exact reload',
     (tester) async {
       await _pumpPanel(
@@ -106,6 +512,10 @@ void main() {
         ),
       );
 
+      await _expandExpertTools(
+        tester,
+        targetKey: const Key('revision3-dataasset-semantic-create'),
+      );
       final create = find.byKey(
         const Key('revision3-dataasset-semantic-create'),
       );
@@ -153,9 +563,12 @@ void main() {
       expect(find.byKey(const Key('dataasset-semantic-wizard')), findsNothing);
       expect(find.textContaining('project changed'), findsOneWidget);
       expect(tester.widget<OutlinedButton>(create).onPressed, isNull);
-      await tester.tap(
-        find.byKey(const Key('revision3-dataasset-stage-refresh')),
+      final refresh = find.byKey(
+        const Key('revision3-dataasset-stage-refresh'),
       );
+      await tester.ensureVisible(refresh);
+      await tester.pump();
+      await tester.tap(refresh);
       await tester.pumpAndSettle();
       expect(tester.widget<OutlinedButton>(create).onPressed, isNotNull);
     },
@@ -321,6 +734,8 @@ void main() {
       expect((buildRect.center.dy - removeRect.center.dy).abs(), lessThan(1));
       expect(buildRect.right, lessThanOrEqualTo(removeRect.left));
 
+      await tester.ensureVisible(buildFinder);
+      await tester.pumpAndSettle();
       await tester.tap(buildFinder);
       await tester.pumpAndSettle();
       expect(
@@ -382,11 +797,12 @@ void main() {
         find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
-        ),
+      final build = find.byKey(
+        ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
       );
+      await tester.ensureVisible(build);
+      await tester.pumpAndSettle();
+      await tester.tap(build);
       await tester.pumpAndSettle();
       expect(
         find.byKey(const Key('revision3-dataasset-build-dialog')),
@@ -477,11 +893,12 @@ void main() {
         find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
-        ),
+      final build = find.byKey(
+        ValueKey('revision3-dataasset-stage-build-${stage.targetPath}'),
       );
+      await tester.ensureVisible(build);
+      await tester.pumpAndSettle();
+      await tester.tap(build);
       await tester.pumpAndSettle();
 
       rebuild(() => requiresReopen = true);
@@ -563,6 +980,7 @@ void main() {
         find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
       );
       await tester.pumpAndSettle();
+      await _expandExpertTools(tester);
       expect(loadCalls, 1);
 
       rebuild(() => requiresReopen = true);
@@ -598,7 +1016,7 @@ void main() {
       );
       expect(
         tester
-            .widget<OutlinedButton>(
+            .widget<FilledButton>(
               find.byKey(const Key('revision3-dataasset-browse-installed')),
             )
             .onPressed,
@@ -727,6 +1145,7 @@ void main() {
       ),
     );
 
+    await _expandExpertTools(tester);
     final add = find.byKey(const Key('revision3-dataasset-stage-add'));
     await tester.tap(add);
     await tester.pump();
@@ -763,6 +1182,7 @@ void main() {
     );
     await tester.pump();
 
+    await _expandExpertTools(tester);
     final add = find.byKey(const Key('revision3-dataasset-stage-add'));
     expect(tester.widget<FilledButton>(add).onPressed, isNull);
     await tester.tap(add);
@@ -794,11 +1214,15 @@ void main() {
       ),
     );
 
+    await _expandExpertTools(tester);
     final add = find.byKey(const Key('revision3-dataasset-stage-add'));
     expect(tester.widget<FilledButton>(add).onPressed, isNotNull);
-    await tester.tap(
-      find.byKey(const Key('revision3-dataasset-stage-refresh')),
+    final refreshAction = find.byKey(
+      const Key('revision3-dataasset-stage-refresh'),
     );
+    await tester.ensureVisible(refreshAction);
+    await tester.pump();
+    await tester.tap(refreshAction);
     await tester.pump();
     expect(tester.widget<FilledButton>(add).onPressed, isNull);
 
@@ -838,6 +1262,7 @@ void main() {
       ),
     );
 
+    await _expandExpertTools(tester);
     await tester.tap(find.byKey(const Key('revision3-dataasset-stage-add')));
     await tester.pumpAndSettle();
 
@@ -873,11 +1298,12 @@ void main() {
         find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
       );
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.byKey(
-          ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
-        ),
+      final remove = find.byKey(
+        ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
       );
+      await tester.ensureVisible(remove);
+      await tester.pumpAndSettle();
+      await tester.tap(remove);
       await tester.pumpAndSettle();
 
       expect(
@@ -924,11 +1350,12 @@ void main() {
       find.byKey(ValueKey('revision3-dataasset-stage-${stage.targetPath}')),
     );
     await tester.pumpAndSettle();
-    await tester.tap(
-      find.byKey(
-        ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
-      ),
+    final remove = find.byKey(
+      ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
     );
+    await tester.ensureVisible(remove);
+    await tester.pumpAndSettle();
+    await tester.tap(remove);
     await tester.pumpAndSettle();
 
     await tester.pumpWidget(
@@ -1014,6 +1441,7 @@ void main() {
       ),
     );
 
+    await _expandExpertTools(tester);
     expect(find.textContaining('Reopen the managed project'), findsWidgets);
     expect(
       tester
@@ -1050,6 +1478,39 @@ Future<void> _pumpPanel(
   if (settle) await tester.pumpAndSettle();
 }
 
+Future<void> _expandExpertTools(
+  WidgetTester tester, {
+  Key targetKey = const Key('revision3-dataasset-stage-add'),
+}) async {
+  final finder = find.byKey(const Key('revision3-dataasset-expert-tools'));
+  final tile = tester.widget<ExpansionTile>(finder);
+  if (tile.controller?.isExpanded ?? false) return;
+  await tester.ensureVisible(finder);
+  await tester.pump(const Duration(milliseconds: 200));
+  await tester.tap(finder);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+  final headerScroll = tester.state<ScrollableState>(
+    find
+        .descendant(
+          of: find.byKey(const Key('revision3-dataasset-stage-header-scroll')),
+          matching: find.byType(Scrollable),
+        )
+        .first,
+  );
+  headerScroll.position.jumpTo(headerScroll.position.maxScrollExtent);
+  await tester.pump();
+  final action = find.byKey(targetKey);
+  if (action.evaluate().isNotEmpty) {
+    await Scrollable.ensureVisible(
+      tester.element(action),
+      alignment: 0.5,
+      duration: Duration.zero,
+    );
+    await tester.pump();
+  }
+}
+
 Future<Revision3DataAssetStagePublication> _unexpectedPublish({
   required String patchReceiptPath,
 }) => throw StateError('unexpected DataAsset publication');
@@ -1065,6 +1526,10 @@ Future<DataAssetExtractReceiptSummary> _matchingReceiptInspector(
 );
 
 Future<void> _startSemanticPublication(WidgetTester tester) async {
+  await _expandExpertTools(
+    tester,
+    targetKey: const Key('revision3-dataasset-semantic-create'),
+  );
   await tester.tap(
     find.byKey(const Key('revision3-dataasset-semantic-create')),
   );

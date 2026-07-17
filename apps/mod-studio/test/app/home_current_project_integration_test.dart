@@ -5308,10 +5308,11 @@ void main() {
         const Key('revision3-dataasset-browse-installed'),
       );
       expect(browse, findsOneWidget);
-      expect(tester.widget<OutlinedButton>(browse).onPressed, isNotNull);
+      expect(tester.widget<FilledButton>(browse).onPressed, isNotNull);
       expect(managed.dataAssetPackageIndexReadCalls, 0);
       await tester.tap(browse);
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
 
       expect(managed.dataAssetPackageIndexReadCalls, 1);
       expect(
@@ -5329,6 +5330,162 @@ void main() {
       );
       await tester.tap(find.text('Close'));
       await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'reviewed DataAsset quick start returns its publication to the advanced registry',
+    (tester) async {
+      await _setDesktopTestSurface(tester);
+      final gameRoot = Directory.systemTemp.createTempSync(
+        'gore_r3_reviewed_dataasset_game',
+      );
+      Directory(p.join(gameRoot.path, 'G1R')).createSync();
+      addTearDown(() {
+        if (gameRoot.existsSync()) gameRoot.deleteSync(recursive: true);
+      });
+      final basis = revision3DataAssetNativeGoldenFixture();
+      final fixture = Revision3DataAssetFixture.fromBasis(
+        basisHead: basis.basisHead,
+        basisProjectJson: basis.basisProjectJson,
+        targetPath: _homeReviewedWolfTargetPath,
+        selector: <String, Object?>{
+          ..._homeReviewedWolfSelector(),
+          'usmap_sha256': '3' * 64,
+        },
+        replacementHex:
+            '00000000000026400000000000002840'
+            '0000000000000000000000000000f03f',
+      );
+      final stage = AuthoringRevision3DataAssetStageListResult.fromJson(
+        fixture.listResponse(),
+        expectedHead: fixture.stagedHead,
+      ).stages.single;
+      var stages = <AuthoringRevision3DataAssetStage>[];
+      ReviewedInstalledDataAssetEditIntent? publishedIntent;
+      final managed = _FakeManagedLease(
+        root: Directory(r'C:\mods\reviewed-dataasset-quick-start'),
+        projectId: stage.projectId,
+        projectRevision: 4,
+        head: fixture.basisHead,
+        canonicalProjectJsonValue: fixture.basisProjectJson,
+        contentIndexBuilder: (lease) => _contentIndex(
+          projectId: lease.projectId,
+          revision: lease.projectRevision,
+        ),
+        onDataAssetList: (_) => List.unmodifiable(stages),
+        onDataAssetPackageIndexRead: (lease, requestedGameRoot) async {
+          expect(requestedGameRoot, gameRoot.path);
+          return _homeDataAssetPackageIndexResult(
+            head: lease.head,
+            projectId: lease.projectId,
+            projectRevision: lease.projectRevision,
+            targetPath: _homeReviewedWolfTargetPath,
+          );
+        },
+        onInstalledDataAssetInspect:
+            (lease, requestedGameRoot, expectedSnapshot, candidate) async {
+              expect(requestedGameRoot, gameRoot.path);
+              expect(
+                identical(candidate, expectedSnapshot.index.candidates.single),
+                isTrue,
+              );
+              return _homeInstalledDataAssetInspectionResult(
+                expectedSnapshot: expectedSnapshot,
+                candidate: candidate,
+                inspection: _homeReviewedWolfInspectionResponse(),
+              );
+            },
+        onReviewedInstalledDataAssetPublish:
+            (lease, requestedGameRoot, intent) {
+              expect(requestedGameRoot, gameRoot.path);
+              expect(intent.expectedTargetPath, _homeReviewedWolfTargetPath);
+              publishedIntent = intent;
+              lease
+                ..projectRevision = 5
+                ..head = fixture.stagedHead
+                ..canonicalProjectJsonValue = fixture.stagedProjectJson;
+              stages = <AuthoringRevision3DataAssetStage>[stage];
+              return Revision3DataAssetStagePublication(
+                projectId: lease.projectId,
+                projectRevision: 5,
+                stage: stage,
+                deduplicatedBlobs: 0,
+              );
+            },
+      );
+      final coordinator = CurrentProjectCoordinator(
+        openManagedRevision3: (_) async => managed,
+      );
+      await coordinator.openManagedRevision3(managed.root);
+      final container = _container(
+        coordinator: coordinator,
+        pickManaged: (_) async => null,
+        gamePath: gameRoot.path,
+      );
+      addTearDown(container.dispose);
+
+      await _pumpApp(tester, container);
+      await tester.pumpAndSettle();
+      await _navigateManagedDataAssets(tester);
+
+      await tester.tap(
+        find.byKey(const Key('revision3-dataasset-browse-installed')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(
+        find.byKey(const Key('installed-package-browser-reviewed-presets')),
+        findsOneWidget,
+      );
+      await tester.tap(
+        find.byKey(const Key('installed-package-reviewed-open-0')),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(managed.installedDataAssetInspectCalls, 1);
+
+      await tester.tap(find.byKey(const Key('dataasset-export-tile-0')));
+      await tester.pump(const Duration(milliseconds: 300));
+      final guidedEdit = find.byKey(const Key('reviewed-footstep-preset-edit'));
+      await tester.ensureVisible(guidedEdit);
+      await tester.tap(guidedEdit);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.enterText(
+        find.byKey(const Key('reviewed-footstep-x')),
+        '11',
+      );
+      await tester.enterText(
+        find.byKey(const Key('reviewed-footstep-y')),
+        '12',
+      );
+      await tester.tap(find.byKey(const Key('reviewed-footstep-preview')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('reviewed-footstep-stage')));
+      await tester.pumpAndSettle();
+
+      expect(managed.reviewedInstalledDataAssetPublishCalls, 1);
+      expect(publishedIntent?.request.x, '11');
+      expect(publishedIntent?.request.y, '12');
+      final current = coordinator.state as ManagedRevision3CurrentProjectState;
+      expect(current.projectRevision, 5);
+      expect(current.head.canonicalJson, fixture.stagedHead.canonicalJson);
+      expect(managed.dataAssetListCalls, greaterThanOrEqualTo(2));
+      final search = tester.widget<TextField>(
+        find.byKey(const Key('revision3-dataasset-stage-search')),
+      );
+      expect(search.controller?.text, _homeReviewedWolfTargetPath);
+      final stageTile = tester.widget<ExpansionTile>(
+        find.byKey(
+          const ValueKey(
+            'revision3-dataasset-stage-'
+            '$_homeReviewedWolfTargetPath',
+          ),
+        ),
+      );
+      expect(stageTile.controller?.isExpanded, isTrue);
+      expect(find.text('DA_WolfFootsteps'), findsOneWidget);
     },
   );
 
@@ -5400,7 +5557,11 @@ void main() {
         findsOneWidget,
       );
 
-      await tester.tap(find.byKey(const Key('revision3-dataasset-stage-add')));
+      final importProof = await _revealManagedDataAssetExpertAction(
+        tester,
+        const Key('revision3-dataasset-stage-add'),
+      );
+      await tester.tap(importProof);
       await tester.pumpAndSettle();
       expect(pickerCalls, 1);
       expect(managed.dataAssetPublishCalls, 1);
@@ -5434,7 +5595,15 @@ void main() {
       final removeButton = find.byKey(
         ValueKey('revision3-dataasset-stage-remove-${stage.targetPath}'),
       );
-      await tester.ensureVisible(removeButton);
+      ScaffoldMessenger.of(
+        tester.element(removeButton),
+      ).removeCurrentSnackBar();
+      await tester.pumpAndSettle();
+      await Scrollable.ensureVisible(
+        tester.element(removeButton),
+        alignment: 0.5,
+        duration: Duration.zero,
+      );
       await tester.pumpAndSettle();
       await tester.tap(removeButton);
       await tester.pumpAndSettle();
@@ -5526,10 +5695,10 @@ void main() {
       await tester.pumpAndSettle();
       await _navigateManagedDataAssets(tester);
 
-      final create = find.byKey(
+      final create = await _revealManagedDataAssetExpertAction(
+        tester,
         const Key('revision3-dataasset-semantic-create'),
       );
-      expect(create, findsOneWidget);
       await tester.tap(create);
       await tester.pumpAndSettle();
       expect(
@@ -6369,6 +6538,24 @@ Future<void> _navigateManagedDataAssets(WidgetTester tester) async {
   );
 }
 
+Future<Finder> _revealManagedDataAssetExpertAction(
+  WidgetTester tester,
+  Key actionKey,
+) async {
+  final expertTools = find.byKey(const Key('revision3-dataasset-expert-tools'));
+  expect(expertTools, findsOneWidget);
+  await tester.ensureVisible(expertTools);
+  await tester.pump();
+  await tester.tap(expertTools);
+  await tester.pumpAndSettle();
+
+  final action = find.byKey(actionKey);
+  expect(action, findsOneWidget);
+  await tester.ensureVisible(action);
+  await tester.pump();
+  return action;
+}
+
 Future<void> _navigateManagedWorkspace(WidgetTester tester, Key key) async {
   final destination = find.byKey(key);
   expect(destination, findsOneWidget);
@@ -6582,6 +6769,19 @@ typedef _DialogLocalizationEditPublishCallback =
       _FakeManagedLease lease,
       Revision3DialogLocalizationEditTechnicalPlan plan,
     );
+typedef _InstalledDataAssetInspectCallback =
+    FutureOr<AuthoringRevision3InstalledDataAssetInspectionResult> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+      AuthoringRevision3DataAssetPackageCandidate candidate,
+    );
+typedef _ReviewedInstalledDataAssetPublishCallback =
+    FutureOr<Revision3DataAssetStagePublication> Function(
+      _FakeManagedLease lease,
+      String gameRoot,
+      ReviewedInstalledDataAssetEditIntent intent,
+    );
 typedef _RecoveryCallback =
     FutureOr<ManagedRevision3RecoveryCheckpoint> Function(
       _FakeRecoverableManagedLease lease,
@@ -6630,6 +6830,8 @@ class _FakeManagedLease
     this.onDataAssetSemanticPublish,
     this.onDataAssetRemove,
     this.onDataAssetPackageIndexRead,
+    this.onInstalledDataAssetInspect,
+    this.onReviewedInstalledDataAssetPublish,
     this.onContentIndexRead,
     this.contentIndexBuilder,
   });
@@ -6777,6 +6979,9 @@ class _FakeManagedLease
     String gameRoot,
   )?
   onDataAssetPackageIndexRead;
+  final _InstalledDataAssetInspectCallback? onInstalledDataAssetInspect;
+  final _ReviewedInstalledDataAssetPublishCallback?
+  onReviewedInstalledDataAssetPublish;
   final Future<Revision3ContentIndex> Function(_FakeManagedLease lease)?
   onContentIndexRead;
   final Revision3ContentIndex Function(_FakeManagedLease lease)?
@@ -6810,6 +7015,8 @@ class _FakeManagedLease
   int dataAssetSemanticPublishCalls = 0;
   int dataAssetRemoveCalls = 0;
   int dataAssetPackageIndexReadCalls = 0;
+  int installedDataAssetInspectCalls = 0;
+  int reviewedInstalledDataAssetPublishCalls = 0;
   int closeCalls = 0;
 
   @override
@@ -6950,9 +7157,16 @@ class _FakeManagedLease
     required String gameRoot,
     required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
     required AuthoringRevision3DataAssetPackageCandidate candidate,
-  }) => throw StateError(
-    'fake managed lease has no installed DataAsset inspector',
-  );
+  }) async {
+    installedDataAssetInspectCalls++;
+    final inspect = onInstalledDataAssetInspect;
+    if (inspect == null) {
+      throw StateError(
+        'fake managed lease has no installed DataAsset inspector',
+      );
+    }
+    return inspect(this, gameRoot, expectedSnapshot, candidate);
+  }
 
   @override
   Future<Revision3DataAssetStagePublication>
@@ -6968,9 +7182,16 @@ class _FakeManagedLease
   prepareAndPublishReviewedInstalledDataAssetEditV1({
     required String gameRoot,
     required ReviewedInstalledDataAssetEditIntent intent,
-  }) => throw StateError(
-    'fake managed lease has no reviewed installed DataAsset edit publisher',
-  );
+  }) async {
+    reviewedInstalledDataAssetPublishCalls++;
+    final publish = onReviewedInstalledDataAssetPublish;
+    if (publish == null) {
+      throw StateError(
+        'fake managed lease has no reviewed installed DataAsset edit publisher',
+      );
+    }
+    return publish(this, gameRoot, intent);
+  }
 
   @override
   Future<Revision3QuestDraftPublication> prepareAndPublishQuestDraftV3({
@@ -7325,6 +7546,7 @@ AuthoringRevision3DataAssetPackageIndexResult _homeDataAssetPackageIndexResult({
   required AuthoringWorkingHead head,
   required String projectId,
   required int projectRevision,
+  String targetPath = '/Game/Characters/DA_Asghan',
 }) {
   final packageIndexJson = jsonEncode(<String, Object?>{
     'status': 'complete_index',
@@ -7334,7 +7556,7 @@ AuthoringRevision3DataAssetPackageIndexResult _homeDataAssetPackageIndexResult({
     'out_of_scope_export_bundle_count': 0,
     'candidates': <Object?>[
       <String, Object?>{
-        'target_path': '/Game/Characters/DA_Asghan',
+        'target_path': targetPath,
         'package_id_hex': '0123456789abcdef',
       },
     ],
@@ -7375,6 +7597,127 @@ AuthoringRevision3DataAssetPackageIndexResult _homeDataAssetPackageIndexResult({
     expectedHead: head,
   );
 }
+
+const _homeReviewedWolfTargetPath =
+    '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps';
+
+AuthoringRevision3InstalledDataAssetInspectionResult
+_homeInstalledDataAssetInspectionResult({
+  required AuthoringRevision3DataAssetPackageIndexResult expectedSnapshot,
+  required AuthoringRevision3DataAssetPackageCandidate candidate,
+  required Map<String, Object?> inspection,
+}) => AuthoringRevision3InstalledDataAssetInspectionResult.fromJson(
+  <String, Object?>{
+    'authority_status': 'not_granted',
+    'build_status': 'not_evaluated',
+    'candidate_ordinal': candidate.ordinal,
+    'head_json': expectedSnapshot.head.canonicalJson,
+    'inspection': inspection,
+    'mutation_status': 'not_supported',
+    'ok': true,
+    'outcome': 'inspection_only',
+    'package_id_hex': candidate.packageIdHex,
+    'package_index_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.packageIndexSeal.byteLength,
+      'sha256': expectedSnapshot.packageIndexSeal.sha256,
+    },
+    'project_id': expectedSnapshot.projectId,
+    'project_revision': expectedSnapshot.projectRevision,
+    'publication_status': 'not_supported',
+    'runtime_status': 'runtime_unqualified',
+    'scope': 'selected_installed_dataasset_fixed_leaf_inspection_only',
+    'source_snapshot_seal': <String, Object?>{
+      'byte_len': expectedSnapshot.sourceSnapshotSeal.byteLength,
+      'sha256': expectedSnapshot.sourceSnapshotSeal.sha256,
+    },
+    'target_path': candidate.targetPath,
+    'usmap_content_seal': <String, Object?>{
+      'byte_len': 256,
+      'sha256': 'c' * 64,
+    },
+    'usmap_inventory_seal': <String, Object?>{
+      'byte_len': 96,
+      'sha256': 'e' * 64,
+    },
+  },
+  expectedSnapshot: expectedSnapshot,
+  requestedOrdinal: candidate.ordinal,
+);
+
+Map<String, Object?> _homeReviewedWolfInspectionResponse() {
+  final response = validDataAssetInspectionResponse(
+    objectName: 'DA_WolfFootsteps',
+  );
+  response['summary'] = <String, Object?>{
+    'package_exports': 1,
+    'reported_exports': 1,
+    'walked_exports': 1,
+    'editable_leaves': 1,
+  };
+  final export = ((response['exports'] as List).single as Map)
+      .cast<String, Object?>();
+  export
+    ..['class_path'] = '/Script/G1R.FootstepTag'
+    ..['schema'] = '/Script/G1R.FootstepTag'
+    ..['leaves'] = <Object?>[
+      <String, Object?>{
+        'index': 0,
+        'editable': true,
+        'selector': _homeReviewedWolfSelector(),
+      },
+    ];
+  return response;
+}
+
+Map<String, Object?> _homeReviewedWolfSelector() => <String, Object?>{
+  'format': 1,
+  'profile': 'g1r_ue5_4',
+  'package_seal': <String, Object?>{
+    'uasset_sha256': 'a' * 64,
+    'uexp_sha256': 'b' * 64,
+  },
+  'usmap_sha256': 'c' * 64,
+  'export_index': 0,
+  'object_name': 'DA_WolfFootsteps',
+  'class_path': '/Script/G1R.FootstepTag',
+  'component': 'uexp',
+  'export_sha256': 'd' * 64,
+  'role': 'property_value',
+  'kind': 'vector4_f64x4',
+  'path': <Object?>[
+    <String, Object?>{
+      'step': 'property',
+      'schema_index': 0,
+      'property_name': 'BoneData',
+      'array_index': 0,
+      'array_dimension': 1,
+      'declaring_schema_name': 'FootstepTag',
+      'declaring_module_path': '/Script/G1R',
+      'property_type': <String, Object?>{
+        'type': 'struct',
+        'name': 'BoneFeetData',
+      },
+    },
+    <String, Object?>{
+      'step': 'struct',
+      'name': 'BoneFeetData',
+      'schema_name': '/Script/G1R.BoneFeetData',
+    },
+    <String, Object?>{
+      'step': 'property',
+      'schema_index': 0,
+      'property_name': 'FeetTextureSize',
+      'array_index': 0,
+      'array_dimension': 1,
+      'declaring_schema_name': 'BoneFeetData',
+      'declaring_module_path': '/Script/G1R',
+      'property_type': <String, Object?>{'type': 'struct', 'name': 'Vector4'},
+    },
+  ],
+  'expected_hex':
+      '00000000000024400000000000002440'
+      '0000000000000000000000000000f03f',
+};
 
 AuthoringWorkingHead _head(int value) => AuthoringWorkingHead.fromCanonicalJson(
   jsonEncode(<String, Object?>{

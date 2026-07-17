@@ -26,8 +26,11 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Reviewed structure'), findsOneWidget);
-    expect(find.text('Build unavailable'), findsOneWidget);
+    expect(find.text('Offline build available after saving'), findsOneWidget);
     expect(find.text('Gameplay/runtime unverified'), findsOneWidget);
+    expect(find.text('Deployment unverified'), findsOneWidget);
+    expect(find.text('Build unavailable'), findsNothing);
+    expect(find.text('Deployment unavailable'), findsNothing);
     expect(find.textContaining('Z 0.0 · W 1.0'), findsOneWidget);
     expect(_fieldText(tester, 'reviewed-footstep-x'), '10.0');
     expect(_fieldText(tester, 'reviewed-footstep-y'), '10.0');

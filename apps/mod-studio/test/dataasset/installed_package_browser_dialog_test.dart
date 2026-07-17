@@ -530,6 +530,7 @@ void main() {
         isNotNull,
       );
       ReviewedInstalledDataAssetEditIntent? publishedIntent;
+      DataAssetSemanticStagePublication? parentPublication;
       await tester.pumpWidget(
         _BrowserHost(
           load: ({required gameRoot}) async => snapshot,
@@ -550,6 +551,7 @@ void main() {
               revision: 9,
             );
           },
+          onResult: (publication) => parentPublication = publication,
         ),
       );
 
@@ -626,7 +628,20 @@ void main() {
         find.byKey(const Key('installed-package-browser-dialog')),
         findsNothing,
       );
+      expect(
+        parentPublication?.targetPath,
+        '/Game/Blueprints/TrackingSystem/FootstepsPresets/DA_WolfFootsteps',
+      );
+      expect(parentPublication?.revision, 9);
       expect(find.textContaining('project revision 9'), findsOneWidget);
+      expect(
+        find.textContaining('Offline build is available after saving'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Deployment and runtime remain unverified'),
+        findsOneWidget,
+      );
     },
   );
 
@@ -637,6 +652,7 @@ void main() {
     final candidate = snapshot.index.candidates.first;
     late final AuthoringRevision3InstalledDataAssetInspectionResult evidence;
     DataAssetInstalledSemanticEditIntent? publishedIntent;
+    DataAssetSemanticStagePublication? parentPublication;
     await tester.pumpWidget(
       _BrowserHost(
         load: ({required gameRoot}) async => snapshot,
@@ -659,6 +675,7 @@ void main() {
             revision: 8,
           );
         },
+        onResult: (publication) => parentPublication = publication,
       ),
     );
     await _openFirstInstalledEdit(tester);
@@ -701,7 +718,14 @@ void main() {
       find.byKey(const Key('installed-package-browser-dialog')),
       findsNothing,
     );
+    expect(parentPublication?.targetPath, '/Game/Characters/DA_Asghan');
+    expect(parentPublication?.revision, 8);
     expect(find.textContaining('project revision 8'), findsOneWidget);
+    expect(
+      find.textContaining('Save the project to keep this edit'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Offline build'), findsNothing);
   });
 
   testWidgets('announces invalid installed edits as a live status', (
@@ -1045,6 +1069,7 @@ class _BrowserHost extends StatelessWidget {
     this.initialQuery = '',
     this.initialTargetPath,
     this.textScale,
+    this.onResult,
   });
 
   final Revision3InstalledPackageIndexLoader load;
@@ -1054,6 +1079,7 @@ class _BrowserHost extends StatelessWidget {
   final String initialQuery;
   final String? initialTargetPath;
   final double? textScale;
+  final ValueChanged<DataAssetSemanticStagePublication?>? onResult;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -1069,18 +1095,21 @@ class _BrowserHost extends StatelessWidget {
       body: Builder(
         builder: (context) => TextButton(
           key: const Key('open-browser'),
-          onPressed: () => showDialog<void>(
-            context: context,
-            builder: (context) => InstalledPackageBrowserDialog(
-              gameRoot: _gameRoot,
-              load: load,
-              inspect: inspect,
-              publish: publish,
-              publishReviewed: publishReviewed,
-              initialQuery: initialQuery,
-              initialTargetPath: initialTargetPath,
-            ),
-          ),
+          onPressed: () async {
+            final result = await showDialog<DataAssetSemanticStagePublication>(
+              context: context,
+              builder: (context) => InstalledPackageBrowserDialog(
+                gameRoot: _gameRoot,
+                load: load,
+                inspect: inspect,
+                publish: publish,
+                publishReviewed: publishReviewed,
+                initialQuery: initialQuery,
+                initialTargetPath: initialTargetPath,
+              ),
+            );
+            onResult?.call(result);
+          },
           child: const Text('Open'),
         ),
       ),

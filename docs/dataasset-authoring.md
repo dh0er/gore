@@ -304,7 +304,7 @@ friendly Before/After preview, verifies the separately selected ExtractReceipt,
 shows and confirms its exact target, and delegates one stage transaction. Wrong
 or stale receipts are intentionally not guessed: native verification rejects
 any package, schema, generation, target, or intent mismatch. The workflow is
-wired through the shared managed session and Home DataAsset surface; successful
+wired through the shared managed session and **Content > DataAssets** surface; successful
 publication advances and reloads the exact managed project checkpoint.
 
 `ManagedRevision3AuthoringProjectSession` publishes receipt-import, typed-edit,
@@ -315,15 +315,24 @@ clobbers the winner; malformed or integrity-uncertain results poison the
 session, while bounded local-input failures remain retryable after the disk head
 is rechecked.
 
-Managed revision-3 Home exposes the exact registry as **Verified DataAsset
-edits**. The author can search friendly asset names or `/Game` paths, inspect
-bounded verified facts, create the first typed fixed-leaf edit through the
-summary/confirmation/preview flow, import a PatchReceipt JSON through the expert
-file picker, and remove an entry from the project registry after confirmation.
-Initial or failed exact-head loading, checkpoint drift, and `requiresReopen`
-lock mutation. Every mutation is bound to the exact project root, project ID,
-revision, and head; each success advances and reloads the visible checkpoint. A
-registry removal does not modify the source receipt or game installation.
+Managed revision-3 **Content > DataAssets** exposes the exact registry as
+**Verified DataAsset edits**. Its normal quick start names the three reviewed
+Human, Scavenger, and Wolf presets and opens the installed-package browser as
+the primary action. The receipt-backed generic editor and PatchReceipt import
+remain available under collapsed **Expert tools** rather than defining the
+empty-state workflow. The author can still search friendly asset names or
+`/Game` paths, inspect bounded verified facts, and remove an entry from the
+project registry after confirmation.
+
+After a guided installed edit succeeds, the browser returns the typed
+publication to the registry. Studio accepts only the next project revision,
+reloads the exact checkpoint, and focuses and expands the result only when both
+its canonical target and staged revision match. A live status points to
+**Build files...** as the next conditional step. Initial or failed exact-head
+loading, checkpoint drift, and `requiresReopen` lock mutation. Every mutation
+is bound to the exact project root, project ID, revision, and head; each success
+advances and reloads the visible checkpoint. A registry removal does not modify
+the source receipt or game installation.
 
 The visible registry manages independently receipt-verified fixed-size edits;
 the generic semantic component remains a typed value-editor slice, not a
@@ -366,10 +375,12 @@ source proof. Dart recomputes the ordinary stage binding from the prior exact
 inspection and requested value before the managed session may publish.
 
 The result is still only a managed-project stage; the edit transaction does not
-publish an artifact. If that reviewed stage remains exact-current, the separate
-build action below can create one offline triplet. Runtime remains unqualified,
-and neither the edit nor build route writes the game installation or a save
-file.
+publish an artifact. The normal quick start returns that exact publication to
+the DataAsset registry instead of ending in a disconnected success message. If
+the reviewed stage remains exact-current, its expanded entry offers the
+separate build action below, which can create one offline triplet. Runtime
+remains unqualified, and neither the edit nor build route writes the game
+installation or a save file.
 
 ### Direct installed fixed-leaf staging
 
@@ -399,7 +410,10 @@ checkpoint drift fails closed and leaves the game and saves untouched.
 
 ### Managed reviewed-stage build in Mod Studio
 
-In **Content > DataAssets**, expand a saved edit and choose **Build files...**.
+In **Content > DataAssets**, complete a reviewed preset edit or expand an
+existing saved edit and choose **Build files...**. A quick-start publication is
+reloaded and expanded automatically only after its exact target and staged
+revision reappear at the published checkpoint.
 The dialog asks only for a portable pack name and an existing destination
 folder, then derives a brand-new output folder from them. It shows the friendly
 asset name and canonical `/Game` target read-only. The action is intentionally

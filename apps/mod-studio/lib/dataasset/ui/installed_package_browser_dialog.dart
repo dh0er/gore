@@ -578,16 +578,25 @@ class _InstalledPackageBrowserDialogState
       );
       if (!mounted || epoch != _inspectionEpoch) return;
       setState(() => _inspectingOrdinal = null);
-      final editResult = await _showInspection(snapshot, candidate, result);
-      if (!mounted || epoch != _inspectionEpoch || editResult == null) return;
+      final inspectionOutcome = await _showInspection(
+        snapshot,
+        candidate,
+        result,
+      );
+      if (!mounted || epoch != _inspectionEpoch || inspectionOutcome == null) {
+        return;
+      }
+      final editResult = inspectionOutcome.editResult;
       final messenger = ScaffoldMessenger.maybeOf(context);
-      Navigator.of(context).pop();
       final publication = editResult.publication;
+      Navigator.of(context).pop(publication);
       messenger?.showSnackBar(
         SnackBar(
           content: Text(
             publication != null
-                ? '${publication.targetPath} staged in project revision ${publication.revision}. Build and runtime remain blocked.'
+                ? inspectionOutcome.isReviewed
+                      ? '${publication.targetPath} staged in project revision ${publication.revision}. Offline build is available after saving. Deployment and runtime remain unverified.'
+                      : '${publication.targetPath} staged in project revision ${publication.revision}. Save the project to keep this edit. Deployment and runtime remain unverified.'
                 : editResult.unavailable!.message,
           ),
         ),
@@ -619,7 +628,7 @@ class _InstalledPackageBrowserDialogState
     }
   }
 
-  Future<InstalledDataAssetSemanticEditResult?> _showInspection(
+  Future<_InstalledPackageInspectionOutcome?> _showInspection(
     AuthoringRevision3DataAssetPackageIndexResult snapshot,
     AuthoringRevision3DataAssetPackageCandidate candidate,
     AuthoringRevision3InstalledDataAssetInspectionResult result,
@@ -634,7 +643,7 @@ class _InstalledPackageBrowserDialogState
     final height = (viewport.height - 170 - (textScale - 1).clamp(0, 4) * 112)
         .clamp(180.0, 760.0)
         .toDouble();
-    return showDialog<InstalledDataAssetSemanticEditResult>(
+    return showDialog<_InstalledPackageInspectionOutcome>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         key: const Key('installed-dataasset-inspection-dialog'),
@@ -661,7 +670,9 @@ class _InstalledPackageBrowserDialogState
                               ),
                         );
                     if (editResult != null && dialogContext.mounted) {
-                      Navigator.of(dialogContext).pop(editResult);
+                      Navigator.of(dialogContext).pop(
+                        _InstalledPackageInspectionOutcome.generic(editResult),
+                      );
                     }
                   },
             header: Column(
@@ -711,7 +722,11 @@ class _InstalledPackageBrowserDialogState
                                 ),
                               );
                           if (editResult != null && dialogContext.mounted) {
-                            Navigator.of(dialogContext).pop(editResult);
+                            Navigator.of(dialogContext).pop(
+                              _InstalledPackageInspectionOutcome.reviewed(
+                                editResult,
+                              ),
+                            );
                           }
                         },
                         icon: const Icon(Icons.tune_outlined),
@@ -733,6 +748,24 @@ class _InstalledPackageBrowserDialogState
       ),
     );
   }
+}
+
+final class _InstalledPackageInspectionOutcome {
+  const _InstalledPackageInspectionOutcome._({
+    required this.editResult,
+    required this.isReviewed,
+  });
+
+  const _InstalledPackageInspectionOutcome.generic(
+    InstalledDataAssetSemanticEditResult editResult,
+  ) : this._(editResult: editResult, isReviewed: false);
+
+  const _InstalledPackageInspectionOutcome.reviewed(
+    InstalledDataAssetSemanticEditResult editResult,
+  ) : this._(editResult: editResult, isReviewed: true);
+
+  final InstalledDataAssetSemanticEditResult editResult;
+  final bool isReviewed;
 }
 
 class _SearchPrompt extends StatelessWidget {

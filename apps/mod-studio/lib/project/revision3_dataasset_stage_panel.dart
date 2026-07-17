@@ -15,6 +15,9 @@ typedef Revision3ReviewedDataAssetStageBuilder =
       required String output,
     });
 
+typedef Revision3InstalledDataAssetBrowser =
+    Future<DataAssetSemanticStagePublication?> Function();
+
 /// Visible management surface for receipt-verified DataAsset edits already
 /// supported by the managed revision-3 session.
 ///
@@ -60,7 +63,7 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
   final DataAssetFilePicker? semanticUsmapPicker;
   final DataAssetExtractReceiptPicker? semanticExtractReceiptPicker;
   final DataAssetExtractReceiptInspector? semanticExtractReceiptInspector;
-  final Future<void> Function()? browseInstalledPackages;
+  final Revision3InstalledDataAssetBrowser? browseInstalledPackages;
   final Revision3ReviewedDataAssetStageBuilder? buildReviewedStage;
   final Revision3DataAssetBuildParentDirectoryPicker? pickBuildParentDirectory;
   final String? buildUnavailableReason;
@@ -73,12 +76,14 @@ class Revision3DataAssetStagePanel extends StatefulWidget {
 class _Revision3DataAssetStagePanelState
     extends State<Revision3DataAssetStagePanel> {
   final _search = TextEditingController();
+  final _headerScroll = ScrollController();
   List<AuthoringRevision3DataAssetStage>? _stages;
   Object? _loadError;
   String? _actionError;
   bool _loading = false;
   bool _picking = false;
   bool _mutating = false;
+  bool _installedBrowserOpen = false;
   bool _semanticEditorOpen = false;
   bool _buildDialogOpen = false;
   bool _semanticCheckpointStale = false;
@@ -86,9 +91,19 @@ class _Revision3DataAssetStagePanelState
   bool _locked = false;
   int _loadEpoch = 0;
   int _actionEpoch = 0;
+  int _installedBrowserEpoch = 0;
+  String? _focusedTargetPath;
+  int? _focusedProjectRevision;
+  String? _stageRevealMessage;
+  final Map<String, ExpansibleController> _stageExpansionControllers = {};
+  final Map<String, GlobalKey> _stageFocusKeys = {};
 
   bool get _busy =>
-      _picking || _mutating || _semanticEditorOpen || _buildDialogOpen;
+      _picking ||
+      _mutating ||
+      _installedBrowserOpen ||
+      _semanticEditorOpen ||
+      _buildDialogOpen;
   bool get _registryReady => _stages != null && !_loading && _loadError == null;
   bool get _effectivelyLocked => _locked || widget.requiresReopen;
 
@@ -112,23 +127,38 @@ class _Revision3DataAssetStagePanelState
         oldWidget.projectRevision != widget.projectRevision ||
         oldWidget.projectHead.canonicalJson != widget.projectHead.canonicalJson;
     if (checkpointChanged) {
-      if (oldWidget.projectRoot != widget.projectRoot ||
-          oldWidget.projectId != widget.projectId ||
+      final projectIdentityChanged =
+          oldWidget.projectRoot != widget.projectRoot ||
+          oldWidget.projectId != widget.projectId;
+      if (projectIdentityChanged ||
           oldWidget.projectHead.canonicalJson !=
               widget.projectHead.canonicalJson) {
         _actionEpoch++;
       }
-      _search.clear();
+      if (projectIdentityChanged) {
+        _installedBrowserEpoch++;
+        _focusedTargetPath = null;
+        _focusedProjectRevision = null;
+        _stageRevealMessage = null;
+        _search.clear();
+      } else if (_focusedProjectRevision != widget.projectRevision) {
+        _focusedTargetPath = null;
+        _focusedProjectRevision = null;
+        _stageRevealMessage = null;
+        _search.clear();
+      }
       _actionError = null;
       _locked = false;
       _picking = false;
       _mutating = false;
+      _installedBrowserOpen = false;
       _semanticEditorOpen = false;
       _buildDialogOpen = false;
       _semanticCheckpointStale = false;
       _confirmationOpen = false;
       if (widget.requiresReopen) {
         _loadEpoch++;
+        _installedBrowserEpoch++;
         _stages = null;
         _loading = false;
         _loadError = const Revision3DataAssetRequiresReopenException();
@@ -141,9 +171,11 @@ class _Revision3DataAssetStagePanelState
       if (widget.requiresReopen) {
         _loadEpoch++;
         _actionEpoch++;
+        _installedBrowserEpoch++;
         _loading = false;
         _picking = false;
         _mutating = false;
+        _installedBrowserOpen = false;
         _semanticEditorOpen = false;
         _buildDialogOpen = false;
         _confirmationOpen = false;
@@ -161,9 +193,14 @@ class _Revision3DataAssetStagePanelState
   void dispose() {
     _loadEpoch++;
     _actionEpoch++;
+    _installedBrowserEpoch++;
     _search
       ..removeListener(_searchChanged)
       ..dispose();
+    _headerScroll.dispose();
+    for (final controller in _stageExpansionControllers.values) {
+      controller.dispose();
+    }
     super.dispose();
   }
 
@@ -189,11 +226,42 @@ class _Revision3DataAssetStagePanelState
           'DataAsset edits do not match the current project checkpoint.',
         );
       }
+      final focusTarget = _focusedTargetPath;
+      final focusRevision = _focusedProjectRevision;
+      AuthoringRevision3DataAssetStage? focusedStage;
+      if (focusTarget != null && focusRevision == widget.projectRevision) {
+        for (final stage in stages) {
+          if (stage.targetPath.toLowerCase() == focusTarget.toLowerCase() &&
+              stage.stagedProjectRevision == focusRevision) {
+            focusedStage = stage;
+            break;
+          }
+        }
+      }
+      final focusMissing =
+          focusTarget != null &&
+          focusRevision == widget.projectRevision &&
+          focusedStage == null;
       setState(() {
         _stages = List<AuthoringRevision3DataAssetStage>.unmodifiable(stages);
         _loading = false;
         _semanticCheckpointStale = false;
+        if (focusedStage != null) {
+          _stageRevealMessage =
+              '${_assetName(focusedStage.targetPath)} is saved and opened below. Review it, then use Build files if support for this exact edit is confirmed.';
+        } else if (focusMissing) {
+          _focusedTargetPath = null;
+          _focusedProjectRevision = null;
+          _stageRevealMessage = null;
+          _actionError =
+              'The newly saved DataAsset edit was not present at its published project revision. Refresh the exact project list before continuing.';
+        }
       });
+      if (focusMissing) {
+        _search.clear();
+      } else {
+        _scheduleFocusedStageReveal();
+      }
     } catch (error) {
       if (!mounted || epoch != _loadEpoch) return;
       setState(() {
@@ -264,7 +332,7 @@ class _Revision3DataAssetStagePanelState
       }
       setState(() => _mutating = false);
       _showSuccess(
-        'Verified DataAsset edit saved in project revision ${publication.projectRevision}. Expand it to build new mod files.',
+        'Verified DataAsset edit saved in project revision ${publication.projectRevision}. Review it below; offline build is available only for supported reviewed edits.',
       );
     } catch (error) {
       if (!mounted || epoch != _actionEpoch) return;
@@ -282,6 +350,108 @@ class _Revision3DataAssetStagePanelState
         if (error is Revision3DataAssetRequiresReopenException) _locked = true;
       });
     }
+  }
+
+  Future<void> _browseInstalledPackages() async {
+    final browse = widget.browseInstalledPackages;
+    if (_busy || _effectivelyLocked || browse == null) return;
+    final projectRoot = widget.projectRoot;
+    final projectId = widget.projectId;
+    final projectRevision = widget.projectRevision;
+    final projectHeadJson = widget.projectHead.canonicalJson;
+    final epoch = ++_installedBrowserEpoch;
+    setState(() {
+      _installedBrowserOpen = true;
+      _actionError = null;
+    });
+    try {
+      final publication = await browse();
+      if (!mounted || epoch != _installedBrowserEpoch) return;
+      setState(() => _installedBrowserOpen = false);
+      if (publication == null) return;
+      if (publication.targetPath.isEmpty ||
+          publication.revision != projectRevision + 1) {
+        throw const FormatException(
+          'Installed DataAsset publication does not advance the opened project checkpoint.',
+        );
+      }
+      final stillAtOpeningCheckpoint =
+          widget.projectRevision == projectRevision &&
+          widget.projectHead.canonicalJson == projectHeadJson;
+      final advancedToPublication =
+          widget.projectRevision == publication.revision;
+      if (widget.projectRoot != projectRoot ||
+          widget.projectId != projectId ||
+          (!stillAtOpeningCheckpoint && !advancedToPublication)) {
+        return;
+      }
+      _focusPublishedStage(publication);
+      if (widget.projectRevision == publication.revision &&
+          !_effectivelyLocked) {
+        await _reload(clearCurrent: true);
+      }
+    } catch (error) {
+      if (!mounted || epoch != _installedBrowserEpoch) return;
+      setState(() {
+        _installedBrowserOpen = false;
+        _actionError = revision3DataAssetFriendlyError(error);
+        if (error is Revision3DataAssetRequiresReopenException) _locked = true;
+      });
+    }
+  }
+
+  void _focusPublishedStage(DataAssetSemanticStagePublication publication) {
+    _focusedTargetPath = publication.targetPath;
+    _focusedProjectRevision = publication.revision;
+    _search.text = publication.targetPath;
+  }
+
+  ExpansibleController _stageExpansionController(String targetPath) =>
+      _stageExpansionControllers.putIfAbsent(
+        targetPath.toLowerCase(),
+        ExpansibleController.new,
+      );
+
+  GlobalKey _stageFocusKey(String targetPath) =>
+      _stageFocusKeys.putIfAbsent(targetPath.toLowerCase(), GlobalKey.new);
+
+  void _scheduleFocusedStageReveal() {
+    final targetPath = _focusedTargetPath;
+    final focusedRevision = _focusedProjectRevision;
+    if (targetPath == null || focusedRevision != widget.projectRevision) {
+      return;
+    }
+    final stages = _stages;
+    if (stages == null ||
+        !stages.any(
+          (stage) =>
+              stage.targetPath.toLowerCase() == targetPath.toLowerCase() &&
+              stage.stagedProjectRevision == focusedRevision,
+        )) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          _focusedProjectRevision != widget.projectRevision ||
+          _focusedTargetPath?.toLowerCase() != targetPath.toLowerCase()) {
+        return;
+      }
+      final folded = targetPath.toLowerCase();
+      final controller = _stageExpansionControllers[folded];
+      if (controller != null && !controller.isExpanded) controller.expand();
+      final focusContext = _stageFocusKeys[folded]?.currentContext;
+      if (focusContext != null) {
+        Scrollable.ensureVisible(
+          focusContext,
+          alignment: 0.08,
+          duration: const Duration(milliseconds: 180),
+        );
+      }
+      setState(() {
+        _focusedTargetPath = null;
+        _focusedProjectRevision = null;
+      });
+    });
   }
 
   Future<void> _openSemanticEditor() async {
@@ -326,7 +496,7 @@ class _Revision3DataAssetStagePanelState
     switch (result) {
       case DataAssetSemanticStagePublication publication:
         _showSuccess(
-          'Verified value edit saved in project revision ${publication.revision}. Expand it to build new mod files.',
+          'Verified value edit saved in project revision ${publication.revision}. Review it below; offline build is available only for supported reviewed edits.',
         );
       case DataAssetSemanticStageUnavailableException error:
         setState(() {
@@ -533,160 +703,188 @@ class _Revision3DataAssetStagePanelState
     final visible = stages == null
         ? const <AuthoringRevision3DataAssetStage>[]
         : _visibleStages(stages);
-    return Column(
-      key: const Key('revision3-dataasset-stage-panel'),
-      children: [
-        _DataAssetBoundaryNotice(locked: _effectivelyLocked),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      stages == null
-                          ? 'Verified DataAsset edits'
-                          : 'Verified DataAsset edits (${stages.length})',
-                      style: Theme.of(context).textTheme.titleLarge,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final headerMaxHeight = constraints.maxHeight.isFinite
+            ? (constraints.maxHeight * 0.6).clamp(160.0, 460.0).toDouble()
+            : 460.0;
+        return Column(
+          key: const Key('revision3-dataasset-stage-panel'),
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: headerMaxHeight),
+              child: Scrollbar(
+                key: const Key('revision3-dataasset-stage-header-scrollbar'),
+                controller: _headerScroll,
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  key: const Key('revision3-dataasset-stage-header-scroll'),
+                  controller: _headerScroll,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _DataAssetBoundaryNotice(locked: _effectivelyLocked),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    stages == null
+                                        ? 'Verified DataAsset edits'
+                                        : 'Verified DataAsset edits (${stages.length})',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: const Key(
+                                    'revision3-dataasset-stage-refresh',
+                                  ),
+                                  tooltip: 'Refresh exact project list',
+                                  onPressed:
+                                      _busy || _loading || _effectivelyLocked
+                                      ? null
+                                      : _reload,
+                                  icon: const Icon(Icons.refresh),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            _ReviewedDataAssetQuickStart(
+                              browseAvailable:
+                                  widget.browseInstalledPackages != null,
+                              onBrowse:
+                                  _busy ||
+                                      _effectivelyLocked ||
+                                      widget.browseInstalledPackages == null
+                                  ? null
+                                  : _browseInstalledPackages,
+                              busy: _installedBrowserOpen,
+                            ),
+                            const SizedBox(height: 8),
+                            _DataAssetExpertTools(
+                              semanticEditAvailable:
+                                  widget.publishSemanticEdit != null,
+                              onCreateSemanticEdit:
+                                  _busy ||
+                                      _effectivelyLocked ||
+                                      _semanticCheckpointStale ||
+                                      widget.semanticExtractReceiptInspector ==
+                                          null ||
+                                      !_registryReady
+                                  ? null
+                                  : _openSemanticEditor,
+                              onImportProof:
+                                  _busy || _effectivelyLocked || !_registryReady
+                                  ? null
+                                  : _addVerifiedEdit,
+                              picking: _picking,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: TextField(
+                key: const Key('revision3-dataasset-stage-search'),
+                controller: _search,
+                enabled: stages != null,
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search),
+                  hintText: 'Search DataAsset name or /Game path...',
+                  suffixIcon: _search.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: _search.clear,
+                          icon: const Icon(Icons.close),
+                        ),
+                ),
+              ),
+            ),
+            if (_loading) const LinearProgressIndicator(minHeight: 2),
+            if (_actionError != null)
+              _DataAssetActionError(
+                message: _actionError!,
+                onDismiss: () => setState(() => _actionError = null),
+              ),
+            if (_stageRevealMessage != null)
+              _DataAssetStageRevealNotice(
+                message: _stageRevealMessage!,
+                onDismiss: () => setState(() => _stageRevealMessage = null),
+              ),
+            Expanded(
+              child: switch ((stages, _loadError)) {
+                (null, final Object error) => _DataAssetLoadError(
+                  error: error,
+                  retry: _effectivelyLocked || _loading ? null : _reload,
+                ),
+                (null, null) => Center(
+                  child: Semantics(
+                    liveRegion: true,
+                    label: 'Loading exact DataAsset edit list',
+                    child: const CircularProgressIndicator(
+                      key: Key('revision3-dataasset-stage-loading'),
                     ),
                   ),
-                  IconButton(
-                    key: const Key('revision3-dataasset-stage-refresh'),
-                    tooltip: 'Refresh exact project list',
-                    onPressed: _busy || _loading || _effectivelyLocked
+                ),
+                (final List<AuthoringRevision3DataAssetStage> loaded, _)
+                    when loaded.isEmpty =>
+                  _DataAssetEmptyState(
+                    browseAvailable: widget.browseInstalledPackages != null,
+                    onBrowse:
+                        _busy ||
+                            _effectivelyLocked ||
+                            widget.browseInstalledPackages == null
                         ? null
-                        : _reload,
-                    icon: const Icon(Icons.refresh),
+                        : _browseInstalledPackages,
                   ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  alignment: WrapAlignment.end,
-                  children: [
-                    OutlinedButton.icon(
-                      key: const Key('revision3-dataasset-browse-installed'),
-                      onPressed: _busy || _effectivelyLocked
-                          ? null
-                          : widget.browseInstalledPackages,
-                      icon: const Icon(Icons.travel_explore_outlined),
-                      label: const Text('Browse installed packages...'),
-                    ),
-                    if (widget.publishSemanticEdit != null)
-                      OutlinedButton.icon(
-                        key: const Key('revision3-dataasset-semantic-create'),
-                        onPressed:
-                            _busy ||
-                                _effectivelyLocked ||
-                                _semanticCheckpointStale ||
-                                widget.semanticExtractReceiptInspector ==
-                                    null ||
-                                !_registryReady
-                            ? null
-                            : _openSemanticEditor,
-                        icon: const Icon(Icons.tune_outlined),
-                        label: const Text('Create value edit...'),
-                      ),
-                    FilledButton.icon(
-                      key: const Key('revision3-dataasset-stage-add'),
-                      onPressed: _busy || _effectivelyLocked || !_registryReady
-                          ? null
-                          : _addVerifiedEdit,
-                      icon: _picking || _mutating
-                          ? const SizedBox.square(
-                              dimension: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.add),
-                      label: Text(
-                        _picking ? 'Choosing...' : 'Import verified proof...',
-                      ),
-                    ),
-                  ],
+                (_, _) when visible.isEmpty => const Center(
+                  child: Text(
+                    'No matching DataAsset edits.',
+                    key: Key('revision3-dataasset-stage-no-matches'),
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: TextField(
-            key: const Key('revision3-dataasset-stage-search'),
-            controller: _search,
-            enabled: stages != null,
-            decoration: InputDecoration(
-              isDense: true,
-              prefixIcon: const Icon(Icons.search),
-              hintText: 'Search DataAsset name or /Game path...',
-              suffixIcon: _search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      onPressed: _search.clear,
-                      icon: const Icon(Icons.close),
+                _ => ListView.builder(
+                  key: const Key('revision3-dataasset-stage-list'),
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+                  itemCount: visible.length,
+                  itemBuilder: (context, index) => _DataAssetStageTile(
+                    stage: visible[index],
+                    expansionController: _stageExpansionController(
+                      visible[index].targetPath,
                     ),
-            ),
-          ),
-        ),
-        if (_loading) const LinearProgressIndicator(minHeight: 2),
-        if (_actionError != null)
-          _DataAssetActionError(
-            message: _actionError!,
-            onDismiss: () => setState(() => _actionError = null),
-          ),
-        Expanded(
-          child: switch ((stages, _loadError)) {
-            (null, final Object error) => _DataAssetLoadError(
-              error: error,
-              retry: _effectivelyLocked || _loading ? null : _reload,
-            ),
-            (null, null) => Center(
-              child: Semantics(
-                liveRegion: true,
-                label: 'Loading exact DataAsset edit list',
-                child: const CircularProgressIndicator(
-                  key: Key('revision3-dataasset-stage-loading'),
+                    focusKey: _stageFocusKey(visible[index].targetPath),
+                    onBuild:
+                        _busy ||
+                            _effectivelyLocked ||
+                            !_registryReady ||
+                            widget.buildReviewedStage == null ||
+                            widget.pickBuildParentDirectory == null
+                        ? null
+                        : () => _openBuildDialog(visible[index]),
+                    buildUnavailableReason: widget.buildUnavailableReason,
+                    remove: _busy || _effectivelyLocked || !_registryReady
+                        ? null
+                        : () => _removeStage(visible[index]),
+                  ),
                 ),
-              ),
+              },
             ),
-            (final List<AuthoringRevision3DataAssetStage> loaded, _)
-                when loaded.isEmpty =>
-              const _DataAssetEmptyState(),
-            (_, _) when visible.isEmpty => const Center(
-              child: Text(
-                'No matching DataAsset edits.',
-                key: Key('revision3-dataasset-stage-no-matches'),
-              ),
-            ),
-            _ => ListView.builder(
-              key: const Key('revision3-dataasset-stage-list'),
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-              itemCount: visible.length,
-              itemBuilder: (context, index) => _DataAssetStageTile(
-                stage: visible[index],
-                onBuild:
-                    _busy ||
-                        _effectivelyLocked ||
-                        !_registryReady ||
-                        widget.buildReviewedStage == null ||
-                        widget.pickBuildParentDirectory == null
-                    ? null
-                    : () => _openBuildDialog(visible[index]),
-                buildUnavailableReason: widget.buildUnavailableReason,
-                remove: _busy || _effectivelyLocked || !_registryReady
-                    ? null
-                    : () => _removeStage(visible[index]),
-              ),
-            ),
-          },
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 }
@@ -736,112 +934,292 @@ class _DataAssetBoundaryNotice extends StatelessWidget {
   }
 }
 
+class _ReviewedDataAssetQuickStart extends StatelessWidget {
+  const _ReviewedDataAssetQuickStart({
+    required this.browseAvailable,
+    required this.onBrowse,
+    required this.busy,
+  });
+
+  final bool browseAvailable;
+  final VoidCallback? onBrowse;
+  final bool busy;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      key: const Key('revision3-dataasset-reviewed-quick-start'),
+      color: scheme.primaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.auto_awesome_outlined,
+                  color: scheme.onPrimaryContainer,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Start with a reviewed preset',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(color: scheme.onPrimaryContainer),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        'Choose an installed Human, Scavenger, or Wolf footstep preset, inspect its exact game data, then preview and save a reviewed, bounded X/Y texture-size project edit.',
+                        style: TextStyle(color: scheme.onPrimaryContainer),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              key: const Key('revision3-dataasset-reviewed-presets'),
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final target in footstepPresetReviewedSchema.targets)
+                  Chip(
+                    key: ValueKey(
+                      'revision3-dataasset-reviewed-preset-${target.assetName}',
+                    ),
+                    avatar: const Icon(Icons.pets_outlined, size: 18),
+                    label: Text(target.friendlyName),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: FilledButton.icon(
+                key: const Key('revision3-dataasset-browse-installed'),
+                onPressed: onBrowse,
+                icon: busy
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.travel_explore_outlined),
+                label: Text(
+                  busy
+                      ? 'Opening installed data...'
+                      : 'Edit installed preset...',
+                ),
+              ),
+            ),
+            if (!browseAvailable) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Choose the Gothic 1 Remake installation in Settings to inspect reviewed presets.',
+                key: const Key(
+                  'revision3-dataasset-reviewed-browser-unavailable',
+                ),
+                style: TextStyle(color: scheme.onPrimaryContainer),
+              ),
+            ],
+            const SizedBox(height: 8),
+            Text(
+              'Saving changes only this project. Supported reviewed edits can later create offline mod files; installation, deployment, and gameplay remain separate and unverified.',
+              style: TextStyle(color: scheme.onPrimaryContainer),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _DataAssetExpertTools extends StatelessWidget {
+  const _DataAssetExpertTools({
+    required this.semanticEditAvailable,
+    required this.onCreateSemanticEdit,
+    required this.onImportProof,
+    required this.picking,
+  });
+
+  final bool semanticEditAvailable;
+  final VoidCallback? onCreateSemanticEdit;
+  final VoidCallback? onImportProof;
+  final bool picking;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    clipBehavior: Clip.antiAlias,
+    child: ExpansionTile(
+      key: const Key('revision3-dataasset-expert-tools'),
+      leading: const Icon(Icons.construction_outlined),
+      title: const Text('Expert tools'),
+      subtitle: const Text('Advanced import and generic value editing'),
+      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+      children: [
+        const Divider(),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Use these only when you already have exact extraction or patch proof. They do not grant structural editing, deployment, or runtime authority.',
+          ),
+        ),
+        const SizedBox(height: 10),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (semanticEditAvailable)
+                OutlinedButton.icon(
+                  key: const Key('revision3-dataasset-semantic-create'),
+                  onPressed: onCreateSemanticEdit,
+                  icon: const Icon(Icons.tune_outlined),
+                  label: const Text('Create generic value edit...'),
+                ),
+              FilledButton.tonalIcon(
+                key: const Key('revision3-dataasset-stage-add'),
+                onPressed: onImportProof,
+                icon: picking
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.receipt_long_outlined),
+                label: Text(
+                  picking ? 'Choosing...' : 'Import verified proof...',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _DataAssetStageTile extends StatelessWidget {
   const _DataAssetStageTile({
     required this.stage,
+    required this.expansionController,
+    required this.focusKey,
     required this.onBuild,
     required this.buildUnavailableReason,
     required this.remove,
   });
 
   final AuthoringRevision3DataAssetStage stage;
+  final ExpansibleController expansionController;
+  final GlobalKey focusKey;
   final VoidCallback? onBuild;
   final String? buildUnavailableReason;
   final VoidCallback? remove;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: ExpansionTile(
-      key: ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
-      leading: const Icon(Icons.data_object_outlined),
-      title: Text(_assetName(stage.targetPath)),
-      subtitle: Text(
-        '${stage.targetPath}\n${_dataKindLabel(stage.selectorKind)} - saved in project revision ${stage.stagedProjectRevision}',
-        maxLines: 2,
-        overflow: TextOverflow.ellipsis,
-      ),
-      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-      children: [
-        const Divider(),
-        const Align(
-          alignment: Alignment.centerLeft,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            children: [
-              Chip(label: Text('Saved project edit')),
-              Chip(label: Text('Gameplay unverified')),
-            ],
-          ),
+  Widget build(BuildContext context) => Container(
+    key: focusKey,
+    child: Card(
+      child: ExpansionTile(
+        key: ValueKey('revision3-dataasset-stage-${stage.targetPath}'),
+        controller: expansionController,
+        leading: const Icon(Icons.data_object_outlined),
+        title: Text(_assetName(stage.targetPath)),
+        subtitle: Text(
+          '${stage.targetPath}\n${_dataKindLabel(stage.selectorKind)} - saved in project revision ${stage.stagedProjectRevision}',
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
         ),
-        if (onBuild == null && buildUnavailableReason != null) ...[
-          const SizedBox(height: 10),
-          Align(
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          const Divider(),
+          const Align(
             alignment: Alignment.centerLeft,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
               children: [
-                const Icon(Icons.info_outline, size: 18),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    buildUnavailableReason!,
-                    key: ValueKey(
-                      'revision3-dataasset-stage-build-unavailable-${stage.targetPath}',
+                Chip(label: Text('Saved project edit')),
+                Chip(label: Text('Gameplay unverified')),
+              ],
+            ),
+          ),
+          if (onBuild == null && buildUnavailableReason != null) ...[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.info_outline, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      buildUnavailableReason!,
+                      key: ValueKey(
+                        'revision3-dataasset-stage-build-unavailable-${stage.targetPath}',
+                      ),
                     ),
                   ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          _DataAssetFact(
+            label: 'Verified value shape',
+            value: _dataKindLabel(stage.selectorKind),
+          ),
+          _DataAssetFact(
+            label: 'Replacement width',
+            value:
+                '${stage.replacementByteLength} byte${stage.replacementByteLength == 1 ? '' : 's'}',
+          ),
+          _DataAssetFact(
+            label: 'Selector depth',
+            value: '${stage.selectorPathDepth}',
+          ),
+          _DataAssetFact(
+            label: 'Verified package inputs',
+            value:
+                '${stage.generationContainerCount} containers, ${stage.generationChunkCount} chunks, ${stage.sidecars.length} sidecars',
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerRight,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: [
+                FilledButton.icon(
+                  key: ValueKey(
+                    'revision3-dataasset-stage-build-${stage.targetPath}',
+                  ),
+                  onPressed: onBuild,
+                  icon: const Icon(Icons.inventory_2_outlined),
+                  label: const Text('Build files...'),
+                ),
+                OutlinedButton.icon(
+                  key: ValueKey(
+                    'revision3-dataasset-stage-remove-${stage.targetPath}',
+                  ),
+                  onPressed: remove,
+                  icon: const Icon(Icons.remove_circle_outline),
+                  label: const Text('Remove from project...'),
                 ),
               ],
             ),
           ),
         ],
-        const SizedBox(height: 12),
-        _DataAssetFact(
-          label: 'Verified value shape',
-          value: _dataKindLabel(stage.selectorKind),
-        ),
-        _DataAssetFact(
-          label: 'Replacement width',
-          value:
-              '${stage.replacementByteLength} byte${stage.replacementByteLength == 1 ? '' : 's'}',
-        ),
-        _DataAssetFact(
-          label: 'Selector depth',
-          value: '${stage.selectorPathDepth}',
-        ),
-        _DataAssetFact(
-          label: 'Verified package inputs',
-          value:
-              '${stage.generationContainerCount} containers, ${stage.generationChunkCount} chunks, ${stage.sidecars.length} sidecars',
-        ),
-        const SizedBox(height: 8),
-        Align(
-          alignment: Alignment.centerRight,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            alignment: WrapAlignment.end,
-            children: [
-              FilledButton.icon(
-                key: ValueKey(
-                  'revision3-dataasset-stage-build-${stage.targetPath}',
-                ),
-                onPressed: onBuild,
-                icon: const Icon(Icons.inventory_2_outlined),
-                label: const Text('Build files...'),
-              ),
-              OutlinedButton.icon(
-                key: ValueKey(
-                  'revision3-dataasset-stage-remove-${stage.targetPath}',
-                ),
-                onPressed: remove,
-                icon: const Icon(Icons.remove_circle_outline),
-                label: const Text('Remove from project...'),
-              ),
-            ],
-          ),
-        ),
-      ],
+      ),
     ),
   );
 }
@@ -869,7 +1247,13 @@ class _DataAssetFact extends StatelessWidget {
 }
 
 class _DataAssetEmptyState extends StatelessWidget {
-  const _DataAssetEmptyState();
+  const _DataAssetEmptyState({
+    required this.browseAvailable,
+    required this.onBrowse,
+  });
+
+  final bool browseAvailable;
+  final VoidCallback? onBrowse;
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
@@ -885,17 +1269,31 @@ class _DataAssetEmptyState extends StatelessWidget {
         padding: const EdgeInsets.all(padding),
         child: ConstrainedBox(
           constraints: BoxConstraints(minHeight: minimumContentHeight),
-          child: const Center(
+          child: Center(
             child: Column(
-              key: Key('revision3-dataasset-stage-empty'),
+              key: const Key('revision3-dataasset-stage-empty'),
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.data_object_outlined, size: 42),
-                SizedBox(height: 12),
-                Text('No verified DataAsset edits in this project.'),
-                SizedBox(height: 6),
+                const Icon(Icons.data_object_outlined, size: 42),
+                const SizedBox(height: 12),
+                const Text('No verified DataAsset edits in this project.'),
+                const SizedBox(height: 6),
                 Text(
-                  'Use Create value edit for the guided inspect, preview, and exact ExtractReceipt-v2 workflow. Import verified proof is the expert alternative for an existing guarded PatchReceipt-v2.',
+                  browseAvailable
+                      ? 'Start with an installed reviewed preset. You can inspect its exact values, preview the change, and save it without changing the game installation.'
+                      : 'Choose the Gothic 1 Remake installation in Settings, then return here to inspect a reviewed preset.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 14),
+                FilledButton.icon(
+                  key: const Key('revision3-dataasset-empty-browse-installed'),
+                  onPressed: onBrowse,
+                  icon: const Icon(Icons.travel_explore_outlined),
+                  label: const Text('Edit installed preset...'),
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Advanced receipt workflows remain available under Expert tools.',
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -914,31 +1312,39 @@ class _DataAssetLoadError extends StatelessWidget {
   final VoidCallback? retry;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: Padding(
-      key: const Key('revision3-dataasset-stage-error'),
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.error_outline,
-            size: 42,
-            color: Theme.of(context).colorScheme.error,
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      key: const Key('revision3-dataasset-stage-error-scroll'),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: constraints.maxHeight),
+        child: Center(
+          child: Padding(
+            key: const Key('revision3-dataasset-stage-error'),
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.error_outline,
+                  size: 42,
+                  color: Theme.of(context).colorScheme.error,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  revision3DataAssetFriendlyError(error),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  key: const Key('revision3-dataasset-stage-retry'),
+                  onPressed: retry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry exact read'),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 12),
-          Text(
-            revision3DataAssetFriendlyError(error),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            key: const Key('revision3-dataasset-stage-retry'),
-            onPressed: retry,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Retry exact read'),
-          ),
-        ],
+        ),
       ),
     ),
   );
@@ -965,6 +1371,42 @@ class _DataAssetActionError extends StatelessWidget {
           Expanded(child: Text(message)),
           IconButton(
             tooltip: 'Dismiss error',
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _DataAssetStageRevealNotice extends StatelessWidget {
+  const _DataAssetStageRevealNotice({
+    required this.message,
+    required this.onDismiss,
+  });
+
+  final String message;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    container: true,
+    liveRegion: true,
+    label: message,
+    child: Container(
+      key: const Key('revision3-dataasset-stage-reveal-notice'),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: Row(
+        children: [
+          const Icon(Icons.check_circle_outline),
+          const SizedBox(width: 8),
+          Expanded(child: ExcludeSemantics(child: Text(message))),
+          IconButton(
+            key: const Key('revision3-dataasset-stage-reveal-dismiss'),
+            tooltip: 'Dismiss saved edit notice',
             onPressed: onDismiss,
             icon: const Icon(Icons.close),
           ),

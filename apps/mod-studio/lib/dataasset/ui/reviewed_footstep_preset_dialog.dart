@@ -209,8 +209,8 @@ class _ReviewedFootstepPresetDialogState
                     ),
                     Chip(
                       key: Key('reviewed-footstep-badge-build'),
-                      avatar: Icon(Icons.block_outlined, size: 18),
-                      label: Text('Build unavailable'),
+                      avatar: Icon(Icons.inventory_2_outlined, size: 18),
+                      label: Text('Offline build available after saving'),
                     ),
                     Chip(
                       key: Key('reviewed-footstep-badge-runtime'),
@@ -220,7 +220,7 @@ class _ReviewedFootstepPresetDialogState
                     Chip(
                       key: Key('reviewed-footstep-badge-deployment'),
                       avatar: Icon(Icons.do_not_disturb_alt_outlined, size: 18),
-                      label: Text('Deployment unavailable'),
+                      label: Text('Deployment unverified'),
                     ),
                   ],
                 ),
